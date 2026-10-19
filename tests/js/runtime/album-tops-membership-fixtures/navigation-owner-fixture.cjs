@@ -28,7 +28,7 @@ function harness(){
     fetch(...args){calls.fetch.push(args);return Promise.reject(new Error('Synthetic destination transport unavailable'));},
     handleGalleryBootstrapPopState(){calls.gallery++;},getActiveAppFormPage:()=>null,
   });
-  for(const file of ['settings-navigation.js','runtime/mobile-navigation.js'])vm.runInContext(fs.readFileSync(path.join(F.ROOT,'music_app/static/js',file),'utf8'),context,{filename:file});
+  for(const file of ['settings-navigation.js','runtime/mobile-navigation.js','runtime/gallery-display-preference-helpers.js'])vm.runInContext(fs.readFileSync(path.join(F.ROOT,'music_app/static/js',file),'utf8'),context,{filename:file});
   context.handleMobilePagePopState=()=>false;
   const navigation=context.AlbumHavenSettingsNavigation.instance;
   let current=true,decision=false;

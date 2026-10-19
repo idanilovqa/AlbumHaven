@@ -233,3 +233,48 @@ test('content-width Choice measures its labels and retains the native anchor sea
   h.key(h.document.activeElement, 'Escape'); assert.equal(owner.isOpen, false);
   assert.equal(h.document.activeElement, trigger);
 });
+
+test('Choice independently checks a final checkbox without changing the selected radio', () => {
+  const h = nativeHarness(), trigger = h.trigger('Top playback options'), selected = [];
+  const formats = [{value: 'ordered', label: 'In order'}, {value: 'random', label: 'Random albums'},
+    {value: 'popular', label: 'Most popular songs', disabled: true},
+    {value: 'stop', label: 'Stop after current album', kind: 'checkbox', checked: true}];
+  const owner = h.runtime.openChoice(trigger, {formats, selected: 'random', label: 'Playback options',
+    updateTriggerLabel: false, onSelect: value => selected.push(value)});
+  const menu = h.document.querySelector('[role="menu"]'), rows = menu.querySelectorAll('button');
+  assert.deepEqual(rows.map(row => row.getAttribute('role')), ['menuitemradio', 'menuitemradio', 'menuitemradio', 'menuitemcheckbox']);
+  assert.deepEqual(rows.map(row => row.getAttribute('aria-checked')), ['false', 'true', 'false', 'true']);
+  assert.equal(h.document.activeElement, rows[1]);
+  h.key(rows[1], 'End'); assert.equal(h.document.activeElement, rows[3]);
+  h.key(rows[3], 'ArrowUp'); assert.equal(h.document.activeElement, rows[1], 'disabled radio is skipped');
+  rows[3].dispatchEvent(new h.context.Event('click'));
+  assert.deepEqual(selected, ['stop']); assert.equal(owner.isOpen, false);
+  assert.equal(h.document.activeElement, trigger); assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+  assert.equal(trigger.querySelector('.ui-button__content').textContent, 'Top playback options');
+  assert.equal(formats[3].checked, true, 'consumer remains the checked-state owner');
+  const reopened = h.runtime.openChoice(trigger, {formats: formats.map(row => row.value === 'stop' ? {...row, checked: false} : row),
+    selected: 'random', label: 'Playback options', onSelect() {}});
+  const fresh = h.document.querySelector('[role="menu"]').querySelectorAll('button');
+  assert.equal(fresh[1].getAttribute('aria-checked'), 'true'); assert.equal(fresh[3].getAttribute('aria-checked'), 'false');
+  reopened.close();
+});
+
+test('Choice checkbox state requires true and action menus preserve action semantics', () => {
+  for (const checked of [false, undefined, 'true', 1]) {
+    const h = nativeHarness(), trigger = h.trigger();
+    const owner = h.runtime.openChoice(trigger, {formats: [{value: 'stop', label: 'Stop', kind: 'checkbox', checked}],
+      selected: 'stop', label: 'Options', onSelect() {}});
+    const row = h.document.querySelector('[data-foobar-format="stop"]');
+    assert.equal(row.getAttribute('role'), 'menuitemcheckbox'); assert.equal(row.getAttribute('aria-checked'), 'false'); owner.close();
+    const action = h.runtime.openChoice(trigger, {formats: [{value: 'stop', label: 'Stop', kind: 'checkbox', checked: true}],
+      selected: 'stop', label: 'Actions', actionMenu: true, onSelect() {}});
+    const actionRow = h.document.querySelector('[data-foobar-format="stop"]');
+    assert.equal(actionRow.getAttribute('role'), 'menuitem'); assert.equal(actionRow.hasAttribute('aria-checked'), false); action.close();
+  }
+});
+
+test('Choice owns the independent checkbox marker rather than a consumer override', () => {
+  const css = read('music_app/static/css/choice-component.css');
+  assert.match(css, /\.settings-foobar-format-menu \.gallery-menu-action\[role="menuitemcheckbox"\]::before/);
+  assert.match(css, /\[role="menuitemcheckbox"\]\[aria-checked="true"\]::before/);
+});

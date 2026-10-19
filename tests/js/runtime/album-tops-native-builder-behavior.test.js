@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {load, id, TOP, ALBUM, deferred, drain, detail, service, preparedController, nativeEnvironment, connectedView} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
+const {load, id, TOP, ALBUM, deferred, drain, nextTask, detail, service, preparedController, nativeEnvironment, connectedView} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
 
 async function pickerFixture(backend, selected = null) {
   const env = nativeEnvironment(), controller = await preparedController(backend, {selected});
@@ -77,5 +77,5 @@ test('uncertain mutation uses native confirmation to retry the exact actual-cont
     assert.deepEqual(backend.calls.filter(row => row.method === 'execute')[1].args[1], original);
     assert.equal(controller.getSnapshot().mutation.status, 'ready');
   } finally {owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });

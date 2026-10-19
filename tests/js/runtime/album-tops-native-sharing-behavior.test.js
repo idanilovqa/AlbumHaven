@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {id, TOP, SCOPE, deferred, drain, sharing, service, preparedController, nativeEnvironment, connectedView} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
+const {id, TOP, SCOPE, deferred, drain, nextTask, sharing, service, preparedController, nativeEnvironment, connectedView} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
 
 async function opened(backend) {
   const env = nativeEnvironment(), controller = await preparedController(backend), owner = await connectedView(env, backend, controller);
@@ -22,7 +22,7 @@ test('actual sharing query ownership aborts and rejects an older candidate page'
     env.click(env.button(env.content(), 'Add access')); await drain();
     const write = backend.calls.find(row => row.method === 'execute'); assert.equal(write.args[0], 'grant_viewer'); assert.equal(write.args[1].account_id, 40); assert.equal(write.args[1].role, 'viewer');
   } finally {env.owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });
 
 test('sharing page cursor uses the actual reader and repeated next cursor is disabled', async () => {
@@ -35,7 +35,7 @@ test('sharing page cursor uses the actual reader and repeated next cursor is dis
     env.click(env.button(env.content(), 'First edit requests page')); await drain();
     assert.equal(backend.calls.filter(row => row.method === 'readSharing')[2].args[1].cursor, null);
   } finally {env.owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });
 
 test('a conflicting actual access page disables access writes and offers authoritative refresh', async () => {
@@ -48,7 +48,7 @@ test('a conflicting actual access page disables access writes and offers authori
     const before = backend.count('read'); env.click(env.button(env.content(), 'Refresh Album Top')); await drain(); assert.equal(backend.count('read'), before + 1);
     assert.equal(backend.count('execute'), 0);
   } finally {env.owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });
 
 test('denied actual sharing read closes private content and late candidate data cannot return', async () => {

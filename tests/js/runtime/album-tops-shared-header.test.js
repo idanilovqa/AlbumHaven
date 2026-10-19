@@ -1,10 +1,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {load, id, ALBUM, ACTIONS: EXISTING_ACTIONS, labels, fixture, measure, navigation, drain, nativeEnvironment} = require('./album-tops-native-fixtures/shared-header-driver.cjs');
+const {load, id, ALBUM, ACTIONS: EXISTING_ACTIONS, labels, fixture, measure, navigation, drain, nextTask, nativeEnvironment} = require('./album-tops-native-fixtures/shared-header-driver.cjs');
 
 // Add is independently authorized and precedes the retained management actions.
 const ACTIONS = ['Add albums', ...EXISTING_ACTIONS];
+const EMPTY_READ_ACTIONS = ['Filter'];
+const POPULATED_READ_ACTIONS = ['Filter', 'Rows', 'Cards', 'No info'];
 
 test('directory delegates its one Create action to the shared Tools capsule', async t => {
   const h = await fixture(t, {selected: false}), header = h.header();
@@ -18,21 +20,25 @@ test('directory delegates its one Create action to the shared Tools capsule', as
 test('detail delegates current ordered actions once and Back remains leading', async t => {
   const h = await fixture(t), header = h.header(), capsule = header.querySelector('[data-header-action-capsule]');
   assert.deepEqual(labels(header.querySelector('.home-header__leading')), ['Back']);
-  assert.deepEqual(labels(header.querySelector('.home-header__primary-actions')), ACTIONS);
+  assert.deepEqual(labels(header.querySelector('.home-header__primary-actions')), [...EMPTY_READ_ACTIONS, ...ACTIONS]);
   for (const slot of ['outside', 'final-action']) assert.deepEqual(labels(header.querySelector(`.home-header__${slot}`)), []);
-  assert.deepEqual(labels(h.host), ['Back', ...ACTIONS]);
+  assert.deepEqual(labels(h.host), ['Back', ...EMPTY_READ_ACTIONS, ...ACTIONS]);
+  assert.equal(h.button(capsule, 'Filter').disabled, true, 'true-empty Top retains a disabled Filter');
   for (const label of ACTIONS) {assert.equal(h.host.querySelectorAll('button').filter(node => node.getAttribute('aria-label') === label).length, 1); assert.ok(h.button(capsule, label));}
   assert.equal(capsule.querySelector('[aria-label="Back"]'), null); assert.match(h.host.innerHTML, /Top &lt;safe&gt;/);
 });
 
 test('shared capsule retains strict current action projections and busy state', async t => {
   for (const grants of [{can_edit: false, can_view_sharing: false, can_copy: false, can_delete: false}, {can_edit: 'true', can_view_sharing: 1, can_copy: 'true', can_delete: 1}]) {
-    const h = await fixture(t, {grants}); assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), ['Add albums']);
+    const h = await fixture(t, {grants}); assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), [...EMPTY_READ_ACTIONS, 'Add albums']);
   }
   for (const mutation of [{status: 'loading'}, {status: 'uncertain'}, {status: 'idle', refreshing: true}]) {
     const h = await fixture(t); h.replace({...h.state(), mutation});
     const actions = h.header().querySelector('.home-header__primary-actions').querySelectorAll('button');
-    assert.equal(actions.length, ACTIONS.length); for (const action of actions) assert.equal(action.disabled, true);
+    assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), [...EMPTY_READ_ACTIONS, ...ACTIONS]);
+    assert.equal(actions.length, ACTIONS.length + 2, 'Filter and hidden Reset join the unchanged management controls');
+    for (const action of actions) assert.equal(action.disabled, true);
+    assert.ok(h.header().querySelector('[aria-label="Reset filters"]').closest('[hidden]'));
   }
   const h = await fixture(t); h.replace({...h.state(), detail: {status: 'denied', data: null}});
   assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), []);
@@ -41,15 +47,16 @@ test('shared capsule retains strict current action projections and busy state', 
 test('Add projection is independent, exact and own while existing header actions remain ordered', async t => {
   for (const can_add of [false, undefined, 'true', 1]) {
     const h = await fixture(t, {grants: {can_add}});
-    assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), EXISTING_ACTIONS);
+    assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), [...EMPTY_READ_ACTIONS, ...EXISTING_ACTIONS]);
     assert.equal(h.header().querySelector('[aria-label="Add albums"]'), null);
   }
   const h = await fixture(t), previous = h.state(), allowed_actions = {...previous.detail.data.allowed_actions};
   delete allowed_actions.can_add; Object.setPrototypeOf(allowed_actions, {can_add: true});
   h.replace({...previous, detail: {...previous.detail, data: {...previous.detail.data, allowed_actions}}});
-  assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), EXISTING_ACTIONS);
+  assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), [...EMPTY_READ_ACTIONS, ...EXISTING_ACTIONS]);
   const denied = await fixture(t, {grants: {can_add: false, can_edit: false, can_view_sharing: false, can_copy: false, can_delete: false}});
-  assert.deepEqual(labels(denied.header().querySelector('.home-header__primary-actions')), []);
+  assert.deepEqual(labels(denied.header().querySelector('.home-header__primary-actions')), EMPTY_READ_ACTIONS);
+  assert.equal(denied.button(denied.header(), 'Filter').disabled, true);
 });
 
 test('retired capsule handlers cannot act on another detail object or revoked grants', async t => {
@@ -121,7 +128,8 @@ test('inline return selects visible Edit then shared Tools then focusable header
 });
 
 test('dialog focus return rejects a connected opener hidden by compact layout', async t => {
-  for (const kind of ['Edit Album Top', 'Share']) for (const compact of [false, true]) {
+  // Share retains the actual dialog contract; Edit is covered as inline below.
+  for (const kind of ['Share']) for (const compact of [false, true]) {
     const h = await fixture(t); measure(h, 1000);
     const opener = h.button(h.header(), kind); opener.focus(); h.click(opener); await drain(); assert.equal(h.modal().hidden, false);
     if (compact) measure(h, 210);
@@ -129,6 +137,30 @@ test('dialog focus return rejects a connected opener hidden by compact layout', 
     h.click(h.document.getElementById('app-form-close')); await drain(); assert.equal(h.modal().hidden, true);
     assert.equal(h.document.activeElement, compact ? h.header().querySelector('[data-header-tools]') : opener);
   }
+});
+
+test('ordinary saved Top Edit uses actual inline navigation and returns focus after guarded discard', async t => {
+  const h = await fixture(t, {inlineNavigation: true}); measure(h, 1000);
+  const original = h.header(), opener = h.button(original, 'Edit Album Top');
+  opener.focus(); h.click(opener); await drain();
+  const form = h.host.querySelector('form.album-top-inline-edit'); assert.ok(form);
+  assert.equal(original.isConnected, false); assert.equal(opener.isConnected, false);
+  assert.equal(h.modal().hidden, true); assert.equal(h.opens.length, 0);
+  assert.deepEqual(labels(h.header()), ['Back', 'Save', 'Cancel']);
+  const input = form.querySelector('[name="top-name"]'); h.input(input, 'Unsaved title');
+  h.click(h.button(form, 'Cancel')); await drain();
+  assert.equal(h.document.getElementById('app-confirm-modal').hidden, false);
+  assert.match(h.document.getElementById('app-confirm-modal').textContent, /Discard these unsaved Album Top changes/);
+  h.click(h.document.getElementById('app-confirm-cancel')); await drain(); await nextTask();
+  assert.equal(form.isConnected, true); assert.equal(input.value, 'Unsaved title');
+  h.click(h.button(form, 'Cancel')); await drain();
+  h.click(h.document.getElementById('app-confirm-accept')); await drain(); await nextTask();
+  assert.equal(form.isConnected, false); assert.equal(h.host.querySelector('form.album-top-inline-edit'), null);
+  const restored = measure(h, 1000), edit = h.button(restored, 'Edit Album Top');
+  assert.notEqual(restored, original); assert.notEqual(edit, opener);
+  assert.equal(h.document.activeElement, edit); assert.equal(Boolean(edit.closest('[hidden],[inert]')), false);
+  assert.equal(h.backend.count('execute'), 0); assert.deepEqual(h.calls.mutations, []);
+  assert.equal(h.runtime.deferDraftNavigation(() => assert.fail('Discarded editor retained a navigation guard')), false);
 });
 
 test('SharedHeader external object/callback refs compose with its internal root and clear on unmount', async () => {
@@ -157,15 +189,89 @@ test('SharedHeader preserves callback-ref cleanup and replacement lifetimes', as
 });
 
 test('responsive action order and progress nodes remain stable through compact and expanded updates', async t => {
-  const h = await fixture(t, {patch: {items: [{item_ref: id(21), album_ref: ALBUM, title: 'Album', artist: 'Artist', year: 2001}], top_viewer_overlay: {item_progress: {[ALBUM]: {progress_revision: '4', manual_completed_at: null}}}}});
+  const h = await fixture(t, {patch: {items: [{item_ref: id(21), album_ref: ALBUM, title: 'Album', artist: 'Artist', year: 2001}], completion_summary: {completed: 0, total: 1}, top_viewer_overlay: {item_progress: {[ALBUM]: {progress_revision: '4', manual_completed_at: null}}}}});
   const header = h.header(), actions = ACTIONS.map(label => h.button(header, label)), title = header.querySelector('.gallery-bar__title').firstChild;
+  const progress = header.querySelector('[role="progressbar"]'); assert.ok(progress);
+  assert.equal(progress.getAttribute('aria-valuetext'), '0 of 1 albums completed');
   const completion = h.host.querySelector('[data-gallery-card-intent="complete"]'); assert.ok(completion);
   for (const [width, compact] of [[1000, false], [210, true], [1000, false]]) {
     measure(h, width); assert.equal(header.getAttribute('data-header-compact'), String(compact));
-    assert.deepEqual(labels(header.querySelector('.home-header__primary-actions')), ACTIONS);
+    assert.deepEqual(labels(header.querySelector('.home-header__primary-actions')), [...POPULATED_READ_ACTIONS, ...ACTIONS]);
     ACTIONS.forEach((label, index) => assert.equal(header.querySelector(`[aria-label="${label}"]`), actions[index]));
     h.replace({...h.state(), mutation: {status: 'idle'}});
-    assert.equal(h.header(), header); assert.equal(header.querySelector('.gallery-bar__title').firstChild, title);
+    assert.equal(h.header(), header); assert.equal(header.querySelector('[role="progressbar"]'), progress);
+    assert.equal(progress.getAttribute('aria-valuetext'), '0 of 1 albums completed'); assert.equal(header.querySelector('.gallery-bar__title').firstChild, title);
     assert.equal(h.host.querySelector('[data-gallery-card-intent="complete"]'), completion); assert.equal(completion.getAttribute('aria-pressed'), 'false');
   }
+});
+
+// Real Settings admission/discard order is retained. Wrapping its callback only
+// supplies the adversarial duplicate or successor event, never grants departure.
+test('actual inline Cancel decline preserves the editor and accepted focus return is one-shot', async t => {
+  const h = await fixture(t, {inlineNavigation: true});
+  let admittedCallback = null, admissions = 0;
+  const defer = h.runtime.deferDraftNavigation;
+  h.runtime.deferDraftNavigation = callback => defer(() => {
+    admissions++; admittedCallback = callback; return callback();
+  });
+  h.click(h.button(h.header(), 'Edit Album Top')); await drain();
+  const form = h.host.querySelector('form.album-top-inline-edit'), input = form.querySelector('[name="top-name"]');
+  h.input(input, 'Keep this draft');
+  h.click(h.button(form, 'Cancel')); await drain();
+  h.click(h.document.getElementById('app-confirm-cancel')); await drain(); await nextTask();
+  assert.equal(admissions, 0); assert.equal(admittedCallback, null);
+  assert.equal(form.isConnected, true); assert.equal(input.value, 'Keep this draft');
+  assert.equal(h.document.activeElement, input);
+  h.click(h.button(form, 'Cancel')); await drain();
+  h.click(h.document.getElementById('app-confirm-accept')); await drain(); await nextTask();
+  assert.equal(admissions, 1); assert.equal(form.isConnected, false);
+  const edit = h.button(h.header(), 'Edit Album Top'); assert.equal(h.document.activeElement, edit);
+  const share = h.button(h.header(), 'Share'); share.focus();
+  admittedCallback(); admittedCallback(); await drain();
+  assert.equal(h.document.activeElement, share, 'duplicate admitted callback cannot reclaim later focus');
+  assert.equal(h.backend.count('execute'), 0);
+});
+
+test('old admitted Cancel callback cannot steal focus from a reentrant newer inline editor', async t => {
+  const h = await fixture(t, {inlineNavigation: true});
+  let oldCallback = null, successor = null, successorInput = null;
+  const defer = h.runtime.deferDraftNavigation;
+  h.runtime.deferDraftNavigation = callback => defer(() => {
+    oldCallback = callback;
+    assert.equal(h.host.querySelector('form.album-top-inline-edit'), null, 'actual owner discarded before callback');
+    h.click(h.button(h.header(), 'Edit Album Top'));
+    successor = h.host.querySelector('form.album-top-inline-edit'); assert.ok(successor);
+    successorInput = successor.querySelector('[name="top-name"]'); successorInput.focus();
+    return callback();
+  });
+  h.click(h.button(h.header(), 'Edit Album Top')); await drain();
+  const retired = h.host.querySelector('form.album-top-inline-edit');
+  h.click(h.button(retired, 'Cancel')); await drain(); await nextTask();
+  assert.equal(retired.isConnected, false); assert.equal(successor.isConnected, true);
+  assert.equal(h.document.activeElement, successorInput);
+  oldCallback(); await drain();
+  assert.equal(h.document.activeElement, successorInput);
+  assert.equal(h.host.querySelector('form.album-top-inline-edit'), successor);
+  assert.equal(h.backend.count('execute'), 0);
+});
+
+test('admitted Cancel callback is inert when disposed before its first dispatch', async t => {
+  const h = await fixture(t, {inlineNavigation: true});
+  let retiredCallback = null, external = null;
+  const defer = h.runtime.deferDraftNavigation;
+  h.runtime.deferDraftNavigation = callback => defer(() => {
+    retiredCallback = callback;
+    assert.equal(h.host.querySelector('form.album-top-inline-edit'), null, 'actual discard completed first');
+    h.view.dispose();
+    external = h.document.createElement('button'); h.document.body.append(external); external.focus();
+    return callback();
+  });
+  h.click(h.button(h.header(), 'Edit Album Top')); await drain();
+  try {
+    h.click(h.button(h.host.querySelector('form.album-top-inline-edit'), 'Cancel')); await drain(); await nextTask();
+    assert.equal(typeof retiredCallback, 'function'); assert.ok(external);
+    assert.equal(h.document.activeElement, external); assert.equal(h.host.querySelector('[data-shared-header]'), null);
+    retiredCallback(); await drain();
+    assert.equal(h.document.activeElement, external); assert.equal(h.host.querySelector('[data-shared-header]'), null);
+  } finally {external?.remove();}
 });

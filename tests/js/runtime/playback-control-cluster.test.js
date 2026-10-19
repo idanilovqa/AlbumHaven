@@ -59,16 +59,24 @@ test('component query helper returns only controls owned by the supplied root', 
   const owned = {
     previous: { name: 'previous' },
     playPause: { name: 'play-pause' },
+    play: { name: 'play' },
     next: { name: 'next' },
     loopActions: { name: 'loop-actions' },
+    actionRoot: { name: 'action-root' },
+    optionsTrigger: { name: 'options-trigger' },
+    modeBadge: { name: 'mode-badge' },
   };
   const root = {
     querySelector(selector) {
       return {
         '[data-playback-control-action="previous"]': owned.previous,
         '[data-playback-control-action="play-pause"]': owned.playPause,
+        '[data-playback-control-action="play"]': owned.play,
         '[data-playback-control-action="next"]': owned.next,
         '[data-playback-control-loop-actions]': owned.loopActions,
+        '.loop-edit-actions[data-loop-action-owner]': owned.actionRoot,
+        '[data-playback-control-action="options"]': owned.optionsTrigger,
+        '[data-playback-mode-badge]': owned.modeBadge,
       }[selector] || null;
     },
   };
@@ -77,8 +85,12 @@ test('component query helper returns only controls owned by the supplied root', 
   assert.deepEqual(component.getPlaybackControlClusterElements(null), {
     previous: null,
     playPause: null,
+    play: null,
     next: null,
     loopActions: null,
+    actionRoot: null,
+    optionsTrigger: null,
+    modeBadge: null,
   });
 });
 

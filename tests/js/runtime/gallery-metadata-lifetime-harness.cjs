@@ -10,7 +10,14 @@ function createMetadataLifetimeRuntime({ grid = false } = {}) {
     listenerAdds: 0, listenerRemoves: 0, frameRequests: 0, frameCancels: 0,
   };
   class Element {
-    constructor() { this.listeners = new Map(); this.hidden = false; this.isConnected = true; }
+    constructor() { this.listeners = new Map(); this.attributes = new Map(); this.hidden = false; this.isConnected = true; }
+    setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    removeAttribute(name) { this.attributes.delete(name); }
+    matches(selector) {
+      const attribute = /^\[([\w-]+)\]$/.exec(selector);
+      if (!attribute) throw new Error(`Unsupported lifetime fixture selector: ${selector}`);
+      return this.attributes.has(attribute[1]);
+    }
     addEventListener(type, callback) {
       counts.listenerAdds += 1;
       if (!this.listeners.has(type)) this.listeners.set(type, new Set());
@@ -40,6 +47,7 @@ function createMetadataLifetimeRuntime({ grid = false } = {}) {
     const classes = new Set(), styles = new Map();
     row.parentElement = root;
     text.parentElement = row;
+    text.setAttribute('data-gallery-metadata-text', '');
     Object.defineProperty(row, 'clientWidth', { get() { counts.measures += 1; return 120; } });
     Object.defineProperty(text, 'scrollWidth', { get() { counts.measures += 1; return 300; } });
     row.classList = {
@@ -63,7 +71,7 @@ function createMetadataLifetimeRuntime({ grid = false } = {}) {
       },
     };
     root.querySelectorAll = selector => {
-      if (selector === '.album-card [data-gallery-metadata-text]') return [text];
+      if (selector === '.album-card [data-gallery-metadata-text]') return text.matches('[data-gallery-metadata-text]') ? [text] : [];
       if (selector === 'img[data-gallery-cover-src]') return [];
       throw new Error(`Unexpected lifetime fixture selector: ${selector}`);
     };

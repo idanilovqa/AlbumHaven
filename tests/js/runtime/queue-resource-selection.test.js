@@ -143,15 +143,43 @@ test('new deliberate selection retires old native transfer and Forward rechecks 
 });
 test('row details mount the existing native widget without playback and release it on removal', async () => {
   const env = environment(), mounts = [], states = []; let releases = 0;
-  env.context.document.getElementById = () => ({hidden:true});
-  env.context.window.addEventListener = () => {}; env.context.window.removeEventListener = () => {};
-  env.context.acquireTrackModalSelection = (host, album, options) => {mounts.push({host,album,options}); return {release() {releases++;}};};
-  const host = {isConnected:true,addEventListener() {},removeEventListener() {}};
+  const native = require('./native-home-harness.cjs').createNativeHomeRuntime();
+  const d = native.document, c = env.context;
+  c.document = d; c.ButtonComponent = native.context.ButtonComponent;
+  c.window.addEventListener = d.addEventListener.bind(d);
+  c.window.removeEventListener = d.removeEventListener.bind(d);
+  native.context.Node.prototype.before = function(node) {this.parentNode?.insertBefore(node, this);};
+  native.context.Node.prototype.replaceWith = function(node) {if (this.parentNode) {this.before(node); this.remove();}};
+  d.createComment = () => new native.context.Node(8);
+  const overlay = d.createElement('div'); overlay.id = 'track-modal'; overlay.hidden = true;
+  overlay.innerHTML = '<div class="track-modal-dialog" role="dialog" aria-modal="true"><div class="album-details-header__primary">Album</div></div>';
+  d.body.appendChild(overlay);
+  const dialog = overlay.firstElementChild, host = d.createElement('section'); d.body.appendChild(host);
+  c.getTrackModalElements = () => ({overlay});
+  // Album rendering is outside this lease test; acquisition, DOM transfer,
+  // currentness and release come from the complete actual native owner.
+  c.renderTrackModalRelease = () => {};
+  vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/runtime/track-modal-lightbox-helpers.js'), 'utf8'), c);
+  c.fetchTrackModalAlbumDetails = async key => ({key, tracks: []});
+  const acquire = c.acquireTrackModalSelection;
+  c.acquireTrackModalSelection = (host, album, options) => {
+    mounts.push({host, album, options});
+    const lease = acquire(host, album, options);
+    if (lease) {const release = lease.release; lease.release = reason => {
+      const current = c.getTrackModalSelectionLease() === lease;
+      release(reason); if (current) releases++;
+    };}
+    return lease;
+  };
   await env.owner.select(['one']); const target = env.owner.getSnapshot().album;
   const lease = env.owner.mountResourceSelection(host, {selection:target,scopeKey:'actor/library',origin:target.origin,onState:state=>states.push(state)});
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(mounts.length, 1); assert.equal(mounts[0].album.key, 'native:album'); assert.equal(env.opened.length, 0);
+  assert.equal(c.getTrackModalSelectionLease().dialog, dialog);
+  assert.equal(host.contains(dialog), true, 'Actual native lease moves its existing dialog');
   assert.equal(states.at(-1), 'ready'); env.setEntries(['two']); assert.equal(releases, 1); assert.equal(mounts[0].options.isCurrent(), false);
+  assert.equal(c.getTrackModalSelectionLease(), null);
+  assert.equal(overlay.contains(dialog), true, 'Actual release returns the exact dialog to its dock');
   lease.dispose(); assert.equal(releases, 1);
 });
 

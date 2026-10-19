@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {load, id, TOP, OTHER, SCOPE, deferred, drain, detail, sharing, service, preparedController,
+const {load, id, TOP, OTHER, SCOPE, deferred, drain, nextTask, detail, sharing, service, preparedController,
   nativeEnvironment, connectedView, shell} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
 if (!globalThis.crypto) globalThis.crypto = require('node:crypto').webcrypto;
 
@@ -18,7 +18,7 @@ test('notification sharing Close before the read settles consumes one request an
     owner.update({shareRequest: request}); gate.resolve(sharing()); await drain();
     assert.equal(env.opens.length, 1); assert.equal(env.modal().hidden, true);
   } finally {owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });
 
 test('notification already-projected sharing authority also consumes once across close and repeated props', async () => {
@@ -31,25 +31,47 @@ test('notification already-projected sharing authority also consumes once across
     owner.update({shareRequest: request}); await drain();
     assert.equal(env.opens.length, 1); assert.equal(handled, 1); assert.equal(env.modal().hidden, true);
   } finally {owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });
 
-test('a current share notification replaces a metadata-only editor with the actual sharing owner', async () => {
-  const backend = service(), env = nativeEnvironment(), controller = await preparedController(backend);
+test('a current share notification replaces inline Edit only after its real draft departure is accepted', async () => {
+  const backend = service(), env = nativeEnvironment({inlineNavigation: true});
+  const controller = await preparedController(backend, {scopeKey: env.runtime.snapshot().scopeKey});
   let handled = 0; const owner = await connectedView(env, backend, controller, {onShareRequestHandled: () => handled++});
   try {
     env.click(env.button(env.host, 'Edit Album Top'));
-    const old = env.content().querySelector('form'); assert.equal(old.getAttribute('aria-label'), 'Edit Album Top');
-    owner.update({shareRequest: {row: {top_ref: TOP}, isCurrent: () => true}}); await drain();
-    assert.equal(old.isConnected, false); assert.equal(env.content().querySelector('form'), null);
+    const old = env.host.querySelector('form.album-top-inline-edit'), name = old.querySelector('[name="top-name"]');
+    assert.equal(old.getAttribute('aria-label'), 'Edit Album Top'); assert.equal(name.disabled, false);
+    env.input(name, 'Unsaved title'); assert.equal(env.button(old, 'Save').disabled, false);
+    assert.equal(env.modal().hidden, true); assert.equal(env.opens.length, 0);
+    const request = {row: {top_ref: TOP}, isCurrent: () => true}; let arrivals = 0;
+    // Notifications publish their share request after guarded navigation. Keep
+    // that ordering and exercise the actual Settings/Top departure owner.
+    const arrive = () => {arrivals++; owner.update({shareRequest: request}); return true;};
+    const declined = env.runtime.deferDraftNavigation(arrive); await drain();
+    assert.equal(env.document.getElementById('app-confirm-modal').hidden, false);
+    assert.equal(arrivals, 0); assert.equal(handled, 0);
+    env.click(env.document.getElementById('app-confirm-cancel')); assert.equal(await declined, false);
+    assert.equal(old.isConnected, true); assert.equal(name.value, 'Unsaved title');
+    assert.equal(env.opens.length, 0); assert.equal(handled, 0); assert.equal(backend.count('execute'), 0);
+    const accepted = env.runtime.deferDraftNavigation(arrive); await drain();
+    assert.equal(env.document.getElementById('app-confirm-modal').hidden, false);
+    env.click(env.document.getElementById('app-confirm-accept')); assert.equal(await accepted, true); await drain();
+    assert.equal(old.isConnected, false); assert.equal(env.host.querySelector('form.album-top-inline-edit'), null);
+    assert.equal(env.content().querySelector('form'), null); assert.equal(arrivals, 1);
     assert.equal(env.document.getElementById('app-form-title').textContent, 'Share Album Top');
-    assert.equal(env.opens.length, 2); assert.equal(handled, 1);
+    assert.equal(env.opens.length, 1); assert.equal(handled, 1);
     assert.ok(env.button(env.content(), 'Save visibility'));
+    owner.update({shareRequest: request}); await drain(); assert.equal(env.opens.length, 1); assert.equal(handled, 1);
+    env.click(env.button(env.content(), 'Close')); await drain(); owner.update({shareRequest: request}); await drain();
+    assert.equal(env.modal().hidden, true); assert.equal(env.opens.length, 1); assert.equal(handled, 1);
+    assert.equal(backend.count('execute'), 0); assert.equal(controller.getSnapshot().detail.data.title, 'Curated Top');
+    assert.equal(env.runtime.deferDraftNavigation(() => assert.fail('Retired editor replayed a departure')), false);
   } finally {owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });
 
-for (const [label, selected] of [['Create Album Top', null], ['Edit Album Top', TOP], ['Share', TOP]]) {
+for (const [label, selected] of [['Create Album Top', null], ['Share', TOP]]) {
   test(`${label} reports native open failure, closes fallback, and permits an explicit reopen`, async () => {
     const backend = service(), env = nativeEnvironment(), controller = await preparedController(backend, {selected});
     const owner = await connectedView(env, backend, controller), actualOpen = env.runtime.openForm;
@@ -65,6 +87,46 @@ for (const [label, selected] of [['Create Album Top', null], ['Edit Album Top', 
     env.assertClean();
   });
 }
+
+test('inline Edit reports real navigation protection failure, cancels, and saves after an explicit reopen', async () => {
+  const write = deferred(), backend = service({execute: () => write.promise}), env = nativeEnvironment({inlineNavigation: true});
+  const controller = await preparedController(backend, {scopeKey: env.runtime.snapshot().scopeKey});
+  const owner = await connectedView(env, backend, controller), {history, location} = env.context;
+  const originalHistory = structuredClone(history.state), originalUrl = location.href;
+  try {
+    history.replaceState({...originalHistory, albumHavenNavigationPosition: '1'}, '', originalUrl);
+    env.click(env.button(env.host, 'Edit Album Top'));
+    const failed = env.host.querySelector('form.album-top-inline-edit');
+    assert.match(failed.textContent, /navigation protection could not be started.*Cancel and reopen this Top/);
+    assert.equal(failed.querySelector('[name="top-name"]').disabled, true);
+    assert.equal(env.button(failed, 'Save').disabled, true); assert.equal(env.button(failed, 'Cancel').disabled, false);
+    failed.dispatchEvent(new env.context.Event('submit')); assert.equal(backend.count('execute'), 0);
+    assert.equal(env.modal().hidden, true); assert.equal(env.opens.length, 0);
+    assert.equal(env.runtime.deferDraftNavigation(() => assert.fail('Failed guard authorized a departure')), false);
+    env.click(env.button(failed, 'Cancel')); await drain();
+    assert.equal(failed.isConnected, false); assert.doesNotMatch(env.host.textContent, /navigation protection could not be started/);
+    history.replaceState(originalHistory, '', originalUrl);
+    env.click(env.button(env.host, 'Edit Album Top'));
+    const reopened = env.host.querySelector('form.album-top-inline-edit'), name = reopened.querySelector('[name="top-name"]');
+    assert.notEqual(reopened, failed); assert.equal(name.disabled, false); assert.equal(name.value, 'Curated Top');
+    assert.doesNotMatch(reopened.textContent, /navigation protection could not be started/);
+    env.input(name, 'Recovered Top'); assert.equal(env.button(reopened, 'Save').disabled, false);
+    reopened.dispatchEvent(new env.context.Event('submit'));
+    assert.equal(backend.count('execute'), 1);
+    const [action, command] = backend.calls.find(call => call.method === 'execute').args;
+    assert.equal(action, 'save'); assert.equal(command.top_ref, TOP); assert.equal(command.revision, '7');
+    assert.equal(command.title, 'Recovered Top'); assert.equal(command.description, 'Subtitle');
+    backend.data.detail = detail({title: command.title, revision: '8'});
+    write.resolve({action, request_key: command.request_key, top_ref: TOP, revision: '8'}); await drain();
+    assert.equal(reopened.isConnected, false); assert.equal(env.host.querySelector('form.album-top-inline-edit'), null);
+    assert.equal(env.host.querySelector('.gallery-bar__title').textContent, 'Recovered Top');
+    assert.equal(env.button(env.host, 'Edit Album Top').disabled, false); assert.equal(backend.count('execute'), 1);
+    assert.equal(env.modal().hidden, true); assert.equal(env.opens.length, 0);
+    assert.deepEqual(history.state, originalHistory); assert.equal(location.href, originalUrl);
+    assert.equal(env.runtime.deferDraftNavigation(() => assert.fail('Saved editor retained its guard')), false);
+  } finally {owner.dispose();}
+  env.assertClean();
+});
 
 test('partial builder mount failure retires real draft subscription and native form before recovery', async () => {
   const backend = service(), env = nativeEnvironment(), controller = await preparedController(backend, {selected: null});
@@ -138,7 +200,7 @@ test('delete native confirmation rechecks the actual controller snapshot before 
     await controller.open(OTHER); env.click(env.document.getElementById('app-confirm-accept')); await drain();
     assert.equal(backend.count('execute'), 0);
   } finally {owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });
 
 test('backend receipt mismatch stays uncertain in the actual controller without publishing a ready receipt', async () => {

@@ -6,8 +6,8 @@ const {nativeEnvironment, drain} = require('./actual-native-runtime.cjs');
 
 // Add the whole canonical native menu and anchoring owners to the existing real
 // native form/controller fixture. Only platform registration accounting changes.
-function actualChoiceEnvironment() {
-  const env = nativeEnvironment(), {context, document} = env;
+function actualChoiceEnvironment(options = {}) {
+  const env = nativeEnvironment(options), {context, document} = env;
   const permanent = [], originalWindowAdd = context.addEventListener, originalDocumentAdd = document.addEventListener;
   context.addEventListener = function (type, callback, capture = false) {
     permanent.push({target: context, type, callback, capture});

@@ -158,3 +158,18 @@ test('G02 retired grid activation and repeated destroy cannot claim or dispose a
   assert.equal(h.observers[1].nodes.size, 0, 'B retains its own working teardown');
   assert.equal(h.media.listeners.get('change').size, 0);
 });
+
+test('metadata text losing its browser selector membership retires its observed row', () => {
+  const h = createMetadataLifetimeRuntime(), card = h.card();
+  const owner = h.context.syncGalleryCardMetadataMotion(card.root);
+  h.flushFrame(); activeMotion(h, card);
+  card.text.removeAttribute('data-gallery-metadata-text');
+  assert.equal(card.text.matches('[data-gallery-metadata-text]'), false);
+  h.observers[0].deliver(); h.flushFrame();
+  assert.equal(h.observers[0].nodes.size, 0);
+  assert.equal(card.row.classList.contains('is-card-text-overflowing'), false);
+  owner.update(card.root); h.flushFrame();
+  assert.equal(h.observers[0].nodes.size, 0, 'Selector lookup cannot readmit unmarked text');
+  owner.dispose();
+  assert.equal(h.frames.size, 0);
+});

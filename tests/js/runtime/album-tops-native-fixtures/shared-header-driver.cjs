@@ -5,10 +5,10 @@ const {load, TOP, detail, service, preparedController, nativeEnvironment, drain}
 if (!globalThis.crypto) globalThis.crypto = require('node:crypto').webcrypto;
 const ACTIONS = ['Edit Album Top', 'Share', 'Save a copy', 'Delete Album Top'];
 const labels = root => [...root.querySelectorAll('button')].filter(node => !node.closest('[hidden]')).map(node => node.getAttribute('aria-label') || node.textContent.trim()).filter(label => label !== 'Tools');
-async function fixture(t, {selected = true, grants = {}, editDraft = false, patch = {}} = {}) {
-  const env = nativeEnvironment(), backend = service();
+async function fixture(t, {selected = true, grants = {}, editDraft = false, inlineNavigation = false, patch = {}} = {}) {
+  const env = nativeEnvironment({inlineNavigation}), backend = service();
   backend.data.detail = detail({title: 'Top <safe>', ...(editDraft ? {edit_draft: {items: [], publication_preview_required: false}} : {}), ...patch});
-  const controller = await preparedController(backend, {selected: selected ? TOP : null});
+  const controller = await preparedController(backend, {selected: selected ? TOP : null, scopeKey: env.runtime.snapshot().scopeKey});
   let state = controller.getSnapshot();
   if (selected) state = {...state, detail: {...state.detail, data: {...state.detail.data, allowed_actions: {...state.detail.data.allowed_actions, ...grants}}}};
   // State projections are test input (including deliberately malformed grants),
@@ -21,7 +21,7 @@ async function fixture(t, {selected = true, grants = {}, editDraft = false, patc
   const {mountAlbumTopsView} = await load('album-tops/app.mjs');
   const props = () => ({controller, providers: backend.providers, state, onOpen: ref => calls.opens.push(ref)});
   const view = mountAlbumTopsView(env.host, env.runtime, props());
-  t.after(() => {view.dispose(); controller.dispose(); env.assertClean();});
+  t.after(async () => {view.dispose(); controller.dispose(); await actual.nextTask(); env.assertClean();});
   return {...env, backend, controller, calls, view, state: () => state,
     replace(next, reconcile = true) {state = next; if (reconcile) view.update(props());}, render() {view.update(props());},
     header() {const roots = env.host.querySelectorAll('[data-shared-header]'); assert.equal(roots.length, 1); assert.equal(env.host.querySelectorAll('header').length, 1); return roots[0];}};

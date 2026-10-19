@@ -306,18 +306,23 @@ test('saved Loved default and session order use actual saved runtime without ord
   // recipe normalizer exported by AlbumHavenPlaylistUI, never a permissive stub.
   const {nativeMixFixture} = require('./library-mix-react-fixture.cjs');
   const h = await nativeMixFixture(t);
-  // Reply only to the exact native entry hydration. Every other startup URL
+  // Reply only to the exact native entry and applied-filter hydration. Every other startup URL
   // remains a failure; there is no catch-all successful network response.
+  const hydrationUrl = `/view-data?surface=playlists&playlist_id=${id(80)}`;
+  const filtersUrl = `/playlists/${id(80)}/filter-preferences`;
   h.c.fetch = async (url, options = {}) => {
     h.calls.requests.push({url, ...options});
-    assert.equal(url, `/view-data?surface=playlists&playlist_id=${id(80)}`);
+    assert.ok(url === hydrationUrl || url === filtersUrl, 'only the two authorized startup reads');
     assert.equal(options.method || 'GET', 'GET');
-    assert.equal(h.calls.requests.length, 1, 'one bounded native entry hydration');
+    assert.equal(options.body, undefined, 'startup hydration cannot write preferences');
+    assert.equal(h.calls.requests.filter(request => request.url === url).length, 1, 'one bounded read per startup resource');
+    if (url === filtersUrl) return response({context_ref: h.c.AlbumHavenPrivateUITransport.context(),
+      playlist_ref: id(80), revision: '1', filters: null, expires_at: null, server_time: '2026-10-19T00:00:00Z'});
     return response(h.state.view);
   };
   await h.boot({}); await h.settle();
-  assert.deepEqual(h.calls.requests.map(request => request.url ?? request[0]), [`/view-data?surface=playlists&playlist_id=${id(80)}`],
-    'actual native entry performs exactly its selected saved playlist hydration before custom providers are configured');
+  assert.deepEqual(h.calls.requests.map(request => request.url ?? request[0]).sort(), [filtersUrl, hydrationUrl].sort(),
+    'actual native entry performs exactly one selected saved playlist and one applied-filter hydration before custom providers are configured');
   const startupRequests = h.calls.requests.length;
   h.state.view = data; h.runtime.sync(); await h.settle();
   const actualRecipe = await import('../../../music_app/static/js/playlists/artist-loved-recipe.mjs');

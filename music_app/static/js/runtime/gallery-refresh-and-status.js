@@ -45,13 +45,15 @@ function isPagedRootGallery(view = state.view) {
     && surface === 'albums');
 }
 
-function cancelRootGalleryPageRequest() {
-  rootGalleryPageRequest?.controller.abort();
-  rootGalleryPageRequest = null;
+function cancelRootGalleryPageRequest(expectedOwner = rootGalleryPageRequest) {
+  // Detach only this owner before abort observers can install a successor.
+  if (rootGalleryPageRequest === expectedOwner) rootGalleryPageRequest = null;
+  expectedOwner?.controller.abort();
 }
 
-function mergeRootGalleryPageGroups(existing, incoming) {
-  const groups = (existing || []).map(group => ({ ...group, albums: [...(group.albums || [])] }));
+function mergeRootGalleryPageGroups(existing, incoming, previousStamp = null, incomingStamp = null) {
+  const retainLoved = typeof incomingStamp === 'string' && /^[0-9a-f]{64}$/.test(incomingStamp) && previousStamp === incomingStamp;
+  const groups = (existing || []).map(group => ({ ...group, artist_loved_launch: retainLoved ? group.artist_loved_launch ?? null : null, albums: [...(group.albums || [])] }));
   const byArtist = new Map(groups.map(group => [String(group.display_artist_key || group.artist || ''), group]));
   for (const incomingGroup of incoming || []) {
     const artistKey = String(incomingGroup.display_artist_key || incomingGroup.artist || '');
@@ -61,6 +63,7 @@ function mergeRootGalleryPageGroups(existing, incoming) {
       groups.push(group);
       byArtist.set(artistKey, group);
     }
+    group.artist_loved_launch = incomingGroup.artist_loved_launch ?? null;
     const identities = new Set(group.albums.map(album => String(album.key || '')));
     for (const album of incomingGroup.albums || []) {
       const identity = String(album.key || '');
@@ -91,9 +94,10 @@ async function loadNextRootGalleryPage() {
     cursor: page.next_cursor,
     revision: page.revision,
     tagEditMutationRevision: Number(state.ui.tagEditOptimisticMutationRevision || 0),
+    albumPreferenceScope: captureRuntimeAlbumPreferenceScope(),
   };
   rootGalleryPageRequest = request;
-  const ownsResponse = () => rootGalleryPageRequest === request
+  const ownsPage = () => rootGalleryPageRequest === request
     && !request.controller.signal.aborted
     && readViewStateRevision() === request.viewRevision
     && Number(state.ui.tagEditOptimisticMutationRevision || 0) === request.tagEditMutationRevision
@@ -101,16 +105,22 @@ async function loadNextRootGalleryPage() {
     && buildRootGalleryPageUrl(state.view) === request.url
     && state.view.gallery_page.next_cursor === request.cursor
     && state.view.gallery_page.revision === request.revision;
+  const ownsResponse = () => ownsPage()
+    && (!request.albumPreferenceScope || runtimeAlbumPreferenceScopeIsCurrent(request.albumPreferenceScope))
+    && ownsPage();
   const url = new URL(request.url, window.location.href);
   url.searchParams.set('gallery_page_size', '50');
   url.searchParams.set('gallery_cursor', request.cursor);
   url.searchParams.set('omit_sidebar', '1');
   try {
+    if (!ownsResponse()) return false;
     let preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
       signal: request.controller.signal, isCurrent: ownsResponse,
     });
+    if (!ownsResponse()) return false;
     let response = await fetch(`${url.pathname}${url.search}`, {
-      headers: { Accept: 'application/json' }, signal: request.controller.signal,
+      headers: { Accept: 'application/json', ...(request.albumPreferenceScope ? {'X-AlbumHaven-Context': request.albumPreferenceScope.context} : {}) },
+      credentials: 'same-origin', cache: 'no-store', signal: request.controller.signal,
     });
     let restarted = false;
     if (response.status === 409) {
@@ -123,12 +133,14 @@ async function loadNextRootGalleryPage() {
       preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
         signal: request.controller.signal, isCurrent: ownsResponse,
       });
+      if (!ownsResponse()) return false;
       response = await fetch(`${url.pathname}${url.search}`, {
-        headers: { Accept: 'application/json' }, signal: request.controller.signal,
+        headers: { Accept: 'application/json', ...(request.albumPreferenceScope ? {'X-AlbumHaven-Context': request.albumPreferenceScope.context} : {}) },
+      credentials: 'same-origin', cache: 'no-store', signal: request.controller.signal,
       });
       restarted = true;
     }
-    const data = await readGalleryResponse(response, ownsResponse, preferenceRead);
+    const data = await readGalleryResponse(response, ownsResponse, preferenceRead, null, request.albumPreferenceScope);
     if (!ownsResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
@@ -137,7 +149,7 @@ async function loadNextRootGalleryPage() {
       || !Array.isArray(data.artist_groups)) return false;
     const artistGroups = restarted
       ? data.artist_groups
-      : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
+      : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups, state.view.artist_loved_context_ref, data.artist_loved_context_ref);
     if (restarted && typeof admitLooseTrackPreferenceRows === 'function') {
       admitLooseTrackPreferenceRows(data, preferenceRead);
       // Admission notifies synchronous subscribers that may replace this owner.
@@ -153,6 +165,7 @@ async function loadNextRootGalleryPage() {
           visible_library_categories: data.visible_library_categories,
         },
       } : {}),
+      artist_loved_context_ref: data.artist_loved_context_ref ?? null,
       artist_groups: artistGroups,
       gallery_page: data.gallery_page,
       initial_view_partial: false,
@@ -651,6 +664,7 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  if(typeof syncAdvancedSearchAppliedView==='function')syncAdvancedSearchAppliedView();
   const renderedView = state.view, renderedRequestId = Number(state.ui?.activeViewRequestId || 0);
   const renderedRevision = Number(state.ui?.viewStateRevision || 0);
   const ownsRender = () => state.view === renderedView
@@ -704,8 +718,12 @@ function renderView(options = {}) {
     renderRelated();
   }
   if (!ownsRender()) return;
-  if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
-    renderArtistGroups(options);
+  const artistReconcile = window.AlbumHavenArtistPageRuntime?.reconcileAdmittedView({
+    view: renderedView, requestId: renderedRequestId, revision: renderedRevision, isCurrent: ownsRender, renderOptions: options,
+  });
+  if (!ownsRender()) return;
+  if (artistReconcile?.requiresGalleryRender || options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
+    renderArtistGroups({...options, isCurrentResponse: ownsRender});
   } else if (typeof updateGalleryMainChrome === 'function') {
     // Retained cards do not imply that search or artist context is unchanged.
     updateGalleryMainChrome();
@@ -1007,8 +1025,96 @@ function privateSearchInitialProgressIsValid(data, {resultCursor = null, sidebar
     && (sidebarCursor === null || sidebar.next_cursor !== sidebarCursor);
 }
 
+function privateListenerSearchCriteriaIsValid(criteria) {
+  const exact = (value, keys) => isRuntimePlainObject(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  const tiers = value => Array.isArray(value) && value.length <= 2
+    && value.every(tier => tier === 'loved' || tier === 'obsessed')
+    && new Set(value).size === value.length
+    && JSON.stringify(value) === JSON.stringify(['loved', 'obsessed'].filter(tier => value.includes(tier)));
+  return exact(criteria, ['subject', 'predicate_domain', 'history', 'love'])
+    && exact(criteria.subject, ['kind', 'username']) && criteria.subject.kind === 'username'
+    && typeof criteria.subject.username === 'string' && /^[a-z0-9][a-z0-9._-]{2,63}$/.test(criteria.subject.username)
+    && criteria.predicate_domain === 'tracks' && exact(criteria.history, ['period']) && criteria.history.period === 'all'
+    && exact(criteria.love, ['include', 'exclude']) && tiers(criteria.love.include) && tiers(criteria.love.exclude);
+}
+
+function privateListenerSearchResponseMatchesRequest(data, url) {
+  const allowed = new Set(['surface', 'q', 'search_presentation', 'search_page_size', 'search_cursor']);
+  const params = url.searchParams, size = params.get('search_page_size') ?? '100';
+  return url.pathname === '/view-data' && [...params.keys()].every(key => allowed.has(key) && params.getAll(key).length === 1)
+    && (params.get('surface') ?? 'albums') === 'albums' && params.has('q')
+    && isListenerSearchExpression(params.get('q')) && data.query === params.get('q')
+    && (params.get('search_presentation') ?? 'tracks') === 'tracks' && data.presentation === 'tracks'
+    && /^[0-9]{1,3}$/.test(size) && Number(size) >= 1 && Number(size) <= 100 && data.page?.limit === Number(size)
+    && (!params.has('search_cursor') || Boolean(params.get('search_cursor')) && params.get('search_cursor').length <= 4096)
+    && data.status === 'ready' && data.private_search === true && privateListenerSearchCriteriaIsValid(data.criteria)
+    && data.listener?.username === data.criteria.subject.username
+    && (!data.page?.has_more || data.page.next_cursor !== params.get('search_cursor'));
+}
+
+function privatePopularitySearchCriteriaIsValid(criteria) {
+  const exact = (value, keys) => isRuntimePlainObject(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  // Bounds are only wire-shape protection; normalization and matching belong
+  // to the server. 400 UTF-16 units admits every 200-code-point query term.
+  const terms = value => Array.isArray(value) && value.length <= 200
+    && value.every(term => typeof term === 'string' && term.length > 0 && term.length <= 400);
+  const predicate = value => exact(value, ['include', 'exclude']) && terms(value.include) && terms(value.exclude);
+  return exact(criteria, ['predicate_domain', 'sort', 'artist', 'genre', 'per_artist'])
+    && criteria.predicate_domain === 'tracks'
+    && exact(criteria.sort, ['provider', 'metric', 'direction'])
+    && criteria.sort.provider === 'lastfm' && criteria.sort.metric === 'overall_scrobbles'
+    && criteria.sort.direction === 'desc' && predicate(criteria.artist) && predicate(criteria.genre)
+    && (criteria.per_artist === null || Number.isInteger(criteria.per_artist)
+      && criteria.per_artist >= 1 && criteria.per_artist <= 5000);
+}
+
+function privatePopularitySearchResponseMatchesRequest(data, url) {
+  if (!(url instanceof URL)) url = new URL(url, 'http://localhost');
+  const allowed = new Set(['surface', 'q', 'search_presentation', 'search_page_size', 'search_cursor', 'gallery_scope', 'category']);
+  const params = url.searchParams, size = params.get('search_page_size') ?? '100';
+  const cursor = params.get('search_cursor');
+  const presentation = params.get('search_presentation') ?? 'tracks';
+  const categories = params.getAll('category');
+  return url.pathname === '/view-data' && [...params].length <= 38
+    && [...params.keys()].every(key => allowed.has(key) && (key === 'category' || params.getAll(key).length === 1))
+    && (params.get('surface') ?? 'albums') === 'albums' && params.has('q')
+    && isPopularitySearchExpression(params.get('q')) && data?.query === params.get('q')
+    && ['albums', 'tracks'].includes(presentation) && data.presentation === presentation
+    && /^[0-9]{1,3}$/.test(size) && Number(size) >= 1 && Number(size) <= 100 && data.page?.limit === Number(size)
+    && (cursor === null || /^[\x00-\x7f]{1,4096}$/.test(cursor) && !cursor.includes('\0'))
+    && ['all', 'new_arrivals'].includes(params.get('gallery_scope') ?? 'all')
+    && categories.length <= 32 && categories.every(category => DEFAULT_LIBRARY_CATEGORIES.includes(category))
+    && data.status === 'ready' && data.private_search === true && data.contract_version === (presentation === 'albums' ? 'popularity-search-albums-v1' : 'popularity-search-v1')
+    && privatePopularitySearchCriteriaIsValid(data.criteria)
+    && (!data.page?.has_more || data.page.next_cursor !== cursor);
+}
+
+// Server messages and middleware detail strings are never rendered. Locations
+// are optional original-query UTF-16 offsets, copied only after bounded checks.
+function privatePopularitySearchReadError(status, data, query) {
+  const messages = {400: 'This popularity search request is malformed.',
+    422: 'This popularity search combination is not supported.',
+    403: 'Popularity Search is not authorized in this context.',
+    409: 'Popularity Search has changed or expired. Restart search from page one.',
+    503: 'Popularity Search is temporarily unavailable. Try again.'};
+  const value = data?.location;
+  const location = isRuntimePlainObject(value) && Object.keys(value).length === 2
+    && Number.isInteger(value.start) && Number.isInteger(value.end)
+    && value.start >= 0 && value.end >= value.start && value.end <= query.length
+    ? {start: value.start, end: value.end} : null;
+  return Object.assign(new Error(messages[status] || 'Popularity Search could not be loaded. Try again.'), {
+    status, location, popularitySearchFailure: true, privateSearchRetired: true,
+  });
+}
+
 function privateSearchResponseMatchesRequest(data, apiUrl) {
   const url = new URL(apiUrl, 'http://localhost');
+  if (url.searchParams.getAll('q').some(isPopularitySearchExpression)
+    && !['popularity-search-v1', 'popularity-search-albums-v1'].includes(data?.contract_version)) return false;
+  if (['popularity-search-v1', 'popularity-search-albums-v1'].includes(data?.contract_version)) return privatePopularitySearchResponseMatchesRequest(data, url);
+  if (data?.contract_version === 'listener-search-v1') return privateListenerSearchResponseMatchesRequest(data, url);
   const selectedPending = data?.status === 'pending';
   if (url.pathname !== '/view-data' || (url.searchParams.get('surface') || 'albums') !== 'albums'
     || data?.private_search !== true || data.contract_version !== 'own-love-v1'
@@ -1050,9 +1156,10 @@ function privateSearchResponseMatchesRequest(data, apiUrl) {
   return true;
 }
 
-async function readGalleryResponse(response, ownsResponse, preferenceRead = null, readOwner = null) {
+async function readGalleryResponse(response, ownsResponse, preferenceRead = null, readOwner = null, albumPreferenceScope = null) {
   const assertCurrent = () => {
-    if (!ownsResponse()) {
+    if (!ownsResponse() || albumPreferenceScope && !runtimeAlbumPreferenceScopeIsCurrent(albumPreferenceScope)
+      || !ownsResponse()) {
       throw Object.assign(new Error('View request was superseded.'), {name: 'AbortError'});
     }
   };
@@ -1063,6 +1170,7 @@ async function readGalleryResponse(response, ownsResponse, preferenceRead = null
     assertCurrent();
     preferenceRead?.revoke();
     assertCurrent();
+    if (readOwner.popularityRequest) throw privatePopularitySearchReadError(response.status, null, readOwner.query);
     throw Object.assign(new Error('Private Search is no longer available.'), {
       status: response.status, privateSearchRetired: true,
     });
@@ -1086,6 +1194,11 @@ async function readGalleryResponse(response, ownsResponse, preferenceRead = null
   try { data = await response.json(); }
   catch (error) {
     assertCurrent();
+    if (readOwner?.popularityRequest) {
+      readOwner.retire();
+      assertCurrent();
+      throw privatePopularitySearchReadError(response.status, null, readOwner.query);
+    }
     if (readOwner?.privateRequest && response.ok) {
       readOwner.retire();
       assertCurrent();
@@ -1100,6 +1213,11 @@ async function readGalleryResponse(response, ownsResponse, preferenceRead = null
     throw error;
   }
   assertCurrent();
+  if (readOwner?.popularityRequest && (!response.ok || data?.ok === false)) {
+    readOwner.retire();
+    assertCurrent();
+    throw privatePopularitySearchReadError(response.status, data, readOwner.query);
+  }
   if (readOwner) {
     const code = data?.error_code;
     const privateDenial = ['private_search_forbidden', 'stale_context', 'search_selection_unavailable',
@@ -1128,6 +1246,13 @@ async function readGalleryResponse(response, ownsResponse, preferenceRead = null
     && (data.source_readable === false || data.readable === false
       || Object.hasOwn(data.allowed_actions || {}, 'can_read') && data.allowed_actions.can_read !== true)) {
     preferenceRead?.revoke();
+    assertCurrent();
+  }
+  // Only an explicit browse owner can supply its immutable pre-dispatch scope.
+  // Generic status/sidebar parsers cannot manufacture preference receipts.
+  if (albumPreferenceScope && response.ok && data?.ok !== false) {
+    assertCurrent();
+    admitRuntimeAlbumPreferenceRead(data, albumPreferenceScope);
     assertCurrent();
   }
   return data;
@@ -1244,7 +1369,7 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
 }
 
-async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, preferenceRead) {
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, preferenceRead, albumPreferenceScope) {
   let payload = data;
   let restarted = false;
   const cursors = new Set();
@@ -1265,11 +1390,13 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     const continuationRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
       signal: controller?.signal, isCurrent: ownsResponse,
     });
+    if (!ownsResponse() || albumPreferenceScope && !runtimeAlbumPreferenceScopeIsCurrent(albumPreferenceScope) || !ownsResponse()) return null;
     const response = await fetch(`${url.pathname}${url.search}`, {
-      headers: { Accept: 'application/json' }, signal: controller?.signal,
+      headers: { Accept: 'application/json', ...(albumPreferenceScope ? {'X-AlbumHaven-Context': albumPreferenceScope.context} : {}) },
+      credentials: 'same-origin', cache: 'no-store', signal: controller?.signal,
     });
     if (!ownsResponse()) return null;
-    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse, continuationRead);
+    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse, continuationRead, null, albumPreferenceScope);
     if (!ownsResponse()) return null;
     if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
       if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
@@ -1281,10 +1408,12 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
       preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
         signal: controller?.signal, isCurrent: ownsResponse,
       });
+      if (!ownsResponse() || albumPreferenceScope && !runtimeAlbumPreferenceScopeIsCurrent(albumPreferenceScope) || !ownsResponse()) return null;
       const restartResponse = await fetch(`${url.pathname}${url.search}`, {
-        headers: { Accept: 'application/json' }, signal: controller?.signal,
+        headers: { Accept: 'application/json', ...(albumPreferenceScope ? {'X-AlbumHaven-Context': albumPreferenceScope.context} : {}) },
+        credentials: 'same-origin', cache: 'no-store', signal: controller?.signal,
       });
-      payload = await readGalleryResponse(restartResponse, ownsResponse, preferenceRead);
+      payload = await readGalleryResponse(restartResponse, ownsResponse, preferenceRead, null, albumPreferenceScope);
       continue;
     }
     if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
@@ -1292,7 +1421,8 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     }
     payload = {
       ...payload,
-      artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups),
+      artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups, payload.artist_loved_context_ref, next.artist_loved_context_ref),
+      artist_loved_context_ref: next.artist_loved_context_ref ?? null,
       gallery_page: next.gallery_page,
     };
   }
@@ -1300,6 +1430,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
 }
 
 async function fetchAndRender(url, push = true, options = {}, originatingOptions = options) {
+  if(typeof invalidateAdvancedSearchIntent==='function')invalidateAdvancedSearchIntent('navigation',{preserveRetained:true});
   const suppliedOptions = (options && typeof options === 'object') ? options : {};
   const callbackOptions = (originatingOptions && typeof originatingOptions === 'object') ? originatingOptions : suppliedOptions;
   const nativeWindow = typeof window === 'undefined' ? null : window;
@@ -1423,12 +1554,19 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
     : 0;
   let viewRendered = false;
   let requestStarted = false, settledApplied = false, settledError = null;
-  let cleanupWorkRetired = false, ownsCatchCleanup = null;
+  let cleanupWorkRetired = false, ownsCatchCleanup = null, artistRequestSettlement = null;
+  const artistRequestOriginalView = state.view;
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   const privateRequest = isPrivateSearchRequestUrl(apiUrl);
+  const requestParams = new URL(apiUrl, 'http://localhost').searchParams;
+  const popularityRequest = privateRequest && requestParams.getAll('q').some(isPopularitySearchExpression);
+  // Capture request visibility before navigation projection or observers can
+  // mutate state.view; raw requests retain their original fields for rejection.
+  const popularityVisibility = Object.freeze({gallery_scope: requestParams.get('gallery_scope') ?? 'all',
+    visible_library_categories: Object.freeze(requestParams.getAll('category'))});
   let readScope = null;
   const ownsRequestSlot = () => state.ui.activeViewRequestId === requestId
     && state.ui.activeViewRequestController === controller
@@ -1444,6 +1582,12 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
     && ownsForegroundContext();
   const ownsPreferenceResponse = () => ownsForegroundSlot()
     && ownsPreferenceContext() && ownsForegroundSlot();
+  const albumPreferenceModal = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+  const albumPreferenceOwner = typeof getTrackModalAlbumPreferenceLease === 'function' ? getTrackModalAlbumPreferenceLease() : null;
+  const albumPreferenceFocus = typeof captureTrackModalAlbumPreferenceFocus === 'function'
+    ? captureTrackModalAlbumPreferenceFocus(albumPreferenceModal, albumPreferenceOwner) : null;
+  if (typeof disposeTrackModalAlbumPreferences === 'function') disposeTrackModalAlbumPreferences(
+    albumPreferenceOwner, {preserveFocus: !!albumPreferenceFocus});
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
@@ -1461,6 +1605,10 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
     && typeof requestOptions.retainMountedSelectedViewState === 'object'
   );
   try {
+    artistRequestSettlement = nativeWindow?.AlbumHavenArtistPageRuntime?.captureRequestSettlement({
+      view: artistRequestOriginalView, requestId, isCurrent: ownsForegroundContext,
+    }) || null;
+    if (!ownsForegroundContext()) return false;
     // A claimed foreground replacement revokes the accepted main result before
     // render/onStart subscribers can observe it. Deferral/queue paths above
     // preserve the current result. Reentry still passes through native finally.
@@ -1502,7 +1650,14 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       signal: controller?.signal, isCurrent: ownsPreferenceResponse,
     });
     if (!ownsPreferenceResponse()) return false;
+    const albumPreferenceScope = captureRuntimeAlbumPreferenceScope();
+    if (!ownsPreferenceResponse()) return false;
     requestStarted = true;
+    // Capture before dispatch, never at response receipt or after JSON parsing.
+    // This baseline stays local to this exact foreground request owner.
+    const searchRequestTiming = popularityRequest
+      ? nativeWindow?.AlbumHavenSearchRuntime?.captureRequestTiming?.() ?? null : null;
+    if (!ownsPreferenceResponse()) return false;
     const response = await fetch(apiUrl, {
       headers: { Accept: 'application/json',
         ...(readScope.context ? {'X-AlbumHaven-Context': readScope.context} : {}) },
@@ -1510,15 +1665,15 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       signal: controller?.signal,
     });
     let data = await readGalleryResponse(response, ownsPreferenceResponse, preferenceRead, {
-      privateRequest,
+      privateRequest, popularityRequest, query: requestParams.get('q') || '',
       retire: () => retireNativePrivateSearchView(ownsPreferenceResponse),
-    });
+    }, albumPreferenceScope);
     if (!ownsPreferenceResponse()) return false;
     if (privateRequest && data?.private_search !== true) {
       retireNativePrivateSearchView(ownsPreferenceResponse, 'invalid');
       throw Object.assign(new Error('Search is no longer available. Start a fresh search.'), {privateSearchRetired: true});
     }
-    if (data?.private_search === true || ['own-love-v1', 'listener-history-v1'].includes(data?.contract_version)) {
+    if (data?.private_search === true || ['own-love-v1', 'listener-history-v1', 'listener-search-v1', 'popularity-search-v1', 'popularity-search-albums-v1'].includes(data?.contract_version)) {
       if (!privateRequest || !readScope.context || !/^[1-9]\d*$/.test(readScope.actor) || !/^[1-9]\d*$/.test(readScope.library)
         || typeof readScope.transport?.accept !== 'function'
         || !privateSearchResponseMatchesRequest(data, apiUrl)
@@ -1542,7 +1697,7 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
           return false;
         }
       };
-      const collected = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh, preferenceRead);
+      const collected = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh, preferenceRead, albumPreferenceScope);
       if (!collected || !ownsRefresh()) return false;
       // Only the initial or restart packet supplies Loose rows. Continuation
       // metadata cannot replace its dispatch epoch with a completion-time read.
@@ -1603,7 +1758,8 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       throw Object.assign(new Error('Search is no longer available. Start a fresh search.'), {privateSearchRetired: true});
     }
     const payloadToApply = data?.private_search === true
-      ? normalizePrivateSearchNavigation(data, state.view)
+      ? normalizePrivateSearchNavigation(data, ['popularity-search-v1', 'popularity-search-albums-v1'].includes(data.contract_version)
+        ? {...state.view, ...popularityVisibility} : state.view)
       : retainedMountedSelectedViewState
       ? {
         ...state.view,
@@ -1661,7 +1817,7 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
         && (!retainedPlaylistDraft
           || nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft) === true)
         && galleryReadScopeIsCurrent(readScope) && ownsAcceptedIdentity();
-      if (nativeWindow.AlbumHavenSearchRuntime.accept(data, {isCurrent: ownsAcceptedResult}) !== true) {
+      if (nativeWindow.AlbumHavenSearchRuntime.accept(data, {isCurrent: ownsAcceptedResult, requestUrl: apiUrl, requestTiming: searchRequestTiming}) !== true) {
         if (ownsPreferenceResponse()) retireNativePrivateSearchView(ownsPreferenceResponse, 'invalid');
         throw Object.assign(new Error('Search is no longer available. Start a fresh search.'), {privateSearchRetired: true});
       }
@@ -1763,7 +1919,18 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
         primary_filter_active: state.view.primary_filter_active,
         search_filters: normalizeRuntimeSearchFilters(state.view.search_filters),
       } : state.view;
-      pushBrowserViewState(state.view, historySnapshot, retainedPlaylistDraft);
+      const artistCommittedView = state.view;
+      if (!ownsPreferenceResponse()) return false;
+      const artistHistoryAccepted = pushBrowserViewState(artistCommittedView, historySnapshot, retainedPlaylistDraft) !== false;
+      if (!ownsPreferenceResponse() || state.view !== artistCommittedView) return false;
+      nativeWindow?.AlbumHavenArtistPageRuntime?.commitAdmittedNavigation(artistCommittedView, ownsPreferenceResponse, artistHistoryAccepted);
+      if (!ownsPreferenceResponse() || state.view !== artistCommittedView) return false;
+    } else {
+      // A refresh/history restoration has no new history entry to adopt.
+      const artistCommittedView = state.view;
+      if (!ownsPreferenceResponse()) return false;
+      nativeWindow?.AlbumHavenArtistPageRuntime?.commitAdmittedNavigation(artistCommittedView, ownsPreferenceResponse, true);
+      if (!ownsPreferenceResponse() || state.view !== artistCommittedView) return false;
     }
     if (!ownsPreferenceResponse()) return false;
     recordSuccessfulCanonicalFullViewApply(data, requestOptions);
@@ -1798,6 +1965,15 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       if (!ownsErrorCleanup()) cleanupWorkRetired = true;
       return !cleanupWorkRetired;
     };
+    if (!cancelled && error?.popularitySearchFailure) {
+      settledError = error;
+      if (!ownsCatchCleanup()) return false;
+      const published = nativeWindow?.AlbumHavenSearchRuntime?.failPopularityRequest?.({
+        status: error.status, location: error.location, requestUrl: apiUrl,
+      }, {isCurrent: ownsCatchCleanup});
+      if (!published && ownsCatchCleanup() && typeof showToast === 'function') showToast(error.message, 'error', 4800);
+      return false;
+    }
     if (!cancelled && error?.privateSearchRetired) {
       settledError = error;
       if (typeof showToast === 'function') showToast('Search is no longer available. Start a fresh search.', 'error', 4800);
@@ -1838,6 +2014,7 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
     settledError = error;
     throw error;
   } finally {
+    try {
     // A catch that lost work ownership cannot reacquire its replacement merely
     // because finally starts later. Physical slot release remains independent.
     if (ownsCatchCleanup) ownsCatchCleanup();
@@ -1956,6 +2133,16 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
           });
         }
       }
+      // Failed/cancelled/declined work may leave the exact old admission alive.
+      // Settle only after owned cleanup and queued/automatic dispatch decisions;
+      // a newer request, navigation or scope cannot be reopened by this finally.
+      if (!settledApplied && !viewRendered && ownsReleasedContext()) {
+        artistRequestSettlement?.settle(ownsReleasedContext);
+      }
+      if (ownsReleasedContext() && albumPreferenceModal && !albumPreferenceModal.read_only_subject
+        && typeof getCurrentTrackModalAlbum === 'function' && getCurrentTrackModalAlbum() === albumPreferenceModal
+        && typeof isTrackModalContentVisible === 'function' && isTrackModalContentVisible()
+        && typeof renderTrackModalRelease === 'function') renderTrackModalRelease(albumPreferenceModal, albumPreferenceFocus);
     }
     if (
       waveformPeakLoadSuspension
@@ -1981,6 +2168,9 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       && (settledApplied || requestOwnsCurrentViewState(requestId, requestViewStateRevision))) {
       try {requestOptions.onSettled?.({applied: settledApplied, error: settledError, requestId});}
       catch (_error) { /* An observer cannot change the request outcome. */ }
+    }
+    } finally {
+      if (albumPreferenceFocus && albumPreferenceFocus.owner === null) albumPreferenceFocus.dispose();
     }
   }
 }
@@ -2049,12 +2239,18 @@ async function triggerLibraryRefresh(fullRescan = false) {
   }
 }
 function claimLocalViewStateNavigation() {
-  cancelRootGalleryPageRequest();
+  if(typeof invalidateAdvancedSearchIntent==='function')invalidateAdvancedSearchIntent('local-navigation');
+  // Capture before any abort/continuity callback can install another owner.
+  const albumPreferenceOwner = typeof getTrackModalAlbumPreferenceLease === 'function' ? getTrackModalAlbumPreferenceLease() : null;
+  const rootPageOwner = rootGalleryPageRequest;
+  const activeController = state.ui.activeViewRequestController;
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.ui.pendingViewRequest = null;
   state.ui.pendingViewTransition = false;
   state.ui.pendingViewTransitionRequestId = 0;
-  const activeController = state.ui.activeViewRequestController;
+  // Reentrant successor controls must capture the newly claimed revision.
+  if (typeof disposeTrackModalAlbumPreferences === 'function') disposeTrackModalAlbumPreferences(albumPreferenceOwner);
+  cancelRootGalleryPageRequest(rootPageOwner);
   if (activeController && typeof activeController.abort === 'function') {
     activeController.abort();
   }
@@ -2164,7 +2360,9 @@ function closeScanPage() {
   ) {
     state.view = JSON.parse(JSON.stringify(returnContext.view));
   }
-  state.ui.searchDraftQuery = String(returnContext.searchDraftQuery ?? state.view?.query ?? '');
+  if(typeof invalidateAdvancedSearchIntent==='function')invalidateAdvancedSearchIntent('query-assignment');
+  if(typeof updateGallerySearchDraftQuery==='function')updateGallerySearchDraftQuery(String(returnContext.searchDraftQuery ?? state.view?.query ?? ''));
+  else state.ui.searchDraftQuery = String(returnContext.searchDraftQuery ?? state.view?.query ?? '');
   state.ui.scanPageReturnContext = null;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
@@ -2297,7 +2495,9 @@ async function browseScannedLibrarySnapshot() {
     state.ui.scanPageReturnContext = null;
     state.ui.forceScanPageVisible = false;
     if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
-    state.ui.searchDraftQuery = '';
+    if(typeof invalidateAdvancedSearchIntent==='function')invalidateAdvancedSearchIntent('query-assignment');
+    if(typeof updateGallerySearchDraftQuery==='function')updateGallerySearchDraftQuery('');
+    else state.ui.searchDraftQuery = '';
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = '';
     pushBrowserViewState(state.view);
@@ -2363,7 +2563,9 @@ async function browseScannedLibrarySnapshot() {
       state.ui.scanPageReturnContext = null;
       state.ui.forceScanPageVisible = false;
       if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
-      state.ui.searchDraftQuery = '';
+      if(typeof invalidateAdvancedSearchIntent==='function')invalidateAdvancedSearchIntent('query-assignment');
+      if(typeof updateGallerySearchDraftQuery==='function')updateGallerySearchDraftQuery('');
+      else state.ui.searchDraftQuery = '';
       const searchInput = document.getElementById('search-input');
       if (searchInput) searchInput.value = '';
       pushBrowserViewState(state.view);

@@ -1916,6 +1916,18 @@ font-weight: 400;
 #app-form-content { min-height: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
 #app-form-modal .confirm-modal-title, #app-form-modal .confirm-modal-actions, #app-form-error { flex: 0 0 auto; }
 #app-form-error:empty { display: none; }
+/* Opt-in content composition; the native form retains its header and lifecycle. */
+#app-form-modal:not(.is-mobile-page) > .confirm-modal-dialog:has(.app-form-joined) { width: min(960px, calc(100vw - 32px)); max-width: 100%; }
+.app-form-joined { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; }
+.app-form-joined > .app-form-joined__pane { min-width: 0; }
+.app-form-joined > .app-form-joined__pane + .app-form-joined__pane { border-inline-start: 1px solid var(--border); padding-inline-start: 16px; }
+.app-form-joined__title { margin: 0; font-size: inherit; font-weight: 600; }
+@media (max-width: 720px) {
+  .app-form-joined { grid-template-columns: minmax(0, 1fr); }
+  .app-form-joined > .app-form-joined__pane + .app-form-joined__pane {
+    border-inline-start: 0; padding-inline-start: 0; border-block-start: 1px solid var(--border); padding-block-start: 16px;
+  }
+}
 .utility-loop-entry.is-drop-before::before { top: -9px; }
 .utility-loop-entry.is-drop-after::after { bottom: -9px; }
 .utility-loop-tree-child.is-drop-before::before { top: -2px; }

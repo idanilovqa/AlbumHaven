@@ -29,12 +29,11 @@
 .album-top-inline-edit .album-top-builder__identity input { width: 100%; min-width: 0; box-sizing: border-box; }
 .album-top-inline-edit .gallery-bar__actions { flex-wrap: nowrap; }
 .album-top-inline-edit__content { padding: 12px; min-width: 0; }
-/* Share keeps the canonical form, tabs, fields and buttons. These rules only
+/* Share keeps the canonical joined form, fields and buttons. These rules only
    bound its nested lists and let subsection controls fit narrow viewports. */
 .album-top-share, .album-top-share :is(fieldset, .ui-choice, .ui-choice__control) { min-width: 0; max-width: 100%; }
 .album-top-share :is(.album-top-share__people, .album-top-share__public, .album-top-share__publication,
   .album-top-share__saved-album, .album-top-share__source-chooser, .album-top-share__publication-preview) { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.album-top-share :is(.album-top-share__people, .album-top-share__public)[hidden] { display: none; }
 .album-top-share :is(.album-top-share__member-results, .album-top-share__source-results) {
   height: min(18rem, 40vh); min-height: 8rem; overflow: auto; overscroll-behavior: contain;
   min-width: 0; max-width: 100%; box-sizing: border-box; padding: 4px;

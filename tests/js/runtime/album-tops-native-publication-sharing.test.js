@@ -76,7 +76,7 @@ async function opened(t, data = backend()) {
   env.click(env.button(env.host, 'Share')); await settle();
   return {...env, controller, viewOwner: owner, backend: data};
 }
-async function publicPane(env) {env.click(env.button(env.content(), 'Public link')); await settle();}
+async function publicPane(env) {assert.equal(env.content().querySelector('#album-top-share-public').hidden, false); await settle();}
 async function choose(env, itemRef, sourceRef) {
   const row = env.content().querySelector(`[data-item-ref="${itemRef}"]`); assert.ok(row, 'saved publication row exists');
   env.click(env.button(row, findButton(row, 'Choose source') ? 'Choose source' : 'Change source')); await settle();
@@ -95,7 +95,7 @@ function accept(env) {
 test('joined native Share explicitly selects the complete nonempty vector, previews, publishes, copies a fresh saved URL and revokes', async t => {
   const fresh = deferred(), data = backend(), env = await opened(t, data), copied = [];
   env.context.navigator = {...env.context.navigator, clipboard: {writeText: value => {copied.push(value); return Promise.resolve();}}};
-  assert.equal(env.content().querySelector('[role="tab"][aria-selected="true"]').textContent.trim(), 'People');
+  assert.equal(env.content().querySelector('[role="tablist"]'), null); assert.equal(env.content().querySelector('#album-top-share-people').hidden, false);
   assert.ok(env.button(env.content(), 'Save visibility'));
   assert.equal(data.count('readPublicationSources'), 0, 'opening Share does not eagerly browse every saved album');
   await publicPane(env);
@@ -241,7 +241,7 @@ test('People retains native visibility, selected member role, search focus and o
   input.focus(); await env.controller.load(); await settle();
   assert.equal(env.document.activeElement, input, 'unrelated controller update preserves input focus');
   await publicPane(env); assert.equal(input.isConnected, true); assert.equal(role.isConnected, true);
-  env.click(env.button(env.content(), 'People')); await settle();
+  assert.equal(env.content().querySelector('#album-top-share-people').hidden, false); await settle();
   assert.equal(env.content().querySelector('input[type="search"]'), input);
   assert.equal(env.button(env.content(), 'Access for Ada: Editor'), role);
   assert.ok(env.button(env.content(), 'Album Top visibility: Shared with this server'));
@@ -298,7 +298,7 @@ test('named grants and pending request choices remain mounted across tabs and ap
   assert.equal(env.button(env.content(), 'Apply').disabled, false);
   const sharingReads = data.count('readSharing'), grantReads = data.count('readAccessGrants');
   await publicPane(env); assert.equal(grantRole.isConnected, true); assert.equal(requestRole.isConnected, true);
-  env.click(env.button(env.content(), 'People')); await settle();
+  assert.equal(env.content().querySelector('#album-top-share-people').hidden, false); await settle();
   assert.equal(env.button(env.content(), 'Access for Grace: Editor'), grantRole);
   assert.equal(env.button(env.content(), 'Access for Cara: Editor'), requestRole);
   assert.ok(env.button(env.content(), 'Apply access')); assert.ok(env.button(env.content(), 'Remove access'));

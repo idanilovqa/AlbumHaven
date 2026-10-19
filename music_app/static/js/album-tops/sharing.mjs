@@ -1,4 +1,4 @@
-import {mountButton, mountChoice, mountStatus, mountTabs} from '../home-friends/native-controls.mjs';
+import {mountButton, mountChoice, mountStatus} from '../home-friends/native-controls.mjs';
 import {openNativeDialog} from '../home-friends/native-dialog.mjs';
 import {mountSharingVisibility, mountSharingMember, mountSharingReaderAccess, mountSharingRequestDecision} from '../home-friends/resource-sharing.mjs';
 import {mountCreationSearch} from '../playlists/native-creation.mjs';
@@ -48,7 +48,7 @@ function sharingPage(controller, method, changed, onFailure) {
 
 export function openShareAlbumTop({runtime, controller, state: initialState, onClose, returnFocus, fallbackHost}) {
   let state = initialState, alive = true, frame = null, dialog = null, root = null, closeDialog = null;
-  let visibility = null, decisionsDraft = null, rolesDraft = null, query = '', pane = 'people';
+  let visibility = null, decisionsDraft = null, rolesDraft = null, query = '';
   const records = new Map();
   const superseded = Symbol('superseded sharing render');
   let rendering = false, renderPending = false, revision = 0, mounting = false, failed = false, failure = null, errorCleanup = null;
@@ -214,18 +214,15 @@ export function openShareAlbumTop({runtime, controller, state: initialState, onC
     }
     children.set(root, []);
     status('sharing:status', root, sharing, 'Album Top sharing');
-    control('panes:tabs', root, mountTabs, {id: 'album-top-share-panes', label: 'Album Top sharing options', value: pane,
-      items: [['people', 'People', {panelId: 'album-top-share-people'}], ['public', 'Public link', {panelId: 'album-top-share-public'}]],
-      onChange: value => {
-        if (['people', 'public'].includes(value) && alive && !failed && frame === currentFrame
-          && controller.getSnapshot().scopeKey === scopeKey && controller.getSnapshot().detail.data === detail) {pane = value; render();}
-      }});
-    const people = section('panes:people', root, 'section', 'album-top-share__people');
-    people.id = 'album-top-share-people'; people.setAttribute('role', 'tabpanel');
-    people.setAttribute('aria-labelledby', 'album-top-share-panes-people'); people.hidden = pane !== 'people';
-    const publicHost = section('panes:public', root, 'section', 'album-top-share__public');
-    publicHost.id = 'album-top-share-public'; publicHost.setAttribute('role', 'tabpanel');
-    publicHost.setAttribute('aria-labelledby', 'album-top-share-panes-public'); publicHost.hidden = pane !== 'public';
+    const joined = section('panes:joined', root, 'div', 'app-form-joined');
+    const publicHost = section('panes:public', joined, 'section', 'app-form-joined__pane album-top-share__public');
+    const people = section('panes:people', joined, 'section', 'app-form-joined__pane album-top-share__people');
+    for (const [key, host, title] of [['public', publicHost, 'Public Share'], ['people', people, 'People']]) {
+      host.id = `album-top-share-${key}`;
+      const heading = node(`panes:${key}:title`, host, 'h3').node;
+      heading.id = `${host.id}-heading`; heading.className = 'app-form-joined__title'; heading.textContent = title;
+      host.setAttribute('aria-labelledby', heading.id);
+    }
     control('publication:panel', publicHost, mountAlbumTopPublication, {controller, state, onError: failContent});
     if (conflict) {
       text('conflict:note', root, 'This Album Top changed. Refresh it before editing access.', 'playlists__note', 'alert');
@@ -278,17 +275,15 @@ export function openShareAlbumTop({runtime, controller, state: initialState, onC
       status: state.mutation.status === 'uncertain' ? 'error' : state.mutation.status}, controller});
     const publicationRecovery = state.mutation.status === 'uncertain'
       && ['enable_external', 'revoke_external'].includes(state.mutation.action);
-    if (pane === 'public' || conflict || publicationRecovery || sharing.value.status === 'error' || state.preparation?.status === 'error') {
-      const topRef = state.selectedTopRef;
-      button('publication:refresh', root, 'Refresh Album Top', !topRef || state.detail.status === 'loading'
-        || state.mutation.refreshing === true || state.mutation.status === 'loading'
-        || state.mutation.status === 'uncertain' && !publicationRecovery, () => {
-        const next = controller.getSnapshot();
-        if (alive && !failed && frame === currentFrame && next.scopeKey === scopeKey && next.selectedTopRef === topRef
-          && next.detail.status !== 'loading' && next.mutation.status !== 'loading' && next.mutation.refreshing !== true
-          && (next.mutation.status !== 'uncertain' || ['enable_external', 'revoke_external'].includes(next.mutation.action))) controller.open(topRef);
-      });
-    }
+    const topRef = state.selectedTopRef;
+    button('publication:refresh', publicHost, 'Refresh Album Top', !topRef || state.detail.status === 'loading'
+      || state.mutation.refreshing === true || state.mutation.status === 'loading'
+      || state.mutation.status === 'uncertain' && !publicationRecovery, () => {
+      const next = controller.getSnapshot();
+      if (alive && !failed && frame === currentFrame && next.scopeKey === scopeKey && next.selectedTopRef === topRef
+        && next.detail.status !== 'loading' && next.mutation.status !== 'loading' && next.mutation.refreshing !== true
+        && (next.mutation.status !== 'uncertain' || ['enable_external', 'revoke_external'].includes(next.mutation.action))) controller.open(topRef);
+    });
     if (state.mutation.status === 'uncertain' && !dismissalBlocked) text('mutation:uncertain', root,
       publicationRecovery ? 'The publication request has an unknown outcome. Refresh this Album Top before retrying the original request.'
         : 'Access changed. You can close this dialog and refresh the Album Top before retrying the original request.', 'playlists__note', 'status');

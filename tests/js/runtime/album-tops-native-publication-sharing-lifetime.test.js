@@ -58,7 +58,7 @@ function unavailable(root, label) {const node = findButton(root, label); assert.
 async function fixture(t, data = backend(), {open = true} = {}) {
   const env = actualChoiceEnvironment(), controller = await preparedController(data), owner = await connectedView(env, data, controller);
   t.after(async () => {owner.dispose(); await settle(); env.assertClean(); env.host.remove();});
-  if (open) {env.click(env.button(env.host, 'Share')); await settle(); env.click(env.button(env.content(), 'Public link')); await settle();}
+  if (open) {env.click(env.button(env.host, 'Share')); await settle(); assert.equal(env.content().querySelector('#album-top-share-public').hidden, false); await settle();}
   return {...env, controller, viewOwner: owner, backend: data};
 }
 async function selectAndPreview(env) {
@@ -93,7 +93,7 @@ for (const retirement of ['revoke', 'close', 'actor', 'top', 'saved-link-change'
     } else if (retirement === 'close') {
       env.click(env.button(env.content(), 'Close')); await settle();
       assert.equal(env.modal().hidden, true);
-      env.click(env.button(env.host, 'Share')); await settle(); env.click(env.button(env.content(), 'Public link')); await settle();
+      env.click(env.button(env.host, 'Share')); await settle(); assert.equal(env.content().querySelector('#album-top-share-public').hidden, false); await settle();
     } else if (retirement === 'actor') env.controller.setScope(`${SCOPE}:next-actor`);
     else if (retirement === 'top') await env.controller.open(OTHER);
     else {
@@ -212,7 +212,7 @@ test('closing a pending preview retires the token and does not bring back Publis
   assert.equal(read.args[2].signal.aborted, true); assert.equal(env.controller.getSnapshot().preparation.token, undefined);
   pending.resolve(data.defaults.preview(...read.args)); await settle();
   assert.equal(env.modal().hidden, true); assert.equal(data.count('execute'), 0);
-  env.click(env.button(env.host, 'Share')); await settle(); env.click(env.button(env.content(), 'Public link')); await settle();
+  env.click(env.button(env.host, 'Share')); await settle(); assert.equal(env.content().querySelector('#album-top-share-public').hidden, false); await settle();
   unavailable(env.content(), 'Publish'); assert.equal(env.controller.getSnapshot().preparation.token, undefined);
 });
 
@@ -261,7 +261,7 @@ for (const returned of [true, false]) {
     env.click(env.button(fallback, 'Close')); await settle();
     env.click(env.button(env.host, 'Share')); await settle();
     assert.equal(env.modal().hidden, false); const current = env.content().firstElementChild;
-    env.click(env.button(env.content(), 'Public link')); await settle();
+    assert.equal(env.content().querySelector('#album-top-share-public').hidden, false); await settle();
     history.resolve(returned); await settle();
     assert.equal(env.modal().hidden, false); assert.equal(env.content().firstElementChild, current);
     assert.ok(env.button(env.content(), 'Preview publication')); assert.equal(env.opens.length, 2);

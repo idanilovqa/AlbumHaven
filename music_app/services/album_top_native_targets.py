@@ -5,6 +5,7 @@ from music_app.services.owned_album_tops import AlbumTopError, BROWSE, top_uuid,
 from music_app.services.policy import ResourceScope
 from music_app.services.private_native_targets import PrivateNativeTargets, NativeTargetError, allows
 from music_app.services import album_top_remote_membership as remote_membership
+from music_app.services.album_top_native_binding import lock_binding, eligible_editions
 
 
 _INVENTORY_REF = re.compile(r'inventory-album:([1-9][0-9]{0,18}):([1-9][0-9]{0,18})\Z')
@@ -41,20 +42,11 @@ class AlbumTopNativeTargets:
             if member is None:
                 raise AlbumTopError('item_unavailable', 404)
             catalog_ref = str(member['catalog_ref'])
-            locked = connection.execute('''select app.lock_top_native_catalog_binding(%s,%s,%s,%s,%s)
-                as locked''', (ref, item, library, int(revision), catalog_ref)).fetchone()
-            if locked is None or locked['locked'] is not True:
-                raise AlbumTopError('native_binding_changed', 409)
+            lock_binding(connection, top_ref=ref, item_ref=item, library_id=library,
+                         revision=revision, catalog_ref=catalog_ref)
 
             def current_mapping():
-                rows = connection.execute('''select a.id,a.album_key
-                    from library.catalog_album_links l
-                    join library.local_albums a on a.id=l.local_album_id and a.library_id=l.library_id
-                    where l.library_id=%s and l.catalog_ref=%s
-                    order by a.id for share of a''', (library, catalog_ref)).fetchall()
-                # Lock even currently unbound editions so an album_key update
-                # cannot introduce a second eligible edition before commit.
-                eligible = [row for row in rows if row['album_key']]
+                eligible = eligible_editions(connection, library, catalog_ref)
                 return len(eligible) == 1 and eligible[0]['id'] == album_id
 
             if not current_mapping():

@@ -19,6 +19,7 @@ from music_app.services.owned_album_tops import (
 )
 from music_app.services.owned_album_tops_postgres import PostgresOwnedAlbumTopsService
 from music_app.services.album_top_native_targets import AlbumTopNativeTargets
+from music_app.services.album_top_native_queue import AlbumTopNativeQueue
 from music_app.services.album_top_remote_acquisition import TopRemoteAcquisitionService
 from music_app.services.album_top_artwork_owner import TopArtworkOwnerService
 from music_app.services.album_top_artwork_preparation import TopArtworkPreparationService
@@ -273,6 +274,36 @@ def read_album_top_native_target(request: Request, top_ref: str, item_ref: str):
         return _response(request, value)
     except AlbumTopError as error:
         return _error(error)
+
+
+async def _native_playback(request, top_ref, *, resolve):
+    try:
+        if request.query_params:
+            raise AlbumTopError('invalid_command', 422)
+        context, constraints = _context(request, BROWSE)
+        context_ref = _require_context(request)
+        payload = await read_bounded_json_object(request, max_bytes=MAX_TOP_COMMAND_BYTES)
+        service = AlbumTopNativeQueue(_service(request))
+        action = service.resolve if resolve else service.capture
+        value = await run_in_threadpool(action, context, top_ref=top_ref,
+            payload=payload, context_ref=context_ref, constraints=constraints)
+        if _require_context(request) != context_ref:
+            raise AlbumTopError('stale_context', 409)
+        return _response(request, value)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+
+
+@router.post('/album-tops/{top_ref}/native-queue')
+async def capture_album_top_native_queue(request: Request, top_ref: str):
+    return await _native_playback(request, top_ref, resolve=False)
+
+
+@router.post('/album-tops/{top_ref}/native-playback-target')
+async def resolve_album_top_native_playback(request: Request, top_ref: str):
+    return await _native_playback(request, top_ref, resolve=True)
 
 
 async def _mutate(request, action, top_ref=None):

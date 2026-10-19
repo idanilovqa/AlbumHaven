@@ -766,13 +766,18 @@ class PostgresLibraryBrowseRepository:
             projection_context = gallery_projection_context(connection) if paged else None
             cached_page = load_gallery_projection_page(
                 connection, view_state, query_params or {}, context=projection_context,
-                allow_stale=bool((library_state or {}).get("scan_in_progress")),
+                allow_stale=True,
             ) if projection_context else None
-            if (paged and projection_context and cached_page is None
-                    and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")):
+            projection_stale = bool(cached_page and cached_page[3].get("projection_stale"))
+            refresh_projection = bool(
+                paged and projection_context and (cached_page is None or projection_stale)
+                and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
+            )
+            if refresh_projection:
                 schedule_gallery_projection_refresh(
                     self._config, connect=self._connect, view_state=view_state,
                 )
+            if refresh_projection and cached_page is None:
                 raise GalleryProjectionPending("Gallery is being prepared.")
             projection_hit = cached_page is not None
             phase_ms["projection_lookup"] = (perf_counter() - phase_started_at) * 1000

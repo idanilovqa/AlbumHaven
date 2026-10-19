@@ -247,6 +247,30 @@ export class GalleryRegressions {
     // parity-check: allow-read-only-measurement-evaluate -- compare input and diagnostics on one browser clock
     return this.page.evaluate(() => performance.timeOrigin + performance.now());
   }
+  readArtistJumpResourceTimings(artist, startedEpoch) {
+    // parity-check: allow-read-only-measurement-evaluate -- diagnose anchored gallery request timing after measurement freezes
+    return this.page.evaluate(({ targetArtist, minimumEpoch }) => (
+      performance.getEntriesByType('resource')
+        .filter((entry) => {
+          const url = new URL(entry.name, location.href);
+          return url.pathname === '/view-data'
+            && url.searchParams.get('gallery_anchor_artist') === targetArtist
+            && performance.timeOrigin + entry.responseEnd >= minimumEpoch;
+        })
+        .map((entry) => ({
+          startTime: entry.startTime,
+          responseStart: entry.responseStart,
+          responseEnd: entry.responseEnd,
+          duration: entry.duration,
+          responseStatus: Number.isFinite(Number(entry.responseStatus))
+            ? Number(entry.responseStatus)
+            : null,
+          transferSize: entry.transferSize,
+          encodedBodySize: entry.encodedBodySize,
+          decodedBodySize: entry.decodedBodySize,
+        }))
+    ), { targetArtist: artist, minimumEpoch: startedEpoch });
+  }
   async readArtistJumpPlacement(artist) {
     // parity-check: allow-read-only-measurement-evaluate -- assert rendered artist content and chrome placement
     return this.page.evaluate(observeArtistPlacement, {
@@ -423,9 +447,37 @@ export class GalleryRegressions {
           const rect = item.getBoundingClientRect();
           return rect.top >= bounds.top && rect.top < bounds.bottom;
         });
+      const cardBounds = card?.getBoundingClientRect() || null;
+      const albumKey = card?.querySelector('[data-open-tracklist="1"][data-album-key]')
+        ?.getAttribute('data-album-key') || null;
+      const artist = card?.closest('.artist-section')
+        ?.querySelector('.family-artist-header[data-scroll-artist]')
+        ?.getAttribute('data-scroll-artist') || null;
+      const sectionKey = card?.closest('[data-virtual-section-key]')
+        ?.getAttribute('data-virtual-section-key') || null;
+      const matchingIdentityCount = [...document.querySelectorAll('#artist-groups .album-card')]
+        .filter((candidate) => (
+          candidate.querySelector('[data-open-tracklist="1"][data-album-key]')
+            ?.getAttribute('data-album-key') === albumKey
+          && candidate.closest('.artist-section')
+            ?.querySelector('.family-artist-header[data-scroll-artist]')
+            ?.getAttribute('data-scroll-artist') === artist
+          && candidate.closest('[data-virtual-section-key]')
+            ?.getAttribute('data-virtual-section-key') === sectionKey
+        )).length;
       return {
-        card, top: card?.getBoundingClientRect().top ?? null,
-        scrollTop: scroll.scrollTop, scrollerTop: bounds.top,
+        card,
+        albumKey,
+        artist,
+        sectionKey,
+        cardKey: card?.getAttribute('data-gallery-card-key') || null,
+        cardRenderKey: card?.getAttribute('data-gallery-card-render-key') || null,
+        matchingIdentityCount,
+        top: cardBounds?.top ?? null,
+        bottom: cardBounds?.bottom ?? null,
+        scrollTop: scroll.scrollTop,
+        scrollerTop: bounds.top,
+        scrollerBottom: bounds.bottom,
       };
     });
   }
@@ -581,10 +633,37 @@ export class GalleryRegressions {
         ? saved.card.getBoundingClientRect().top - saved.top : null;
       const scrollDelta = scroll.scrollTop - saved.scrollTop;
       const scrollerDelta = scroll.getBoundingClientRect().top - saved.scrollerTop;
+      const replacements = [...document.querySelectorAll('#artist-groups .album-card')]
+        .filter((candidate) => (
+          candidate.querySelector('[data-open-tracklist="1"][data-album-key]')
+            ?.getAttribute('data-album-key') === saved.albumKey
+          && candidate.closest('.artist-section')
+            ?.querySelector('.family-artist-header[data-scroll-artist]')
+            ?.getAttribute('data-scroll-artist') === saved.artist
+          && candidate.closest('[data-virtual-section-key]')
+            ?.getAttribute('data-virtual-section-key') === saved.sectionKey
+        ));
+      const replacement = replacements[0] || null;
+      const replacementBounds = replacement?.getBoundingClientRect() || null;
       return {
         connected: Boolean(saved.card?.isConnected), delta,
         scrollDelta, scrollerDelta,
         contentDelta: delta === null ? null : delta + scrollDelta - scrollerDelta,
+        anchorAlbumKey: saved.albumKey,
+        anchorArtist: saved.artist,
+        anchorSectionKey: saved.sectionKey,
+        anchorCardKey: saved.cardKey,
+        anchorCardRenderKey: saved.cardRenderKey,
+        anchorMatchingIdentityCount: saved.matchingIdentityCount,
+        anchorTop: saved.top,
+        anchorBottom: saved.bottom,
+        anchorScrollerTop: saved.scrollerTop,
+        anchorScrollerBottom: saved.scrollerBottom,
+        replacementCount: replacements.length,
+        replacementCardKey: replacement?.getAttribute('data-gallery-card-key') || null,
+        replacementCardRenderKey: replacement?.getAttribute('data-gallery-card-render-key') || null,
+        replacementTop: replacementBounds?.top ?? null,
+        replacementBottom: replacementBounds?.bottom ?? null,
       };
     });
   }

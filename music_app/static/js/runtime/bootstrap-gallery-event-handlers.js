@@ -559,7 +559,10 @@ function scrollRootGalleryToArtist(artist) {
     related_filter_artists: [],
     primary_filter_active: false,
   };
-  const url = buildApiUrl(nextView, { galleryAnchorArtist: targetArtist });
+  const url = buildApiUrl(nextView, {
+    galleryAnchorArtist: targetArtist,
+    omitSidebar: true,
+  });
   renderLibraryLoader(state.status);
   return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
     if (result === false || rootGalleryArtistAlignmentGeneration !== navigationGeneration) return false;

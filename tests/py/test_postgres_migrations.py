@@ -39,6 +39,9 @@ TARGETED_ARTIST_SEARCH_PATCH_MIGRATION = (
 GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION = (
     MIGRATIONS_DIR / "0089_allow_gallery_projection_featured_kind.sql"
 )
+GALLERY_PROJECTION_ARTIST_LOOKUP_MIGRATION = (
+    MIGRATIONS_DIR / "0091_add_gallery_projection_artist_lookup_indexes.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -444,7 +447,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-50:] == [
+    assert migration_names[-51:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -495,7 +498,23 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0088_add_active_physical_parent_index.sql",
         "0089_allow_gallery_projection_featured_kind.sql",
         "0090_patch_local_artist_search_projection.sql",
+        "0091_add_gallery_projection_artist_lookup_indexes.sql",
     ]
+
+
+def test_gallery_projection_artist_lookup_migration_indexes_anchor_and_boundary_queries():
+    sql = _normalized_sql(
+        GALLERY_PROJECTION_ARTIST_LOOKUP_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert (
+        "on library.gallery_projection_occurrences "
+        "(library_id, scope_key, (payload ->> 'artist_name'), ordinal)"
+    ) in sql
+    assert (
+        "on library.gallery_projection_occurrences "
+        "(library_id, scope_key, (payload ->> 'artist_id'), ordinal)"
+    ) in sql
 
 
 def test_album_raw_artist_search_index_matches_search_preview_expression():

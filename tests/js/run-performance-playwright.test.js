@@ -1166,6 +1166,12 @@ test('post-edit performance target requires the production-calibration fixture',
   assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
 });
 
+test('artist-tree scroll navigation target requires the production-calibration fixture', () => {
+  const target = _private.resolvePerformanceTarget('artist-tree-scroll-navigation');
+
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
+});
+
 test('Cover Lookup performance setup enters the target artist before album selection', () => {
   const source = fs.readFileSync(
     path.join(
@@ -1214,7 +1220,9 @@ test('every real-app target forces the browse selector', () => {
     assert.equal(target.coverageClass, 'real-app-library-browse-load');
     assert.deepEqual(
       target.env,
-      targetName === 'problematic-files-focused'
+      targetName === 'artist-tree-scroll-navigation'
+        ? CALIBRATED_REAL_APP_ENV
+        : targetName === 'problematic-files-focused'
         ? FOCUSED_PROBLEMATIC_FILES_REAL_APP_ENV
         : targetName === 'utility-problematic-files'
           ? BROAD_UTILITY_PROBLEMATIC_FILES_REAL_APP_ENV

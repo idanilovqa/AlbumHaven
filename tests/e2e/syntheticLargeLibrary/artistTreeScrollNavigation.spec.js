@@ -24,6 +24,7 @@ async function openContextMenuForArtist(ui, artist) {
 async function jumpToArtist(ui, artist, { expectLoader = null } = {}) {
   const loaderObservation = expectLoader === false ? await ui.observeLoaderVisibility() : null;
   await openContextMenuForArtist(ui, artist);
+  const jumpStartedEpoch = await ui.readBrowserEpoch();
   const jumpStartedAt = performance.now();
   await ui.scrollToArtistAction.click();
   await expect.poll(
@@ -47,8 +48,9 @@ async function jumpToArtist(ui, artist, { expectLoader = null } = {}) {
     throw error;
   });
   const timing = evaluateTimingBudget(performance.now() - jumpStartedAt, JUMP_ALIGNED_BUDGET);
+  const resourceTimings = await ui.readArtistJumpResourceTimings(artist, jumpStartedEpoch);
   await test.info().attach('artist-jump-timing', {
-    body: JSON.stringify({ artist, ...timing }, null, 2),
+    body: JSON.stringify({ artist, ...timing, resourceTimings }, null, 2),
     contentType: 'application/json',
   });
   console.log(formatTimingBudgetOutcome(`Artist jump to ${artist}`, timing));

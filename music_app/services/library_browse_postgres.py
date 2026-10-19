@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 import base64
 import binascii
 from copy import deepcopy
@@ -168,6 +169,16 @@ def invalidate_postgres_utility_projection_cache(
 
 def _request_flag(value: object) -> bool:
     return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _root_gallery_request_needs_support_state(
+    query_params: Mapping[str, object] | None,
+) -> bool:
+    params = query_params or {}
+    return not (
+        str(params.get("gallery_anchor_artist") or "").strip()
+        or str(params.get("gallery_cursor") or "").strip()
+    )
 
 
 def _should_load_non_album_tracks(query_params: Mapping[str, object] | None) -> bool:
@@ -756,7 +767,8 @@ class PostgresLibraryBrowseRepository:
         gallery_page = None
         non_album_entries = []
         configured_root_paths = ()
-        connection = self._connect_to_database()
+        connection_stack = ExitStack()
+        connection = connection_stack.enter_context(self._browse_connection_context())
         phase_ms["connection"] = (perf_counter() - phase_started_at) * 1000
         phase_started_at = perf_counter()
         try:
@@ -803,11 +815,10 @@ class PostgresLibraryBrowseRepository:
             phase_ms["aliases"] = (perf_counter() - phase_started_at) * 1000
             phase_started_at = perf_counter()
             support_state = (
-                {}
-                if sidebar_only
-                else self._inventory_repository.load_support_state(
-                    connection=connection,
-                )
+                self._inventory_repository.load_support_state(connection=connection)
+                if not sidebar_only
+                and _root_gallery_request_needs_support_state(query_params)
+                else None
             )
             phase_ms["support"] = (perf_counter() - phase_started_at) * 1000
             phase_started_at = perf_counter()
@@ -924,9 +935,7 @@ class PostgresLibraryBrowseRepository:
                 if callable(rollback):
                     rollback()
             finally:
-                close = getattr(connection, "close", None)
-                if callable(close):
-                    close()
+                connection_stack.close()
 
         if relation_alias_maps.get("projection_stale_reason"):
             schedule_gallery_projection_refresh(self._config, connect=self._connect)
@@ -982,8 +991,6 @@ class PostgresLibraryBrowseRepository:
             "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
-            "ignored_version_keys": support_state["ignored_version_keys"],
-            "manual_version_links": support_state["manual_version_links"],
             "non_album_tracks": build_non_album_track_list(
                 non_album_entries, config=self._config, configured_root_paths=configured_root_paths,
             ),
@@ -997,6 +1004,11 @@ class PostgresLibraryBrowseRepository:
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,
         }
+        if support_state is not None:
+            payload.update({
+                "ignored_version_keys": support_state["ignored_version_keys"],
+                "manual_version_links": support_state["manual_version_links"],
+            })
         if gallery_page is not None:
             payload["gallery_page"] = gallery_page
             payload["initial_view_partial"] = False
@@ -3503,10 +3515,22 @@ class PostgresLibraryBrowseRepository:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres library browse.")
         return self._connect(self._database_url)
 
-    def _search_connection_context(self) -> Any:
+    @contextmanager
+    def _browse_connection_context(self) -> Any:
         if self._use_shared_connection_pool:
-            return _pooled_connection(self._database_url, workload="browse")
-        return self._connect_to_database()
+            with _pooled_connection(self._database_url, workload="browse") as connection:
+                yield connection
+            return
+        connection = self._connect_to_database()
+        try:
+            yield connection
+        finally:
+            close = getattr(connection, "close", None)
+            if callable(close):
+                close()
+
+    def _search_connection_context(self) -> Any:
+        return self._browse_connection_context()
 
     def _config_value(self, key: str, default: object = "") -> object:
         return self._config.get(key, default)

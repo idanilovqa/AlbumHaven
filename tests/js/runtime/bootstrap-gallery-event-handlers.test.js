@@ -989,6 +989,7 @@ test('scrollRootGalleryToArtist requests an anchored root page and jumps after r
   assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
   assert.equal(calls.buildApiUrl.at(-1).query, '');
   assert.equal(calls.buildApiUrlOptions.at(-1).galleryAnchorArtist, 'A Forest Of Stars');
+  assert.equal(calls.buildApiUrlOptions.at(-1).omitSidebar, true);
   assert.equal(
     new URL(calls.fetchAndRender.at(-1).url, 'http://localhost')
       .searchParams.get('gallery_anchor_artist'),

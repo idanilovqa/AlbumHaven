@@ -8378,16 +8378,24 @@ def test_canonicalize_artist_rows_builds_normalized_alias_lookup_once_for_fallba
     assert alias_to_canonical.items_calls == 1
 
 
-def test_search_connection_reuses_shared_pool_without_overriding_injected_connect(monkeypatch):
+def test_browse_connections_reuse_shared_pool_without_overriding_injected_connect(monkeypatch):
     from music_app.services import library_browse_postgres as module
 
-    pooled_context = object()
+    pooled_connection = object()
     raw_context = object()
+
+    class PoolContext:
+        def __enter__(self):
+            return pooled_connection
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return None
+
     monkeypatch.setattr(
         module,
         "_pooled_connection",
         lambda database_url, *, workload: (
-            pooled_context
+            PoolContext()
             if database_url == "postgresql://browse" and workload == "browse"
             else None
         ),
@@ -8401,8 +8409,14 @@ def test_search_connection_reuses_shared_pool_without_overriding_injected_connec
         connect=lambda database_url: raw_context if database_url == "postgresql://browse" else None,
     )
 
-    assert default_repository._search_connection_context() is pooled_context
-    assert injected_repository._search_connection_context() is raw_context
+    with default_repository._browse_connection_context() as connection:
+        assert connection is pooled_connection
+    with default_repository._search_connection_context() as connection:
+        assert connection is pooled_connection
+    with injected_repository._browse_connection_context() as connection:
+        assert connection is raw_context
+    with injected_repository._search_connection_context() as connection:
+        assert connection is raw_context
 
 
 def test_postgres_selected_artist_payload_queues_visible_display_cover_variants(monkeypatch):

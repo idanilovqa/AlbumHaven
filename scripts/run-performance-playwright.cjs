@@ -470,6 +470,7 @@ const PERFORMANCE_TARGETS = {
     measurementExpected: false,
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'gallery-artwork-diversity': {

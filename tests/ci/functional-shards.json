@@ -211,7 +211,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
-              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five \u0420\u0435\u043c\u0438\u043a\u0441\u044b rerenders",
+              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders",
               "area": "tag-edit"
             },
             {
@@ -950,6 +950,20 @@
               "test": "tests/e2e/specs/playerArtworkSearchContext.spec.js",
               "case": "FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playerCaptureTelemetry.spec.js",
+              "case": "short audible playback survives reload as positive private capture",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playerCaptureTelemetry.spec.js",
+              "case": "visible backward seek retains repeated consumed positions in one capture",
+              "area": "playback"
             }
           ]
         },
@@ -1062,6 +1076,48 @@
               "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
               "case": "FTC-HFP-FB-013 pins only fresh authorized friend playback without listen credit",
               "area": "home-friends-playlists"
+            }
+          ]
+        },
+        {
+          "config": "playwright.native-acceptance.config.js",
+          "project": "native-acceptance-chrome",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.native-acceptance.config.js",
+              "project": "native-acceptance-chrome",
+              "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+              "case": "FTC-NATIVE-ACCEPT-001 Home preserves native own preferences and friend read-only taste",
+              "area": "native-acceptance"
+            },
+            {
+              "config": "playwright.native-acceptance.config.js",
+              "project": "native-acceptance-chrome",
+              "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+              "case": "FTC-NATIVE-ACCEPT-002 Goals empty state keeps period and admission dismissal native",
+              "area": "native-acceptance"
+            },
+            {
+              "config": "playwright.native-acceptance.config.js",
+              "project": "native-acceptance-chrome",
+              "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+              "case": "FTC-NATIVE-ACCEPT-003 Album Top preserves order and explicit manual completion",
+              "area": "native-acceptance"
+            },
+            {
+              "config": "playwright.native-acceptance.config.js",
+              "project": "native-acceptance-chrome",
+              "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+              "case": "FTC-NATIVE-ACCEPT-004 Advanced Search commits once and Popularity Album results mark only selected siblings",
+              "area": "native-acceptance"
+            },
+            {
+              "config": "playwright.native-acceptance.config.js",
+              "project": "native-acceptance-chrome",
+              "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+              "case": "FTC-NATIVE-ACCEPT-005 Mobile artist album sheet and native navigation retain ownership",
+              "area": "native-acceptance"
             }
           ]
         }

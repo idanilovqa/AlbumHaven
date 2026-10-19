@@ -14,6 +14,7 @@ from music_app.services.owned_playlists import (
     PlaylistError, normalize_playlist_command,
 )
 from music_app.services.owned_playlists_postgres import PostgresOwnedPlaylistsService
+from music_app.services.playlist_filter_preferences import PlaylistFilterPreferences, filter_command
 from music_app.services.playlist_preferences_postgres import (
     PREFERENCE_READ, PREFERENCE_WRITE, PostgresPlaylistPreferencesService, normalize_preference_command,
 )
@@ -393,6 +394,46 @@ def playlist_preferences(request: Request):
         return _response(request, service.read(context, constraints=constraints))
     except PlaylistError as error:
         return _error(error)
+
+
+@router.get("/playlists/{playlist_ref}/filter-preferences")
+def playlist_filter_preferences(request: Request, playlist_ref: str):
+    try:
+        admitted = _context_ref(request)
+        context, constraints = _context(request, PREFERENCE_READ)
+        result = PlaylistFilterPreferences(_service(request)).read(
+            context, playlist_ref, constraints=constraints)
+        return _filter_preference_response(request, admitted, result)
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.put("/playlists/{playlist_ref}/filter-preferences")
+async def update_playlist_filter_preferences(request: Request, playlist_ref: str):
+    try:
+        witnesses = request.headers.getlist("x-albumhaven-context")
+        if len(witnesses) != 1:
+            raise PlaylistError("stale_context", 409)
+        admitted = _context_ref(request)
+        context, constraints = _context(request, PREFERENCE_WRITE)
+        _require_context_header(request)
+        payload = await read_bounded_json_object(request, max_bytes=4096)
+        command = filter_command(playlist_ref, payload)
+        if _context_ref(request) != admitted:
+            raise PlaylistError("stale_context", 409)
+        result = await run_in_threadpool(PlaylistFilterPreferences(_service(request)).execute,
+            context, command, constraints=constraints)
+        return _filter_preference_response(request, admitted, result)
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except PlaylistError as error:
+        return _error(error)
+
+
+def _filter_preference_response(request, admitted, payload):
+    if _context_ref(request) != admitted:
+        raise PlaylistError("stale_context", 409)
+    return JSONResponse({**payload, "context_ref": admitted}, headers=_NO_STORE)
 
 
 @router.put("/account/playlist-preferences")

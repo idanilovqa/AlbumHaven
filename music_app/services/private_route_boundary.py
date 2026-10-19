@@ -88,6 +88,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
     ("GET", "/account"): "account.self.read",
     ("GET", "/account/playlist-preferences"): "account.self.playlist_preferences.read",
+    ("GET", "/playlists/{playlist_ref}/filter-preferences"): "account.self.playlist_preferences.read",
+    ("PUT", "/playlists/{playlist_ref}/filter-preferences"): "account.self.playlist_preferences.write",
     ("PUT", "/account/playlist-preferences"): "account.self.playlist_preferences.write",
     ("GET", "/account/playlist-preferences/operations/{request_key}"): "account.self.playlist_preferences.read",
     ("GET", "/account/appearance"): "account.self.appearance.read",

@@ -22,22 +22,46 @@ async function actionFixture(t, {media = true, entry = false, mobile = false, ..
   const start = template.indexOf('<div class="track-modal" id="track-modal" hidden>');
   const end = template.indexOf('<div class="cover-lookup-modal"', start);
   assert.ok(start >= 0 && end > start, 'exact served Album modal section exists');
-  let buttons = 0;
+  const buttons = [];
   const markup = template.slice(start, end).replace(/{% call action_button\(([\s\S]*?)\) %}([\s\S]*?){% endcall %}/g, (_, args, content) => {
     const label = args.match(/^'([^']+)'/)?.[1], id = args.match(/\bid='([^']+)'/)?.[1];
-    const className = args.match(/class_name='([^']+)'/)?.[1];
-    assert.ok(label && id && className); buttons++;
-    // These are the three exact server macro invocations, rendered using the
-    // matching production Button component, not a replacement modal owner.
+    const className = args.match(/class_name='([^']+)'/)?.[1], title = args.match(/\btitle='([^']+)'/)?.[1];
+    assert.ok(label && id && className); buttons.push(id);
+    // Serialize the actual macro's finite literal attributes through the real
+    // Button component. Reject unsupported syntax rather than dropping attrs.
+    const literal = args.match(/\battributes=\{([^}]*)\}/)?.[1];
+    const attributes = {id, ...(title ? {title} : {})};
+    if (literal !== undefined) {
+      const pairs = [...literal.matchAll(/'([^']+)'\s*:\s*'([^']*)'/g)];
+      assert.equal(literal.replace(/'([^']+)'\s*:\s*'([^']*)'/g, '').replace(/[,\s]/g, ''), '');
+      for (const [, key, value] of pairs) {
+        assert.equal(Object.hasOwn(attributes, key), false, 'no duplicate macro attribute');
+        attributes[key] = value;
+      }
+    }
     return c.ButtonComponent.renderActionButton({ariaLabel: label, className,
-      disabled: args.includes('disabled=true'), content,
-      attributes: {id, ...(id === 'track-modal-close' ? {'data-close-track-modal': '1'} : {})}});
+      disabled: args.includes('disabled=true'), content, attributes});
   });
-  assert.equal(buttons, 3); assert.doesNotMatch(markup, /{%|{{/);
+  assert.deepEqual(buttons, ['track-modal-sheet-toggle', 'track-modal-edit-tags', 'track-modal-folder', 'track-modal-close']);
+  assert.doesNotMatch(markup, /{%|{{/);
   assert.equal(document.getElementById('track-modal'), null);
   document.body.insertAdjacentHTML('beforeend', markup);
   const modal = document.getElementById('track-modal');
   assert.ok(modal.querySelector(':scope > .track-modal-dialog > .track-modal-header'));
+  const toggle = modal.querySelector(':scope > .track-modal-dialog > #track-modal-sheet-toggle');
+  assert.ok(toggle, 'sheet toggle is the real dialog child outside header actions');
+  assert.equal(toggle.getAttribute('hidden'), 'hidden');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(toggle.getAttribute('aria-controls'), 'track-modal-list');
+  assert.equal(toggle.getAttribute('aria-label'), 'Expand album sheet');
+  assert.equal(toggle.disabled, false);
+  assert.equal(modal.querySelector('#track-modal-close').getAttribute('data-close-track-modal'), '1');
+  for (const [id, label] of [['track-modal-edit-tags', 'Edit album tags unavailable while album details load'],
+    ['track-modal-folder', 'Open album folder unavailable while album details load']]) {
+    const button = modal.querySelector(`#${id}`);
+    assert.equal(button.disabled, true); assert.equal(button.getAttribute('title'), label);
+    assert.equal(button.getAttribute('aria-label'), label);
+  }
   const streams = [], activations = [], opens = [], hydrations = [], audioAttempts = [];
   const stream = c.startStreamingTrack, activate = c.activateSharedTrackButton;
   const open = c.openTrackModal, hydrate = c.fetchTrackModalAlbumDetails;

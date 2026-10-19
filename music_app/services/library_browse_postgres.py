@@ -1637,6 +1637,36 @@ class PostgresLibraryBrowseRepository:
                 connection=connection,
             )
 
+    def build_album_detail_payload_by_id(
+        self,
+        album_id: object,
+        *,
+        client_surface_class: object = None,
+    ) -> dict[str, object] | None:
+        try:
+            normalized_album_id = int(album_id)
+        except (TypeError, ValueError):
+            return None
+        if normalized_album_id <= 0:
+            return None
+        with self._search_connection_context() as connection:
+            row = connection.execute(
+                """
+                select album_key
+                from library.local_albums
+                where id = %(album_id)s
+                """,
+                {"album_id": normalized_album_id},
+            ).fetchone()
+            album_key = str(_row_mapping(row).get("album_key") or "").strip()
+            if not album_key:
+                return None
+            return self._build_album_detail_payload_with_connection(
+                album_key,
+                client_surface_class=client_surface_class,
+                connection=connection,
+            )
+
     def _build_album_detail_payload_with_connection(
         self,
         normalized_album_key: str,

@@ -3350,3 +3350,145 @@ def test_cover_lookup_task_identity_does_not_repeat_validated_album_resolution()
         {"track_paths": ["C:/Music/Artist/Album/song.mp3"]},
         track_paths={"C:/Music/Artist/Album/song.mp3"},
     ) is True
+
+
+@pytest.mark.parametrize("compact_request", [False, True])
+def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
+    app,
+    monkeypatch,
+    compact_request,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    monkeypatch.setattr(asgi_routes, "perf_counter", lambda: 100.0)
+
+    stale_path = (
+        app.config["MUSIC_DIR"] / "Ovderhead" / "Telepathic Minds" / "05.mp3"
+    ).resolve()
+    current_path = (
+        app.config["MUSIC_DIR"] / "Overhead" / "Telepathic Minds" / "05.mp3"
+    ).resolve()
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_path.write_bytes(b"stale track")
+    current_path.parent.mkdir(parents=True, exist_ok=True)
+    current_path.write_bytes(b"track")
+    album = {
+        **_album_payload(stale_path),
+        "album_id": 14674,
+        "key": "ovderhead::telepathic minds",
+    }
+    if compact_request:
+        album["tracks"] = []
+    refreshed_album = {
+        **_album_payload(current_path),
+        "album_id": 24674,
+        "key": "overhead::telepathic minds",
+        "album_artist": "Overhead",
+    }
+    compact_source_album = {
+        **_album_payload(stale_path),
+        "album_id": 14674,
+        "tracks": [],
+    }
+    events = []
+
+    class Reservation:
+        def release(self):
+            events.append("released")
+
+    async def acquire_reservation(resource_keys):
+        events.append(("acquired", resource_keys))
+        return Reservation()
+
+    def refresh_album(_self, album_id, *, client_surface_class=None):
+        events.append(("refreshed", album_id, client_surface_class))
+        if album_id == 14674:
+            return compact_source_album
+        return refreshed_album if album_id == 24674 else None
+
+    def latest_structural_destination(resource_keys, *, completed_after_monotonic):
+        assert completed_after_monotonic == pytest.approx(70.0)
+        events.append(("reconciled", resource_keys, completed_after_monotonic))
+        return {"destination_album_id": 24674}
+
+    def queue_lookup(queued_album, track_paths, manual_urls, **_kwargs):
+        events.append(("queued", queued_album, track_paths, manual_urls))
+        return "task-1"
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "acquire_structural_tag_edit_reservation_async",
+        acquire_reservation,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_album_detail_payload_by_id",
+        refresh_album,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "latest_structural_tag_edit_destination",
+        latest_structural_destination,
+        raising=False,
+    )
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(
+        asgi_routes,
+        "cover_lookup_result",
+        lambda task_id: {"id": task_id, "status": "queued"},
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "serialize_cover_lookup_task_payload",
+        lambda payload: payload,
+    )
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    asgi_app = _make_wave_d_app(app)
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/start",
+        json_body={"album": album, "manual_urls": []},
+    )
+
+    assert status == 200
+    assert _decode_json(body)["ok"] is True
+    acquired = events[0]
+    assert acquired[0] == "acquired"
+    assert "album:ovderhead::telepathic minds" in acquired[1]
+    stale_path_key = next(iter(asgi_routes.structural_tag_edit_resource_keys(
+        "",
+        {str(stale_path)},
+    )))
+    assert (stale_path_key in acquired[1]) is not compact_request
+    assert events[1] == ("refreshed", 14674, None)
+    assert events[2][0] == "reconciled"
+    assert events[2][1] == acquired[1]
+    assert events[2][2] > 0
+    assert events[3] == ("refreshed", 24674, None)
+    assert events[4] == "released"
+    assert events[5][0] == "queued"
+    assert events[5][1]["album_artist"] == "Overhead"
+    assert events[5][2] == {str(current_path)}
+
+
+def test_cover_lookup_reconciliation_uses_inline_album_detail_track_rows():
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_row = {"path": "C:/Music/Overhead/Telepathic Minds/05.mp3"}
+    compact_album = {
+        "tracks": [],
+        "gallery_list_block": {
+            "track_rows_source": "inline",
+            "track_rows": [track_row],
+        },
+    }
+
+    hydrated_album = asgi_routes._album_with_context_tracks(compact_album)
+
+    assert hydrated_album["tracks"] == [track_row]
+    assert compact_album["tracks"] == []

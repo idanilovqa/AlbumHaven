@@ -1071,16 +1071,23 @@ def test_live_postgres_explicit_separate_release_consolidates_same_year_identity
 @pytest.mark.parametrize("changed_field", ["album", "year"])
 @pytest.mark.parametrize("selected_has_guest", [False, True])
 def test_live_postgres_structural_split_persists_projected_owner_without_rewriting_credits(
-    existing_destination, changed_field, selected_has_guest,
+    monkeypatch, existing_destination, changed_field, selected_has_guest,
 ):
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:
         pytest.skip("Isolated setup is required for the structural owner contract.")
     isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services import gallery_projection_postgres
     from music_app.services.scan_cache_persistence import (
         PostgresScanCacheAdapter,
         _structural_destination_album_projection,
+    )
+
+    monkeypatch.setattr(
+        gallery_projection_postgres,
+        "schedule_gallery_projection_refresh",
+        lambda *_args, **_kwargs: None,
     )
 
     token = uuid4().hex
@@ -1097,12 +1104,14 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
             "year": 2026, "release_date": "2026", "cover_path": "", "cover_revision": "",
         }
     selected_path = next(iter(previous))
+    updated_path = f"C:/__structural_owner__/{token}/renamed/1.flac"
     if selected_has_guest:
         previous[selected_path]["album_artist"] = solo
         previous[selected_path]["artist"] = f"{solo} feat. Featured Voice"
     updated = {
         selected_path: {
             **previous[selected_path],
+            "path": updated_path,
             **({"album": f"Split Credits {token}"} if changed_field == "album"
                else {"year": 2030, "release_date": "2030"}),
         },
@@ -1191,6 +1200,12 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
             updated_file_entries=updated, changed_field_names={changed_field},
             commit_guard=lambda _commit: None,
         )
+        selected_private_path = connection.execute(
+            "select private_path from library.local_track_files where track_id = %s",
+            (track_ids[0],),
+        ).fetchone()[0]
+        assert selected_private_path == updated_path
+
         destination = connection.execute(
             """select albums.id,artists.name,albums.metadata,albums.release_year
                from library.local_albums albums
@@ -1225,7 +1240,7 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
                from library.local_track_files where track_id=any(%s)""", (track_ids,),
         ).fetchall()
         for path, entry in persisted:
-            expected = updated.get(path, previous[path])
+            expected = updated[selected_path] if path == updated_path else previous[path]
             for field in ("artist", "album_artist", "title", "album", "year", "release_date"):
                 assert entry[field] == expected[field]
         repository = PostgresLibraryBrowseRepository(config, connect=lambda _url: proxy)

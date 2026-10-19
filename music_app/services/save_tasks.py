@@ -319,8 +319,44 @@ def _normalize_empty_exception_rebase_entries(
 def save_task_result(task_id: str) -> JsonDict:
     with _SAVE_TASKS_LOCK:
         result = dict(_SAVE_TASKS.get(task_id, {}))
-    result.pop("_timing_recorder", None)
-    return result
+    return {key: value for key, value in result.items() if not key.startswith("_")}
+
+
+def latest_structural_tag_edit_destination(
+    resource_keys: set[str] | frozenset[str],
+    *,
+    completed_after_monotonic: float,
+) -> JsonDict | None:
+    requested_keys = frozenset(
+        str(key or "").strip()
+        for key in resource_keys
+        if str(key or "").strip()
+    )
+    if not requested_keys:
+        return None
+    with _SAVE_TASKS_LOCK:
+        candidates = [
+            task
+            for task in _SAVE_TASKS.values()
+            if task.get("status") == "completed"
+            and float(task.get("_structural_completed_monotonic") or 0.0)
+            >= completed_after_monotonic
+            and requested_keys.issubset(
+                frozenset(task.get("_structural_resource_keys") or ())
+            )
+            and int(task.get("destination_album_id") or 0) > 0
+        ]
+        if not candidates:
+            return None
+        latest = max(
+            candidates,
+            key=lambda task: float(task.get("_structural_completed_monotonic") or 0.0),
+        )
+        return {
+            "destination_album_id": int(latest["destination_album_id"]),
+            "destination_album_key": str(latest.get("destination_album_key") or ""),
+            "destination_artist": str(latest.get("destination_artist") or ""),
+        }
 
 
 def save_task_timing_recorder(task_id: str) -> EditTagTimingRecorder | None:
@@ -1029,6 +1065,12 @@ def finalize_structural_tag_edit_save_task(
         if timing_recorder is not None:
             completion.update(timing_recorder.snapshot())
             completion["_timing_recorder"] = timing_recorder
+        reservation_resource_keys = frozenset(
+            getattr(structural_tag_edit_reservation, "_resource_keys", ()) or ()
+        )
+        if reservation_resource_keys:
+            completion["_structural_resource_keys"] = reservation_resource_keys
+            completion["_structural_completed_monotonic"] = perf_counter()
         update_save_task(task_id, **completion)
     finally:
         release = getattr(structural_tag_edit_reservation, "release", None)

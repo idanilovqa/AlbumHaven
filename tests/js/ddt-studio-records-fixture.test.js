@@ -43,6 +43,7 @@ for number in range(1, 17):
     execFileAsync: async (command, args, options) => args[0] === '-c'
       ? { stdout: execFileSync(command, args, options) }
       : { stdout: JSON.stringify({ album_rows: 1, track_rows: 16, track_file_rows: 16,
+        fixture_root_rows: 1, track_file_root_rows: 16,
         album_edition_rows: 0, file_edition_rows: 0,
         typo_album_rows: expectedTypoAlbumRows,
         typo_membership_rows: expectedTypoAlbumRows }) },
@@ -121,6 +122,8 @@ test('uses the nested writable media tree for the synthetic large-library profil
           album_rows: 1,
           track_rows: 16,
           track_file_rows: 16,
+          fixture_root_rows: 1,
+          track_file_root_rows: 16,
           album_edition_rows: 0,
           file_edition_rows: 0,
           typo_album_rows: 0,
@@ -133,6 +136,15 @@ test('uses the nested writable media tree for the synthetic large-library profil
   });
 
   assert.equal(calls[0].args[2], albumDirectory);
+  const psqlArgs = calls[1].args;
+  const rootArgument = psqlArgs.find((argument) => (
+    argument.startsWith('--variable=fixture_root_b64=')
+  ));
+  assert.ok(rootArgument);
+  assert.equal(
+    Buffer.from(rootArgument.split('=', 3)[2], 'base64').toString('utf8'),
+    writableRoot,
+  );
 });
 
 test('restores the exact mixed-year Studio Records fixture through guarded helpers', async () => {
@@ -173,6 +185,8 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
         album_rows: 1,
         track_rows: 16,
         track_file_rows: 16,
+        fixture_root_rows: 1,
+        track_file_root_rows: 16,
         album_edition_rows: 0,
         file_edition_rows: 0,
         typo_album_rows: 0,
@@ -196,6 +210,8 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
     album_rows: 1,
     track_rows: 16,
     track_file_rows: 16,
+    fixture_root_rows: 1,
+    track_file_root_rows: 16,
     album_edition_rows: 0,
     file_edition_rows: 0,
     typo_album_rows: 0,
@@ -214,6 +230,7 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
   assert.equal(calls[2].options.env.PGPASSWORD, 'secret');
   assert.equal(calls[2].options.env.PGDATABASE, undefined);
   assert.ok(calls[2].args.some((arg) => arg.startsWith('--variable=fixture_b64=')));
+  assert.ok(calls[2].args.some((arg) => arg.startsWith('--variable=fixture_root_b64=')));
   const sqlArg = calls[2].args.find(
     (arg) => arg.endsWith('ddtStudioRecordsFixtureReset.sql'),
   );
@@ -241,6 +258,20 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
     /library\.local_tracks\.library_id\s*=\s*target_album\.library_id/,
   );
   assert.match(sql, /private_path = selected_rows\.private_path/);
+  assert.match(sql, /insert into library\.library_roots/);
+  assert.match(sql, /library_root_id = fixture_root\.id/);
+  assert.match(
+    sql,
+    /updated_track_files[\s\S]*returning[\s\S]*library\.local_track_files\.library_root_id[\s\S]*'track_file_root_rows',[\s\S]*from updated_track_files/,
+  );
+  assert.match(sql, /track_key\s*=\s*selected_rows\.private_path/);
+  for (const field of ['key', 'track_ref', 'path']) {
+    assert.match(
+      sql,
+      new RegExp(`'${field}',\\s*selected_rows\\.private_path`),
+      `Expected reset SQL to align scan-cache ${field} with private_path.`,
+    );
+  }
   assert.match(sql, /begin;/i);
   assert.match(sql, /duplicate_track_files\s+as\s+materialized/i);
   assert.match(sql, /delete\s+from\s+library\.local_track_files/i);
@@ -366,6 +397,12 @@ test('owns the exact five-track typo-artist rename inside the isolated Edit Tags
   assert.match(spec, /whilePostInFlight/);
   assert.match(spec, /const visibleSuccessMessages = new Set\(/);
   assert.match(spec, /expect\(\[\.\.\.visibleSuccessMessages\]\)\.toHaveLength\(1\)/);
+  assert.match(spec, /const MAX_RETAINED_HEAP_GROWTH_BYTES = 32 \* 1024 \* 1024;/);
+  assert.match(spec, /const MAX_RETAINED_DOM_NODE_GROWTH = 1_500;/);
+  assert.match(spec, /Memory\.getDOMCounters/);
+  assert.match(spec, /const editOpenTimingsMs = \[\];/);
+  assert.match(spec, /retainedHeapGrowthBytes/);
+  assert.match(spec, /retainedDomNodeGrowth/);
   for (const endpoint of [
     '/status',
     '/view-data?surface=albums',

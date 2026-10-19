@@ -3,6 +3,103 @@
 begin;
 
 with
+fixture_context as materialized (
+  select convert_from(
+    decode(:'fixture_root_b64', 'base64'),
+    'UTF8'
+  ) as root_path
+),
+bootstrap_context as materialized (
+  select library.libraries.id as library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1
+),
+fixture_root as (
+  insert into library.library_roots (
+    library_id,
+    root_path,
+    root_kind,
+    is_active,
+    metadata
+  )
+  select
+    bootstrap_context.library_id,
+    fixture_context.root_path,
+    'main_library',
+    true,
+    jsonb_build_object(
+      'source', 'e2e_fixture',
+      'root_id', 'edit-tags-writable-root',
+      'category', 'main_library',
+      'category_key', 'main_library_roots',
+      'layout_mode', 'artist'
+    )
+  from bootstrap_context
+  cross join fixture_context
+  on conflict (library_id, root_path) do update
+  set
+    root_kind = excluded.root_kind,
+    is_active = true,
+    updated_at = now(),
+    metadata = library.library_roots.metadata || excluded.metadata
+  returning library.library_roots.id
+)
+update library.library_root_settings
+set
+  root_categories = coalesce(
+    library.library_root_settings.root_categories,
+    '{}'::jsonb
+  ) || jsonb_build_object(
+    fixture_context.root_path,
+    jsonb_build_object(
+      'root_id', 'edit-tags-writable-root',
+      'category', 'main_library',
+      'category_key', 'main_library_roots'
+    )
+  ),
+  settings_payload = jsonb_set(
+    library.library_root_settings.settings_payload,
+    '{main_library_roots}',
+    case
+      when exists (
+        select 1
+        from jsonb_array_elements(
+          coalesce(
+            library.library_root_settings.settings_payload
+              -> 'main_library_roots',
+            '[]'::jsonb
+          )
+        ) as configured_root
+        where configured_root ->> 'path' = fixture_context.root_path
+      )
+      then library.library_root_settings.settings_payload
+        -> 'main_library_roots'
+      else coalesce(
+        library.library_root_settings.settings_payload
+          -> 'main_library_roots',
+        '[]'::jsonb
+      ) || jsonb_build_array(
+        jsonb_build_object(
+          'id', 'edit-tags-writable-root',
+          'path', fixture_context.root_path,
+          'layout_mode', 'artist'
+        )
+      )
+    end,
+    true
+  ),
+  updated_at = now()
+from bootstrap_context
+cross join fixture_context
+cross join fixture_root
+where library.library_root_settings.library_id = bootstrap_context.library_id;
+
+with
 fixture_rows as materialized (
   select *
   from jsonb_to_recordset(
@@ -112,6 +209,20 @@ fixture_rows as materialized (
     file_size_bytes bigint,
     modified_at_epoch double precision
   )
+),
+fixture_context as materialized (
+  select convert_from(
+    decode(:'fixture_root_b64', 'base64'),
+    'UTF8'
+  ) as root_path
+),
+fixture_root as materialized (
+  select library.library_roots.id
+  from library.library_roots
+  cross join fixture_context
+  where library.library_roots.root_path = fixture_context.root_path
+    and library.library_roots.is_active
+  limit 1
 ),
 target_album as materialized (
   select
@@ -280,6 +391,7 @@ updated_album as (
 updated_tracks as (
   update library.local_tracks
   set
+    track_key = selected_rows.private_path,
     album_id = case
       when selected_rows.album = 'Telepathic Minds'
       then (select upserted_typo_album.id from upserted_typo_album)
@@ -306,6 +418,7 @@ updated_tracks as (
 updated_track_files as (
   update library.local_track_files
   set
+    library_root_id = fixture_root.id,
     private_path = selected_rows.private_path,
     file_size_bytes = selected_rows.file_size_bytes,
     modified_at = to_timestamp(selected_rows.modified_at_epoch),
@@ -322,6 +435,9 @@ updated_track_files as (
           library.local_track_files.metadata #> '{scan_cache,file_entry}',
           '{}'::jsonb
         ) || jsonb_build_object(
+          'key', selected_rows.private_path,
+          'track_ref', selected_rows.private_path,
+          'path', selected_rows.private_path,
           'artist', selected_rows.artist,
           'album_artist', selected_rows.album_artist,
           'album', selected_rows.album,
@@ -338,8 +454,11 @@ updated_track_files as (
     ),
     last_seen_at = now()
   from selected_rows
+  cross join fixture_root
   where library.local_track_files.id = selected_rows.track_file_id
-  returning library.local_track_files.id
+  returning
+    library.local_track_files.id,
+    library.local_track_files.library_root_id
 ),
 deleted_separate_releases as (
   delete from library.separate_releases
@@ -447,6 +566,13 @@ select json_build_object(
   'typo_membership_rows', (select count(*) from upserted_typo_membership),
   'track_rows', (select count(*) from updated_tracks),
   'track_file_rows', (select count(*) from updated_track_files),
+  'fixture_root_rows', (select count(*) from fixture_root),
+  'track_file_root_rows', (
+    select count(*)
+    from updated_track_files
+    cross join fixture_root
+    where updated_track_files.library_root_id = fixture_root.id
+  ),
   'album_edition_rows', (
     select count(*)
     from library.local_albums

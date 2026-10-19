@@ -48,6 +48,10 @@ test('Edit Tags post-edit target uses the production synthetic-large application
   assert.equal(contractTarget.fixtureProfile, 'synthetic-large-library');
   assert.equal(contractTarget.fixtureMode, 'preloaded-release');
   assert.equal(contractTarget.runnerClass, 'synthetic');
+  assert.deepEqual(performanceTimes['edit-tags-post-edit.tagEditorOpenMs'], {
+    local: { targetMs: 800, graceMs: 400, hardCeilingMs: 1200 },
+    ci: { targetMs: 800, graceMs: 400, hardCeilingMs: 1200 },
+  });
 });
 
 test('Cover Lookup and exact title searches are isolated production synthetic-large targets', () => {

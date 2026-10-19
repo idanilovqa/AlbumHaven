@@ -130,6 +130,24 @@ def _normalized_sql(sql):
     return " ".join(sql.casefold().split())
 
 
+def test_structural_album_tag_edit_promotes_renamed_file_path_to_private_path():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(
+        scan_cache_persistence._persist_structural_album_tag_edit_sql()
+    )
+    updated_track_files_sql = normalized_sql.split(
+        "updated_track_files as (", 1
+    )[1].split("vacated_source_album as materialized (", 1)[0]
+
+    assert (
+        "private_path = coalesce( "
+        "nullif(selected_track_files.file_entry ->> 'path', ''), "
+        "library.local_track_files.private_path )"
+        in updated_track_files_sql
+    )
+
+
 def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
     from music_app.services import scan_cache_persistence
 
@@ -2232,6 +2250,9 @@ def test_targeted_structural_relation_patch_avoids_full_source_load(monkeypatch)
         def fetchone(self):
             return self.rows[0] if self.rows else None
 
+        def fetchall(self):
+            return self.rows
+
     class Connection:
         def execute(self, sql, params=None):
             if sql == persistence._load_scan_snapshot_sql():
@@ -2285,6 +2306,41 @@ def test_targeted_structural_relation_patch_avoids_full_source_load(monkeypatch)
     assert "targeted_patch_timestamp" in metadata
 
 
+def test_stale_structural_relation_patch_reports_authoritative_orphan(monkeypatch):
+    from music_app.services import scan_cache_persistence as persistence
+
+    class Cursor:
+        def fetchone(self):
+            return {"scan_cache": {}}
+
+    class Connection:
+        def execute(self, sql, _params=None):
+            assert sql == persistence._load_scan_snapshot_sql()
+            return Cursor()
+
+    monkeypatch.setattr(
+        persistence,
+        "_orphaned_structural_source_artists",
+        lambda _connection, artist_names: (
+            ["Ovderhead"] if artist_names == {"Ovderhead"} else []
+        ),
+    )
+
+    result = persistence._patch_structural_relation_projection(
+        Connection(),
+        previous_entries={
+            "track.flac": {"artist": "Ovderhead", "album_artist": "Ovderhead"},
+        },
+        updated_entries={
+            "track.flac": {"artist": "Overhead", "album_artist": "Overhead"},
+        },
+        source_album_vacated=True,
+    )
+
+    assert result["projection_mode"] == "stale"
+    assert result["orphaned_source_artists"] == ["Ovderhead"]
+
+
 def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch):
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services.cache import serialize_relation_views
@@ -2322,6 +2378,9 @@ def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch
         def fetchone(self):
             return self.rows[0] if self.rows else None
 
+        def fetchall(self):
+            return self.rows
+
     class Connection:
         def execute(self, sql, params=None):
             if sql == persistence._load_scan_snapshot_sql():
@@ -2329,6 +2388,9 @@ def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch
             if sql == persistence._save_scan_snapshot_sql():
                 saved_snapshots.append(params["scan_cache"])
                 return Cursor()
+            if "with source_artist_names as" in sql:
+                assert params == {"artist_names": ["Ovderhead"]}
+                return Cursor([{"artist_name": "Ovderhead"}])
             raise AssertionError(f"Unexpected SQL in stale fallback: {sql}")
 
     monkeypatch.setattr(
@@ -2350,6 +2412,7 @@ def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch
     assert result == {
         "projection_mode": "stale",
         "rebuild_reason": "structural_tag_edit_requires_full_projection",
+        "orphaned_source_artists": ["Ovderhead"],
     }
     assert saved_snapshots[0][persistence.RELATION_PROJECTION_METADATA_KEY]["status"] == "stale"
 

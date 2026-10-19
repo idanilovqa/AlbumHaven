@@ -48,7 +48,10 @@ const TREE_ARTIST = 'Ария';
 const ARTIST_VIEW_URL = `/?surface=albums&artist=${encodeURIComponent(ARTIST)}`;
 const SAVED_MESSAGE = /^Saved changes to \d+ tracks? in “.+”\.$/u;
 const TYPO_SAVED_MESSAGE = `Saved changes to ${TYPO_TRACK_FILENAMES.length} tracks in “${TYPO_ALBUM}”.`;
+const MAX_RETAINED_HEAP_GROWTH_BYTES = 32 * 1024 * 1024;
+const MAX_RETAINED_DOM_NODE_GROWTH = 1_500;
 const BUDGETS = Object.freeze(Object.fromEntries([
+  'tagEditorOpenMs',
   'searchGalleryReadyMs',
   'treeHighlightMs',
   'treeGalleryReadyMs',
@@ -106,10 +109,12 @@ async function probeEditTagsRequestCapacity(page, album) {
     const response = method === 'post'
       ? await authenticatedPagePost(page, url, { data, timeout: 30000 })
       : await authenticatedPageGet(page, url, { timeout: 30000 });
+    const ok = response.ok();
     return {
+      body: ok ? '' : await response.text(),
       durationMs: performance.now() - startedAt,
       name,
-      ok: response.ok(),
+      ok,
       status: response.status(),
     };
   }));
@@ -140,6 +145,16 @@ async function observeEditTagPosts(page, operation) {
   }
 }
 
+async function sampleRendererRetention(cdp, phase) {
+  await cdp.send('HeapProfiler.enable');
+  await cdp.send('HeapProfiler.collectGarbage');
+  const [heap, dom] = await Promise.all([
+    cdp.send('Runtime.getHeapUsage'),
+    cdp.send('Memory.getDOMCounters'),
+  ]);
+  return { phase, heap, dom };
+}
+
 test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
   test('repeated saves leave navigation responsive', async ({
     appBarActions,
@@ -156,7 +171,11 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
     requirePostgresRuntimeEnv('the repeated Edit Tags post-edit benchmark');
 
     const saveTimingsMs = [];
+    const editOpenTimingsMs = [];
     const metrics = {};
+    let cdp = null;
+    let retentionBaseline = null;
+    let retentionFinal = null;
     let treeArtist = '';
     let treeAlbum = '';
     let typoAlbumRequest = null;
@@ -206,8 +225,10 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       await stepLogger.step('Correct the final typo artist and reconcile to its destination', async () => {
         const typoSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
         expect(typoSummary.trackRows).toBe(TYPO_TRACK_FILENAMES.length);
+        const editOpenStartedAt = performance.now();
         await trackModalActions.openTagEditor();
         await tagEditorActions.waitForOpen({ expectedTrackCount: TYPO_TRACK_FILENAMES.length });
+        editOpenTimingsMs.push(performance.now() - editOpenStartedAt);
         await tagEditorActions.selectTracksByFilenames(TYPO_TRACK_FILENAMES);
         await tagEditorActions.setArtist(CORRECTED_ARTIST);
         await tagEditorActions.setAlbumArtist(CORRECTED_ARTIST);
@@ -245,7 +266,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         for (const probe of exactIncidentProbes) {
           expect(
             probe.ok,
-            `${probe.name} returned HTTP ${probe.status} during Edit Tags.`,
+            `${probe.name} returned HTTP ${probe.status}${probe.body ? `: ${probe.body}` : ''} during Edit Tags.`,
           ).toBe(true);
           expect(
             probe.durationMs,
@@ -354,6 +375,8 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           year: FIXTURE_YEAR,
         });
         await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
+        cdp = await page.context().newCDPSession(page);
+        retentionBaseline = await sampleRendererRetention(cdp, 'before-repeated-edits');
       });
 
       for (const [index, destinationAlbum] of [
@@ -362,8 +385,10 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         ORIGINAL_ALBUM,
       ].entries()) {
         await stepLogger.step(`Save Edit Tags transition ${index + 1}`, async () => {
+          const editOpenStartedAt = performance.now();
           await trackModalActions.openTagEditor();
           await tagEditorActions.waitForOpen();
+          editOpenTimingsMs.push(performance.now() - editOpenStartedAt);
           await tagEditorActions.selectTrackByFilename(TRACK_FILENAME);
           await tagEditorActions.setAlbumName(destinationAlbum);
           const startedAt = performance.now();
@@ -467,6 +492,18 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         });
       }
 
+      retentionFinal = await sampleRendererRetention(cdp, 'after-repeated-edits');
+      metrics.retainedHeapGrowthBytes = retentionFinal.heap.usedSize
+        - retentionBaseline.heap.usedSize;
+      metrics.retainedDomNodeGrowth = retentionFinal.dom.nodes - retentionBaseline.dom.nodes;
+      expect(metrics.retainedHeapGrowthBytes).toBeLessThanOrEqual(
+        MAX_RETAINED_HEAP_GROWTH_BYTES,
+      );
+      expect(metrics.retainedDomNodeGrowth).toBeLessThanOrEqual(
+        MAX_RETAINED_DOM_NODE_GROWTH,
+      );
+      metrics.tagEditorOpenMs = Math.max(...editOpenTimingsMs);
+
       await stepLogger.step('Close Album Details after the restored save', async () => {
         await trackModalActions.close();
         await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ORIGINAL_ALBUM, {
@@ -553,15 +590,20 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       expect(trackSummary.trackRows).toBeGreaterThan(0);
       await trackModalActions.close();
     } finally {
-      await managedAppLifecycle.stop();
       try {
-        await restoreDdtStudioRecordsFixture();
+        if (cdp) await cdp.detach();
       } finally {
-        await managedAppLifecycle.restart();
+        await managedAppLifecycle.stop();
+        try {
+          await restoreDdtStudioRecordsFixture();
+        } finally {
+          await managedAppLifecycle.restart();
+        }
       }
     }
 
     for (const [key, label] of [
+      ['tagEditorOpenMs', 'Slowest Edit Tags editor open'],
       ['searchGalleryReadyMs', 'Post-edit exact-artist search gallery'],
       ['treeHighlightMs', 'Post-edit Artist Tree highlight'],
       ['treeGalleryReadyMs', 'Post-edit Artist Tree selected gallery'],
@@ -597,8 +639,20 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       timingMs: metrics.treeCoverReadyMs,
       details: { treeArtist },
     });
+    editTagsPostEditLocalReport.recordTextCheckpoint({
+      key: 'post-edit-retained-renderer-state',
+      label: 'Retained renderer state after repeated Edit Tags',
+      valueText: `${metrics.retainedHeapGrowthBytes} bytes / ${metrics.retainedDomNodeGrowth} nodes`,
+      details: {
+        maximumHeapGrowthBytes: MAX_RETAINED_HEAP_GROWTH_BYTES,
+        maximumDomNodeGrowth: MAX_RETAINED_DOM_NODE_GROWTH,
+        baseline: retentionBaseline,
+        final: retentionFinal,
+      },
+    });
     editTagsPostEditLocalReport.setMetricsPayload({
       ...metrics,
+      editOpenTimingsMs,
       saveTimingsMs,
       treeAlbum,
       treeArtist,

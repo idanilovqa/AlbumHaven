@@ -2355,6 +2355,58 @@ def _structural_entry_artist_names(
     }
 
 
+def _orphaned_structural_source_artists(
+    connection: Any,
+    artist_names: set[str],
+) -> list[str]:
+    normalized_names = sorted(
+        {
+            str(name or "").strip()
+            for name in artist_names
+            if str(name or "").strip()
+        }
+    )
+    if not normalized_names:
+        return []
+    rows = connection.execute(
+        """
+        with source_artist_names as (
+          select unnest(%(artist_names)s::text[]) as artist_name
+        )
+        select source.artist_name
+        from source_artist_names source
+        where not exists (
+          select 1
+          from library.local_artists artist
+          where lower(btrim(artist.name)) = lower(btrim(source.artist_name))
+            and (
+              exists (
+                select 1 from library.local_albums album
+                where album.artist_id = artist.id
+              )
+              or exists (
+                select 1 from library.local_tracks track
+                where track.artist_id = artist.id
+              )
+              or exists (
+                select 1 from library.local_album_featured_artists featured
+                where featured.artist_id = artist.id
+              )
+            )
+        )
+        order by lower(source.artist_name), source.artist_name
+        """,
+        {"artist_names": normalized_names},
+    ).fetchall()
+    orphaned = []
+    for row in rows:
+        row_mapping = _row_mapping(row)
+        artist_name = str(row_mapping.get("artist_name") or row[0]).strip()
+        if artist_name:
+            orphaned.append(artist_name)
+    return orphaned
+
+
 def _patch_structural_relation_projection(
     connection: Any,
     *,
@@ -2363,6 +2415,7 @@ def _patch_structural_relation_projection(
     source_album_vacated: bool,
     reason: str = "structural_tag_edit",
 ) -> dict[str, object]:
+    source_artist_names = _structural_entry_artist_names(previous_entries)
     snapshot_row = _first_row(connection.execute(_load_scan_snapshot_sql()))
     loaded_snapshot = (
         _row_mapping(snapshot_row).get("scan_cache")
@@ -2381,9 +2434,13 @@ def _patch_structural_relation_projection(
         return {
             "projection_mode": "stale",
             "rebuild_reason": "structural_tag_edit_requires_full_projection",
+            "orphaned_source_artists": (
+                _orphaned_structural_source_artists(connection, source_artist_names)
+                if source_album_vacated
+                else []
+            ),
         }
 
-    source_artist_names = _structural_entry_artist_names(previous_entries)
     destination_artist_names = _structural_entry_artist_names(updated_entries)
     affected_rows = [
         {
@@ -2416,6 +2473,11 @@ def _patch_structural_relation_projection(
         return {
             "projection_mode": "stale",
             "rebuild_reason": "structural_tag_edit_requires_full_projection",
+            "orphaned_source_artists": (
+                _orphaned_structural_source_artists(connection, source_artist_names)
+                if source_album_vacated
+                else []
+            ),
         }
 
     next_scan_cache["relation_views"] = serialize_relation_views(patched_views)
@@ -4948,7 +5010,11 @@ def _persist_structural_album_tag_edit_sql(
         ),
         updated_track_files as (
           update library.local_track_files
-          set metadata = jsonb_set(
+          set private_path = coalesce(
+                nullif(selected_track_files.file_entry ->> 'path', ''),
+                library.local_track_files.private_path
+              ),
+              metadata = jsonb_set(
                 coalesce(library.local_track_files.metadata, '{}'::jsonb),
                 '{scan_cache}',
                 coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)

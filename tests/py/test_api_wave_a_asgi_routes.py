@@ -5693,13 +5693,18 @@ def test_postgres_blank_album_edit_hydrates_siblings_for_inferred_membership(app
 def test_edit_tag_reservation_releases_intent_and_structural_owners_even_on_failure():
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
     releases = []
+    resource_keys = frozenset({"album:ovderhead::telepathic minds"})
     def fail_release():
         releases.append("intent")
         raise RuntimeError("session lost")
     reservation = asgi_routes._EditTagsReservation(
         SimpleNamespace(release=fail_release),
-        SimpleNamespace(release=lambda: releases.append("structural")),
+        SimpleNamespace(
+            _resource_keys=resource_keys,
+            release=lambda: releases.append("structural"),
+        ),
     )
+    assert reservation._resource_keys == resource_keys
     with pytest.raises(RuntimeError, match="session lost"):
         reservation.release()
     reservation.release()

@@ -168,6 +168,7 @@ export async function restoreDdtStudioRecordsFixture(
   } = {},
 ) {
   const albumDirectory = resolveFixtureAlbumDirectory(env);
+  const fixtureRoot = path.dirname(path.dirname(albumDirectory));
   const { databaseTarget, password } = resolvePsqlConnection(env);
   const { stdout: physicalStdout } = await execFileAsync(
     pythonCommand,
@@ -195,6 +196,7 @@ export async function restoreDdtStudioRecordsFixture(
       JSON.stringify(physicalRows),
       'utf8',
     ).toString('base64')}`,
+    `--variable=fixture_root_b64=${Buffer.from(fixtureRoot, 'utf8').toString('base64')}`,
     `--file=${RESET_SQL_PATH}`,
   ];
   const childEnv = {
@@ -214,6 +216,8 @@ export async function restoreDdtStudioRecordsFixture(
     result.album_rows !== 1
     || result.track_rows !== TRACK_COUNT
     || result.track_file_rows !== TRACK_COUNT
+    || result.fixture_root_rows !== 1
+    || result.track_file_root_rows !== TRACK_COUNT
     || result.album_edition_rows !== 0
     || result.file_edition_rows !== 0
     || Number(result.typo_album_rows || 0) !== (typoArtistAlbum ? 1 : 0)

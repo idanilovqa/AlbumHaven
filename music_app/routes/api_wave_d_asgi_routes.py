@@ -5,6 +5,7 @@ from music_app.services.log_history import history_scope_for_request
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
+from time import perf_counter
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -64,13 +65,20 @@ from music_app.services.cover_workflow import (
     validate_local_cover_source,
 )
 from music_app.services.covers import image_dimensions, score_image
+from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.repair_previews import (
     find_problematic_album_by_track_paths as find_problematic_album_by_track_paths_in_state,
+)
+from music_app.services.save_tasks import (
+    acquire_structural_tag_edit_reservation_async,
+    latest_structural_tag_edit_destination,
+    structural_tag_edit_resource_keys,
 )
 
 
 router = APIRouter()
 LOGGER = logging.getLogger(__name__)
+_STRUCTURAL_RECONCILIATION_LOOKBACK_SECONDS = 30.0
 
 JsonDict = dict[str, object]
 ResponseValue = JsonDict | tuple[JsonDict, int]
@@ -179,6 +187,19 @@ def _album_track_paths(album: Mapping[str, object] | None) -> set[str]:
         for track in tracks
         if isinstance(track, Mapping) and str(track.get("path") or "")
     }
+
+
+def _album_with_context_tracks(album: Mapping[str, object]) -> JsonDict:
+    normalized_album = dict(album)
+    if _album_track_paths(normalized_album):
+        return normalized_album
+    gallery_list_block = normalized_album.get("gallery_list_block")
+    if not isinstance(gallery_list_block, Mapping):
+        return normalized_album
+    track_rows = gallery_list_block.get("track_rows")
+    if isinstance(track_rows, list):
+        normalized_album["tracks"] = track_rows
+    return normalized_album
 
 
 def _require_album_track_paths(
@@ -498,11 +519,51 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     manual_urls = _clean_string_list(payload.get("manual_urls"))
     if manual_urls and client_surface_from_request(request) == "tv":
         return _json_response(({"ok": False, "error": "Manual cover links are unavailable on TV."}, 403))
-    album_context = resolve_album_context(config, album or {})
+    requested_track_paths = _album_track_paths(album)
+    reservation_resource_keys = structural_tag_edit_resource_keys(
+        str((album or {}).get("key") or (album or {}).get("album_ref") or ""),
+        requested_track_paths,
+    )
+    reconciliation_started_at = (
+        perf_counter() - _STRUCTURAL_RECONCILIATION_LOOKBACK_SECONDS
+    )
+    reservation = await acquire_structural_tag_edit_reservation_async(
+        reservation_resource_keys
+    )
+    queued_album = album or {}
+    try:
+        album_context = resolve_album_context(config, queued_album)
+        album_id = _album_id(queued_album)
+        if album_id is not None:
+            refreshed_album = await run_in_threadpool(
+                PostgresLibraryBrowseRepository(config).build_album_detail_payload_by_id,
+                album_id,
+            )
+            if refreshed_album is not None:
+                queued_album = _album_with_context_tracks(refreshed_album)
+                album_context = resolve_album_context(config, queued_album)
+            if album_context is None:
+                reconciliation = latest_structural_tag_edit_destination(
+                    reservation_resource_keys,
+                    completed_after_monotonic=reconciliation_started_at,
+                )
+                destination_album_id = int(
+                    (reconciliation or {}).get("destination_album_id") or 0
+                )
+                if destination_album_id > 0:
+                    refreshed_album = await run_in_threadpool(
+                        PostgresLibraryBrowseRepository(config).build_album_detail_payload_by_id,
+                        destination_album_id,
+                    )
+                    if refreshed_album is not None:
+                        queued_album = _album_with_context_tracks(refreshed_album)
+                        album_context = resolve_album_context(config, queued_album)
+    finally:
+        reservation.release()
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album does not contain any tracks"}, 400))
     task_id = queue_cover_lookup_task(
-        album or {},
+        queued_album,
         album_context.track_paths,
         manual_urls,
         config=config,
@@ -515,10 +576,10 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         "Cover lookup task queued",
         level="info",
         task_id=task_id,
-        artist=str((album or {}).get("album_artist") or ""),
-        album=str((album or {}).get("name") or (album or {}).get("album") or ""),
-        year=(album or {}).get("year"),
-        edition=str((album or {}).get("edition") or ""),
+        artist=str(queued_album.get("album_artist") or ""),
+        album=str(queued_album.get("name") or queued_album.get("album") or ""),
+        year=queued_album.get("year"),
+        edition=str(queued_album.get("edition") or ""),
      history_scope=history_scope)
     return JSONResponse(
         {

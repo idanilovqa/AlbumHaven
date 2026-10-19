@@ -391,6 +391,7 @@ function buildNotificationHistoryLocalSummaryCards(_checkpoints, metricsPayload)
 
 function buildEditTagsPostEditSummaryCards(_checkpoints, metricsPayload) {
   return [
+    ['Slowest Editor Open', metricsPayload?.tagEditorOpenMs, 'Maximum across four Edit Tags opens'],
     ['Search Gallery', metricsPayload?.searchGalleryReadyMs, 'Post-edit exact-artist search'],
     ['Tree Highlight', metricsPayload?.treeHighlightMs, 'Post-edit Artist Tree selection'],
     ['Tree Gallery', metricsPayload?.treeGalleryReadyMs, 'Selected-artist visible gallery'],
@@ -1170,9 +1171,10 @@ export const test = base.extend({
       reportId: 'editTagsPostEditLocal',
       caseId: 'FTC-TAGS-026P',
       title: 'Repeated Edit Tags And Post-Edit Navigation Benchmark',
-      intro: 'This synthetic performance report records three terminal tag saves, clean notification dismissal, and same-session navigation against the complete library fixture.',
+      intro: 'This synthetic performance report records four Edit Tags opens, three terminal tag saves, retained renderer state, clean notification dismissal, and same-session navigation against the complete library fixture.',
       buildSummaryCards: buildEditTagsPostEditSummaryCards,
       expectedTimingMetricIds: [
+        'edit-tags-post-edit.tagEditorOpenMs',
         'edit-tags-post-edit.searchGalleryReadyMs',
         'edit-tags-post-edit.treeHighlightMs',
         'edit-tags-post-edit.treeGalleryReadyMs',

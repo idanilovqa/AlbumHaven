@@ -41,6 +41,37 @@ def _logger_stub() -> SimpleNamespace:
     )
 
 
+def test_structural_completion_lookup_is_private_and_time_scoped():
+    task_id = create_save_task("edit-tags")
+    resource_keys = {
+        "album:ovderhead::telepathic minds",
+        "path:c:\\music\\ovderhead\\telepathic minds\\05.mp3",
+    }
+    save_tasks_module.update_save_task(
+        task_id,
+        status="completed",
+        destination_album_id=24674,
+        destination_album_key="overhead::telepathic minds",
+        destination_artist="Overhead",
+        _structural_resource_keys=frozenset(resource_keys),
+        _structural_completed_monotonic=12.5,
+    )
+
+    assert save_tasks_module.latest_structural_tag_edit_destination(
+        resource_keys,
+        completed_after_monotonic=12.0,
+    ) == {
+        "destination_album_id": 24674,
+        "destination_album_key": "overhead::telepathic minds",
+        "destination_artist": "Overhead",
+    }
+    assert save_tasks_module.latest_structural_tag_edit_destination(
+        resource_keys,
+        completed_after_monotonic=13.0,
+    ) is None
+    assert not any(key.startswith("_") for key in save_task_result(task_id))
+
+
 def _durable_save_finalize_kwargs(
     tmp_path: Path,
     *,

@@ -16966,3 +16966,49 @@ def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
     assert "ignored_repair_rollup" not in sql
     assert "library.ignored_repairs" not in sql
 
+
+def test_album_detail_payload_by_id_resolves_current_key_before_loading(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    class Cursor:
+        def fetchone(self):
+            return {"album_key": "overhead::telepathic minds"}
+
+    class Connection:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params):
+            self.calls.append((statement, params))
+            return Cursor()
+
+    class ConnectionContext:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            return self.connection
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+    connection = Connection()
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: ConnectionContext(connection),
+    )
+    loaded = []
+    monkeypatch.setattr(
+        repository,
+        "_build_album_detail_payload_with_connection",
+        lambda album_key, *, client_surface_class, connection: loaded.append(
+            (album_key, client_surface_class, connection)
+        ) or {"album_id": 14674, "key": album_key},
+    )
+
+    payload = repository.build_album_detail_payload_by_id(14674)
+
+    assert payload == {"album_id": 14674, "key": "overhead::telepathic minds"}
+    assert connection.calls[0][1] == {"album_id": 14674}
+    assert loaded == [("overhead::telepathic minds", None, connection)]
+

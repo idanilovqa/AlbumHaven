@@ -932,6 +932,9 @@ class _EditTagsReservation:
     def __init__(self, intent_lease, structural_reservation):
         self._intent_lease = intent_lease
         self._structural_reservation = structural_reservation
+        self._resource_keys = frozenset(
+            getattr(structural_reservation, "_resource_keys", ()) or ()
+        )
         self._released = False
 
     def release(self):

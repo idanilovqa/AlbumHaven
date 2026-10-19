@@ -1411,27 +1411,14 @@ class PostgresScanCacheAdapter:
             from music_app.services import gallery_projection_postgres as gallery
 
             try:
-                patch_result = gallery.patch_gallery_projections_after_structural_edit(
+                gallery.schedule_gallery_projection_refresh(
                     self._config,
-                    source_album_id=source_album_id,
-                    destination_album_id=destination_album_id,
                     connect=self._connect,
                 )
             except Exception:
                 _LOGGER.exception(
-                    "Committed structural tag edit could not patch gallery projection."
+                    "Committed structural tag edit could not schedule gallery refresh."
                 )
-                patch_result = {"patched": 0}
-            if not int(patch_result.get("patched") or 0):
-                try:
-                    gallery.schedule_gallery_projection_refresh(
-                        self._config,
-                        connect=self._connect,
-                    )
-                except Exception:
-                    _LOGGER.exception(
-                        "Committed structural tag edit could not schedule gallery refresh."
-                    )
         return persistence_result
 
     def validate_structural_tag_edit(

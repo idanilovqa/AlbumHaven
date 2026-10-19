@@ -1570,6 +1570,8 @@ def test_postgres_year_split_uses_year_identity_and_persists_only_selected_file_
     assert mutation_params["input_rows"] == [
         {
             "private_path": selected_path,
+            "track_artist_key": "artist",
+            "track_artist_name": "Artist",
             "file_entry": {"release_date": "2014", "year": 2014},
         }
     ]
@@ -1709,7 +1711,10 @@ def test_postgres_album_only_rename_never_overwrites_current_album_metadata(
         "renamed_source_album as (", 1
     )[1].split("inserted_destination_album as (", 1)[0]
 
-    assert "set album_key = case" in destination_album_update
+    assert "artist_id = (select id from inserted_destination_artist)" in (
+        destination_album_update
+    )
+    assert "album_key = case" in destination_album_update
     assert (
         "when %(destination_is_explicit_separate)s::boolean"
         in destination_album_update
@@ -2166,7 +2171,9 @@ def test_postgres_album_rename_returns_only_after_commit_and_propagates_commit_f
     assert failed_connection.exit_exc_type is RuntimeError
 
 
-def test_structural_album_edit_patches_gallery_after_domain_transaction_exit(monkeypatch):
+def test_structural_album_edit_schedules_gallery_refresh_after_domain_transaction_exit(
+    monkeypatch,
+):
     from music_app.services import gallery_projection_postgres as gallery
 
     _paths, previous, updated = _entries()
@@ -2182,24 +2189,34 @@ def test_structural_album_edit_patches_gallery_after_domain_transaction_exit(mon
         "source_album_id": 17,
     })
     adapter = _adapter(monkeypatch, connection)
-    patch_calls = []
+    scheduled = []
+    monkeypatch.setattr(
+        gallery,
+        "patch_gallery_projections_after_structural_edit",
+        lambda *_args, **_kwargs: pytest.fail(
+            "structural edit republished gallery snapshots in the foreground"
+        ),
+        raising=False,
+    )
 
-    def patch(config, **kwargs):
-        events.append("gallery_patch")
-        patch_calls.append((config, kwargs))
-        return {"patched": 1, "generation": 9}
+    def schedule_refresh(config, **kwargs):
+        events.append("gallery_refresh_scheduled")
+        scheduled.append((config, kwargs))
 
-    monkeypatch.setattr(gallery, "patch_gallery_projections_after_structural_edit", patch)
+    monkeypatch.setattr(
+        gallery,
+        "schedule_gallery_projection_refresh",
+        schedule_refresh,
+    )
 
     result = _persist_album_rename(adapter, previous, updated)
 
-    assert events == ["transaction_exit", "gallery_patch"]
+    assert events == ["transaction_exit", "gallery_refresh_scheduled"]
     assert result["source_album_id"] == 17
-    assert patch_calls == [(
+    assert result["destination_album_id"] == 41
+    assert scheduled == [(
         adapter._config,
         {
-            "source_album_id": 17,
-            "destination_album_id": 41,
             "connect": adapter._connect,
         },
     )]
@@ -2212,7 +2229,9 @@ def test_structural_album_edit_patches_gallery_after_domain_transaction_exit(mon
     )
 
 
-def test_structural_album_edit_falls_back_after_gallery_patch_failure(monkeypatch):
+def test_structural_album_edit_preserves_commit_after_gallery_refresh_schedule_failure(
+    monkeypatch,
+):
     from music_app.services import gallery_projection_postgres as gallery
 
     _paths, previous, updated = _entries()
@@ -2221,26 +2240,27 @@ def test_structural_album_edit_falls_back_after_gallery_patch_failure(monkeypatc
         "source_album_id": 17,
     })
     adapter = _adapter(monkeypatch, connection)
-    scheduled = []
-
-    def fail_patch(*_args, **_kwargs):
-        raise RuntimeError("projection patch failed")
-
     monkeypatch.setattr(
         gallery,
         "patch_gallery_projections_after_structural_edit",
-        fail_patch,
+        lambda *_args, **_kwargs: pytest.fail(
+            "structural edit republished gallery snapshots in the foreground"
+        ),
+        raising=False,
     )
+
+    def fail_schedule(*_args, **_kwargs):
+        raise RuntimeError("projection refresh scheduling failed")
+
     monkeypatch.setattr(
         gallery,
         "schedule_gallery_projection_refresh",
-        lambda config, **kwargs: scheduled.append((config, kwargs)),
+        fail_schedule,
     )
 
     result = _persist_album_rename(adapter, previous, updated)
 
     assert result["destination_album_id"] == 41
-    assert scheduled == [(adapter._config, {"connect": adapter._connect})]
 
 
 def test_structural_tag_edit_runs_intent_completion_on_domain_transaction_before_commit(monkeypatch):

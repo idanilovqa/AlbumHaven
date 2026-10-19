@@ -54,4 +54,6 @@ test('authenticated POST preserves payload and sends the browser session cookies
     captured.options.headers.Cookie,
     '__Host-album_haven_session=session-token; __Host-album_haven_csrf=csrf-token',
   );
+  assert.equal(captured.options.headers.Origin, 'http://127.0.0.1:5101');
+  assert.equal(captured.options.headers['X-Album-Haven-CSRF'], 'csrf-token');
 });

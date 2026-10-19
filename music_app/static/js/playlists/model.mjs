@@ -1,3 +1,4 @@
+import {normalizeSavedArtistLovedRecipe} from './artist-loved-recipe.mjs';
 import {DEFAULT_PLAYLIST_FILTERS, normalizePlaylistFacts, normalizePlaylistFilters, matchesPlaylistFilters, playlistFiltersActive} from './filters.mjs';
 import {normalizeCreationDescriptor} from './creation.mjs';
 import {detailSelection} from '../home-friends/resource-target.mjs';
@@ -40,9 +41,12 @@ function unique(values, key) {
   });
 }
 function directoryItem(value) {
+  const loved = value.playlist_kind === 'artist_loved' ? normalizeSavedArtistLovedRecipe(value.artist_loved) : null;
+  if (value.playlist_kind === 'artist_loved' && (!loved || value.library_mix != null)
+    || value.artist_loved != null && value.playlist_kind !== 'artist_loved') throw new TypeError('Invalid Loved playlist projection.');
   return freeze({playlist_id: value.playlist_id, title: text(value.title), description: text(value.description),
     visibility: text(value.visibility), item_count: count(value.item_count), playlist_kind: text(value.playlist_kind),
-    allowed_actions: grants(value.allowed_actions)});
+    ...(loved ? {artist_loved: loved} : {}), allowed_actions: grants(value.allowed_actions)});
 }
 function track(value, index) {
   if (!record(value)) throw new TypeError('Invalid playlist track.');

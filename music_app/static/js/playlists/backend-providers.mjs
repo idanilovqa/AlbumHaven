@@ -1,3 +1,4 @@
+import {normalizeArtistLovedDescriptor, normalizeArtistLovedRecipe} from './artist-loved-recipe.mjs';
 import {queueOccurrences} from './queue-provenance.mjs';
 // Authenticated transport adapter. Actor/context evidence and inventory links
 // remain private here; components receive only lifecycle-scoped projections.
@@ -15,7 +16,7 @@ const fail = (message, status = 409) => Object.assign(new Error(message), {statu
 const aborted = () => Object.assign(new Error('Playlist request superseded.'), {name: 'AbortError'});
 const tuple = source => ({kind: source.kind, ref: source.ref, revision: source.revision});
 const same = (a, b) => a?.kind === b?.kind && a?.ref === b?.ref && a?.revision === b?.revision;
-const sourceProtocols = new Set(['library_selection_v1', 'complete_inventory_selection_v1', 'complete_activity_selection_v1', 'missing_playlist_selection_v1', 'missing_activity_selection_v1', 'library_mix_selection_v1', 'artist_popular_selection_v1']);
+const sourceProtocols = new Set(['library_selection_v1', 'complete_inventory_selection_v1', 'complete_activity_selection_v1', 'missing_playlist_selection_v1', 'missing_activity_selection_v1', 'library_mix_selection_v1', 'artist_popular_selection_v1', 'artist_loved_selection_v1']);
 const visibilityModes = ['private', 'server_shared'];
 function preferences(value) {
   if (typeof value?.remember_order_mode !== 'boolean' || !['regular', 'shuffle'].includes(value.last_order_mode)
@@ -71,15 +72,30 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       || data.source?.kind !== kind || !uuid(data.source.ref)
       || !(kind === 'playlist' ? revision(data.source.revision) : uuid(data.source.revision)) || !granted(data)
       || expected && !same(data.source, expected)) throw fail('Playlist source was not acknowledged.');
+    let loved = null, entryRefs = null;
+    if (data.source_protocol === 'artist_loved_selection_v1') {
+      loved = normalizeArtistLovedRecipe(data.artist_loved);
+      if (!loved || data.library_mix != null || data.entries_complete !== true || !Array.isArray(data.entries)
+        || data.entries.length > 5000) throw fail('Invalid Loved selection.');
+      entryRefs = data.entries.map(row => row?.entry_ref);
+      if (entryRefs.some(ref => !uuid(ref)) || new Set(entryRefs).size !== entryRefs.length
+        || data.entries.some(row => row?.allowed_actions?.can_read !== true || row.allowed_actions.can_select !== true))
+        throw fail('Invalid Loved membership.');
+      const previous = sources.get(data.source.ref);
+      if (previous && (!same(previous.source, data.source) || previous.protocol !== data.source_protocol
+        || JSON.stringify(previous.artistLoved) !== JSON.stringify(loved)
+        || JSON.stringify(previous.entryRefs) !== JSON.stringify(entryRefs))) throw fail('Loved source changed.');
+    }
     acceptActor(data.actor_scope);
     sources.set(data.source.ref, {source: tuple(data.source), protocol: data.source_protocol,
+      ...(loved ? {artistLoved: loved, entryRefs: Object.freeze(entryRefs)} : {}),
       ...(missing && uuid(data.capture_ref) ? {capture_ref: data.capture_ref} : {})});
     return data;
   }
   function descriptor(data) {return {...tuple(data.source), source_protocol: data.source_protocol, allowed_actions: {...data.allowed_actions}};}
   function projection(data, scopeKey) {
     const {actor_scope, context_ref, capture_ref, ...safe} = data;
-    if (['library_mix_selection_v1','artist_popular_selection_v1'].includes(data.source_protocol)) delete safe.diagnostics;
+    if (['library_mix_selection_v1','artist_popular_selection_v1','artist_loved_selection_v1'].includes(data.source_protocol)) delete safe.diagnostics;
     return {...safe, scopeKey, ...(Array.isArray(data.entries) ? {entries: data.entries.map(({inventory_track_ref, ...row}) => row)} : {})};
   }
   async function begin(options) {
@@ -117,6 +133,8 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       || (operation.action === 'copy' ? value.source_playlist_id !== operation.playlist_id || value.playlist_id === operation.playlist_id
         : operation.playlist_id && value.playlist_id !== operation.playlist_id) || !revision(value.revision) || typeof value.changed !== 'boolean'
       || !actor || value.actor_scope?.account_id !== actor.account_id || value.actor_scope?.library_id !== actor.library_id) throw fail('Playlist mutation was not acknowledged.');
+    if (operation.action === 'create' && operation.source_protocol === 'artist_loved_selection_v1'
+      && !['created', 'existing'].includes(value.creation_outcome)) throw fail('Loved playlist creation was not acknowledged.');
     revisions.set(value.playlist_id, value.revision);
     const {actor_scope, context_ref, ...safe} = value;
     return {...safe, scopeKey: operation.scopeKey};
@@ -207,7 +225,7 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       return prior.receipt ? result(prior.receipt, prior, options.scopeKey) : reconcile(prior, options.signal, options.scopeKey);
     }
     const operation = {key, action, playlist_id: options.playlist_id, target, scopeKey: options.scopeKey,
-      owner: token, semantic, receipt: null};
+      owner: token, semantic, source_protocol: action === 'create' ? fields.source_protocol : null, receipt: null};
     operations.set(key, operation);
     const body = {...fields, request_key: key};
     operation.command = Object.freeze({path, method, body: JSON.stringify(body)});
@@ -275,6 +293,20 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       const data = sourceData(response, token, options.signal);
       if (data.source_protocol !== 'library_mix_selection_v1' || data.entries_complete !== true
         || !Array.isArray(data.entries)) throw fail('Library Mix source was not acknowledged.');
+      return {status: 'ready', data: projection(data, options.scopeKey)};
+    },
+    async beginArtistLoved(options) {
+      const requested = normalizeArtistLovedDescriptor(options.descriptor);
+      if (!requested) throw fail('Invalid Loved selection.', 400);
+      const token = identity(options.scopeKey);
+      if (pendingOperation({scopeKey: options.scopeKey, action: 'create'})) throw fail('Check the original save before starting another selection.', 409);
+      active(token, options.signal);
+      const response = await transport.request('/playlists/creation-source/artist-loved', {
+        method: 'POST', body: requested, signal: options.signal, expected: JSON.parse(token)[0]});
+      const data = sourceData(response, token, options.signal), recipe = normalizeArtistLovedRecipe(data.artist_loved);
+      if (data.source_protocol !== 'artist_loved_selection_v1' || data.entries_complete !== true || !Array.isArray(data.entries)
+        || !recipe || recipe.root_artist_id !== requested.root_artist_id || recipe.scope_mode !== requested.scope_mode
+        || recipe.playback_order !== 'regular') throw fail('Loved selection was not acknowledged.');
       return {status: 'ready', data: projection(data, options.scopeKey)};
     },
     async beginArtistMix(options) {
@@ -420,7 +452,8 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       try {
         response = await transport.request(transport.query(isPaged ? '/playlists/creation-source/entries'
           : known.protocol === 'library_mix_selection_v1' ? '/playlists/creation-source/library-mix'
-          : known.protocol === 'artist_popular_selection_v1' ? '/playlists/creation-source/artist-popular' : '/playlists/creation-source/complete', {
+          : known.protocol === 'artist_popular_selection_v1' ? '/playlists/creation-source/artist-popular'
+          : known.protocol === 'artist_loved_selection_v1' ? '/playlists/creation-source/artist-loved' : '/playlists/creation-source/complete', {
           source_ref: known.source.ref, source_revision: known.source.revision,
           ...(isPaged ? {q: options.q || '', cursor: options.cursor, limit: 100}
             : known.protocol === 'complete_activity_selection_v1' ? {source_protocol: known.protocol} : {})}), {signal: options.signal});
@@ -437,9 +470,11 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       const known = sources.get(options.source?.ref);
       if (!known || !same(known.source, options.source) || options.mode !== (['missing_playlist_selection_v1', 'missing_activity_selection_v1'].includes(known.protocol) ? 'missing' : 'ordinary')
         || options.source_protocol !== known.protocol) throw fail('Playlist source unavailable.', 409);
+      if (known.protocol === 'artist_loved_selection_v1' && JSON.stringify(options.entry_refs) !== JSON.stringify(known.entryRefs))
+        throw fail('Save requires the complete captured Loved selection.', 409);
       return mutate('create', options, '/playlists', 'POST', {source_protocol: known.protocol, mode: options.mode, source: tuple(known.source),
         title: options.title, description: options.description, entry_refs: options.entry_refs,
-        ...(['library_mix_selection_v1','artist_popular_selection_v1'].includes(known.protocol) ? {mix_playback_order: options.mix_playback_order} : {})});
+        ...(['library_mix_selection_v1','artist_popular_selection_v1','artist_loved_selection_v1'].includes(known.protocol) ? {mix_playback_order: options.mix_playback_order} : {})});
     },
     savePlaylist(options) {
       identity(options.scopeKey);

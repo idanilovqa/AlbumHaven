@@ -785,18 +785,27 @@ export function mountPlaylistsView(host,runtime,initial) {
             if(['queued','running'].includes(value.popularity_refresh_status))note('Last.fm popularity refresh is in progress. Auto-updating mixes use newly resolved counts when the owner next opens them.');
             if(value.popularity_refresh_status==='blocked'||value.popularity_refresh_error)note(`${value.popularity_refresh_error==='not_configured'?'Last.fm popularity refresh is not configured.':'Last.fm popularity refresh is unavailable.'} Resolved cached counts are still used.`);
           }
+          if(detail.artist_loved) {
+            const value=detail.artist_loved;
+            note('Loved and Obsessed · updates automatically when the owner opens this playlist · Generated membership is locked');
+            if(value.root_state==='root_missing')note('The original artist no longer exists. This playlist retains its original artist identity.');
+            if(value.refresh_status==='current')note('Selection evaluated for this read.');
+            else if(value.refresh_status==='owner_refresh_required')note('Showing the owner’s last computed selection; only the owner can refresh it.');
+            else if(value.refresh_status==='too_large')note('Refresh unavailable: the complete selection is too large. Showing the last computed selection.');
+            else note('Showing the last computed selection; freshness could not be confirmed.');
+          }
           if(draft?.conflict)note('This playlist changed on the server. Your draft is preserved. Discard it to reload the current values before saving.',true);
           if(currentIntegration) {
             const playbackProps= {
               controller:integrations,
               state:integration,
               providers,
-              hasOrderControl:Boolean(detail.library_mix)
+              hasOrderControl:Boolean(detail.library_mix||detail.artist_loved)
             };
             if(!playback)playback=acquireCurrent(()=>mountPlaylistPlaybackControls(playbackHost,runtime,playbackProps));
             else playback.update(playbackProps);
             if(!live())return;
-            if(detail.library_mix) {
+            if(detail.library_mix||detail.artist_loved) {
               const mixProps= {
                 detail,
                 scopeKey:state.scopeKey,
@@ -848,7 +857,7 @@ export function mountPlaylistsView(host,runtime,initial) {
               render();
             },
             onError:notice,
-            onDisplayedRowsChange:detail.library_mix?value=> {
+            onDisplayedRowsChange:(detail.library_mix||detail.artist_loved)?value=> {
               displayedView=value;
               if(mix&&value?.detail===detail&&value.scopeKey===state.scopeKey)mix.update({
                 detail,

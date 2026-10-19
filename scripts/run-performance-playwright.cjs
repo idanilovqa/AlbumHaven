@@ -107,6 +107,8 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'edit-tags-post-edit',
+    'cover-lookup',
     'album-title-search',
     'track-title-search',
     'search-browse',

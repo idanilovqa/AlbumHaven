@@ -141,15 +141,16 @@ export const test = base.extend({
       completed = true;
     } catch (error) { failure = error; }
     finally {
-      if (!completed) {
-        try { await capture(active, 'failure'); } catch { /* Original failure remains authoritative; outcome reports unavailable/withheld. */ }
-      }
       const secondaryFailure = (type, message) => {
         // Fixed diagnostics only: never serialize a teardown error, stack or path.
         testInfo.annotations.push({ type, description: message });
         if (!failure) failure = new Error(message);
         completed = false;
       };
+      if (!completed) {
+        try { await capture(active, 'failure'); }
+        catch { secondaryFailure('native-failure-screenshot', 'Native failure screenshot was unavailable or withheld.'); }
+      }
       try {
         for (const [target, state] of pages) target.off('pageerror', state.onError);
         for (const [owned, listener] of contexts) owned.off('page', listener);

@@ -20,7 +20,7 @@ export class NativeAcceptanceActions {
     const v = this.view, row = await this.unique(v.exactActivity(this.data.catalog.tracks.one.title));
     await v.rowTitle(row).click();
     await expect(v.album).toContainText(this.data.catalog.albums.first.title);
-    await (await this.unique(v.album.locator('[data-resource-selection-open]'))).click();
+    await (await this.unique(v.titleExpansion())).click();
     await expect(v.modal).toBeVisible();
   }
   async ownTaste(rating, favorite, saved = false) {
@@ -45,7 +45,7 @@ export class NativeAcceptanceActions {
     await v.button(v.friends, 'Listening activity').click(); await this.history(true); await this.openRecentAlbum();
     await expect(v.modal.getByRole('img', { name: 'Subject album rating 8/10', exact: true })).toBeVisible();
     await expect(v.modal).toContainText('Favorite: Yes');
-    await expect(v.modal.locator('[data-album-preference-action]:enabled')).toHaveCount(0);
+    await expect(v.enabledPreferenceActions).toHaveCount(0);
     await this.capture('friend-taste');
     await v.modalClose.click(); await this.home(); await this.history(); await this.openRecentAlbum();
     await this.ownTaste(6, true); await this.capture('own-preferences');
@@ -54,7 +54,7 @@ export class NativeAcceptanceActions {
     const v = this.view;
     await v.goalsTab.click(); await expect(v.goalsTab).toHaveAttribute('aria-selected', 'true');
     await expect(v.home.getByText('The goals were not set', { exact: true })).toBeVisible();
-    await expect(v.goalAlbums.locator('.album-card')).toHaveCount(0);
+    await expect(v.goalAlbumCards).toHaveCount(0);
   }
   async goals() {
     const v = this.view;
@@ -62,7 +62,7 @@ export class NativeAcceptanceActions {
     await v.home.getByRole('button', { name: 'Period: 1 week', exact: true }).click();
     await this.page.getByRole('menu', { name: 'Period', exact: true }).getByRole('menuitemradio', { name: '1 month', exact: true }).click();
     await expect(v.home.getByRole('button', { name: 'Period: 1 month', exact: true })).toBeVisible();
-    await expect(v.goalAlbums.locator('.album-card')).toHaveCount(0);
+    await expect(v.goalAlbumCards).toHaveCount(0);
     await v.goalStart.click(); await expect(v.goalAdmission).toBeVisible();
     const title = v.goalForm.getByRole('textbox', { name: 'Album title', exact: true });
     await expect(title).toHaveValue('');
@@ -84,8 +84,8 @@ export class NativeAcceptanceActions {
   async topOrder() {
     const v = this.view, { first, second } = this.data.catalog.albums;
     await expect(v.topHeader).toContainText(this.data.top.title);
-    await expect(v.tops.locator('.album-card .album-title')).toHaveText([first.title, second.title]);
-    const completions = v.tops.locator('[data-gallery-card-intent="complete"]');
+    await expect(v.topAlbumTitles).toHaveText([first.title, second.title]);
+    const completions = v.topCompletions;
     await expect(completions).toHaveCount(2);
     await expect(completions.nth(0)).toHaveAttribute('data-gallery-card-ref', first.ref);
     await expect(completions.nth(1)).toHaveAttribute('data-gallery-card-ref', second.ref);
@@ -134,7 +134,7 @@ export class NativeAcceptanceActions {
     const query = `:popular artist:"${album.artist}" per_artist:2`;
     await this.page.goto(`/?surface=albums&q=${encodeURIComponent(query)}&search_presentation=albums`);
     await expect(v.search).toHaveValue(query);
-    await expect(this.page.locator('.album-card:visible')).toHaveCount(1);
+    await expect(v.visibleAlbumCards).toHaveCount(1);
     await this.openSearchAlbum(); await this.matches(['one', 'two']); await this.capture('two-matches'); await v.modalClose.click();
     const commits = { draft: 0, apply: 0, reset: 0 };
     let phase = 'draft', nextQuery;
@@ -148,20 +148,20 @@ export class NativeAcceptanceActions {
       await v.advancedToggle.click(); await expect(v.advanced).toBeVisible(); await expect(v.capEnabled).toBeChecked();
       await v.cap.fill('1'); await expect(v.preview).toContainText('per_artist:1');
       nextQuery = await v.preview.innerText();
-      await expect(v.search).toHaveValue(query); await expect(this.page.locator('.album-card:visible')).toHaveCount(1);
-      await v.advanced.locator('[data-search-help-close]').click();
+      await expect(v.search).toHaveValue(query); await expect(v.visibleAlbumCards).toHaveCount(1);
+      await v.advancedClose.click();
       await this.openSearchAlbum(); await this.matches(['one', 'two']); await v.modalClose.click();
       await v.advancedToggle.click(); await expect(v.cap).toHaveValue('1');
       expect(commits.draft).toBe(0);
       phase = 'apply';
-      await v.advanced.locator('[data-advanced-apply]').click();
+      await v.advancedApply.click();
       await expect(v.advanced).toBeHidden(); await expect(v.search).toHaveValue(nextQuery);
       await this.openSearchAlbum(); await this.matches(['one']); await this.capture('one-match');
       expect(commits.apply).toBe(1);
       await v.modalClose.click(); phase = 'reset'; await v.advancedToggle.click();
-      await v.advanced.locator('[data-advanced-reset]').click();
+      await v.advancedReset.click();
       await expect(v.search).toHaveValue(nextQuery);
-      await v.advanced.locator('[data-search-help-close]').click(); await expect(v.search).toHaveValue(nextQuery);
+      await v.advancedClose.click(); await expect(v.search).toHaveValue(nextQuery);
       await this.openSearchAlbum(); await this.matches(['one']); await v.modalClose.click();
       expect(commits.reset).toBe(0);
       expect(commits.apply).toBe(1);
@@ -177,7 +177,7 @@ export class NativeAcceptanceActions {
     await expect(v.discography.getByRole('button', { name: 'Discography', exact: true, includeHidden: !foreground })).toHaveAttribute('aria-expanded', 'true');
     if (foreground) {
       await expect(v.artistRoot).toBeVisible(); expect(await v.foreground(v.artistRoot)).toBe(true);
-      await expect(v.discography.locator('[data-disclosure-panel]')).toBeVisible();
+      await expect(v.discographyPanel).toBeVisible();
     }
   }
   async noOverflow(locator) {
@@ -194,7 +194,7 @@ export class NativeAcceptanceActions {
     await this.page.goto(bookmark); await this.artistParent();
     const parentUrl = this.page.url(), params = new URL(parentUrl).searchParams;
     expect(params.get('artist')).toBe(album.artist); expect(params.get('page_mode')).toBe('info');
-    const opener = await this.unique(v.albumOpener(album, v.discography.locator('[data-disclosure-panel]')));
+    const opener = await this.unique(v.albumOpener(album, v.discographyPanel));
     await opener.click(); await expect(v.modal).toHaveClass(/\bis-artist-discography-sheet\b/);
     await expect(v.sheetHandle).toBeVisible(); await expect(v.sheetToggle).toBeVisible(); await this.artistParent({ foreground: false });
     await expect(v.sheetToggle).toHaveAttribute('aria-expanded', 'false');
@@ -205,11 +205,11 @@ export class NativeAcceptanceActions {
     await expect(opener).toBeFocused(); expect(this.page.url()).toBe(parentUrl);
     await this.capture('returned-parent');
     await this.page.goForward(); await expect(v.sheetHandle).toBeVisible(); await this.artistParent({ foreground: false });
-    await v.modal.locator('#track-modal-cover [data-open-lightbox="1"]').click();
+    await v.modalCoverOpener.click();
     await expect(v.lightboxImage).toBeVisible();
     await expect(v.lightboxImage).toHaveAttribute('alt', `Album cover for ${album.title}`);
     await expect.poll(() => v.imageReady(v.lightboxImage)).toBe(true);
-    await expect(this.page.locator('#image-lightbox-close')).toBeVisible(); await this.page.locator('#image-lightbox-close').click();
+    await expect(v.lightboxClose).toBeVisible(); await v.lightboxClose.click();
     await expect(v.lightbox).toBeHidden();
     await expect(v.sheetHandle).toBeVisible(); await this.artistParent({ foreground: false });
     await this.page.goBack(); await this.artistParent(); expect(this.page.url()).toBe(parentUrl);

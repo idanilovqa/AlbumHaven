@@ -29,6 +29,17 @@ export class NativeAcceptancePage extends HomeFeedbackPage {
     this.favorite = this.modal.locator('[data-album-preference-action="favorite"]');
     this.rating = this.modal.locator('select[aria-label="Your album rating"]');
     this.preferenceStatus = this.modal.locator('[data-album-preference-status]');
+    this.enabledPreferenceActions = this.modal.locator('[data-album-preference-action]:enabled');
+    this.goalAlbumCards = this.goalAlbums.locator('.album-card');
+    this.topAlbumTitles = this.tops.locator('.album-card .album-title');
+    this.topCompletions = this.tops.locator('[data-gallery-card-intent="complete"]');
+    this.visibleAlbumCards = page.locator('.album-card:visible');
+    this.advancedClose = this.advanced.locator('[data-search-help-close]');
+    this.advancedApply = this.advanced.locator('[data-advanced-apply]');
+    this.advancedReset = this.advanced.locator('[data-advanced-reset]');
+    this.discographyPanel = this.discography.locator('[data-disclosure-panel]');
+    this.modalCoverOpener = this.modal.locator('#track-modal-cover [data-open-lightbox="1"]');
+    this.lightboxClose = page.locator('#image-lightbox-close');
   }
   exactActivity(title) {
     return this.activityRows.filter({ has: this.page.locator('.album-track-table__title').filter({ hasText: new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }) });

@@ -256,3 +256,19 @@ test('native observes pageerrors from later context page events and detaches the
   assert.equal(added.listeners.has('pageerror'), false);
   assert.ok(h.events.includes('closeAll'));
 });
+
+for (const cleanupFailure of [false, true]) {
+  test(`native failure screenshot error is visible without replacing primary error; cleanupFailure=${cleanupFailure}`, async () => {
+    const h = harness({ captureFailure: true, cleanupFailure }), original = new Error('synthetic primary assertion');
+    await assert.rejects(h.run(async actions => { await actions.signIn(); throw original; }), error => error === original);
+    assert.ok(h.events.includes('screenshot')); assert.ok(h.events.includes('closeAll'));
+    assert.deepEqual(h.info.annotations.map(row => row.type), [
+      'native-failure-screenshot', ...(cleanupFailure ? ['native-session-cleanup'] : []),
+    ]);
+    assert.equal(h.attached.length, 1);
+    const outcome = JSON.parse(h.attached[0].body);
+    assert.equal(outcome.screenshot, 'unavailable'); assert.equal(outcome.assertionsCompleted, false);
+    assert.doesNotMatch(JSON.stringify(h.info.annotations) + h.attached[0].body, /raw private|private cleanup|synthetic primary|password|stack/);
+    assert.equal(h.page.listeners.size, 0);
+  });
+}

@@ -4652,3 +4652,29 @@ test('G03 retired grid callbacks leave a sequential replacement layout and sched
   gridB.destroy();
   assert.equal(cacheDestroys, 2, 'B retains its own teardown');
 });
+
+
+// Ordinary Gallery regression boundary for the optional Artist adapter. New
+// host acceptance belongs to the actual-owner Artist suites, not this harness.
+test('without an Artist lease ordinary origin-zero block coordinates and header estimates are unchanged', () => {
+  const {virtualGrid, section, scrollEl} = createResponsiveGalleryScenario(100, 1000, 36);
+  assert.equal(virtualGrid._artistPageLease == null, true);
+  assert.equal(virtualGrid.overscanPx, 320);
+  assert.equal(section.height, virtualGrid.sectionHeaderHeight + section.blocksHeight + virtualGrid.sectionMarginBottom);
+  const first = virtualGrid.getVisibleBlockRange(section, 0, scrollEl.clientHeight);
+  assert.equal(first.firstIndex, 0);
+  const contentTop = section.top + virtualGrid.sectionHeaderHeight;
+  const secondTop = contentTop + section.blockOffsets[1];
+  const second = virtualGrid.getVisibleBlockRange(section, secondTop + 1, secondTop + 2);
+  assert.ok(second.firstIndex <= 1 && second.lastIndex >= 1);
+});
+
+test('ordinary Gallery still accepts fallback groups and keeps its original cache through setGroups', () => {
+  const {context, scrollEl, containerEl, topSpacerEl, bottomSpacerEl} = createRuntimeContext();
+  const grid = vm.runInContext('virtualGrid', context), cache = grid.albumCardNodeCache;
+  grid.setGroups([], [], [{artist: 'Fallback Artist', albums: [{key: 'fallback-boundary', name: 'Fallback', tracks: []}]}]);
+  assert.equal(grid._artistPageLease == null, true);
+  assert.equal(grid.sections.some(section => section.group?.artist === 'Fallback Artist'), true);
+  assert.equal(grid.albumCardNodeCache, cache); assert.equal(grid.scrollEl, scrollEl); assert.equal(grid.containerEl, containerEl);
+  assert.equal(grid.topSpacerEl, topSpacerEl); assert.equal(grid.bottomSpacerEl, bottomSpacerEl);
+});

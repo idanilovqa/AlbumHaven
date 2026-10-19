@@ -526,6 +526,27 @@ def require_finite_friend_policy(connection, library_id):
     assert len(rows)==1 and rows[0]['finite'] is True, 'Canonical friend policy timestamp must be finite'
 
 
+def capture_budget_state(connection):
+    """Only migration0142's untouched global zero-budget singleton is fresh."""
+    occupied = connection.execute("""select exists(
+        select 1 from integration.playback_capture_session
+        union all select 1 from integration.playback_capture_checkpoint
+        union all select 1 from integration.playback_capture_run
+        union all select 1 from integration.playback_capture_anchor
+    ) as occupied""").fetchone()["occupied"]
+    if occupied:
+        raise RuntimeError("Unexpected capture rows in Favorites bootstrap baseline.")
+    rows = connection.execute("""select id,account_id,is_global,reserved_bytes,rate_tokens,
+        rate_updated_at,isfinite(rate_updated_at) as finite
+        from integration.playback_capture_budget""").fetchall()
+    if (len(rows) != 1 or type(rows[0]["id"]) is not int or rows[0]["id"] <= 0
+            or rows[0]["account_id"] is not None or rows[0]["is_global"] is not True
+            or rows[0]["reserved_bytes"] != 0 or rows[0]["rate_tokens"] != 8
+            or rows[0]["finite"] is not True):
+        raise RuntimeError("Unexpected migration-owned capture budget singleton.")
+    return dict(rows[0])
+
+
 class BootstrapFavoritesDatabase(FavoritesDatabase):
     """Exclusive supported initializer baseline; never seeds or adopts its rows.
 
@@ -569,6 +590,7 @@ class BootstrapFavoritesDatabase(FavoritesDatabase):
                 ('app','social_profiles'):1,('app','friend_policies'):1,
                 ('library','relation_alias_endpoint_publications'):0,('library','gallery_projection_state'):1,
                 ('library','public_metadata_source_state'):1,('catalog','popularity_api_refresh_state'):1,
+                ('integration','playback_capture_budget'):1,
                 ('library','library_memberships'):len(self.baseline_memberships)}
             tables=con.execute("""select n.nspname,c.relname from pg_class c
                 join pg_namespace n on n.oid=c.relnamespace
@@ -581,6 +603,7 @@ class BootstrapFavoritesDatabase(FavoritesDatabase):
                 count=con.execute(sql.SQL('select count(*) as n from {}.{}').format(
                     sql.Identifier(ident[0]),sql.Identifier(ident[1]))).fetchone()['n']
                 assert count==expected.get(ident,0), 'Unknown mutable baseline prohibits test writes'
+            self.capture_budget_baseline=capture_budget_state(con)
             epochs=con.execute('select library_id,account_id,revision,love_revision,album_taste_revision from app.activity_source_revisions').fetchall()
             for row in epochs:
                 assert row['library_id']==self.library
@@ -624,6 +647,7 @@ class BootstrapFavoritesDatabase(FavoritesDatabase):
             self.registry.quarantine()
             raise RuntimeError('Bootstrap fixture drain unproved; cleanup prohibited')
         with self.connect() as con:
+            assert capture_budget_state(con)==self.capture_budget_baseline, "Capture baseline changed; quarantine"
             current=con.execute("""select b.account_id,l.id as library_id,to_jsonb(a) as account_json,to_jsonb(l) as library_json
                 from app.bootstrap_owners b join app.accounts a on a.id=b.account_id join library.libraries l on l.owner_account_id=b.account_id
                 where b.owner_key='local-bootstrap-owner' and l.name='Local Library' and l.library_kind='local'""").fetchall()
@@ -677,6 +701,7 @@ class BootstrapFavoritesDatabase(FavoritesDatabase):
             remaining=[r['data'] for r in con.execute('select to_jsonb(m) as data from library.library_memberships m').fetchall()]
             assert remaining==self.baseline_memberships
             self.assert_social_baseline(con)
+            assert capture_budget_state(con)==self.capture_budget_baseline, "Capture baseline changed; quarantine"
 
 
     def assert_social_baseline(self, con):

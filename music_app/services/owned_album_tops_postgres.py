@@ -14,6 +14,7 @@ from music_app.services.policy import PolicyContext, ResourceScope
 from music_app.services import album_top_viewer_actions as viewers
 from music_app.services import album_top_progress as progress
 from music_app.services import album_top_activity_postgres as activity
+from music_app.services.album_top_browse import project_native_albums
 from music_app.services import album_top_publication as publication
 from music_app.services import album_top_publication_evidence as publication_evidence
 from music_app.services import album_top_remote_membership as remote_membership
@@ -284,12 +285,15 @@ class PostgresOwnedAlbumTopsService:
                 self._require(live, (BROWSE,), constraints, top)
                 if not actions.get('can_edit'):
                     edit = {}
+            items = remote_membership.project_items(rows, remote) if remote else [
+                {**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]
+            items = project_native_albums(connection, live, items,
+                remote_item_refs=remote, constraints=constraints)
+            self._require(live, (BROWSE,), constraints, top)
             return {"top_ref": ref, "title": top["title"], "description": top["description"],
                 "revision": str(top["revision"]), "visibility": top["visibility"],
                 "allowed_actions": actions, **edit,
-                "top_viewer_overlay": overlay,
-                "items": remote_membership.project_items(rows, remote) if remote else [
-                    {**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]}
+                "top_viewer_overlay": overlay, "items": items}
 
     def resolve_public_link(self, context, *, share_ref, constraints=None):
         """Resolve an active share only for an independently permitted working reader.

@@ -193,7 +193,7 @@ def test_create_read_and_exact_replay_preserve_authored_order_and_one_receipt(db
     assert set(detail) == {"top_ref", "title", "description", "revision", "visibility", "allowed_actions", "items"}
     for item in detail["items"]:
         assert set(item) == {"ref", "catalog_ref", "original_position", "curator_position",
-                             "title", "artist_display", "release_year"}
+                             "title", "artist_display", "release_year", "native_album"}
     assert "local_album_id" not in json.dumps(detail)
 
 

@@ -2584,6 +2584,7 @@ jobs:
               ;;
             new_playlist_preview)
               printf '%s\n' \
+                'tests/py/test_playlist_album_top_preview_availability.py' \
                 'tests/py/test_playlist_album_top_preview_editions.py' \
                 'tests/py/test_playlist_album_top_preview_routes.py' \
                 'tests/py/test_playlist_album_top_preview_target_routes.py' \

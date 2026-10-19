@@ -50,6 +50,11 @@ export async function authenticatedPageGet(page, url, options = {}) {
   return page.request.get(request.target, request.options);
 }
 
+export async function authenticatedPagePost(page, url, options = {}) {
+  const request = await authenticatedPageOptions(page, url, options);
+  return page.request.post(request.target, request.options);
+}
+
 export async function authenticatedPagePut(page, url, options = {}) {
   const request = await authenticatedPageOptions(page, url, options);
   return page.request.put(request.target, request.options);

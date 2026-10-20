@@ -40,6 +40,21 @@ const ARTIST_CONJUNCTION_TARGET = Object.freeze({
   year: '2006',
 });
 
+test('FTC-COVERS-032 current 1200px cover clears stale poor-quality alert', { tag: '@area:cover-providers' }, async ({
+  galleryActions,
+  settingsModalAppBarActions,
+  utilityProblematicFilesActions,
+  utilityTabBarActions,
+}) => {
+  await galleryActions.goto('/?surface=albums');
+  await galleryActions.waitForGalleryReady();
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('problematic-files');
+  await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+  await utilityProblematicFilesActions.search(MANUAL_PROVIDER_COVER.album);
+  await utilityProblematicFilesActions.waitForNoSearchResults(MANUAL_PROVIDER_COVER.album);
+});
+
 test('FTC-COVERS-024 manual composer preserves staged images and exclusive choices at narrow width', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,

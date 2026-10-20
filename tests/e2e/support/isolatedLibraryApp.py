@@ -2314,6 +2314,8 @@ def build_file_cache(
                             or is_progressive_candidate_fixture
                             or is_automatic_candidate_fixture
                         )
+                        else 600
+                        if is_primary_manifest_cover_lookup_album
                         else 640
                         if is_user_owned_improvement_fixture
                         else cover.get("width")
@@ -2325,6 +2327,8 @@ def build_file_cache(
                             or is_progressive_candidate_fixture
                             or is_automatic_candidate_fixture
                         )
+                        else 600
+                        if is_primary_manifest_cover_lookup_album
                         else 640
                         if is_user_owned_improvement_fixture
                         else cover.get("height")

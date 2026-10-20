@@ -450,6 +450,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-032 current 1200px cover clears stale poor-quality alert",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-028 pasted cover revision reconciles album details, gallery, and mobile caches",
               "area": "cover-providers"
             },

@@ -770,6 +770,26 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-032 current 1200px cover clears stale poor-quality alert",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-quality:stale-dimensions"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool"
+    ],
+    "expectedContracts": [
+      "current-cover-dimensions"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-022 cover gallery loading starts before the task list responds",
     "profile": "functional-core",
     "setupScope": "isolated",

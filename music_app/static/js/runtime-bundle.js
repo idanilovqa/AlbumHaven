@@ -27782,6 +27782,7 @@ function getCoverLookupModalElements() {
 
 const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
+const COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS = 2000;
 
 function revokeCoverLookupPastedImageUrls() {
   const items = [
@@ -28707,6 +28708,23 @@ function preloadCoverLookupAlbumImage(album) {
       );
     };
     image.src = source;
+  });
+}
+
+function preloadCoverLookupAlbumImageWithTimeout(album) {
+  const preload = Promise.resolve().then(() => preloadCoverLookupAlbumImage(album));
+  if (typeof setTimeout !== 'function') return preload.catch(() => false);
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId !== null && typeof clearTimeout === 'function') clearTimeout(timeoutId);
+      resolve(result);
+    };
+    timeoutId = setTimeout(() => finish(null), COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS);
+    preload.then(finish, () => finish(false));
   });
 }
 
@@ -29999,10 +30017,10 @@ async function saveLocalCoverFromLookup(sourcePath) {
       : [data.updated_album].filter(Boolean);
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     markAlbumCoverPathsFresh(updatedAlbums);
-    if (updatedAlbums[0]) {
-      await preloadCoverLookupAlbumImage(updatedAlbums[0]);
-    }
-    clearOptimisticAlbumCovers(updatedAlbums);
+    const preloadResult = updatedAlbums[0]
+      ? await preloadCoverLookupAlbumImageWithTimeout(updatedAlbums[0])
+      : false;
+    if (preloadResult !== null) clearOptimisticAlbumCovers(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     if (taskId) {

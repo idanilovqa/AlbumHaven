@@ -190,6 +190,45 @@ test('local mutation claim spans image preload and releases after synchronous se
   assert.equal(h.notifications.at(-1)[1], 'error');
 });
 
+test('successful local save completes when the authoritative image preload stalls', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+  h.context.state.coverLookup.modal.taskId = 'task-a';
+  h.context.preloadCoverLookupAlbumImage = () => new Promise(() => {});
+  h.context.setTimeout = callback => {
+    queueMicrotask(callback);
+    return 1;
+  };
+  h.context.clearTimeout = () => {};
+  const acknowledged = [];
+  let closeCount = 0;
+  h.context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum) => {
+    acknowledged.push([taskId, selectedAlbum.name]);
+  };
+  h.context.renderCoverLookupDrawer = () => {};
+  h.context.closeCoverLookupModal = () => { closeCount += 1; };
+
+  const pending = h.context.saveLocalCoverFromLookup('/A/source.jpg');
+  const optimisticKey = h.context.getAlbumPathSignature(a);
+  const optimisticCover = h.context.state.coverLookup.optimisticAlbumCovers[optimisticKey];
+  await h.settle(0);
+  const outcome = await Promise.race([
+    pending.then(() => 'settled'),
+    new Promise(resolve => setImmediate(() => resolve('pending'))),
+  ]);
+
+  assert.equal(outcome, 'settled');
+  assert.equal(h.context.state.coverLookup.modal.saving, false);
+  assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
+  assert.deepEqual(acknowledged, [['task-a', 'A']]);
+  assert.equal(closeCount, 1);
+  assert.strictEqual(
+    h.context.state.coverLookup.optimisticAlbumCovers[optimisticKey],
+    optimisticCover,
+    'timeout must keep the selected image visible',
+  );
+});
+
 test('a pre-mutation gallery response cannot restore the deleted cover', async () => {
   const h = harness(), a = album('A');
   await h.open(a);

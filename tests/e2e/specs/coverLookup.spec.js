@@ -968,6 +968,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       selectedLocalCover.name,
       { stableCoverLocator: trackModalActions.trackModal.detailedCoverImage },
     );
+    await expect(coverLookupActions.coverLookup.modal).toBeHidden();
     expect(saved.immediateCoverState).not.toBeNull();
     expect(saved.candidate.sourcePath).toBe(selectedLocalCover.sourcePath);
     expect(saved.candidate.image.sha256).toBe(selectedLocalCover.image.sha256);
@@ -1025,6 +1026,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
+    await expect(coverLookupActions.coverLookup.saveRemoteButton).toHaveText('Save');
     const reopenedCandidates = await coverLookupActions.readLocalCoverCandidates();
     expect(reopenedCandidates.map((candidate) => candidate.sourcePath).sort())
       .toEqual(initialUnusedCandidatePaths);

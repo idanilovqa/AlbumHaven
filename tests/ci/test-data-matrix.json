@@ -2551,7 +2551,8 @@
       "media-copy:selected-local-art-rescan"
     ],
     "expectedContracts": [
-      "selected-local-art-authority-after-rescan-restart"
+      "selected-local-art-authority-after-rescan-restart",
+      "durable-local-save-clears-saving-and-closes-modal"
     ],
     "globalMutationReason": "Requires a dedicated full-library rescan and managed application restart.",
     "ownerApproval": "approved"

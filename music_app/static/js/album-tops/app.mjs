@@ -58,6 +58,11 @@ export function mountAlbumTopsView(host, runtime, props) {
         if (title.firstChild !== titleText) title.replaceChildren(titleText);
         titleText.textContent = selected && detail ? detail.title : 'Album Tops';
         if (!selected && albumTopActionAllowed(state, 'create')) control('create', 'Create Album Top', {icon: 'add', disabled: busy, onClick: event => {if (albumTopActionAllowed(controller.getSnapshot(), 'create')) show('create', null, event.target.closest('button'));}});
+        if (!selected && albumTopActionAllowed(state, 'create') && latest.onImport) control('import', 'Import Album Top', {
+          icon: 'add', disabled: busy || !latest.canImport, onClick: event => {
+            if (disposed || controller.getSnapshot().selectedTopRef || !albumTopActionAllowed(controller.getSnapshot(), 'create') || !latest.canImport) return;
+            const opener = event.target.closest('button'); latest.onImport(() => returnHeaderFocus(opener));
+          }});
         const guarded = action => {const current = controller.getSnapshot(); return current.detail.data === detail && albumTopActionAllowed(current, action, detail?.top_ref);};
         if (selected && albumTopActionAllowed(state, 'set_activity')) {
           const active = detail.top_viewer_overlay.activity.active;

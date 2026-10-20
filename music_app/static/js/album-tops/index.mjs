@@ -2,6 +2,7 @@ import {createAlbumTopController} from './model.mjs';
 import {createEditRequestNotifications} from '../home-friends/edit-request-notifications.mjs';
 import {mountAlbumTopsView} from './app.mjs';
 import {createAlbumTopSourceReplay} from './source-replay.mjs';
+import {createSourceImportIndex} from './source-import-index.mjs';
 import {mountButton, mountStatus} from '../home-friends/native-controls.mjs';
 export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   if (!host || !runtime?.snapshot || !runtime.subscribe) throw new TypeError('A native Album Tops host and runtime are required.');
@@ -9,7 +10,7 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   const sourceReplay = createAlbumTopSourceReplay({runtime, providers});
   let disposed = false, mutationOwner = null, completedOperation = null, shareRequest = null, notifications = null, refreshedOperation = null,
     navigationError = null, savedForm = null, previousScope = Symbol('initial'), previousInLibrary = null, previousEnabled = null, previousNavigation = null,
-    view = null, viewScope = null, viewNavigation = null, running = false, queued = false;
+    view = null, viewScope = null, viewNavigation = null, running = false, queued = false, sourceImports = null;
   const make = (parent, tag = 'div') => {const node = parent.ownerDocument.createElement(tag); parent.append(node); return node;};
   const errorHost = make(host), retryHost = make(host), loadingHost = make(host), viewHost = make(host);
   const retry = mountButton(retryHost, runtime, {label: 'Retry opening Album Top', onClick: () => open(navigationError?.topRef)});
@@ -84,7 +85,9 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
     if (!errorHost.hidden) errorHost.innerHTML = runtime.alertHtml({severity: 'error', role: 'alert', message: 'This Album Top could not be opened. Try again.'});
     loadingHost.hidden = !visible || showView || Boolean(navigationError);
     if (!showView || viewScope !== shell.scopeKey || viewNavigation !== shell.viewVersion) {view?.dispose(); view = null; viewScope = null; viewNavigation = null;}
-    if (showView) {const options = {runtime, controller, state, providers, sourceReplay, onOpen: open, onFormSaved: formSaved, shareRequest, onShareRequestHandled: request => {if (shareRequest === request) shareRequest = null;}};
+    if (showView) {const options = {runtime, controller, state, providers, sourceReplay, onOpen: open, onFormSaved: formSaved, shareRequest,
+      canImport: sourceImports?.canStart() === true, onImport: returnFocus => sourceImports?.start(returnFocus),
+      onShareRequestHandled: request => {if (shareRequest === request) shareRequest = null;}};
       if (view) view.update(options); else {viewScope = shell.scopeKey; viewNavigation = shell.viewVersion; view = mountAlbumTopsView(viewHost, runtime, options);}}
     const mutation = state.mutation, owner = mutationOwner, receipt = mutation.data, operation = receipt && JSON.stringify([state.scopeKey, receipt.request_key]);
     if (!enabled || !shell.visible || state.scopeKey !== shell.scopeKey || mutation.status !== 'ready' || mutation.refreshing === true
@@ -99,8 +102,9 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
         && (mutation.action !== 'copy' || next.topRef === mutation.command.top_ref);};
     if (isCurrent()) {completedOperation = operation; open(mutation.action === 'delete' ? null : receipt.top_ref, isCurrent, owner.viewRequestId);}
   }
+  sourceImports = createSourceImportIndex({runtime, controller, providers, onChange: schedule});
   mountNotifications(); schedule();
   return Object.freeze({refresh() {if (!disposed && runtime.acceptsPrivateScope(controller.getSnapshot().scopeKey)) return controller.load();},
-    dispose() {if (disposed) return; disposed = true; sourceReplay.dispose(); unsubscribe(); unsubscribeShell(); unsubscribeNotifications?.(); notifications?.dispose(); view?.dispose(); all?.dispose(); directory?.dispose(); retry.dispose(); loading.dispose();
+    dispose() {if (disposed) return; disposed = true; sourceImports.dispose(); sourceReplay.dispose(); unsubscribe(); unsubscribeShell(); unsubscribeNotifications?.(); notifications?.dispose(); view?.dispose(); all?.dispose(); directory?.dispose(); retry.dispose(); loading.dispose();
       for (const row of sidebarRows.values()) row.element.removeEventListener('click', row.listener); sidebarRows.clear(); sidebar?.remove(); controller.dispose(); providers.dispose?.(); errorHost.remove(); retryHost.remove(); loadingHost.remove(); viewHost.remove();}});
 }

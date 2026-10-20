@@ -1,6 +1,7 @@
 // All network replies are bound to the authenticated native context and caller scope.
 import {isProgressRevision, isManualProgress, isTopActivity, projectCompleteTopProgress} from './progress.mjs';
 import {isPublicationRevision, projectOwnerPublication, projectPublicationReceipt} from './publication.mjs';
+import {createSourceImportProviders} from './source-import-provider.mjs';
 
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const revision = value => typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value);
@@ -409,6 +410,7 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
   };
   return {
     remoteContext,
+    ...createSourceImportProviders({request}),
     async searchRemoteAlbums(payload, options) {
       if (!keysAre(payload, ['destination', 'title', 'artist']) || typeof payload.title !== 'string' || !payload.title.trim() || Array.from(payload.title).length > 100
         || typeof payload.artist !== 'string' || Array.from(payload.artist).length > 100 || /[\u0000-\u001f\u007f]/.test(payload.title + payload.artist)

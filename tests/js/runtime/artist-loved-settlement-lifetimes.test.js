@@ -80,7 +80,8 @@ function observe(h) {
       owned = {runtime: h.runtime(), callbacks: new Map()}; sets.set(this, owned);
     }
     const result = add.call(this, value); // Exact real value and return preserved.
-    if (owned && typeof value === 'function' && !owned.callbacks.has(value)) {
+    // Observe the two per-host native/Loved callbacks only. The separate Top bridge subscriber remains live and unmodified.
+    if (owned && typeof value === 'function' && ['update', 'refreshLoved'].includes(value.name) && !owned.callbacks.has(value)) {
       const record = {runtime: owned.runtime, host: registeringHost || host(h), callback: value, stops: 0,
         deliver: (...args) => value(...args)};
       owned.callbacks.set(value, record); records.push(record); registeringHost = null;

@@ -46,6 +46,33 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-possessive-project"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-possessive-identity"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "possessive-project-identity-separation",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-possessive-project",
+      "filesystemCopy": "media/cases/watcher-possessive-identity"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan",
     "profile": "functional-core",
     "setupScope": "isolated",

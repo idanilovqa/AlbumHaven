@@ -494,6 +494,35 @@ def test_punctuation_only_band_names_do_not_alias_to_prefix_artist(
     assert relation_views["alias_to_canonical"][punctuation_name] == punctuation_name
 
 
+def test_possessive_project_name_does_not_alias_to_base_artist_without_identity_evidence():
+    rows = [
+        _row(
+            album_id=1,
+            artist="Luca Turilli's Rhapsody",
+            member=guest,
+            relative_path=rf"Shared\Rhapsody\{index:02d}.flac",
+            private_path=rf"C:\Music\Shared\Rhapsody\{index:02d}.flac",
+        )
+        for index, guest in enumerate(("Guest One", "Guest Two"), start=1)
+    ]
+    rows.append(
+        _row(
+            album_id=2,
+            artist="Rhapsody",
+            relative_path=r"Shared\Rhapsody\03.flac",
+            private_path=r"C:\Music\Shared\Rhapsody\03.flac",
+        )
+    )
+
+    relation_views = _build(rows)
+
+    assert relation_views["alias_to_canonical"]["Rhapsody"] == "Rhapsody"
+    assert (
+        relation_views["alias_to_canonical"]["Luca Turilli's Rhapsody"]
+        == "Luca Turilli's Rhapsody"
+    )
+
+
 def test_root_relative_parts_prefers_valid_stored_relative_path():
     builder = importlib.import_module(
         "music_app.services.relation_projection_builder"

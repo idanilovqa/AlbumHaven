@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
 const WATCHER_FIXTURE_DIRECTORIES = new Set([
   'watcher-reconciliation',
   'watcher-punctuation-identity',
+  'watcher-possessive-identity',
 ]);
 
 const RETAG_SCRIPT = `
@@ -126,6 +127,8 @@ async function buildWatchedAlbumFixture({
   albumArtist = artist,
   album = 'Watcher Reconciliation Album',
   year = 2004,
+  trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
+  trackArtists = null,
   removeEmbeddedArtwork = false,
   fixtureDirectory = 'watcher-reconciliation',
 } = {}) {
@@ -135,16 +138,21 @@ async function buildWatchedAlbumFixture({
   if (fs.existsSync(ownedRoot)) fs.rmSync(ownedRoot, { recursive: true });
   fs.mkdirSync(albumDirectory, { recursive: true });
   const source = firstPlayableMp3(mediaRoot);
-  const createAlbum = async ({ album: albumName, year: albumYear, trackTitles }) => {
+  const createAlbum = async ({
+    album: albumName,
+    year: albumYear,
+    trackTitles: titles,
+    trackArtists: albumTrackArtists = null,
+  }) => {
     const directory = assertOwnedPath(mediaRoot, path.join(ownedRoot, artist, albumName));
     fs.mkdirSync(directory, { recursive: true });
     const createdTracks = [];
-    for (const [index, title] of trackTitles.entries()) {
+    for (const [index, title] of titles.entries()) {
       const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;
       const destination = assertOwnedPath(mediaRoot, path.join(directory, filename));
       fs.copyFileSync(source, destination);
       await retag(destination, {
-        trackArtist,
+        trackArtist: albumTrackArtists?.[index] ?? trackArtist,
         albumArtist,
         album: albumName,
         year: albumYear,
@@ -159,7 +167,8 @@ async function buildWatchedAlbumFixture({
   const target = await createAlbum({
     album,
     year,
-    trackTitles: ['Watcher First Signal', 'Watcher Second Signal'],
+    trackTitles,
+    trackArtists,
   });
   const tracks = target.tracks;
   return {

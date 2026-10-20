@@ -999,6 +999,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan",
               "area": "cover-providers"
             },

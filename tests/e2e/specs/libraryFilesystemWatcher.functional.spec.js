@@ -22,6 +22,12 @@ const PUNCTUATION_BAND_TARGET = Object.freeze({
   album: 'Watcher Punctuation Identity',
   year: 2007,
 });
+const POSSESSIVE_PROJECT_TARGET = Object.freeze({
+  artist: "Luca Turilli's Rhapsody",
+  baseArtist: 'Rhapsody',
+  album: 'Watcher Possessive Project Identity',
+  year: 2008,
+});
 
 async function viewResponseHasAlbumTrackCount(response, albumName, expectedCount) {
   if (!response.ok() || new URL(response.url()).pathname !== '/view-data') return false;
@@ -319,6 +325,93 @@ test('FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity', {
         { timeout: 60000, intervals: [250, 500, 1000] },
       ).toBe(1);
       expect(await navigationPanelActions.readSidebarArtistLabelCount('Ash')).toBe(0);
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+test('FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist', {
+  tag: '@area:gallery-search',
+}, async ({
+  appBarActions,
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  navigationPanelActions,
+  searchToolbarActions,
+  stepLogger,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add one release containing distinct project and base artist credits', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      fixture = await createWatchedAlbumFixture({
+        artist: POSSESSIVE_PROJECT_TARGET.artist,
+        albumArtist: POSSESSIVE_PROJECT_TARGET.artist,
+        album: POSSESSIVE_PROJECT_TARGET.album,
+        year: POSSESSIVE_PROJECT_TARGET.year,
+        trackTitles: ['Project Signal', 'Base Signal', 'Guest Signal'],
+        trackArtists: [
+          POSSESSIVE_PROJECT_TARGET.artist,
+          POSSESSIVE_PROJECT_TARGET.baseArtist,
+          'Watcher Guest Artist',
+        ],
+        fixtureDirectory: 'watcher-possessive-identity',
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+    });
+
+    await stepLogger.step('Expose separate project and base artist identities', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await expect.poll(
+        () => navigationPanelActions.readSidebarArtistLabelCount(
+          POSSESSIVE_PROJECT_TARGET.artist,
+        ),
+        { timeout: 60000, intervals: [250, 500, 1000] },
+      ).toBe(1);
+      expect(await navigationPanelActions.readSidebarArtistLabelCount(
+        POSSESSIVE_PROJECT_TARGET.baseArtist,
+      )).toBe(1);
+
+      await searchToolbarActions.search(POSSESSIVE_PROJECT_TARGET.artist, {
+        submitWithEnter: true,
+      });
+      await searchToolbarActions.waitForQuery(POSSESSIVE_PROJECT_TARGET.artist);
+      await galleryActions.waitForAlbumVisible(POSSESSIVE_PROJECT_TARGET.album, 60000);
+    });
+
+    await stepLogger.step('Keep both identities separate after application restart', async () => {
+      await managedAppLifecycle.restart();
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await expect.poll(
+        () => navigationPanelActions.readSidebarArtistLabelCount(
+          POSSESSIVE_PROJECT_TARGET.artist,
+        ),
+        { timeout: 60000, intervals: [250, 500, 1000] },
+      ).toBe(1);
+      expect(await navigationPanelActions.readSidebarArtistLabelCount(
+        POSSESSIVE_PROJECT_TARGET.baseArtist,
+      )).toBe(1);
     });
   } catch (error) {
     originalFailure = error;

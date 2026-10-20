@@ -223,26 +223,11 @@ def _prefix_match(alias_key: str, solo_key: str) -> bool:
     )
 
 
-def _possessive_project_match(alias_key: str, solo_key: str) -> bool:
-    if not alias_key or not solo_key or alias_key == solo_key:
-        return False
-    suffix = f" {solo_key}"
-    if not alias_key.endswith(suffix):
-        return False
-    owner = alias_key[: -len(suffix)].rstrip()
-    return bool(owner) and (owner.endswith("'s") or owner.endswith("s'"))
-
-
 def _contains_single_base(alias_key: str, solo_keys: set[str]) -> str | None:
     matches = [
         solo
         for solo in solo_keys
-        if solo
-        and (
-            alias_key == solo
-            or _prefix_match(alias_key, solo)
-            or _possessive_project_match(alias_key, solo)
-        )
+        if solo and (alias_key == solo or _prefix_match(alias_key, solo))
     ]
     return matches[0] if len(matches) == 1 else None
 

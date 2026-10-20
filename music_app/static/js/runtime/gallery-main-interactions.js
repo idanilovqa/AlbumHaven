@@ -670,7 +670,10 @@ function updateGalleryMainChrome() {
   const renderedView = state.view, renderedRequestId = state.ui?.activeViewRequestId;
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
-  if (!bar || !scroll) return;
+  if (!bar || !scroll) {
+    if (typeof syncAlbumTopArtistCreationContext === 'function') syncAlbumTopArtistCreationContext();
+    return;
+  }
   syncGalleryBarSearchVisibility();
   updateGalleryMainControls();
   const model = getFilteredGalleryMainModel();
@@ -754,6 +757,8 @@ function updateGalleryMainChrome() {
     const active = galleryMainSurfaceController?.current?.();
     if (active?.surface === panel) positionArtistFamilyPanelEnvelope(panel, active.anchor);
   }
+  if (state.view === renderedView && state.ui?.activeViewRequestId === renderedRequestId
+    && typeof syncAlbumTopArtistCreationContext === 'function') syncAlbumTopArtistCreationContext();
 }
 
 function transitionGalleryMain(action) {

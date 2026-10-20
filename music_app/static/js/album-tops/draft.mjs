@@ -1,5 +1,6 @@
 // A volatile, detached edit intent. The existing Top controller owns persistence.
 import {albumTopActionAllowed} from './model.mjs';
+import {captureArtistScope, initialArtistFilters, applyArtistFilters, artistRowMatches, captureArtistRows, extendArtistOrder, selectedArtistRows, captureArtistRemote} from './scoped-selection.mjs';
 const copy = value => JSON.parse(JSON.stringify(value));
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const localWire = row => ({item_ref: row.item_ref ?? null, album_ref: row.album_ref,
@@ -23,8 +24,12 @@ export function albumTopAddAllowed(state) {
     && albumTopActionAllowed(state, 'add');
 }
 
-export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', sourceJobRef}) {
+export function createAlbumTopDraft(configuration) {
+  const {controller, providers = {}, mode = 'edit', sourceJobRef} = configuration;
+  const scoped = Object.hasOwn(configuration, 'artistScope');
+  const initialScope = scoped ? captureArtistScope(configuration.artistScope) : null;
   const parent = controller.getSnapshot(), sourceMatch = mode === 'source-match';
+  if (scoped && (parent.selectedTopRef || mode !== 'edit' || initialScope.mode !== 'artist')) throw new TypeError('Artist scope requires an ordinary unsaved create.');
   if (sourceMatch && (parent.selectedTopRef || typeof sourceJobRef !== 'string' || sourceJobRef.length !== 36
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sourceJobRef)
     || sourceJobRef === '00000000-0000-0000-0000-000000000000')) throw new TypeError('Source matching requires a current create scope and canonical source job.');
@@ -38,9 +43,13 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
   const initialItems = source?.items?.map(row => {const binding = copy(bindings.get(row.item_ref) || {}); return {...copy(row), ...binding, ...(binding.source?.kind === 'local' ? {selected_local_album_id: binding.source.selected_local_album_id, selected_source_ref: binding.source.selected_source_ref} : {})};}) || [];
   const baseline = {title: source?.title || '', description: source?.description || '', items: initialItems.map(wire)};
   let state = {scopeKey, topRef, sourceMatch, ...(sourceMatch ? {capacity: 1} : {}), revision: source?.revision || null, title: baseline.title, description: baseline.description,
-    items: adding ? [] : copy(initialItems), ...(adding ? {capacity: Math.max(0, 5000 - initialItems.length), submittedRequestKey: null} : {}), query: '', tab: editing && !adding ? 'selected' : 'all', search: {status: 'idle', items: [], next_cursor: null},
+    items: adding ? [] : copy(initialItems), ...(adding ? {capacity: Math.max(0, 5000 - initialItems.length), submittedRequestKey: null} : {}), query: '', tab: scoped || editing && !adding ? 'selected' : 'all', search: {status: 'idle', items: [], next_cursor: null},
     busy: false, stale: false, denied: false, dirty: false, error: null, pool: 'local', formRef: sourceMatch ? sourceJobRef : null,
     remote: {status: 'idle', title: '', artist: '', search: {status: 'idle', candidates: []}, preparation: null, operation: null, ownState: null, maintenance: null, retired: false, membershipRetired: false}};
+  if (scoped) state = {...state, artistScope: initialScope, artistFilters: initialArtistFilters(), population: {status: 'loading', generation: 0}};
+  const populationMethod = providers.listScopedAlbums, admissionMethod = providers.admitAlbum;
+  let populationAbort = null, populationVersion = 0, artistRows = [], artistOrder = [], remoteArtistRows = [];
+  const artistExclusions = new Set();
   const listeners = new Set(), requests = new Set(), cursors = new Set();
   let disposed = false, retired = false, sequence = 0, searchAbort = null, working = false, results = [];
   let remoteActive = initialItems.some(isRemote), remoteRetired = false, remoteMembershipRetired = false, remoteOperation = null, remoteSearchVersion = 0, remoteSearchAbort = null;
@@ -65,7 +74,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
     if (disposed || retired && !adding) return false;
     if (remoteActive && !remoteScoped()) retireRemote();
     const current = controller.getSnapshot();
-    if (current.scopeKey !== scopeKey || (current.selectedTopRef || null) !== topRef
+    if (scoped && (providers.listScopedAlbums !== populationMethod || providers.admitAlbum !== admissionMethod) || current.scopeKey !== scopeKey || (current.selectedTopRef || null) !== topRef
       || current.directory.status === 'denied' || current.detail.status === 'denied') {
       if (retired && state.denied) return false;
       retired = true; abortAll(); results = []; emit({denied: true, busy: false, ...(adding ? {title: '', description: '', items: [], query: '', submittedRequestKey: null} : {}), search: {status: 'denied', items: [], next_cursor: null}}); return false;
@@ -133,6 +142,95 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
       return false;
     } finally {requests.delete(abort);}
   }
+  const artistCandidates = () => [...artistRows, ...remoteArtistRows].filter(row => !isRemote(row) || state.artistScope.mode === 'family' || row.artist_scope_preview?.main_artist_match === true);
+  const artistVisible = () => {
+    if (!scoped || state.population.status !== 'ready') return [];
+    const selected = new Set(state.items.map(rowKey)), query = state.query.trim().toLocaleLowerCase();
+    return artistRows.filter(row => !selected.has(rowKey(row)) && artistRowMatches(row, state.artistFilters)
+      && (!query || (row.title + ' ' + row.artist).toLocaleLowerCase().includes(query))).map(copy);
+  };
+  function commitArtistSelection(extra = {}) {
+    const items = state.population.status === 'ready' ? selectedArtistRows(artistOrder, artistCandidates(), artistExclusions, state.artistFilters).map(copy) : [];
+    emit({...extra, items});
+    if (!disposed && !retired) emit({search: {status: state.query.trim() && state.population.status === 'ready' ? 'ready' : 'idle', items: state.query.trim() ? artistVisible() : [], next_cursor: null}});
+  }
+  const artistControlsAllowed = () => scoped && refresh() && !working && !busyMutation(controller.getSnapshot().mutation)
+    && (!remoteOperation || ['begin','acquire'].includes(remoteOperation.kind)) && membersAllowed(controller.getSnapshot());
+  async function startArtistPopulation(descriptor, changeFamily = false) {
+    const observed = populationVersion;
+    if (!scoped || !(changeFamily ? artistControlsAllowed() : allowed(true)) || populationVersion !== observed) return false;
+    const previousAbort = populationAbort, previousRemote = changeFamily ? remoteOperation : null, previousSearchAbort = changeFamily ? remoteSearchAbort : null;
+    const generation = ++populationVersion, abort = begin(); populationAbort = abort;
+    const owns = () => !disposed && !retired && !abort.signal.aborted && populationVersion === generation;
+    const current = () => {
+      if (!owns() || !refresh() || providers.listScopedAlbums !== populationMethod || !membersAllowed(controller.getSnapshot())) return false;
+      return owns();
+    };
+    // Reserve the complete transition before abort listeners can admit another intent.
+    artistRows = [];
+    state = {...state, artistScope: Object.freeze(copy(descriptor)), items: [], population: {status: 'loading', generation},
+      search: {status: 'idle', items: [], next_cursor: null}, error: null};
+    if (changeFamily) {
+      remoteSearchVersion++;
+      if (previousRemote) {remoteOperation = null; state = {...state, remote: {...state.remote, operation: null, status: 'idle'}};}
+    }
+    try {
+      // Drain only captured retired handles even if an abort listener admits a successor.
+      previousAbort?.abort();
+      if (changeFamily) {
+        previousRemote?.abort?.abort();
+        previousSearchAbort?.abort();
+      }
+      if (!current()) return false;
+      emit({});
+      if (typeof populationMethod !== 'function' || !current()) throw new Error('Artist population is unavailable.');
+      const gathered = [], localIds = new Set(), seenCursors = new Set(); let cursor = null, pages = 0;
+      do {
+        if (!current()) return false;
+        if (pages >= 50) throw new RangeError('Artist population exceeds its 50-page work limit.');
+        pages++;
+        const page = await populationMethod.call(providers, {...options(abort), artistScope: copy(descriptor), q: '', ...(cursor ? {cursor} : {})});
+        if (!current()) return false;
+        if (!page || page.next_cursor !== null && (typeof page.next_cursor !== 'string' || !page.next_cursor.length)) throw new TypeError('Invalid Artist population cursor.');
+        for (const row of captureArtistRows(page.albums)) {
+          if (localIds.has(row.local_album_id)) throw new Error('Artist population repeated an album.');
+          localIds.add(row.local_album_id); gathered.push(row);
+          if (gathered.length > 5000) throw new RangeError('Artist population exceeds 5,000 albums.');
+        }
+        cursor = page.next_cursor;
+        if (cursor && seenCursors.has(cursor)) throw new Error('Artist population did not advance.');
+        if (cursor && pages === 50) throw new RangeError('Artist population exceeds its 50-page work limit.');
+        if (cursor) seenCursors.add(cursor);
+      } while (cursor);
+      const order = extendArtistOrder(artistOrder, [...gathered, ...remoteArtistRows], artistExclusions);
+      if (!current()) return false;
+      artistRows = gathered; artistOrder = order;
+      state = {...state, population: {status: 'ready', generation}};
+      commitArtistSelection({error: null}); return owns();
+    } catch (error) {
+      if (owns()) {
+        if ([401,403].includes(error?.status)) {deny(error); if (populationVersion === generation && !disposed) emit({population: {status: 'denied', generation}});}
+        else emit({items: [], population: {status: 'error', generation}, error});
+      }
+      return false;
+    } finally {requests.delete(abort);}
+  }
+  function refreshArtistPopulation() {
+    return scoped ? startArtistPopulation(copy(state.artistScope)) : Promise.resolve(false);
+  }
+  async function setArtistFamily(enabled) {
+    const observed = populationVersion;
+    if (typeof enabled !== 'boolean' || !artistControlsAllowed() || populationVersion !== observed) return false;
+    const mode = enabled ? 'family' : 'artist';
+    if (state.artistScope.mode === mode) return state.population.status === 'ready';
+    return startArtistPopulation({...initialScope, mode}, true);
+  }
+  function setArtistFilters(patch) {
+    if (!artistControlsAllowed()) return false;
+    const filters = applyArtistFilters(state.artistFilters, patch);
+    if (!filters) return false;
+    state = {...state, artistFilters: filters}; commitArtistSelection({error: null}); return true;
+  }
   function remoteScoped() {
     if (disposed || retired || remoteRetired || !remoteIdentity || providers.remoteContext !== remoteContextMethod) return false;
     const current = controller.getSnapshot();
@@ -194,7 +292,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
     if (!allowed(true) || !activateRemote() || !state.remote.title.trim()) return false;
     remoteSearchAbort?.abort();
     const version = ++remoteSearchVersion, abort = begin(); remoteSearchAbort = abort;
-    const payload = {destination: remoteDestination(), title: state.remote.title.trim(), artist: state.remote.artist.trim()};
+    const payload = {destination: remoteDestination(), title: state.remote.title.trim(), artist: state.remote.artist.trim(), ...(scoped ? {artist_scope: copy(state.artistScope)} : {})};
     remotePatch({search: {status: 'loading', candidates: []}});
     try {
       if (!remoteScoped() || typeof providers.searchRemoteAlbums !== 'function') throw remoteError('remote_context_changed');
@@ -231,19 +329,25 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
         ownedParents.add(result.preparation_ref); remotePatch({preparation: copy(result)});
         if (!remoteScoped() || !ownsAttempt() || busyMutation(controller.getSnapshot().mutation)) return false;
         operation.kind = 'acquire'; operation.payload = {version: 2, preparation_ref: result.preparation_ref, request_key: operation.requestKey,
-          destination: operation.payload.destination, release_group_id: operation.candidate.release_group_id};
+          destination: operation.payload.destination, release_group_id: operation.candidate.release_group_id, ...(scoped ? {artist_scope: copy(operation.artistScope)} : {})};
         return await runRemoteOperation(operation);
       }
       if (operation.kind === 'acquire' && result.state === 'in_flight') {
         operation.status = 'in_flight'; remotePatch({status: 'in_flight', operation: {kind: 'acquire', status: 'in_flight', retry_after_seconds: result.retry_after_seconds}}); return false;
       }
       if (operation.kind === 'acquire' && result.state === 'pending') {
+        if (scoped && (!equal(operation.artistScope, state.artistScope) || operation.populationGeneration !== populationVersion)) return false;
         const exists = [...initialItems, ...state.items].some(row => row.release_group_id === result.album.release_group_id);
-        if (!exists && state.items.length < (state.capacity ?? 5000)) {
+        if (!exists && (scoped || state.items.length < (state.capacity ?? 5000))) {
           const row = {...copy(result.album), artist: result.album.artist_display, year: result.album.first_release_date ? Number(result.album.first_release_date.slice(0, 4)) : null,
             item_ref: null, selection_key: 'remote:' + result.acquisition_ref, preparation_ref: result.preparation_ref, expires_at: result.expires_at,
-            source: {kind: 'remote_acquisition', acquisition_ref: result.acquisition_ref, evidence_version: result.evidence_version}};
-          emit({items: [...state.items, row]});
+            source: {kind: 'remote_acquisition', acquisition_ref: result.acquisition_ref, evidence_version: result.evidence_version},
+            ...(scoped ? captureArtistRemote(result, operation.artistScope) : {})};
+          if (scoped) {
+            const previous = remoteArtistRows.filter(item => item.release_group_id !== row.release_group_id);
+            const next = [...previous, row], order = extendArtistOrder(artistOrder, [...artistRows, ...next], artistExclusions);
+            remoteArtistRows = next; artistOrder = order; commitArtistSelection({error: null});
+          } else emit({items: [...state.items, row]});
         }
       }
       if (operation.kind === 'close') invalidateParent(operation.ref);
@@ -282,9 +386,55 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
     remoteOperation = operation;
     return runRemoteOperation(operation);
   }
+  async function submitArtistCreate() {
+    if (!scoped || !allowed(true) || state.population.status !== 'ready' || !state.title.trim()) return false;
+    const captured = copy({title: state.title, description: state.description, artistScope: state.artistScope,
+      items: state.items, generation: state.population.generation, formRef});
+    const admitMethod = providers.admitAlbum, abort = begin();
+    const current = () => !disposed && !retired && !abort.signal.aborted && providers.admitAlbum === admitMethod
+      && providers.listScopedAlbums === populationMethod && populationVersion === captured.generation
+      && refresh() && !remoteMembershipRetired && membersAllowed(controller.getSnapshot())
+      && !busyMutation(controller.getSnapshot().mutation);
+    working = true; emit({busy: true, error: null});
+    try {
+      if (!current()) return false;
+      const resolved = [], canonical = new Set();
+      for (const original of captured.items) {
+        const row = copy(original);
+        if (!isRemote(row) && !row.album_ref) {
+          if (typeof admitMethod !== 'function') throw new Error('Artist album admission is unavailable.');
+          const admitted = await admitMethod.call(providers, row.local_album_id, {...options(abort), artistScope: copy(captured.artistScope)});
+          if (!current()) return false;
+          if (typeof admitted?.album_ref !== 'string' || admitted.album_ref.length !== 36
+            || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(admitted.album_ref)) throw new TypeError('Invalid admitted Artist album.');
+          row.album_ref = admitted.album_ref;
+        }
+        if (row.album_ref && canonical.has(row.album_ref)) continue;
+        if (row.album_ref) canonical.add(row.album_ref);
+        resolved.push(row);
+      }
+      if (!current()) return false;
+      const hasRemote = resolved.some(isRemote);
+      if (hasRemote && (!activateRemote(false) || resolved.some(row => isRemote(row)
+        && (unavailableParents.has(row.preparation_ref) || Date.parse(row.expires_at) <= Date.now())))) throw remoteError('remote_acquisition_expired');
+      const payload = {title: captured.title, description: captured.description, artist_scope: captured.artistScope,
+        ...(hasRemote ? {draft_ref: captured.formRef, selections: resolved.map(row => isRemote(row) ? copy(row.source) : {kind: 'local_catalog', album_ref: row.album_ref})}
+          : {album_refs: resolved.map(row => row.album_ref)})};
+      if (!current()) return false;
+      const before = controller.getSnapshot().mutation, attempt = controller.mutate('create', payload);
+      const mutation = controller.getSnapshot().mutation, command = mutation.command;
+      if (mutation !== before && ['loading','uncertain'].includes(mutation.status) && mutation.action === 'create'
+        && command && Object.keys(payload).every(key => equal(command[key], payload[key]))) emit({submittedRequestKey: command.request_key});
+      return await attempt;
+    } catch (error) {if (!disposed && !retired && !abort.signal.aborted) deny(error); return false;}
+    finally {requests.delete(abort); working = false; if (!disposed && !retired) refresh();}
+  }
   const unsubscribe = controller.subscribe?.(refresh) || (() => {});
   refresh();
+  if (scoped && !disposed && !retired) void refreshArtistPopulation();
   return {
+    refreshArtistPopulation, setArtistFamily, setArtistFilters,
+    resetArtistFilters() {return scoped ? setArtistFilters(initialArtistFilters()) : false;},
     getSnapshot: () => state,
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);}, refresh,
     canEdit: () => allowed(), canEditMembership: () => allowed(true),
@@ -298,6 +448,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
     },
     async setQuery(value) {
       if (!allowed(true) || typeof value !== 'string' || value.length > 100) return false;
+      if (scoped) {emit({query: value}); emit({search: {status: value.trim() && state.population.status === 'ready' ? 'ready' : 'idle', items: value.trim() ? artistVisible() : [], next_cursor: null}}); return true;}
       emit({query: value, search: {status: 'idle', items: [], next_cursor: null}}); cursors.clear(); results = [];
       if (!value.trim()) {searchAbort?.abort(); sequence++; emit({search: {status: 'idle', items: [], next_cursor: null}}); return true;}
       return search(value.trim());
@@ -305,6 +456,12 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
     setTab(tab) {if (!disposed && !retired && ['all', 'selected'].includes(tab)) emit({tab});},
     loadMore() {return state.query.trim() && state.search.next_cursor && state.search.status !== 'loading' ? search(state.query.trim(), state.search.next_cursor) : Promise.resolve(false);},
     async select(row) {
+      if (scoped) {
+        if (!allowed(true) || state.population.status !== 'ready') return false;
+        const candidate = artistRows.find(item => item.local_album_id === row?.local_album_id);
+        if (!candidate || !artistRowMatches(candidate, state.artistFilters)) return false;
+        artistExclusions.delete(rowKey(candidate)); artistExclusions.delete(`inventory:${candidate.local_album_id}`); commitArtistSelection({error: null}); return true;
+      }
       if (!allowed(true) || typeof providers.admitAlbum !== 'function' || !results.some(item => item.local_album_id === row.local_album_id)
         || !Number.isSafeInteger(row.local_album_id) || row.local_album_id < 1 || state.items.length >= (state.capacity ?? 5000)) return false;
       const candidate = results.find(item => item.local_album_id === row.local_album_id), abort = begin();
@@ -320,6 +477,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
     },
     remove(albumRef) {
       if (!allowed(true)) return false;
+      if (scoped) {if (!state.items.some(row => rowKey(row) === albumRef)) return false; artistExclusions.add(albumRef); commitArtistSelection({error: null}); return true;}
       emit({items: state.items.filter(row => rowKey(row) !== albumRef), error: null}); emit({search: {...state.search, items: visible()}}); return true;
     },
     reorder(refs) {
@@ -327,6 +485,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
       const byRef = new Map(state.items.map(row => [rowKey(row), row]));
       const items = Array.from(refs, ref => byRef.get(ref));
       if (items.some(row => !row)) return false;
+      if (scoped) {const selected = new Set(state.items.map(rowKey)); let index = 0; artistOrder = artistOrder.map(key => selected.has(key) ? refs[index++] : key);}
       emit({items, error: null}); return true;
     },
     setPool(pool) {
@@ -344,8 +503,16 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
     searchRemote,
     async selectRemote(candidate) {
       if (!allowed(true) || !activateRemote() || !state.remote.search.candidates.includes(candidate)
-        || state.items.length >= (state.capacity ?? 5000) || [...initialItems, ...state.items].some(row => row.release_group_id === candidate.release_group_id)) return false;
-      const target = remoteDestination(), operation = {kind: 'begin', status: 'new', payload: {destination: target, form_ref: formRef}, candidate: copy(candidate), requestKey: newRef()};
+        || !scoped && state.items.length >= (state.capacity ?? 5000) || [...initialItems, ...state.items].some(row => row.release_group_id === candidate.release_group_id)) return false;
+      if (scoped) {
+        const retained = remoteArtistRows.find(row => row.release_group_id === candidate.release_group_id);
+        if (retained) {
+          if (state.population.status !== 'ready' || state.artistScope.mode === 'artist' && retained.artist_scope_preview?.main_artist_match !== true
+            || !artistRowMatches(retained, state.artistFilters)) return false;
+          artistExclusions.delete(rowKey(retained)); commitArtistSelection({error: null}); return true;
+        }
+      }
+      const target = remoteDestination(), operation = {kind: 'begin', status: 'new', payload: {destination: target, form_ref: formRef}, candidate: copy(candidate), requestKey: newRef(), ...(scoped ? {artistScope: copy(state.artistScope), populationGeneration: populationVersion} : {})};
       return startRemoteOperation(operation);
     },
     retryRemoteAcquisition() {
@@ -372,6 +539,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
     },
     async submit() {
       if (sourceMatch) return false;
+      if (scoped) return submitArtistCreate();
       if (!allowed() || (adding ? !state.items.length : !state.title.trim() || editing && !state.dirty)) return false;
       const items = state.items.map(localWire), membershipChanged = !equal(state.items.map(wire), baseline.items), hasRemote = state.items.some(isRemote);
       if (hasRemote && (!activateRemote(false) || state.items.some(row => row.source?.kind === 'remote_acquisition'
@@ -380,7 +548,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', 
       if (membershipChanged && (remoteMembershipRetired || !membersAllowed(controller.getSnapshot()))) return false;
       const selections = () => state.items.map(row => isRemote(row) ? copy(row.source) : {kind: 'local_catalog', album_ref: row.album_ref});
       const payload = adding ? hasRemote ? {selections: selections()} : {album_refs: state.items.map(row => row.album_ref)}
-        : {title: state.title, description: state.description,
+        : {title: state.title, description: state.description, ...(scoped ? {artist_scope: copy(state.artistScope)} : {}),
           ...(editing ? membershipChanged ? hasRemote ? {item_selections: state.items.map(typedWire)} : {items} : {}
             : hasRemote ? {draft_ref: formRef, selections: selections()} : {album_refs: state.items.map(row => row.album_ref)})};
       const abort = begin(); working = true; emit({busy: true, error: null});

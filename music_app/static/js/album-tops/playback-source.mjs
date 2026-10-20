@@ -15,7 +15,7 @@ export function createTopPlaybackSource({capture, providers, scopeKey, isCurrent
     || typeof providers?.resolveNativePlayback !== 'function' || !text(scopeKey) || typeof isCurrent !== 'function') {
     throw new TypeError('Invalid Top playback session.');
   }
-  const sources = new Map();
+  const sources = new Map(), popularity = [];
   const blocks = Array.from(albums, album => {
     if (!album || !text(album.album_ref) || !Array.isArray(album.tracks)) throw new TypeError('Invalid Top playback album.');
     return {id: album.item_ref, tracks: Array.from(album.tracks, track => {
@@ -24,10 +24,16 @@ export function createTopPlaybackSource({capture, providers, scopeKey, isCurrent
       if (!sourceFields.every(key => text(source[key])) || source.revision !== revision || source.item_ref !== album.item_ref || source.catalog_ref !== album.catalog_ref
         || source.inventory_album_ref !== album.inventory_album_ref) throw new TypeError('Invalid Top playback binding.');
       sources.set(track.queue_item_ref, Object.freeze({source, albumRef: album.album_ref}));
+      if (track.popularity != null) {
+        const evidence = track.popularity;
+        if (evidence.provider !== 'lastfm' || evidence.metric !== 'overall_scrobbles'
+          || !Number.isSafeInteger(evidence.count) || evidence.count < 0) throw new TypeError('Invalid Top popularity.');
+        popularity.push({id: track.queue_item_ref, count: evidence.count});
+      }
       return track.queue_item_ref;
     })};
   });
-  const plan = createTopQueuePlan(blocks, {mode, stopAfterAlbum}), receipts = new WeakMap(), owner = Object.freeze({});
+  const plan = createTopQueuePlan(blocks, {mode, stopAfterAlbum, popularity}), receipts = new WeakMap(), owner = Object.freeze({});
   let retired = false, checking = false, active = null;
 
   function stop(request) {

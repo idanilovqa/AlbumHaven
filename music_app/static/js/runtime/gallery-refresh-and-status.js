@@ -2166,8 +2166,21 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       && galleryReadScopeIsCurrent(readScope)
       && state.ui.activeViewRequestId === requestId
       && (settledApplied || requestOwnsCurrentViewState(requestId, requestViewStateRevision))) {
-      try {requestOptions.onSettled?.({applied: settledApplied, error: settledError, requestId});}
-      catch (_error) { /* An observer cannot change the request outcome. */ }
+      // Successful rendering ran while busy was still held. Publish the
+      // newly actionable Artist origin only from this existing terminal owner.
+      const terminalView = state.view, terminalRevision = readViewStateRevision();
+      try {if (typeof syncAlbumTopArtistCreationContext === 'function') syncAlbumTopArtistCreationContext();}
+      catch (_error) { /* Presentation observers never own request completion. */ }
+      // A subscriber may synchronously start another request or change scope.
+      // Its successor owns the slot; do not deliver the old settlement afterward.
+      if (!cleanupWorkRetired && requestStarted && state.ui.activeViewRequestId === requestId
+        && !controller?.signal.aborted && galleryReadScopeIsCurrent(readScope)
+        && state.ui.activeViewRequestId === requestId && state.view === terminalView
+        && readViewStateRevision() === terminalRevision
+        && (settledApplied || requestOwnsCurrentViewState(requestId, requestViewStateRevision))) {
+        try {requestOptions.onSettled?.({applied: settledApplied, error: settledError, requestId});}
+        catch (_error) { /* An observer cannot change the request outcome. */ }
+      }
     }
     } finally {
       if (albumPreferenceFocus && albumPreferenceFocus.owner === null) albumPreferenceFocus.dispose();

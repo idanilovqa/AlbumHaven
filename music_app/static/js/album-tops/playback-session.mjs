@@ -3,7 +3,7 @@ import {createTopPlaybackSource} from './playback-source.mjs';
 
 const sessions = new WeakMap();
 const abort = () => Object.assign(new Error('Album Top playback was superseded.'), {name: 'AbortError'});
-const modes = new Set(['in_order', 'random_albums', 'random_songs']);
+const modes = new Set(['in_order', 'random_albums', 'random_songs', 'popular_songs']);
 // One admission owner per native shell, independent of any mounted Top view.
 // Providers and source receipts live only as long as their native queue does.
 export function getAlbumTopPlaybackSession(runtime) {

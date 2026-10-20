@@ -1754,6 +1754,7 @@
   font-weight: 750;
   white-space: nowrap;
 }
+input.ui-numeric-input,
 .tag-editor-auto-number-controls input {
   width: 64px;
   min-width: 64px;
@@ -1764,6 +1765,7 @@
   padding: 8px;
   text-align: center;
 }
+input.ui-numeric-input:focus-visible,
 .tag-editor-auto-number-controls input:focus-visible,
 .tag-editor-auto-number-controls button:focus-visible {
   outline: 3px solid #8ac8ff;
@@ -1813,6 +1815,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  input.ui-numeric-input,
   .tag-editor-actions,
   .tag-editor-auto-number-controls input,
   .tag-editor-auto-number-controls button {

@@ -11,12 +11,19 @@ export function mountListensBadge(host, runtime, initial) {
   return {element: host, update, dispose() {if (disposed) return; disposed = true; host.replaceChildren();}};
 }
 
+const adoptedHeaderRoots = new WeakMap();
+
 // Consumer-owned children stay in stable slots through compact/expanded layout.
 // This is the native port of the shared header's placement/focus policy only.
 export function mountSharedHeader(host, runtime, initial) {
+  const adopted = initial.adoptRoot === true, lease = {};
+  if (adopted && adoptedHeaderRoots.has(host)) throw new TypeError('The native header root already has an owner.');
+  if (adopted) adoptedHeaderRoots.set(host, lease);
+  let cleanup = () => {};
+  try {
   const doc = host.ownerDocument, win = doc.defaultView;
   const make = (tag, name) => {const node = doc.createElement(tag); node.className = name; return node;};
-  const root = make('header', 'gallery-bar home-header'), leading = make('span', 'home-header__leading'),
+  const root = adopted ? host : make('header', 'gallery-bar home-header'), leading = make('span', 'home-header__leading'),
     identity = make('div', 'home-header__identity'), content = make('div', 'home-header__content'),
     controls = make('div', 'home-header__controls'), triggerHost = make('span', 'home-header__tools'),
     capsule = make('div', 'home-header__capsule'), outsideActions = make('span', 'home-header__outside'),
@@ -24,11 +31,29 @@ export function mountSharedHeader(host, runtime, initial) {
   // finalAction is a sibling inside the measured actions slot, always ordered last.
   primaryActions.style.display = 'contents'; finalAction.style.display = 'contents';
   actions.append(primaryActions, finalAction); capsule.append(outsideActions, actions); controls.append(triggerHost, capsule);
-  root.append(leading, identity, content, controls); host.replaceChildren(root);
+  // Install owned nodes only after the cleanup owner has been established.
   const resourceControls = make('div', 'home-header__resource-controls'),
     resourcePlayback = make('span', 'home-header__resource-playback'), resourceProgress = make('span', 'home-header__resource-progress');
   resourceControls.append(resourcePlayback, resourceProgress);
   const slots = {leading, identity, content, actions: primaryActions, outsideActions, finalAction, resourcePlayback, resourceProgress};
+  let button = null, resize = null, mutation = null, activeRef = null;
+  const attributes = new Map(), classes = new Map();
+  const writeAttribute = (name, value) => {
+    if (adopted && !attributes.has(name)) attributes.set(name, {before: root.getAttribute(name), last: null});
+    if (value === null) root.removeAttribute(name); else root.setAttribute(name, String(value));
+    if (adopted) attributes.get(name).last = root.getAttribute(name);
+  };
+  const writeClasses = value => {
+    if (!adopted) {root.className = value; return;}
+    const wanted = new Set(value.split(/\s+/).filter(Boolean));
+    for (const [token, record] of classes) if (!wanted.has(token) && record.last && !record.before) {
+      if (root.classList.contains(token)) root.classList.remove(token); record.last = false;
+    }
+    for (const token of wanted) {
+      if (!classes.has(token)) classes.set(token, {before: root.classList.contains(token), last: true});
+      root.classList.add(token); classes.get(token).last = true;
+    }
+  };
   let props = initial, compact = false, outside = false, open = false, disposed = false, frame = 0, lastFocus = null, refCleanup, revision = 0;
   const trigger = () => triggerHost.firstElementChild;
   const focusable = node => node?.isConnected && !node.disabled && node.getAttribute('aria-disabled') !== 'true'
@@ -40,21 +65,23 @@ export function mountSharedHeader(host, runtime, initial) {
     && target?.closest?.('[role="menu"], [role="dialog"]'));
   const buttonProps = () => ({icon: 'tools', label: 'Tools', attributes: {'data-header-tools': 'true',
     'aria-expanded': String(open), 'aria-controls': `${props.id}-tools`}, onClick: () => {open = !open; apply(); if (!open && focusable(trigger())) trigger().focus({preventScroll: true}); schedule();}});
-  const button = mountButton(triggerHost, runtime, buttonProps());
   const conceal = (node, value) => {
     if (value) {node.setAttribute('inert', ''); node.setAttribute('aria-hidden', 'true');}
     else {node.removeAttribute('inert'); node.removeAttribute('aria-hidden');}
   };
   const hasActions = () => primaryActions.childNodes.length > 0 || finalAction.childNodes.length > 0 || outsideActions.childNodes.length > 0;
   const apply = () => {
+    if (disposed) return;
+    const operation = revision;
     // Playback composition is admitted only for an actual saved Top header.
     // Goals and ordinary headers keep their existing DOM and ordering.
     if (props.resourceKind === 'album_top') {
       if (resourceControls.parentNode !== root) root.append(resourceControls);
     } else resourceControls.remove();
-    root.setAttribute('data-header-compact', String(compact)); root.setAttribute('data-header-outside', String(outside)); root.setAttribute('data-header-open', String(open));
+    writeAttribute('data-header-compact', String(compact)); writeAttribute('data-header-outside', String(outside)); writeAttribute('data-header-open', String(open));
     triggerHost.hidden = !hasActions() || !compact;
     button.update(buttonProps());
+    if (disposed || operation !== revision) return;
     const floating = compact && open ? ' gallery-anchored-menu home-header__floating-panel' : '';
     capsule.className = `home-header__capsule${!outside ? floating : ''}`;
     actions.className = `home-header__actions${outside ? floating : ''}`;
@@ -70,7 +97,8 @@ export function mountSharedHeader(host, runtime, initial) {
     return items.reduce((sum, child) => sum + width(child), 0) + Math.max(0, items.length - 1) * (parseFloat(win.getComputedStyle(node).columnGap) || 0);
   };
   const measure = () => {
-    frame = 0; if (disposed || root.hidden) return;
+    frame = 0; if (disposed) return;
+    if (root.hidden) {if (adopted && open) {open = false; apply();} return;}
     const operation = revision;
     const available = root.getBoundingClientRect().width; if (!available) return;
     const gap = parseFloat(win.getComputedStyle(root).columnGap) || 8;
@@ -117,34 +145,71 @@ export function mountSharedHeader(host, runtime, initial) {
   const pointer = event => {if (open && !root.contains(event.target) && !childMenu(event.target)) close(false);};
   const key = event => {if (event.key === 'Escape' && open && !event.defaultPrevented && !childMenu(event.target)) {event.preventDefault(); event.stopPropagation(); close(true);}};
   const focus = event => {lastFocus = event.target;};
-  const resize = win.ResizeObserver ? new win.ResizeObserver(schedule) : null;
+  const clearRef = () => {
+    const ref = activeRef, release = refCleanup;
+    activeRef = null; refCleanup = null;
+    if (typeof release === 'function') release();
+    else if (typeof ref === 'function') ref(null);
+    else if (ref && (!adopted || ref.current === root)) ref.current = null;
+  };
+  const setRef = ref => {
+    activeRef = ref;
+    if (typeof ref === 'function') {
+      const operation = revision, release = ref(root);
+      if (disposed || operation !== revision || activeRef !== ref) {if (typeof release === 'function') release(); return;}
+      refCleanup = release;
+    } else if (ref) ref.current = root;
+  };
+  cleanup = () => {
+    if (disposed) return;
+    disposed = true; revision++;
+    if (frame) win.cancelAnimationFrame(frame); frame = 0;
+    resize?.disconnect(); mutation?.disconnect(); root.removeEventListener('focusin', focus);
+    doc.removeEventListener('pointerdown', pointer); doc.removeEventListener('keydown', key);
+    win.removeEventListener('resize', schedule); win.removeEventListener('scroll', schedule, true);
+    win.visualViewport?.removeEventListener('resize', schedule); win.visualViewport?.removeEventListener('scroll', schedule);
+    try {clearRef();} finally {
+      try {button?.dispose();} finally {
+        if (adopted) {
+          for (const node of [leading, identity, content, controls, resourceControls]) if (node.parentNode === root) node.remove();
+          for (const [name, record] of attributes) if (root.getAttribute(name) === record.last) {
+            if (record.before === null) root.removeAttribute(name); else root.setAttribute(name, record.before);
+          }
+          for (const [token, record] of classes) if (root.classList.contains(token) === record.last) {
+            if (record.before) root.classList.add(token); else root.classList.remove(token);
+          }
+          if (adoptedHeaderRoots.get(root) === lease) adoptedHeaderRoots.delete(root);
+        } else root.remove();
+      }
+    }
+  };
+  const update = next => {
+    if (disposed) return;
+    if (Object.hasOwn(next, 'adoptRoot') && next.adoptRoot !== adopted) throw new TypeError('Native header adoption is fixed at mount.');
+    const operation = ++revision;
+    if (!next.id) throw new TypeError('Native shared header requires a stable unique id.');
+    if (activeRef !== next.headerRef) {clearRef(); if (disposed || operation !== revision) return; setRef(next.headerRef);}
+    if (disposed || operation !== revision) return;
+    props = next; writeClasses(`gallery-bar home-header ${next.className || ''}`);
+    if (!adopted) root.hidden = Boolean(next.hidden); if (root.hidden) open = false;
+    writeAttribute('data-shared-header', next.id); capsule.id = `${next.id}-tools`; capsule.setAttribute('data-header-action-capsule', 'true');
+    writeAttribute('tabindex', next.tabIndex !== undefined ? next.tabIndex : null);
+    writeAttribute('aria-label', next.ariaLabel || null);
+    apply(); schedule();
+  };
+  root.append(leading, identity, content, controls); if (!adopted) host.replaceChildren(root);
+  button = mountButton(triggerHost, runtime, buttonProps());
+  resize = win.ResizeObserver ? new win.ResizeObserver(schedule) : null;
   [root, identity, content, actions, outsideActions, doc.querySelector('.global-player')].filter(Boolean).forEach(node => resize?.observe(node));
-  const mutation = new win.MutationObserver(schedule);
+  mutation = new win.MutationObserver(schedule);
   mutation.observe(root, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'hidden']});
   root.addEventListener('focusin', focus); doc.addEventListener('pointerdown', pointer); doc.addEventListener('keydown', key);
   win.addEventListener('resize', schedule); win.addEventListener('scroll', schedule, true);
   win.visualViewport?.addEventListener('resize', schedule); win.visualViewport?.addEventListener('scroll', schedule);
-  const setRef = ref => {if (typeof ref === 'function') refCleanup = ref(root); else if (ref) ref.current = root;};
-  const clearRef = ref => {if (typeof refCleanup === 'function') refCleanup(); else if (typeof ref === 'function') ref(null); else if (ref) ref.current = null; refCleanup = null;};
-  const update = next => {
-    if (disposed) return;
-    revision++;
-    if (!next.id) throw new TypeError('Native shared header requires a stable unique id.');
-    if (props.headerRef !== next.headerRef) {clearRef(props.headerRef); setRef(next.headerRef);}
-    props = next; root.className = `gallery-bar home-header ${next.className || ''}`;
-    root.hidden = Boolean(next.hidden); if (root.hidden) open = false;
-    root.setAttribute('data-shared-header', next.id); capsule.id = `${next.id}-tools`; capsule.setAttribute('data-header-action-capsule', 'true');
-    if (next.tabIndex !== undefined) root.tabIndex = next.tabIndex; else root.removeAttribute('tabindex');
-    if (next.ariaLabel) root.setAttribute('aria-label', next.ariaLabel); else root.removeAttribute('aria-label');
-    apply(); schedule();
-  };
   setRef(initial.headerRef); update(initial);
-  return {element: root, slots, update, refresh: schedule, dispose() {
-    if (disposed) return; disposed = true; revision++; if (frame) win.cancelAnimationFrame(frame);
-    resize?.disconnect(); mutation.disconnect(); root.removeEventListener('focusin', focus);
-    doc.removeEventListener('pointerdown', pointer); doc.removeEventListener('keydown', key);
-    win.removeEventListener('resize', schedule); win.removeEventListener('scroll', schedule, true);
-    win.visualViewport?.removeEventListener('resize', schedule); win.visualViewport?.removeEventListener('scroll', schedule);
-    clearRef(props.headerRef); button.dispose(); root.remove();
-  }};
+  return {element: root, slots, update, refresh: schedule, dispose: cleanup};
+  } catch (error) {
+    try {cleanup();} finally {if (adoptedHeaderRoots.get(host) === lease) adoptedHeaderRoots.delete(host);}
+    throw error;
+  }
 }

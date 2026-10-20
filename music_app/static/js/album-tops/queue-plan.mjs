@@ -1,7 +1,7 @@
 // Pure captured-occurrence scheduling. This owner never grants playback or owns audio.
-export const TOP_PLAY_MODES = Object.freeze(['in_order', 'random_albums', 'random_songs']);
+export const TOP_PLAY_MODES = Object.freeze(['in_order', 'random_albums', 'random_songs', 'popular_songs']);
 
-export function createTopQueuePlan(blocks, {mode = 'in_order', stopAfterAlbum = false, random = Math.random} = {}) {
+export function createTopQueuePlan(blocks, {mode = 'in_order', stopAfterAlbum = false, random = Math.random, popularity = []} = {}) {
   if (!Array.isArray(blocks) || !blocks.length || !TOP_PLAY_MODES.includes(mode)
       || typeof stopAfterAlbum !== 'boolean' || typeof random !== 'function') throw new TypeError('Invalid Top queue plan.');
   const albums = new Set(), occurrences = new Set();
@@ -16,6 +16,20 @@ export function createTopQueuePlan(blocks, {mode = 'in_order', stopAfterAlbum = 
     return Object.freeze({id: block.id, tracks: Object.freeze(tracks)});
   });
   const albumByTrack = new Map(canonical.flatMap(block => block.tracks.map(id => [id, block.id])));
+  const rank = new Map(), canonicalIndex = new Map([...occurrences].map((id, index) => [id, index]));
+  if (!Array.isArray(popularity)) throw new TypeError('Invalid Top popularity.');
+  for (const row of popularity) {
+    if (!row || !occurrences.has(row.id) || rank.has(row.id) || !Number.isSafeInteger(row.count) || row.count < 0) {
+      throw new TypeError('Invalid Top popularity.');
+    }
+    rank.set(row.id, row.count);
+  }
+  const popular = ids => [...ids].sort((left, right) => {
+    const leftKnown = rank.has(left), rightKnown = rank.has(right);
+    if (leftKnown !== rightKnown) return leftKnown ? -1 : 1;
+    if (leftKnown && rank.get(left) !== rank.get(right)) return rank.get(left) > rank.get(right) ? -1 : 1;
+    return canonicalIndex.get(left) - canonicalIndex.get(right);
+  });
   const unavailable = new Set();
   let revision = 0, index = 0, visitedEnd = -1, order;
   const shuffled = values => {
@@ -38,7 +52,7 @@ export function createTopQueuePlan(blocks, {mode = 'in_order', stopAfterAlbum = 
     let later = remaining.filter(block => block !== boundary);
     if (nextMode === 'random_albums') later = shuffled(later);
     const suffix = [...(boundary ? [boundary] : []), ...later].flatMap(block =>
-      nextMode === 'random_songs' ? shuffled(block.tracks) : block.tracks);
+      nextMode === 'random_songs' ? shuffled(block.tracks) : nextMode === 'popular_songs' ? popular(block.tracks) : block.tracks);
     return [...prefix, ...suffix];
   }
   order = schedule(mode);

@@ -213,3 +213,54 @@ export function mountIntrinsicDisclosure(host, runtime, initial) {
   return {element: host, slots: {actions, panel}, update,
     dispose() {if (disposed) return; disposed = true; owner.dispose(); button.dispose(); host.replaceChildren(); props = null;}};
 }
+
+const numericInputOwners = new WeakMap();
+function numericInputProps(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Numeric input props are required.');
+  const {id, label, value: text, disabled = false, min, max, step = 1, onChange} = value;
+  if (typeof id !== 'string' || !id.trim() || typeof label !== 'string' || !label.trim()
+    || typeof text !== 'string' || typeof disabled !== 'boolean'
+    || min !== undefined && !Number.isInteger(min) || max !== undefined && !Number.isInteger(max)
+    || min !== undefined && max !== undefined && min > max || !Number.isInteger(step) || step <= 0
+    || onChange !== undefined && typeof onChange !== 'function') throw new TypeError('Invalid numeric input props.');
+  return {id, label, value: text, disabled, min, max, step, onChange};
+}
+
+// The existing Edit Tags numeric presentation, with caller-owned value semantics.
+export function mountNumericInput(host, initial) {
+  let props = numericInputProps(initial);
+  if (!host?.ownerDocument?.createElement) throw new TypeError('A numeric input host is required.');
+  const input = host.ownerDocument.createElement('input');
+  let disposed = false;
+  const current = () => !disposed && numericInputOwners.get(host) === owner && input.parentNode === host;
+  const change = () => {if (current() && !input.disabled) props.onChange?.(input.value);};
+  const render = next => {
+    input.id = next.id; input.setAttribute('aria-label', next.label);
+    input.setAttribute('step', String(next.step));
+    for (const key of ['min', 'max']) {
+      if (next[key] === undefined) input.removeAttribute(key); else input.setAttribute(key, String(next[key]));
+    }
+    if (input.value !== next.value) input.value = next.value;
+    input.disabled = next.disabled; input.setAttribute('aria-disabled', String(next.disabled));
+  };
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    if (numericInputOwners.get(host) === owner) numericInputOwners.delete(host);
+    input.removeEventListener('input', change); input.remove();
+  };
+  const owner = {element: input, update(next) {
+    if (!current()) return;
+    const captured = numericInputProps(next); render(captured); props = captured;
+  }, dispose};
+  try {
+    input.className = 'ui-numeric-input'; input.setAttribute('type', 'number'); input.setAttribute('inputmode', 'numeric');
+    render(props);
+    const previous = numericInputOwners.get(host); numericInputOwners.set(host, owner);
+    previous?.dispose();
+    if (disposed || numericInputOwners.get(host) !== owner) {dispose(); return owner;}
+    input.addEventListener('input', change); host.append(input);
+    if (!current()) dispose();
+    return owner;
+  } catch (error) {dispose(); throw error;}
+}

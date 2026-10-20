@@ -22,6 +22,13 @@ function activityOverlay(value) {
   if (!isTopActivity(overlay.activity)) throw fail('Invalid Album Top activity.');
   return {top_viewer_overlay: {activity: {active: overlay.activity.active, activity_revision: overlay.activity.activity_revision}}};
 }
+function artistScope(value) {
+  if (!keysAre(value, ['root_artist_id', 'mode'])) throw fail('Invalid Album Top Artist scope.');
+  const {root_artist_id: id, mode} = value;
+  if (typeof id !== 'string' || id.trim() !== id || !/^[1-9][0-9]{0,18}$/.test(id)
+    || id.length === 19 && id > '9223372036854775807' || !['artist', 'family'].includes(mode)) throw fail('Invalid Album Top Artist scope.');
+  return Object.freeze({root_artist_id: id, mode});
+}
 function top(value) {
   if (!uuid(value?.top_ref) || !revision(value.revision) || typeof value.title !== 'string' || typeof value.description !== 'string'
     || !['private', 'server_shared'].includes(value.visibility)) throw fail('Invalid Album Top response.');
@@ -29,6 +36,7 @@ function top(value) {
     || Object.hasOwn(value, 'source_locked') && typeof value.source_locked !== 'boolean') throw fail('Invalid Album Top editing eligibility.');
   return {top_ref: value.top_ref, title: value.title, description: value.description,
     revision: value.revision, visibility: value.visibility, allowed_actions: actions(value.allowed_actions), ...activityOverlay(value),
+    ...(Object.hasOwn(value, 'artist_scope') ? {artist_scope: artistScope(value.artist_scope)} : {}),
     ...(Object.hasOwn(value, 'type') ? {type: value.type} : {}),
     ...(Object.hasOwn(value, 'source_locked') ? {source_locked: value.source_locked} : {})};
 }
@@ -53,6 +61,21 @@ function albumSummary(value) {
     || typeof value.title !== 'string' || typeof value.artist !== 'string'
     || value.year !== null && (!Number.isInteger(value.year) || value.year < 1 || value.year > 9999)) throw fail('Invalid Album Top search result.');
   return {local_album_id: value.local_album_id, album_ref: value.album_ref, title: value.title, artist: value.artist, year: value.year};
+}
+function scopedAlbumSummary(value, scopeKey) {
+  const row = albumSummary(value);
+  if (!Object.hasOwn(value, 'creation_metadata')) return row;
+  const metadata = value.creation_metadata, library = nativeBrowseScope(scopeKey)[1];
+  if (!keysAre(metadata, ['release_type', 'rating_state', 'rating', 'artwork_url'])
+    || metadata.release_type !== null && !['studio', 'ep', 'live', 'demo', 'compilation', 'single'].includes(metadata.release_type)
+    || !['available', 'unavailable'].includes(metadata.rating_state)
+    || metadata.rating !== null && (!Number.isInteger(metadata.rating) || metadata.rating < 1 || metadata.rating > 10)
+    || metadata.rating_state === 'unavailable' && metadata.rating !== null
+    || metadata.artwork_url !== null && metadata.artwork_url !== '/library/album-artwork/inventory-album:' + library + ':' + row.local_album_id) {
+    throw fail('Invalid Album Top creation metadata.');
+  }
+  return {...row, creation_metadata: Object.freeze({release_type: metadata.release_type,
+    rating_state: metadata.rating_state, rating: metadata.rating, artwork_url: metadata.artwork_url})};
 }
 function draftItem(value) {
   if (!uuid(value?.album_ref) || value.item_ref !== null && !uuid(value.item_ref)) throw fail('Invalid Album Top draft.');
@@ -155,6 +178,16 @@ function nativePlaybackTarget(value, inventoryTrackRef) {
   }
   return target;
 }
+function nativeQueuePopularity(value) {
+  if (value === null) return null;
+  if (!keysAre(value, ['provider', 'metric', 'count', 'observed_at']) || value.provider !== 'lastfm'
+    || value.metric !== 'overall_scrobbles' || !Number.isSafeInteger(value.count) || value.count < 0
+    || typeof value.observed_at !== 'string' || !/(?:Z|\+00:00)$/.test(value.observed_at)) {
+    throw fail('Invalid Album Top popularity.', 502);
+  }
+  try {timestamp(value.observed_at);} catch {throw fail('Invalid Album Top popularity.', 502);}
+  return {provider: value.provider, metric: value.metric, count: value.count, observed_at: value.observed_at};
+}
 function nativeQueue(value, captured, library) {
   if (!keysAre(value, ['top_ref', 'revision', 'albums', 'unavailable_items'])) throw fail('Invalid Album Top native queue.', 502);
   const data = {...value};
@@ -176,7 +209,8 @@ function nativeQueue(value, captured, library) {
     members.add(album.item_ref); catalogs.add(album.catalog_ref); inventoryAlbums.set(album.inventory_album_ref, album.album_ref);
     const tracks = [];
     for (const value of album.tracks) {
-      if (!keysAre(value, ['queue_item_ref', 'source', 'native_target'])) throw fail('Invalid Album Top queue track.', 502);
+      if (!keysAre(value, ['queue_item_ref', 'source', 'native_target'])
+        && !keysAre(value, ['queue_item_ref', 'source', 'native_target', 'popularity'])) throw fail('Invalid Album Top queue track.', 502);
       const track = {...value}, source = nativePlaybackSource(track.source, library);
       const occurrence = source.item_ref + ':' + source.inventory_track_ref.split(':')[2];
       const binding = JSON.stringify([source.inventory_album_ref, source.canonical_track_ref]);
@@ -186,7 +220,8 @@ function nativeQueue(value, captured, library) {
         throw fail('Invalid Album Top queue occurrence.', 502);
       }
       occurrences.add(occurrence); inventoryTracks.set(source.inventory_track_ref, binding);
-      tracks.push({queue_item_ref: occurrence, source, native_target: nativePlaybackTarget(track.native_target, source.inventory_track_ref)});
+      tracks.push({queue_item_ref: occurrence, source, native_target: nativePlaybackTarget(track.native_target, source.inventory_track_ref),
+        ...(Object.hasOwn(track, 'popularity') ? {popularity: nativeQueuePopularity(track.popularity)} : {})});
     }
     albums.push({...album, tracks});
   }
@@ -232,17 +267,17 @@ function sourceSelector(value, {retained = true, local = false} = {}) {
   if (!field || !keysAre(value, ['kind', field, 'evidence_version']) || !nonzeroUUID(value[field]) || !hex(value.evidence_version)) throw fail('Invalid Album Top remote selection.');
   return {kind: value.kind, [field]: value[field], evidence_version: value.evidence_version};
 }
-function typedSelections(values, retained) {
+function typedSelections(values, retained, localOnly = false) {
   if (!Array.isArray(values) || !values.length || values.length > 5000) throw fail('Invalid Album Top selections.');
   const seen = new Set(); let remote = false;
-  const result = values.map(value => {
+  const result = Array.from(values).map(value => {
     const local = keysAre(value, ['kind', 'album_ref']) && value.kind === 'local_catalog' && canonicalUUID(value.album_ref);
     const row = local ? {kind: 'local_catalog', album_ref: value.album_ref} : sourceSelector(value, {retained});
     remote ||= !local;
     const identity = row.kind + ':' + (row.album_ref || row.acquisition_ref || row.admission_ref);
     if (seen.has(identity)) throw fail('Duplicate Album Top selection.'); seen.add(identity); return row;
   });
-  if (!remote) throw fail('Use the existing local Album Top command.');
+  if (!remote && !localOnly) throw fail('Use the existing local Album Top command.');
   return result;
 }
 function typedItems(values, read = false) {
@@ -412,10 +447,15 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
     remoteContext,
     ...createSourceImportProviders({request}),
     async searchRemoteAlbums(payload, options) {
-      if (!keysAre(payload, ['destination', 'title', 'artist']) || typeof payload.title !== 'string' || !payload.title.trim() || Array.from(payload.title).length > 100
+      const scoped = Object.hasOwn(payload || {}, 'artist_scope');
+      if (!keysAre(payload, scoped ? ['destination', 'title', 'artist', 'artist_scope'] : ['destination', 'title', 'artist']) || typeof payload.title !== 'string' || !payload.title.trim() || Array.from(payload.title).length > 100
         || typeof payload.artist !== 'string' || Array.from(payload.artist).length > 100 || /[\u0000-\u001f\u007f]/.test(payload.title + payload.artist)
         || Array.from(payload.title + payload.artist).some(char => char.codePointAt(0) >= 0xd800 && char.codePointAt(0) <= 0xdfff)) throw fail('Invalid Album Top remote search.');
       const target = destination(payload.destination), body = {destination: target, title: payload.title, artist: payload.artist};
+      if (scoped) {
+        if (target.kind !== 'create') throw fail('Invalid Album Top remote search.');
+        body.artist_scope = artistScope(payload.artist_scope);
+      }
       const data = await remoteRequest('/album-top-catalog/remote-search', options, body);
       if (!same(destination(data.destination), target) || data.limit !== 10 || !Array.isArray(data.candidates) || data.candidates.length > data.limit) throw remoteFail();
       const candidates = data.candidates.map(remoteSummary);
@@ -434,11 +474,17 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
       return {version: 2, context_ref: data.context_ref, destination: target, ...result};
     },
     async acquireRemoteAlbum(payload, options) {
-      if (!keysAre(payload, ['version', 'preparation_ref', 'request_key', 'destination', 'release_group_id']) || payload.version !== 2
+      const scoped = Object.hasOwn(payload || {}, 'artist_scope');
+      const keys = ['version', 'preparation_ref', 'request_key', 'destination', 'release_group_id'];
+      if (!keysAre(payload, scoped ? [...keys, 'artist_scope'] : keys) || payload.version !== 2
         || !nonzeroUUID(payload.preparation_ref) || !nonzeroUUID(payload.request_key) || !nonzeroUUID(payload.release_group_id)) throw fail('Invalid Album Top acquisition.');
       const target = destination(payload.destination), body = {version: 2, preparation_ref: payload.preparation_ref, request_key: payload.request_key, destination: target, release_group_id: payload.release_group_id};
+      if (scoped) {
+        if (target.kind !== 'create') throw fail('Invalid Album Top acquisition.');
+        body.artist_scope = artistScope(payload.artist_scope);
+      }
       const data = await remoteRequest('/album-top-catalog/remote-acquisitions', options, body);
-      if (data.version !== 2 || data.preparation_ref !== payload.preparation_ref || data.request_key !== payload.request_key || !same(destination(data.destination), target)) throw remoteFail();
+      if (data.version !== 2 || data.preparation_ref !== body.preparation_ref || data.request_key !== body.request_key || !same(destination(data.destination), target)) throw remoteFail();
       const common = {version: 2, context_ref: data.context_ref, preparation_ref: data.preparation_ref, request_key: data.request_key, destination: target};
       if (['maintenance_required', 'limit'].includes(data.state)) return {...common, ...remoteRefusal(data)};
       if (data.state === 'in_flight' && data.retry_after_seconds === 1) return {...common, state: data.state, retry_after_seconds: 1};
@@ -453,8 +499,22 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
       if (data.state !== 'pending') throw remoteFail();
       const album = remoteSummary(data.album);
       if (album.release_group_id !== body.release_group_id) throw remoteFail();
+      const projection = {};
+      if (scoped || target.kind === 'top' && Object.hasOwn(data, 'artist_scope_preview')) {
+        if (!Object.hasOwn(data, 'artist_scope_preview')) throw remoteFail();
+        const value = data.artist_scope_preview;
+        if (value === null) projection.artist_scope_preview = null;
+        else {
+          if (!keysAre(value, ['artist_scope', 'evidence_version', 'main_artist_match'])
+            || value.evidence_version !== data.evidence_version || ![true, false, null].includes(value.main_artist_match)) throw remoteFail();
+          const scope = artistScope(value.artist_scope);
+          if (scoped && !same(scope, body.artist_scope)) throw remoteFail();
+          projection.artist_scope_preview = Object.freeze({artist_scope: scope,
+            evidence_version: value.evidence_version, main_artist_match: value.main_artist_match});
+        }
+      }
       return {...common, state: 'pending', acquisition_ref: data.acquisition_ref, evidence_version: data.evidence_version,
-        expires_at: timestamp(data.expires_at), album};
+        expires_at: timestamp(data.expires_at), album, ...projection};
     },
     async readRemotePreparationState(options) {
       const data = await remoteRequest('/album-top-catalog/remote-preparations', options);
@@ -490,10 +550,28 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
       if (!cursorValue(data.next_cursor)) throw fail('Invalid Album Top search cursor.');
       return {albums: rows(data.albums, albumSummary, 'local_album_id'), next_cursor: data.next_cursor};
     },
+    async listScopedAlbums(options) {
+      const scopeKey = options.scopeKey;
+      const hasScope = Object.hasOwn(options, 'artistScope'), saved = options.topRef != null;
+      if (hasScope === saved || saved && !canonicalUUID(options.topRef)) throw fail('Invalid Album Top scoped destination.');
+      const scope = hasScope ? artistScope(options.artistScope) : null;
+      const q = Object.hasOwn(options, 'q') ? options.q : '';
+      if (typeof q !== 'string' || q.length > 100 || q.includes('\0')
+        || Array.from(q).some(character => character.length === 1 && /[\ud800-\udfff]/.test(character))) throw fail('Invalid Album Top search.');
+      const path = pagePath('/album-top-catalog/search', {...options, q: q.trim()}, {query: true})
+        + (saved ? '&top_ref=' + encodeURIComponent(options.topRef)
+          : '&root_artist_id=' + encodeURIComponent(scope.root_artist_id) + '&scope_mode=' + scope.mode);
+      const data = await request(path, options);
+      if (!cursorValue(data.next_cursor)) throw fail('Invalid Album Top search cursor.');
+      return {albums: rows(data.albums, value => scopedAlbumSummary(value, scopeKey), 'local_album_id'), next_cursor: data.next_cursor};
+    },
     async admitAlbum(albumId, options) {
       if (!localId(albumId) || options.topRef != null && !uuid(options.topRef)) throw fail('Invalid Album Top album identity.');
+      const hasScope = Object.hasOwn(options, 'artistScope');
+      if (hasScope && options.topRef != null) throw fail('Invalid Album Top scoped destination.');
+      const scope = hasScope ? artistScope(options.artistScope) : null;
       const path = options.topRef ? '/album-tops/' + options.topRef + '/catalog/inventory' : '/album-top-catalog/inventory';
-      const data = await request(path, options, {album_id: albumId});
+      const data = await request(path, options, {album_id: albumId, ...(scope ? {artist_scope: scope} : {})});
       if (!uuid(data.album_ref)) throw fail('Invalid Album Top admission.');
       return {album_ref: data.album_ref};
     },
@@ -690,6 +768,11 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
     async execute(action, command, options) {
       const {top_ref, ...body} = command;
       if (!uuid(body.request_key) || !['create', 'save', 'enable_external', 'revoke_external', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'grant_viewer', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy', 'set_manual_completion', 'set_activity'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
+      const scoped = Object.hasOwn(body, 'artist_scope');
+      if (scoped) {
+        if (action !== 'create' || Object.hasOwn(body, 'source_review') || Object.hasOwn(body, 'playlist_preview_ref')) throw fail('Invalid Album Top scoped command.');
+        body.artist_scope = artistScope(body.artist_scope);
+      }
       const hasSelections = Object.hasOwn(body, 'selections'), hasItems = Object.hasOwn(body, 'item_selections');
       if (hasSelections || hasItems || Object.hasOwn(body, 'draft_ref')) {
         if (!nonzeroUUID(body.request_key) || action !== 'create' && !nonzeroUUID(top_ref)) throw fail('Invalid Album Top mixed identity.');
@@ -699,7 +782,7 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
           || Object.hasOwn(body, 'draft_ref') && (action !== 'create' || !hasSelections)) throw fail('Invalid Album Top mixed command.');
         if (hasSelections) {
           if (action === 'create' && !nonzeroUUID(body.draft_ref)) throw fail('Invalid Album Top draft identity.');
-          body.selections = typedSelections(body.selections, action !== 'create');
+          body.selections = typedSelections(body.selections, action !== 'create', scoped && action === 'create');
         }
         if (hasItems) body.item_selections = typedItems(body.item_selections);
       }

@@ -1,3 +1,4 @@
+import {mountArtistListenThroughCreation} from './artist-creation.mjs';
 import {createAlbumTopController} from './model.mjs';
 import {createEditRequestNotifications} from '../home-friends/edit-request-notifications.mjs';
 import {mountAlbumTopsView} from './app.mjs';
@@ -10,7 +11,7 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   const sourceReplay = createAlbumTopSourceReplay({runtime, providers});
   let disposed = false, mutationOwner = null, completedOperation = null, shareRequest = null, notifications = null, refreshedOperation = null,
     navigationError = null, savedForm = null, previousScope = Symbol('initial'), previousInLibrary = null, previousEnabled = null, previousNavigation = null,
-    view = null, viewScope = null, viewNavigation = null, running = false, queued = false, sourceImports = null;
+    view = null, viewScope = null, viewNavigation = null, running = false, queued = false, sourceImports = null, artistCreation = null;
   const make = (parent, tag = 'div') => {const node = parent.ownerDocument.createElement(tag); parent.append(node); return node;};
   const errorHost = make(host), retryHost = make(host), loadingHost = make(host), viewHost = make(host);
   const retry = mountButton(retryHost, runtime, {label: 'Retry opening Album Top', onClick: () => open(navigationError?.topRef)});
@@ -103,8 +104,9 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
     if (isCurrent()) {completedOperation = operation; open(mutation.action === 'delete' ? null : receipt.top_ref, isCurrent, owner.viewRequestId);}
   }
   sourceImports = createSourceImportIndex({runtime, controller, providers, onChange: schedule});
+  artistCreation = mountArtistListenThroughCreation({runtime, providers});
   mountNotifications(); schedule();
   return Object.freeze({refresh() {if (!disposed && runtime.acceptsPrivateScope(controller.getSnapshot().scopeKey)) return controller.load();},
-    dispose() {if (disposed) return; disposed = true; sourceImports.dispose(); sourceReplay.dispose(); unsubscribe(); unsubscribeShell(); unsubscribeNotifications?.(); notifications?.dispose(); view?.dispose(); all?.dispose(); directory?.dispose(); retry.dispose(); loading.dispose();
+    dispose() {if (disposed) return; disposed = true; artistCreation?.dispose(); sourceImports.dispose(); sourceReplay.dispose(); unsubscribe(); unsubscribeShell(); unsubscribeNotifications?.(); notifications?.dispose(); view?.dispose(); all?.dispose(); directory?.dispose(); retry.dispose(); loading.dispose();
       for (const row of sidebarRows.values()) row.element.removeEventListener('click', row.listener); sidebarRows.clear(); sidebar?.remove(); controller.dispose(); providers.dispose?.(); errorHost.remove(); retryHost.remove(); loadingHost.remove(); viewHost.remove();}});
 }

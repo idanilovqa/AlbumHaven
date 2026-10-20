@@ -1,6 +1,6 @@
 import {getAlbumTopPlaybackSession} from './playback-session.mjs';
-const labels = Object.freeze({in_order: 'Play Top in order', random_albums: 'Random albums', random_songs: 'Random songs'});
-const badges = Object.freeze({in_order: '1', random_albums: 'A', random_songs: 'S'});
+const labels = Object.freeze({in_order: 'Play Top in order', random_albums: 'Random albums', random_songs: 'Random songs', popular_songs: 'Most popular songs'});
+const badges = Object.freeze({in_order: '1', random_albums: 'A', random_songs: 'S', popular_songs: 'P'});
 let serial = 0;
 export function mountAlbumTopPlaybackControls(host, statusHost, runtime, initial) {
   let props = initial, disposed = false, request = null, menu = null, engagement = null, elements = null, key = null;
@@ -23,7 +23,6 @@ export function mountAlbumTopPlaybackControls(host, statusHost, runtime, initial
     owner = runtime.openChoice(elements.optionsTrigger, {label: 'Top playback options', selected,
       updateTriggerLabel: false, menuWidth: 'content', density: 'compact',
       formats: [...Object.entries(labels).map(([value, label]) => ({value, label})),
-        {value: 'popular_songs', label: 'Most popular songs', disabled: true, reason: 'Global popularity ordering is not available yet.'},
         {value: 'stop', label: 'Stop after current album', kind: 'checkbox', checked: stopAfterAlbum}],
       onSelect(value) {
         if (!valid()) return false;

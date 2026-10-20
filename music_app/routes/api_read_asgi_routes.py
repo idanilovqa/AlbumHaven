@@ -56,6 +56,7 @@ from music_app.services.scan_state import resolve_active_scan_browse_state
 from music_app.services.view_payloads import (
     build_home_payload,
     build_view_payload,
+    compact_selected_artist_wire_payload,
     project_library_watch_health,
     project_missing_album_actions,
 )
@@ -644,7 +645,7 @@ def view_data(request: Request) -> JSONResponse:
                 }
             )
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -670,7 +671,7 @@ def view_data(request: Request) -> JSONResponse:
             )
         _log_view_data_request_from_asgi(request, payload, request_started_at)
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_root_album_browse_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
             query_params=request.query_params,

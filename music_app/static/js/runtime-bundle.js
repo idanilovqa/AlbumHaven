@@ -1407,6 +1407,17 @@ function buildSelectedArtistChronologicalArtistGroups(primaryGroups = [], family
   }];
 }
 
+function expandCompactSelectedArtistGroups(payload) {
+  if (!payload || payload.artist_groups_from_selected_sections !== true
+      || Array.isArray(payload.artist_groups)) return payload;
+  payload.artist_groups = buildSelectedArtistRuntimeArtistGroups(
+    payload,
+    Array.isArray(payload.primary_artist_groups) ? payload.primary_artist_groups : [],
+    Array.isArray(payload.family_artist_groups) ? payload.family_artist_groups : [],
+  );
+  return payload;
+}
+
 function buildSelectedArtistRuntimeArtistGroups(view, primaryGroups = [], familyGroups = []) {
   if (normalizeRuntimeSelectedArtistFamilyDisplayMode(view?.selected_artist_family_display_mode ?? view?.artist_page?.family_display_mode) === 'chronological') {
     return buildSelectedArtistChronologicalArtistGroups(primaryGroups, familyGroups);
@@ -15868,7 +15879,10 @@ async function readGalleryResponse(response, ownsResponse) {
     if (ownsResponse()) window.location.assign('/login');
     throw new Error('Sign in again to continue.');
   }
-  const data = await response.json();
+  const responsePayload = await response.json();
+  const data = typeof expandCompactSelectedArtistGroups === 'function'
+    ? expandCompactSelectedArtistGroups(responsePayload)
+    : responsePayload;
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
   }

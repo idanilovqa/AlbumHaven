@@ -1018,7 +1018,10 @@ async function readGalleryResponse(response, ownsResponse) {
     if (ownsResponse()) window.location.assign('/login');
     throw new Error('Sign in again to continue.');
   }
-  const data = await response.json();
+  const responsePayload = await response.json();
+  const data = typeof expandCompactSelectedArtistGroups === 'function'
+    ? expandCompactSelectedArtistGroups(responsePayload)
+    : responsePayload;
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
   }

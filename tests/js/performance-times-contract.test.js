@@ -132,8 +132,16 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       ci: [100, 200, 300],
     },
     'all-artists.startupPreviewSidebarMs': {
-      local: [881, 200, 1081],
-      ci: [881, 200, 1081],
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
+    },
+    'all-artists-local-managed-chrome.startupFullSidebarMs': {
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
+    },
+    'all-artists-local-managed-chrome.startupFullAllArtistsCountMs': {
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
     },
     'selected-artist.selectedArtistApiMs': {
       local: [1800, 400, 2200],

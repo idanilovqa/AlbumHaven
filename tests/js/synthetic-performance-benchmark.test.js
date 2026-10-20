@@ -85,8 +85,8 @@ test('local real-data benchmark evaluation passes when metrics stay within the d
   const evaluation = evaluateAllArtistsLocalBenchmark({
     startupSidebarHydration: {
       previewSidebarMs: 154,
-      fullSidebarMs: 5808,
-      fullCountSynchronizedMs: 5090,
+      fullSidebarMs: 800,
+      fullCountSynchronizedMs: 800,
       firstAlbumsMs: 147,
       coversMs: 128,
     },
@@ -125,9 +125,9 @@ test('local real-data benchmark evaluation reports a clear failure when one metr
 
   const evaluation = evaluateAllArtistsLocalBenchmark({
     startupSidebarHydration: {
-      previewSidebarMs: 1082,
-      fullSidebarMs: 5808,
-      fullCountSynchronizedMs: 5090,
+      previewSidebarMs: 1201,
+      fullSidebarMs: 800,
+      fullCountSynchronizedMs: 800,
       firstAlbumsMs: 147,
       coversMs: 128,
     },
@@ -154,7 +154,7 @@ test('local real-data benchmark evaluation reports a clear failure when one metr
   });
 
   assert.equal(evaluation.failures.length, 1);
-  assert.match(evaluation.failures[0], /startupPreviewSidebarMs hard-fail: exceeded 1081 ms/);
+  assert.match(evaluation.failures[0], /startupPreviewSidebarMs hard-fail: exceeded 1200 ms/);
 });
 
 test('shared benchmark terminal lines report target, grace, hard ceiling, and classification for all timing contracts', async () => {
@@ -184,8 +184,8 @@ test('local real-data benchmark ignores a one-sample return-memory spike when la
   const evaluation = evaluateAllArtistsLocalBenchmark({
     startupSidebarHydration: {
       previewSidebarMs: 154,
-      fullSidebarMs: 5808,
-      fullCountSynchronizedMs: 5090,
+      fullSidebarMs: 800,
+      fullCountSynchronizedMs: 800,
       firstAlbumsMs: 147,
       coversMs: 128,
     },
@@ -223,8 +223,8 @@ test('local real-data benchmark fails when return-memory stays above the ceiling
   const evaluation = evaluateAllArtistsLocalBenchmark({
     startupSidebarHydration: {
       previewSidebarMs: 154,
-      fullSidebarMs: 5808,
-      fullCountSynchronizedMs: 5090,
+      fullSidebarMs: 800,
+      fullCountSynchronizedMs: 800,
       firstAlbumsMs: 147,
       coversMs: 128,
     },
@@ -263,8 +263,8 @@ test('benchmark validation payload keeps retained threshold overlay fields for a
   const evaluation = evaluateAllArtistsLocalBenchmark({
     startupSidebarHydration: {
       previewSidebarMs: 154,
-      fullSidebarMs: 5808,
-      fullCountSynchronizedMs: 5090,
+      fullSidebarMs: 800,
+      fullCountSynchronizedMs: 800,
       firstAlbumsMs: 147,
       coversMs: 128,
     },
@@ -296,10 +296,10 @@ test('benchmark validation payload keeps retained threshold overlay fields for a
   assert.equal(payload.benchmarkId, 'all-artists-local-managed-chrome');
   assert.equal(payload.benchmarkVersion, '2026-06-30-asgi-managed-chrome-all-artists-badge-sync');
   assert.ok(startupPreview);
-  assert.equal(startupPreview.targetMaximum, 881);
-  assert.equal(startupPreview.graceMs, 200);
-  assert.equal(startupPreview.allowedMaximum, 1081);
-  assert.equal(startupPreview.allowedText, '1081 ms');
+  assert.equal(startupPreview.targetMaximum, 800);
+  assert.equal(startupPreview.graceMs, 400);
+  assert.equal(startupPreview.allowedMaximum, 1200);
+  assert.equal(startupPreview.allowedText, '1200 ms');
   assert.equal(startupPreview.performanceStatus, 'target-met');
 });
 

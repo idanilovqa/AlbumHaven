@@ -45225,7 +45225,7 @@ window.addEventListener('popstate', () => {
 
 // BEGIN js/runtime/bootstrap-init.js
 
-const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 5000;
+const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 0;
 
 restorePlayerAppearance();
 attachModalEvents();

@@ -108,6 +108,14 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
         startup.fullVisibleAllArtistsCount,
         'Expected the All artists badge to match the fully hydrated sidebar count on startup.',
       ).toBe(startup.fullSidebarCount);
+      expect(
+        startup.fullSidebarCount,
+        'Expected Artist Tree hydration to continue beyond the initial 50-artist boundary.',
+      ).toBeGreaterThan(startup.continuationBoundaryIndex);
+      expect(
+        startup.firstContinuationArtist,
+        'Expected a reachable Artist Tree artist immediately beyond the initial 50-artist boundary.',
+      ).not.toBe('');
       await allArtistsLocalReport.recordTimingCheckpoint({
         key: 'startup-first-albums',
         label: 'Initial All Artists first albums ready',

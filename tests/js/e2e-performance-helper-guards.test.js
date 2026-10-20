@@ -622,6 +622,25 @@ test('focused search browse resolves its timing budget from the central authorit
   assert.doesNotMatch(spec, /benchmarkValidation\s*:/);
 });
 
+test('focused search browse measures first-use and repeated artist readiness from each submission', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js');
+
+  assert.match(spec, /coldSearchAutoSelectionPromise = navigationPanelActions[\s\S]*?\.then\(\(\) => Date\.now\(\) - searchSubmittedAt\)/);
+  assert.match(spec, /coldSearchGalleryReadyPromise = Promise\.all\([\s\S]*?\.then\(\(\) => Date\.now\(\) - searchSubmittedAt\)/);
+  assert.match(spec, /warmSearchAutoSelectionPromise = navigationPanelActions[\s\S]*?\.then\(\(\) => Date\.now\(\) - warmSearchSubmittedAt\)/);
+  assert.match(spec, /warmSearchGalleryReadyPromise = Promise\.all\([\s\S]*?\.then\(\(\) => Date\.now\(\) - warmSearchSubmittedAt\)/);
+  assert.match(spec, /coldSearchAutoSelectionMs = await coldSearchAutoSelectionPromise/);
+  assert.match(spec, /coldSearchGalleryReadyMs = await coldSearchGalleryReadyPromise/);
+  assert.match(spec, /coldSearchCoversMs = Date\.now\(\) - searchSubmittedAt/);
+  assert.match(spec, /let warmSearchSubmittedAt = 0/);
+  assert.match(spec, /warmSearchAutoSelectionMs = await warmSearchAutoSelectionPromise/);
+  assert.match(spec, /warmSearchGalleryReadyMs = await warmSearchGalleryReadyPromise/);
+  assert.match(spec, /warmSearchCoversMs = Date\.now\(\) - warmSearchSubmittedAt/);
+  assert.match(spec, /key: 'cold-search-visible-covers'/);
+  assert.match(spec, /key: 'warm-search-visible-covers'/);
+  assert.match(spec, /clearSearch[\s\S]*clickAllArtists[\s\S]*waitForPostgresBrowseWarmRoot/);
+});
+
 test('direct Artist Tree timing anchors highlight and gallery readiness to the click and measures covers separately', () => {
   const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js');
   const measurementStart = spec.indexOf('const selectedArtistStartedAt = performance.now();');
@@ -1573,14 +1592,14 @@ test('new gallery and cold saved-loop playback cases own their exact sample evid
 test('populated search timer includes selected album identity and visible cover readiness', () => {
   const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js');
   const start = spec.indexOf('const searchPopulatedReadyMs = await stepLogger.step(');
-  const end = spec.indexOf('const searchPayload = await readRuntimeView(page);', start);
+  const end = spec.indexOf("await stepLogger.step('Clear the first-use search", start);
   assert.ok(start >= 0 && end > start);
   const timedReadiness = spec.slice(start, end);
-  const terminal = timedReadiness.indexOf('return Date.now() - searchSubmittedAt;');
+  const terminal = timedReadiness.indexOf('return coldSearchCoversMs;');
   assert.doesNotMatch(timedReadiness, /waitForAlbumVisibleUnderHeading|scrollTo/);
   for (const requiredWait of [
-    'await navigationPanelActions.waitForSidebarSelection(',
-    'await galleryActions.waitForSelectedArtistGallery(',
+    'coldSearchAutoSelectionMs = await coldSearchAutoSelectionPromise',
+    'coldSearchGalleryReadyMs = await coldSearchGalleryReadyPromise',
     'await expect(expectedCover).toBeInViewport(',
     '.readCoverImageReadinessByArtistAndAlbum(searchQuery, expectedAlbums[0])',
     'await galleryActions.waitForVisibleGalleryCoversLoaded(',

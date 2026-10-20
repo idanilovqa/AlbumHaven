@@ -42343,7 +42343,7 @@ function applyImmediateExactSearchArtistSelection(query) {
   const artist = String(sourceMatches[0]?.artist || '').trim();
   if (!artist) return false;
   if (mountedMatches.length === 1) {
-    return applyImmediateSidebarArtistSelection(mountedMatches[0], artist);
+    if (applyImmediateSidebarArtistSelection(mountedMatches[0], artist)) return true;
   }
   state.ui.pendingSidebarSelectedArtist = artist;
   state.ui.pendingSidebarAllArtistsActive = false;

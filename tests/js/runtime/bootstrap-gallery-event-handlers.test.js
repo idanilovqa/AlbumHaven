@@ -2664,6 +2664,33 @@ test('exact artist search immediately highlights the unique rendered sidebar art
   assert.equal(calls.fetchAndRender.length, 1);
 });
 
+test('exact artist search rerenders a mounted match after sidebar hydration replaces its source', () => {
+  const unresolvedRequest = new Promise(() => {});
+  const sidebarArtists = [
+    { artist: 'A.C.T', count: 1 },
+    { artist: 'Neal Morse', count: 13 },
+  ];
+  const { context, calls } = createContext({
+    searchInputValue: 'neal morse',
+    fetchAndRenderResult: unresolvedRequest,
+  });
+  const selection = createImmediateSidebarArtistEvent(sidebarArtists, 'Neal Morse');
+  context.state.gallery.sidebarArtistsOverride = sidebarArtists.map(entry => ({ ...entry }));
+  context.document.querySelectorAll = selector => (
+    selector === '#sidebar-list [data-sidebar-artist]'
+      ? [selection.selectedLink]
+      : []
+  );
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(context.state.ui.pendingSidebarSelectedArtist, 'Neal Morse');
+  assert.equal(context.state.ui.pendingSidebarAllArtistsActive, false);
+  assert.equal(context.state.ui.pendingSidebarRevealArtist, 'Neal Morse');
+  assert.equal(calls.renderSidebar, 1);
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
 test('exact search for the mounted selected artist retains its complete gallery and scroll', () => {
   const unresolvedRequest = new Promise(() => {});
   const albums = Array.from({ length: 141 }, (_, index) => ({ key: `ddt-${index}` }));

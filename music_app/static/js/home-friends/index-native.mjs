@@ -375,6 +375,29 @@ function canOpenArtistLoved({descriptor, launchContext} = {}) {
   } catch {return false;}
 }
 window.AlbumHavenPlaylistUI = Object.freeze({
+  openSamplePlaylist({originOwner, options, originNavigation} = {}) {
+    if (!originNavigation || typeof originNavigation.presentation?.suspend !== 'function'
+      || originNavigation.parentRegistration !== null && typeof originNavigation.parentRegistration?.registerPlaylistChild !== 'function') return false;
+    if (!originOwner || typeof originOwner.isCurrent !== 'function' || typeof originOwner.back !== 'function' || !originOwner.origin) return false;
+    const native = window.AlbumHavenPlaylistRuntime, generation = playlistProviderGeneration;
+    let sourceCurrent; try {sourceCurrent = originOwner.isCurrent() === true;} catch {return false;}
+    const start = native?.snapshot(); if (!sourceCurrent || !start?.authenticated) return false;
+    const scopeKey = start.scopeKey;
+    mountPlaylistSurface();
+    const owner = playlistMountOwner, mounted = playlistMount; let retired = false;
+    const current = () => {
+      if (retired) return false;
+      try {if (originOwner.isCurrent() !== true || window.AlbumHavenPlaylistRuntime !== native
+        || playlistProviderGeneration !== generation || native.isCurrentPrivateScope?.(scopeKey) !== true
+        || playlistMount !== mounted || !playlistRuntimeCurrent(owner)) retired = true;}
+      catch {retired = true;}
+      return !retired;
+    };
+    if (!current()) return false;
+    const wrapper = Object.freeze({scopeKey, origin: originOwner.origin, isCurrent: current,
+      back(returnToParent) {return current() ? originOwner.back(returnToParent) : false;}});
+    return mounted?.openSamplePlaylist({originOwner: wrapper, options, originNavigation}) ?? false;
+  },
   activityMissingEligibility, inspectActivityMissing,
   normalizeArtistLovedLaunch, normalizeSavedArtistLovedRecipe,
   artistLovedProviderGeneration: () => playlistProviderGeneration,

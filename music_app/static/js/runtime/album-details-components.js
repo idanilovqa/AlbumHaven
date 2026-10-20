@@ -52,6 +52,9 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
     folderAttributes['data-open-track-modal-folder'] = '1';
   }
   return [
+    ButtonComponent.renderActionButton({ariaLabel:'Create sample playlist', title:'Create sample playlist', disabled:missing || config.sampleDisabled !== false,
+      className:'album-details-header__action', iconClass:'album-details-header__action-icon',
+      attributes:{'data-create-sample-playlist':'1'}}),
     ButtonComponent.renderActionButton({
       ariaLabel: editLabel,
       title: editLabel,
@@ -77,8 +80,11 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   ].join('');
 }
 
-function buildLooseTracksHeaderActionsHtml() {
+function buildLooseTracksHeaderActionsHtml(config = {}) {
   return [
+    ButtonComponent.renderActionButton({ariaLabel:'Create sample playlist', title:'Create sample playlist', disabled:config.sampleDisabled !== false,
+      className:'album-details-header__action', iconClass:'album-details-header__action-icon',
+      attributes:{'data-create-non-album-sample-playlist':'1'}}),
     ButtonComponent.renderActionButton({
       ariaLabel: 'Edit tags',
       title: 'Edit tags',

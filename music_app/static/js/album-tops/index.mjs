@@ -5,10 +5,15 @@ import {mountAlbumTopsView} from './app.mjs';
 import {createAlbumTopSourceReplay} from './source-replay.mjs';
 import {createSourceImportIndex} from './source-import-index.mjs';
 import {mountButton, mountStatus} from '../home-friends/native-controls.mjs';
+import {createAlbumTopImageCoordinator} from './image-export-coordinator.mjs';
 export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   if (!host || !runtime?.snapshot || !runtime.subscribe) throw new TypeError('A native Album Tops host and runtime are required.');
   const controller = createAlbumTopController({providers});
   const sourceReplay = createAlbumTopSourceReplay({runtime, providers});
+  // The runtime retains this owner across view and Share remounts, including
+  // uninterruptible closing work. A view never disposes the singleton.
+  let imageExportCoordinator = null;
+  try {imageExportCoordinator = runtime.imageExport?.coordinator(() => createAlbumTopImageCoordinator({runtime, bridge: runtime.imageExport})) || null;} catch { /* Explicitly unavailable image entry. */ }
   let disposed = false, mutationOwner = null, completedOperation = null, shareRequest = null, notifications = null, refreshedOperation = null,
     navigationError = null, savedForm = null, previousScope = Symbol('initial'), previousInLibrary = null, previousEnabled = null, previousNavigation = null,
     view = null, viewScope = null, viewNavigation = null, running = false, queued = false, sourceImports = null, artistCreation = null;
@@ -85,8 +90,8 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
     errorHost.hidden = retryHost.hidden = !(visible && navigationError);
     if (!errorHost.hidden) errorHost.innerHTML = runtime.alertHtml({severity: 'error', role: 'alert', message: 'This Album Top could not be opened. Try again.'});
     loadingHost.hidden = !visible || showView || Boolean(navigationError);
-    if (!showView || viewScope !== shell.scopeKey || viewNavigation !== shell.viewVersion) {view?.dispose(); view = null; viewScope = null; viewNavigation = null;}
-    if (showView) {const options = {runtime, controller, state, providers, sourceReplay, onOpen: open, onFormSaved: formSaved, shareRequest,
+    if ((!showView && !shell.sampleSuspended) || viewScope !== shell.scopeKey || viewNavigation !== shell.viewVersion) {view?.dispose(); view = null; viewScope = null; viewNavigation = null;}
+    if (showView) {const options = {runtime, controller, state, providers, sourceReplay, imageExportCoordinator, onOpen: open, onFormSaved: formSaved, shareRequest,
       canImport: sourceImports?.canStart() === true, onImport: returnFocus => sourceImports?.start(returnFocus),
       onShareRequestHandled: request => {if (shareRequest === request) shareRequest = null;}};
       if (view) view.update(options); else {viewScope = shell.scopeKey; viewNavigation = shell.viewVersion; view = mountAlbumTopsView(viewHost, runtime, options);}}

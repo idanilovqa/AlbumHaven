@@ -845,8 +845,8 @@ export function mountPlaylistsView(host,runtime,initial) {
           count.textContent=`${rows.length} displayed tracks`;
           sample.update({
             label:'Sample Playlist',
-            disabled:busy||!controller.available('createSamplePlaylist'),
-            onClick:()=>controller.mutate('createSamplePlaylist')
+            disabled:busy||!detail.items_complete||!detail.track_rows?.length||!granted(detail,'can_create_sample')||typeof props.onCreateSample!=='function',
+            onClick:()=>props.onCreateSample?.(detail)
           });
           if(!live())return;
           missing.update({

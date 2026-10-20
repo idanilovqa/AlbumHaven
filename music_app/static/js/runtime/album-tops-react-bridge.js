@@ -7,6 +7,7 @@ const AlbumTopsRuntime = (() => {
   let artistRuntime = null, releaseArtistRuntime = null;
   let artistHistoryDepth = 0, artistHistoryQueued = false;
   let snapshotDepth = 0, notificationQueued = false;
+  let sampleSuspension = null;
   let current = null, lastView = null, viewVersion = 0, confirmation = null, draftNavigation = null;
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
   const aborted = () => Object.assign(new Error('Album Top navigation was superseded.'), {name: 'AbortError'});
@@ -18,10 +19,19 @@ const AlbumTopsRuntime = (() => {
     const authenticated = Boolean(context && shell?.dataset?.nativeAccountId && shell?.dataset?.nativeLibraryId);
     return {shell, scopeKey, authenticated};
   }
+  function isCurrentSampleScope(scopeKey) {
+    if (!current || scopeKey !== current.scopeKey || state.view !== lastView) return false;
+    const host = document.getElementById('album-tops-root'), shell = document.getElementById('app-shell');
+    if (!host?.isConnected || !shell || shell.hidden || !shell.dataset?.nativeAccountId || !shell.dataset?.nativeLibraryId) return false;
+    const transportGeneration = PrivateUITransport.peekGeneration();
+    return transportGeneration !== null && JSON.stringify([shell.dataset.nativeAccountId || '', shell.dataset.nativeLibraryId || '',
+      shell.dataset.privateUiContext || '', transportGeneration]) === scopeKey;
+  }
   const draftCurrent = owner => {
     const identity = privateIdentity();
     try {return Boolean(owner && draftNavigation === owner && identity.authenticated && identity.scopeKey === owner.scopeKey
-      && identity.shell?.hidden !== true && state.view === owner.sourceView && owner.isCurrent() === true);} catch {return false;}
+      && identity.shell?.hidden !== true && document.getElementById('album-tops-root')?.isConnected
+      && state.view === owner.sourceView && owner.isCurrent() === true);} catch {return false;}
   };
   function releaseDraftNavigation(owner, discard = false, deferNotification = false) {
     if (!owner || draftNavigation !== owner) return;
@@ -64,8 +74,71 @@ const AlbumTopsRuntime = (() => {
     if (!owner.unregister) {draftNavigation = null; return false;}
     return () => {owner.pendingDiscard = false; releaseDraftNavigation(owner);};
   }
+  function samplePresentationCurrent(owner) {
+    const identity = privateIdentity();
+    return Boolean(owner && owner.host.isConnected && document.getElementById('album-tops-root') === owner.host
+      && identity.authenticated && identity.scopeKey === owner.scopeKey && !identity.shell?.hidden
+      && state.view === owner.view && (!owner.formOwner || activeAppFormDialog === owner.formOwner && owner.formOwner.isCurrentContext()));
+  }
+  function captureSampleNavigation(formOwner = null, formSurface = null, formHandle = null) {
+    const host = document.getElementById('album-tops-root'), identity = privateIdentity();
+    if (!host?.isConnected || host.hidden || sampleSuspension || !identity.authenticated || identity.shell?.hidden
+      || !current || current.scopeKey !== identity.scopeKey || !current.visible
+      || formOwner && (activeAppFormDialog !== formOwner || !formOwner.isCurrentContext() || !formSurface?.isConnected || formSurface.hidden)) return null;
+    const owner = {host, scopeKey: identity.scopeKey, view: state.view, formOwner, phase: 'active'};
+    const parentRegistration = formOwner ? null : draftNavigation?.unregister || null;
+    let used = false;
+    return Object.freeze({parentRegistration, presentation: Object.freeze({suspend() {
+      if (used || sampleSuspension || !samplePresentationCurrent(owner) || host.hidden) return null;
+      const nativePresentation = formOwner ? formHandle?.suspendPresentation?.() : null;
+      if (formOwner && (!nativePresentation || typeof nativePresentation.restore !== 'function' || typeof nativePresentation.retire !== 'function')) return null;
+      used = true;
+      const focus = document.activeElement, nodes = [host];
+      const values = nodes.map(node => ({node, hidden:node.hidden, inert:node.inert, aria:node.getAttribute('aria-hidden')}));
+      const block = event => {event.preventDefault();event.stopImmediatePropagation();};
+      let settled = false;
+      const finish = restore => {
+        if (settled) return false; settled = true;
+        const ownsPresentation = sampleSuspension === owner;
+        let valid = ownsPresentation && samplePresentationCurrent(owner);
+        if (restore && valid && nativePresentation) valid = nativePresentation.restore() === true;
+        if (sampleSuspension === owner) {
+          if (restore && valid) sampleSuspension = null;
+          else owner.phase = 'retiring';
+        }
+        for (const {node,hidden,inert,aria} of values) {
+          for (const type of ['click','keydown','submit','pointerdown']) node.removeEventListener(type,block,true);
+          if (restore && valid) {node.hidden=hidden;node.inert=inert;aria===null?node.removeAttribute('aria-hidden'):node.setAttribute('aria-hidden',aria);}
+          else if (ownsPresentation) {
+            // Relinquish our flags without revealing the obsolete source.
+            if(node.inert===true)node.inert=inert;
+            if(node.getAttribute('aria-hidden')==='true')aria===null?node.removeAttribute('aria-hidden'):node.setAttribute('aria-hidden',aria);
+          }
+        }
+        if (restore && valid) {
+          sync(); if(focus?.isConnected)focus.focus?.({preventScroll:true}); return true;
+        }
+        try {
+          if(nativePresentation){nativePresentation.retire();formHandle.close(null,{force:true,restoreFocus:false,returnToParent:false});}
+          return false;
+        } finally {
+          if (sampleSuspension === owner) owner.phase = 'retired';
+        }
+      };
+      owner.retire = () => finish(false); sampleSuspension = owner;
+      for(const {node} of values){node.hidden=true;node.inert=true;node.setAttribute('aria-hidden','true');for(const type of ['click','keydown','submit','pointerdown'])node.addEventListener(type,block,true);}
+      sync(); return Object.freeze({restore:()=>finish(true),retire:()=>finish(false)});
+    }})});
+  }
+  function captureSampleOriginNavigation() {return captureSampleNavigation();}
   function sync() {
     const {shell, scopeKey, authenticated} = privateIdentity(), host = document.getElementById('album-tops-root');
+    if (sampleSuspension?.phase === 'active' && !samplePresentationCurrent(sampleSuspension)) sampleSuspension.retire();
+    // A spent source suppresses only its original presentation, including
+    // reentrant native cleanup before the accepted destination is installed.
+    if (sampleSuspension && sampleSuspension.phase !== 'active'
+      && (sampleSuspension.host !== host || sampleSuspension.view !== state.view)) sampleSuspension = null;
+    const sampleSuspended = Boolean(sampleSuspension);
     // A snapshot may run during a React render. Retire authority immediately,
     // but notify its consumer after that render; cleanup cancels stale notices.
     if (draftNavigation && !draftCurrent(draftNavigation)) releaseDraftNavigation(draftNavigation, true, true);
@@ -77,7 +150,7 @@ const AlbumTopsRuntime = (() => {
     const active = inLibrary && String(state.view?.surface?.active || state.view?.surface_request || '') === 'album_tops';
     if (lastView !== state.view) {lastView = state.view; viewVersion++;}
     const galleryPreferences = getSavedGalleryDisplayPreferences();
-    const next = {scopeKey, authenticated, inLibrary, active, visible: Boolean(host && active && !state.ui?.pendingViewTransition),
+    const next = {scopeKey, authenticated, inLibrary, active, sampleSuspended, visible: Boolean(host && active && !state.ui?.pendingViewTransition && !sampleSuspended),
       galleryDisplayMode: galleryPreferences.defaultGalleryDisplayMode,
       galleryScalePercent: galleryPreferences.defaultGalleryScalePercent,
       mobileGalleryColumns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) ?? 3,
@@ -459,6 +532,293 @@ const AlbumTopsRuntime = (() => {
     artistListeners.add(listener); return () => artistListeners.delete(listener);
   }});
 
+  // One image owner survives Share/view remounts. No replacement factory can
+  // bypass a closing renderer, preparation or preview-decoder barrier.
+  let imageCoordinator = null, imageCoordinatorAttempted = false, imageRuntimeClosed = false, imageRuntimeClosing = null;
+  const imageAccessOwners = new Set();
+  const imageColorOwners = new WeakMap();
+  const imageError = code => Object.assign(new Error('Album Top image export is unavailable.'), {code});
+  const imageOpaque = (value, maximum = 4096) => typeof value === 'string' && value.length > 0 && value.length <= maximum
+    && !/[\u0000-\u001f\u007f-\u009f\ud800-\udfff]/u.test(value);
+  const imageFreeze = value => {
+    if (value && typeof value === 'object') {for (const child of Object.values(value)) imageFreeze(child); Object.freeze(value);}
+    return value;
+  };
+  function createImageAccess(args) {
+    const {controller, providers, attribution, onRetired} = args || {};
+    if (imageRuntimeClosed || !controller || typeof controller.getSnapshot !== 'function' || typeof controller.subscribe !== 'function'
+      || !providers || typeof providers.resolveNativeAlbum !== 'function' || typeof attribution !== 'string' || !attribution.trim()
+      || typeof onRetired !== 'function') throw imageError('unavailable');
+    let disposed = false, checking = false;
+    const captures = new WeakMap(), liveCaptures = new Set(), ratingResults = new WeakMap(), liveResults = new Set();
+    const releases = [];
+    function releaseResult(result) {
+      const receipt = ratingResults.get(result);
+      if (!receipt || receipt.released) return;
+      receipt.released = true; receipt.callback = null; liveResults.delete(receipt);
+      for (const lease of receipt.leases) {try {lease.release();} catch { /* All remaining leases still release. */ }}
+      receipt.leases.length = 0; receipt.values.length = 0;
+    }
+    function retire(owner, reason = 'source_retired') {
+      if (!owner || owner.retired) return;
+      owner.retired = true; liveCaptures.delete(owner);
+      const callbacks = [];
+      for (const receipt of [...liveResults]) if (receipt.owner === owner) {
+        if (receipt.callback) callbacks.push(receipt.callback);
+        releaseResult(receipt.result);
+      }
+      for (const task of owner.tasks) {
+        task.abort.abort();
+        for (const lease of task.leases) {try {lease.release();} catch { /* Continue cleanup. */ }}
+        task.leases.length = 0;
+      }
+      owner.detail = null; owner.items = null; owner.members = null; owner.scope = null;
+      try {onRetired(owner.capture, reason);} catch { /* Retirement cannot be undone by presentation. */ }
+      for (const callback of callbacks) {try {callback();} catch { /* Notify every retired watcher. */ }}
+    }
+    function currentCapture(capture) {
+      const owner = captures.get(capture);
+      if (!owner || owner.retired || disposed || imageRuntimeClosed) return false;
+      let valid = false;
+      try {
+        const value = controller.getSnapshot(), shell = snapshot(), detail = owner.detail;
+        valid = runtimeAlbumPreferenceScopeIsCurrent(owner.scope)
+          && value.scopeKey === owner.binding.scopeKey && value.detail?.status === 'ready' && value.detail.refreshing !== true
+          && value.detail.data === detail && value.directory?.status !== 'denied' && value.selectedTopRef === owner.binding.topRef
+          && detail.top_ref === owner.binding.topRef && String(detail.revision) === owner.binding.revision
+          && detail.title === owner.title && detail.description === owner.description
+          && detail.allowed_actions?.can_read === true && (detail.next_cursor === undefined || detail.next_cursor === null)
+          && value.mutation?.refreshing !== true && !['loading', 'uncertain'].includes(value.mutation?.status)
+          && shell.visible === true && shell.authenticated === true && shell.scopeKey === owner.binding.scopeKey
+          && shell.topRef === owner.binding.topRef && shell.viewVersion === owner.viewVersion && shell.viewRequestId === owner.viewRequestId
+          && detail.items === owner.items && detail.items.length === owner.members.length
+          && owner.members.every((member, index) => {
+            const row = detail.items[index], native = row?.native_album;
+            return row === member.row && row.item_ref === member.itemRef && row.album_ref === member.albumRef
+              && row.title === member.title && row.artist === member.artist && row.year === member.year
+              && row.source_kind === member.sourceKind && native === member.native
+              && (native == null || native.inventory_album_ref === member.inventoryRef && native.artwork_url === member.url
+                && native.allowed_actions?.can_view_details === true);
+          });
+        // scope/currentness readers can synchronously notify and retire this owner.
+        valid = valid && !owner.retired && !disposed;
+      } catch {valid = false;}
+      if (!valid) retire(owner);
+      return valid;
+    }
+    function checkCaptures() {
+      if (checking || disposed) return;
+      checking = true;
+      try {for (const owner of [...liveCaptures]) currentCapture(owner.capture);}
+      finally {checking = false;}
+    }
+    function capture({sourceKey} = {}) {
+      if (disposed || imageRuntimeClosed || !imageOpaque(sourceKey)) return null;
+      try {
+        const value = controller.getSnapshot(), shell = snapshot(), detail = value.detail?.data;
+        const scope = captureRuntimeAlbumPreferenceScope();
+        if (!scope || !runtimeAlbumPreferenceScopeIsCurrent(scope) || !detail || value.detail.status !== 'ready'
+          || value.detail.refreshing === true || value.directory?.status === 'denied' || detail.allowed_actions?.can_read !== true
+          || value.mutation?.refreshing === true || ['loading', 'uncertain'].includes(value.mutation?.status)
+          || !shell.visible || !shell.authenticated || shell.scopeKey !== value.scopeKey || shell.topRef !== detail.top_ref
+          || value.selectedTopRef !== detail.top_ref || !imageOpaque(detail.top_ref) || !imageOpaque(String(detail.revision))
+          || !Array.isArray(detail.items) || detail.items.length > 5000 || detail.next_cursor != null
+          || typeof detail.title !== 'string' || typeof detail.description !== 'string') return null;
+        const members = [], items = [], memberRefs = new Set(), albumRefs = new Set();
+        for (let index = 0; index < detail.items.length; index++) {
+          if (!Object.hasOwn(detail.items, index)) return null;
+          const row = detail.items[index];
+          if (!row || !imageOpaque(row.item_ref, 256) || !imageOpaque(row.album_ref, 256)
+            || memberRefs.has(row.item_ref) || albumRefs.has(row.album_ref) || typeof row.title !== 'string' || typeof row.artist !== 'string'
+            || !(row.year === null || Number.isInteger(row.year) && row.year >= 1 && row.year <= 9999)) return null;
+          memberRefs.add(row.item_ref); albumRefs.add(row.album_ref);
+          const native = row.native_album;
+          if (native != null) {
+            const ref = native.inventory_album_ref, match = typeof ref === 'string' && /^inventory-album:([1-9]\d{0,18}):([1-9]\d{0,18})$/.exec(ref);
+            if (!match || !albumTopImageInventoryReference(ref) || match[1] !== scope.library || row.source_kind === 'remote_summary'
+              || native.allowed_actions?.can_view_details !== true
+              || native.artwork_url !== null && native.artwork_url !== '/library/album-artwork/' + ref) return null;
+          }
+          members.push({row, itemRef: row.item_ref, albumRef: row.album_ref, title: row.title, artist: row.artist, year: row.year,
+            sourceKind: row.source_kind, native, inventoryRef: native?.inventory_album_ref ?? null, url: native?.artwork_url ?? null});
+          items.push({item_ref: row.item_ref, album_ref: row.album_ref, title: row.title, artist: row.artist, year: row.year});
+        }
+        const binding = {scopeKey: value.scopeKey, topRef: detail.top_ref, revision: String(detail.revision), sourceKey};
+        const token = imageFreeze({source: {binding, complete: true, total: items.length, title: detail.title,
+          description: detail.description, attribution, items}});
+        const owner = {capture: token, binding: token.source.binding, detail, title: detail.title, description: detail.description,
+          items: detail.items, members, scope,
+          viewVersion: shell.viewVersion, viewRequestId: shell.viewRequestId, retired: false, tasks: new Set()};
+        captures.set(token, owner); liveCaptures.add(owner);
+        return currentCapture(token) ? token : null;
+      } catch {return null;}
+    }
+    async function readOwnRatings(token, {signal} = {}) {
+      const owner = captures.get(token);
+      if (!owner || !currentCapture(token)) throw imageError('source_retired');
+      const task = {abort: new AbortController(), leases: [], values: []}; owner.tasks.add(task);
+      const abort = () => task.abort.abort(); signal?.addEventListener('abort', abort, {once: true}); if (signal?.aborted) abort();
+      const live = () => !task.abort.signal.aborted && currentCapture(token);
+      const check = () => {if (!live()) throw imageError('source_retired');};
+      let result = null;
+      try {
+        const members = owner.members;
+        for (const member of members) {
+          check();
+          if (!member.inventoryRef || member.sourceKind === 'remote_summary') throw imageError('own_ratings_unavailable');
+          const source = Object.freeze({top_ref: owner.binding.topRef, revision: owner.binding.revision,
+            item_ref: member.itemRef, album_ref: member.albumRef, inventory_album_ref: member.inventoryRef});
+          const resolved = await providers.resolveNativeAlbum(source, {scopeKey: owner.binding.scopeKey, signal: task.abort.signal, isCurrent: live});
+          check();
+          if (!resolved || Object.keys(source).some(key => resolved[key] !== source[key])
+            || typeof resolved.native_target?.album_ref !== 'string' || !resolved.native_target.album_ref
+            || resolved.native_target.allowed_actions?.can_view_details !== true || resolved.native_target.allowed_actions?.can_play_album !== false) {
+            throw imageError('own_ratings_unavailable');
+          }
+          let admitted = null;
+          const album = await fetchTrackModalAlbumDetails(resolved.native_target.album_ref, {
+            signal: task.abort.signal, isCurrent: live,
+            ownPreferenceObservation: {inventoryAlbumRef: member.inventoryRef,
+              onAdmitted(lease) {
+                admitted = lease; task.leases.push(lease);
+                if (!live()) {lease.release(); throw imageError('source_retired');}
+              },
+              onChange() {retire(owner, 'own_ratings_unavailable');},
+            },
+          });
+          check();
+          const observed = admitted?.read(), preference = runtimeAlbumPreferenceForAlbum(album, owner.scope);
+          if (!observed || !preference || album?.read_only_subject || album?.source_readable === false || album?.allowed_actions?.can_read === false
+            || String(album.key || album.album_ref || '') !== resolved.native_target.album_ref
+            || preference.taste_state !== 'available' || preference.album_ref !== member.inventoryRef
+            || observed.albumRef !== member.inventoryRef || observed.rating !== preference.rating
+            || observed.preferenceRevision !== preference.preference_revision || observed.tasteState !== 'available') {
+            throw imageError('own_ratings_unavailable');
+          }
+          task.values.push(Object.freeze({itemRef: member.itemRef, albumRef: member.albumRef, inventoryRef: member.inventoryRef,
+            rating: observed.rating, revision: observed.preferenceRevision, tasteState: observed.tasteState}));
+        }
+        check();
+        if (task.leases.length !== task.values.length || task.leases.some((lease, index) => {
+          const value = lease.read(), baseline = task.values[index];
+          return !value || value.albumRef !== baseline.inventoryRef || value.rating !== baseline.rating || value.preferenceRevision !== baseline.revision;
+        })) throw imageError('own_ratings_unavailable');
+        result = imageFreeze({binding: {...owner.binding}, items: task.values.map(value => ({item_ref: value.itemRef, rating: value.rating}))});
+        const receipt = {owner, result, leases: task.leases.splice(0), values: task.values.splice(0), callback: null, released: false};
+        ratingResults.set(result, receipt); liveResults.add(receipt);
+        check(); return result;
+      } catch (error) {
+        if (result) releaseResult(result);
+        if (error?.code === 'source_retired' || !currentCapture(token)) throw imageError('source_retired');
+        throw imageError('own_ratings_unavailable');
+      } finally {
+        signal?.removeEventListener('abort', abort); owner.tasks.delete(task);
+        for (const lease of task.leases) {try {lease.release();} catch { /* All remaining observations release. */ }}
+        task.leases.length = 0; task.values.length = 0;
+      }
+    }
+    function receiptCurrent(receipt) {
+      if (!receipt || receipt.released || !currentCapture(receipt.owner.capture)) return false;
+      for (let index = 0; index < receipt.leases.length; index++) {
+        const value = receipt.leases[index].read(), baseline = receipt.values[index];
+        if (!value || value.albumRef !== baseline.inventoryRef || value.rating !== baseline.rating || value.preferenceRevision !== baseline.revision) {
+          retire(receipt.owner, 'own_ratings_unavailable'); return false;
+        }
+      }
+      return !receipt.released;
+    }
+    function watchOwnRatings(token, result, onChange) {
+      const receipt = ratingResults.get(result);
+      if (typeof onChange !== 'function' || !receipt || receipt.owner.capture !== token || receipt.callback || !receiptCurrent(receipt)) {
+        throw imageError('own_ratings_unavailable');
+      }
+      receipt.callback = onChange;
+      return () => releaseResult(result);
+    }
+    function sameOwnRatings(previous, next) {
+      const a = ratingResults.get(previous), b = ratingResults.get(next);
+      // This comparator reads only private captured primitives and committed
+      // retirement flags. Native lifetime/observation owners retire these flags;
+      // callers separately prove current capture before using an export result.
+      if (!a || !b || a.released || b.released || disposed || imageRuntimeClosed || a.owner.retired || b.owner.retired
+        || a.owner !== b.owner || a.values.length !== b.values.length) return false;
+      return a.values.every((value, index) => Object.keys(value).every(key => value[key] === b.values[index][key]));
+    }
+    function admittedResource(token, request, kind) {
+      const owner = captures.get(token);
+      if (!owner || !currentCapture(token)) throw imageError('source_retired');
+      if (!request || request.kind !== kind || request.maxEncodedBytes !== 20971520 || request.maxWidth !== 2048 || request.maxHeight !== 2048
+        || ['scopeKey', 'topRef', 'revision', 'sourceKey'].some(key => request.binding?.[key] !== owner.binding[key])
+        || request.signal?.aborted) throw imageError('resource_unavailable');
+      if (kind === 'brand') {
+        if (request.itemRef !== null || request.albumRef !== null) throw imageError('resource_unavailable');
+        return {owner, member: null};
+      }
+      const member = owner.members.find(value => value.itemRef === request.itemRef && value.albumRef === request.albumRef);
+      if (!member || !member.inventoryRef || member.url !== '/library/album-artwork/' + member.inventoryRef) throw imageError('resource_unavailable');
+      return {owner, member};
+    }
+    async function prepareCover(token, request) {
+      const {owner, member} = admittedResource(token, request, 'cover'), scope = owner.scope;
+      const prepared = await scope.transport.requestAlbumTopImagePng({inventoryAlbumRef: member.inventoryRef, signal: request.signal,
+        expected: scope.context, expectedGeneration: scope.generation, isCurrent: () => currentCapture(token), maxEncodedBytes: 20971520});
+      if (request.signal?.aborted || !currentCapture(token)) {prepared.release(); throw imageError('source_retired');}
+      return prepared;
+    }
+    async function prepareBrand(token, request) {
+      admittedResource(token, request, 'brand');
+      const check = () => {if (request.signal?.aborted || !currentCapture(token)) throw imageError('source_retired');};
+      check(); let response;
+      try {response = await fetch('/static/images/album-haven-cloud-vinyl.png', {method: 'GET', signal: request.signal,
+        credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers: {Accept: 'image/png'}});}
+      catch {check(); throw imageError('resource_unavailable');}
+      const prepared = await prepareAlbumTopImagePngResponse(response, check);
+      try {check();} catch (error) {prepared.release(); throw error;}
+      return prepared;
+    }
+    const access = Object.freeze({capture, isCurrent: currentCapture, readOwnRatings, watchOwnRatings,
+      releaseOwnRatings: releaseResult, sameOwnRatings, prepareCover, prepareBrand,
+      dispose() {
+        if (disposed) return; disposed = true; imageAccessOwners.delete(access);
+        for (const release of releases.splice(0)) {try {release();} catch { /* All subscriptions must release. */ }}
+        for (const owner of [...liveCaptures]) retire(owner);
+      }});
+    try {
+      releases.push(controller.subscribe(checkCaptures));
+      listeners.add(checkCaptures); releases.push(() => {listeners.delete(checkCaptures); pendingListeners.delete(checkCaptures);});
+      const transport = window.AlbumHavenPrivateUITransport;
+      if (!transport || typeof transport.subscribe !== 'function') throw imageError('unavailable');
+      releases.push(transport.subscribe(checkCaptures));
+      imageAccessOwners.add(access);
+    } catch {access.dispose(); throw imageError('unavailable');}
+    return access;
+  }
+  const imageExport = Object.freeze({
+    coordinator(factory) {
+      if (imageRuntimeClosed) throw imageError('unavailable');
+      if (!imageCoordinatorAttempted) {
+        imageCoordinatorAttempted = true;
+        try {
+          const value = typeof factory === 'function' ? factory() : null;
+          if (!value || typeof value.open !== 'function' || typeof value.read !== 'function' || typeof value.dispose !== 'function') throw imageError('unavailable');
+          imageCoordinator = value;
+        } catch {throw imageError('unavailable');}
+      }
+      if (!imageCoordinator) throw imageError('unavailable');
+      return imageCoordinator;
+    },
+    createAccess: createImageAccess,
+  });
+  function closeImageRuntime() {
+    if (imageRuntimeClosed) return imageRuntimeClosing;
+    imageRuntimeClosed = true;
+    for (const access of [...imageAccessOwners]) access.dispose();
+    try {imageRuntimeClosing = Promise.resolve(imageCoordinator?.dispose());}
+    catch {imageRuntimeClosing = new Promise(() => {});}
+    return imageRuntimeClosing;
+  }
+  window.addEventListener('pagehide', event => {if (event.persisted !== true) closeImageRuntime();});
+
   const components = window.AlbumHavenHomeRuntime;
   PrivateUITransport.subscribe(sync);
   window.addEventListener('popstate', observeTopHistory);
@@ -468,6 +828,9 @@ const AlbumTopsRuntime = (() => {
   if (shell && typeof MutationObserver === 'function') new MutationObserver(sync).observe(shell,
     {attributes: true, attributeFilter: ['hidden', 'data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
   return Object.freeze({
+    captureSampleOriginNavigation,
+    sampleLibraryRef: () => TrackActionsRuntime.scope().library,
+    openSamplePlaylist: input => window.AlbumHavenPlaylistUI?.openSamplePlaylist(input) ?? false,
     playbackControlHtml: options => renderPlaybackControlCluster(options),
     playbackControlElements: host => getPlaybackControlClusterElements(host),
     mountPlaybackOptions: options => mountLoopEditActionControl(options),
@@ -489,8 +852,25 @@ const AlbumTopsRuntime = (() => {
       describe: queue => TopPlaybackRuntime.describe(queue),
       dispose: queue => TopPlaybackRuntime.dispose(queue),
     }),
-    artistCreation,
-    snapshot, sync, subscribe(listener) {
+    artistCreation, imageExport,
+    bindImageColorSurface(surface, anchor, close) {
+      let disposed = false;
+      if (typeof close !== 'function' || !activateTriggerSurface(surface, close, {anchor})) throw imageError('unavailable');
+      try {syncTriggerAnchor(surface, anchor);} catch (error) {clearTriggerAnchor(surface); throw error;}
+      const owner = {anchor, form: activeAppFormDialog}; imageColorOwners.set(surface, owner);
+      return () => {
+        if (disposed) return; disposed = true;
+        if (imageColorOwners.get(surface) !== owner) return;
+        imageColorOwners.delete(surface); clearTriggerAnchor(surface);
+      };
+    },
+    imageColorSurfaceCurrent(surface, anchor) {
+      const owner = imageColorOwners.get(surface);
+      return owner?.anchor === anchor && owner.form === activeAppFormDialog
+        && activeTriggerSurface?.surface === surface && isTriggerSurfaceAnchorCurrent(surface, anchor)
+        && !activeAppConfirmDialog && (!activeAppFormDialog || document.getElementById('app-form-modal')?.contains(anchor));
+    },
+    snapshot, sync, isCurrentSampleScope, subscribe(listener) {
       listeners.add(listener);
       return () => {listeners.delete(listener); pendingListeners.delete(listener);};
     },
@@ -537,6 +917,8 @@ const AlbumTopsRuntime = (() => {
       const form = openReactFormDialog({...options, retainParentView: () => currentView()
         && formOwner?.isCurrentContext() === true && (!activeAppFormDialog || activeAppFormDialog === formOwner)}, currentView);
       formOwner = activeAppFormDialog;
+      const surface = document.getElementById('app-form-modal');
+      options.onSampleOriginNavigationCapture?.(() => captureSampleNavigation(formOwner, surface, form));
       return form;
     },
     deferFormNavigation: callback => typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(callback),

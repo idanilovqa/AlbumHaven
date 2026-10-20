@@ -5,6 +5,7 @@ import {mountCreationSearch} from '../playlists/native-creation.mjs';
 import {mountMutationStatus} from '../playlists/native-mutation-status.mjs';
 import {albumTopActionAllowed} from './model.mjs';
 import {mountAlbumTopPublication} from './publication-panel.mjs';
+import {registerAlbumTopImageShareTransition} from './image-export-share-transition.mjs';
 
 // Each server directory owns its abort signal, cursor history and response. A
 // detail identity, scope or query change invalidates every page from that owner.
@@ -46,8 +47,72 @@ function sharingPage(controller, method, changed, onFailure) {
   };
 }
 
-export function openShareAlbumTop({runtime, controller, state: initialState, onClose, returnFocus, fallbackHost}) {
+export function openShareAlbumTop({runtime, controller, providers, imageExportCoordinator, state: initialState, onClose, returnFocus, fallbackHost}) {
   let state = initialState, alive = true, frame = null, dialog = null, root = null, closeDialog = null;
+  let imageDesigner = null;
+  let mode='share', transitionToken=0, transition=null, unregisterTransition=null, appNotified=false, shellToken=null;
+  const notifyApp = outcome => {if(appNotified)return;appNotified=true;onClose?.(outcome);};
+  function identity() {
+    const value=controller.getSnapshot(),shell=runtime.snapshot();
+    return {scope:value.scopeKey,top:value.selectedTopRef,detail:value.detail.data,
+      viewVersion:shell.viewVersion,viewRequestId:shell.viewRequestId};
+  }
+  function identityCurrent(captured) {
+    try {
+      const value=controller.getSnapshot(),shell=runtime.snapshot();
+      return alive&&!failed&&fallbackHost?.isConnected===true&&value.scopeKey===captured.scope
+        &&value.selectedTopRef===captured.top&&value.detail.data===captured.detail
+        &&value.detail.status==='ready'&&!value.detail.refreshing
+        &&shell.visible===true&&shell.authenticated===true&&shell.scopeKey===captured.scope
+        &&shell.viewVersion===captured.viewVersion&&shell.viewRequestId===captured.viewRequestId
+        &&albumTopActionAllowed(value,'view_sharing')&&canDismiss();
+    }catch{return false;}
+  }
+  function retireLogical(outcome={current:false,restoreFocus:false}) {
+    disposeContent();const old=dialog;dialog=null;old?.dispose();notifyApp(outcome);
+  }
+  function beginImageTransition() {
+    if(!alive||failed||mode!=='share'||!dialog||!imageDesigner)throw new Error('Image transition unavailable.');
+    let resolve;const settled=new Promise(done=>{resolve=done;});
+    const owner={token:++transitionToken,shell:shellToken,captured:identity(),cancelled:false,resolve,confirmed:false,settled:false};transition=owner;
+    const lease=Object.freeze({settled,cancel(){owner.cancelled=true;}});
+    mode='leaving-share';frame=null;revision++;renderPending=false;
+    try {
+      const completion=dialog.close({force:true,restoreFocus:false,returnToParent:false});
+      if(completion&&typeof completion.then==='function')completion.catch(()=>{/* Unknown closure keeps settled pending. */});
+    }catch{/* No fabricated native-close settlement. */}
+    return lease;
+  }
+  function registerTransition() {
+    if(!fallbackHost?.isConnected)return;
+    unregisterTransition=registerAlbumTopImageShareTransition(fallbackHost,beginImageTransition);
+  }
+  function restoreAfterImage(record) {
+    if(record.restoring||!record.closed||!record.handle)return;
+    record.restoring=true;
+    record.handle.closed.then(()=>{
+      if(!alive||imageDesigner!==record)return;
+      imageDesigner=null;
+      if(mode==='share'){render();return;} // Non-transitioning coordinator consumer.
+      if(mode!=='image'||record.outcome?.current!==true||!transition?.confirmed
+        ||transition.cancelled||transition.token!==transitionToken||!identityCurrent(transition.captured)){
+        retireLogical();return;
+      }
+      mode='returning-share';
+      const release=unregisterTransition;unregisterTransition=null;release?.();
+      transition=null;
+      try {
+        mountShell();
+        if(!alive||dialog?.failed){retireLogical();return;}
+        mode='share';registerTransition();render();
+        if(record.anchor?.isConnected)record.anchor.focus({preventScroll:true});else returnFocus?.();
+      }catch{retireLogical();}
+    },()=>retireLogical());
+  }
+  function closeImage() {
+    const previous = imageDesigner; imageDesigner = null;
+    try {previous?.handle?.close();} catch (error) {failure ||= error;}
+  }
   let visibility = null, decisionsDraft = null, rolesDraft = null, query = '';
   const records = new Map();
   const superseded = Symbol('superseded sharing render');
@@ -74,7 +139,9 @@ export function openShareAlbumTop({runtime, controller, state: initialState, onC
   }
   function disposeContent() {
     if (!alive) return;
-    alive = false; frame = null; revision++; renderPending = false;
+    alive = false; mode='disposed';transitionToken++;frame = null; revision++; renderPending = false;
+    const release=unregisterTransition;unregisterTransition=null;release?.();
+    closeImage();
     retirePages(); releaseRecords();
     errorCleanup?.(); errorCleanup = null;
     root?.replaceChildren(); root = null; closeDialog = null;
@@ -82,6 +149,7 @@ export function openShareAlbumTop({runtime, controller, state: initialState, onC
   function failContent(error) {
     if (!alive || failed) return;
     failed = true; failure = error; frame = null; revision++; renderPending = false;
+    closeImage();
     retirePages(); releaseRecords();
     if (!alive || !root) return;
     // Last-resort native DOM owner deliberately avoids the renderer that failed.
@@ -98,7 +166,7 @@ export function openShareAlbumTop({runtime, controller, state: initialState, onC
     try {dialog?.update(options());} catch (_presentationError) { /* Error state remains visible. */ }
   }
   function render() {
-    if (!alive || failed || !root) return;
+    if (!alive || failed || !root || mode!=='share') return;
     revision++; frame = null; renderPending = true;
     if (rendering) return;
     rendering = true;
@@ -224,6 +292,18 @@ export function openShareAlbumTop({runtime, controller, state: initialState, onC
       host.setAttribute('aria-labelledby', heading.id);
     }
     control('publication:panel', publicHost, mountAlbumTopPublication, {controller, state, onError: failContent});
+    button('image:open', publicHost, 'Export image', busy || !fallbackHost?.isConnected || !providers || typeof imageExportCoordinator?.open !== 'function' || Boolean(imageDesigner), event => {
+      if (!active() || imageDesigner || !providers || typeof imageExportCoordinator?.open !== 'function') return;
+      const anchor = event?.target?.closest?.('button'), record = {handle: null, closed: false,anchor,outcome:null,restoring:false};
+      imageDesigner = record;
+      try {
+        const opened = imageExportCoordinator.open({controller, providers, attribution: 'Created with AlbumHaven',
+          returnFocus: () => {if (alive && anchor?.isConnected) anchor.focus({preventScroll: true});}, fallbackHost,
+          onClose(outcome) {record.closed = true;record.outcome=outcome;restoreAfterImage(record);}});
+        if (!alive || imageDesigner !== record) opened?.close(); else {record.handle = opened;restoreAfterImage(record);}
+      } catch {imageDesigner = null;}
+      if (alive) render();
+    });
     if (conflict) {
       text('conflict:note', root, 'This Album Top changed. Refresh it before editing access.', 'playlists__note', 'alert');
     }
@@ -305,21 +385,36 @@ export function openShareAlbumTop({runtime, controller, state: initialState, onC
     }
     check(); dialog?.update(options()); check();
   }
-  try {
-    dialog = openNativeDialog(runtime, options(), {onClose, fallbackHost,
+  function mountShell() {
+    const shell={};shellToken=shell;
+    dialog = openNativeDialog(runtime, options(), {onClose(outcome){
+      // Logical wrapper disposal may suppress this callback. An issued
+      // transition instead owns the independent physical observer below.
+      if(transition?.shell===shell)return;
+      notifyApp(outcome);
+    },onNativeSettlement(outcome){
+      if(transition?.shell===shell&&!transition.settled){
+        const owner=transition;dialog=null;closeDialog=null;
+        const current=outcome.status==='closed'&&outcome.current===true&&!owner.cancelled&&owner.token===transitionToken&&identityCurrent(owner.captured);
+        owner.settled=true;owner.confirmed=current;if(current)mode='image';owner.resolve(current);
+        if(!current)retireLogical(outcome);
+      }
+    }, fallbackHost,
       onError(error) {failed = true; failure = error; disposeContent();},
       mount(host, close) {
-        root = host.ownerDocument.createElement('div'); root.className = 'playlists__form tag-editor-form album-top-share';
+        if(!root){root = host.ownerDocument.createElement('div'); root.className = 'playlists__form tag-editor-form album-top-share';}
         host.append(root); closeDialog = close; mounting = true;
-        try {render(); return {dispose: disposeContent};}
+        try {render(); return {dispose(){if(mode!=='leaving-share')disposeContent();}};}
         catch (error) {disposeContent(); throw error;}
         finally {mounting = false;}
       }});
-  } catch (error) {disposeContent(); throw error;}
+  }
+  try {registerTransition();mountShell();} catch (error) {disposeContent(); throw error;}
   return {
     get failed() {return failed || dialog?.failed === true;},
     get error() {return failure;},
-    update({state: nextState}) {if (!alive) return; state = nextState; render();},
-    dispose() {dialog?.dispose(); disposeContent(); dialog = null;}
+    update({state: nextState}) {if (!alive) return; state = nextState; imageDesigner?.handle?.update({state});
+      if(transition&&!identityCurrent(transition.captured)){retireLogical();return;}render();},
+    dispose() {const old=dialog;dialog=null;disposeContent();old?.dispose();}
   };
 }

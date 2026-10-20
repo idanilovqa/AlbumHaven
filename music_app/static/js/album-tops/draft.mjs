@@ -40,7 +40,7 @@ export function createAlbumTopDraft(configuration) {
     const ref = item.item_ref;
     if (!bindings.has(ref)) bindings.set(ref, item);
   }
-  const initialItems = source?.items?.map(row => {const binding = copy(bindings.get(row.item_ref) || {}); return {...copy(row), ...binding, ...(binding.source?.kind === 'local' ? {selected_local_album_id: binding.source.selected_local_album_id, selected_source_ref: binding.source.selected_source_ref} : {})};}) || [];
+  const initialItems = source?.items?.map(row => {const binding = copy(bindings.get(row.item_ref) || {}); return {...copy(row), ...binding, ...(binding.source?.kind === 'local' ? {selected_local_album_id: binding.source.selected_local_album_id, selected_source_ref: binding.source.selected_source_ref, ...(binding.source.selected_inventory_album_ref ? {selected_inventory_album_ref: binding.source.selected_inventory_album_ref} : {})} : {})};}) || [];
   const baseline = {title: source?.title || '', description: source?.description || '', items: initialItems.map(wire)};
   let state = {scopeKey, topRef, sourceMatch, ...(sourceMatch ? {capacity: 1} : {}), revision: source?.revision || null, title: baseline.title, description: baseline.description,
     items: adding ? [] : copy(initialItems), ...(adding ? {capacity: Math.max(0, 5000 - initialItems.length), submittedRequestKey: null} : {}), query: '', tab: scoped || editing && !adding ? 'selected' : 'all', search: {status: 'idle', items: [], next_cursor: null},
@@ -464,7 +464,7 @@ export function createAlbumTopDraft(configuration) {
       }
       if (!allowed(true) || typeof providers.admitAlbum !== 'function' || !results.some(item => item.local_album_id === row.local_album_id)
         || !Number.isSafeInteger(row.local_album_id) || row.local_album_id < 1 || state.items.length >= (state.capacity ?? 5000)) return false;
-      const candidate = results.find(item => item.local_album_id === row.local_album_id), abort = begin();
+      const candidate = copy(results.find(item => item.local_album_id === row.local_album_id)), abort = begin();
       working = true; emit({busy: true, error: null});
       try {
         const admitted = await providers.admitAlbum(candidate.local_album_id, options(abort));

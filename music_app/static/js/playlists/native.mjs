@@ -1,3 +1,6 @@
+import {normalizeSampleOrigin} from './sample-playlist-input.mjs';
+import {createSamplePlaylistController} from './sample-playlist.mjs';
+import {mountSamplePlaylistPage} from './native-sample-playlist.mjs';
 import {normalizeArtistLovedDescriptor} from './artist-loved-recipe.mjs';
 import {createPlaylistEditNotifications} from './edit-request-notifications.mjs';
 import {createPlaylistController, granted, playlistDraft, draftDirty} from './model.mjs';
@@ -20,7 +23,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
   let configuredProviders = {...providers};
   let disposed = false, generation = 0, navigationSequence = 0, customReader = typeof providers.readPlaylists === 'function';
   let activeDraft = null, deletedNavigation = null, copiedNavigation = null, shareRequest = null, notifications = null;
-  let activeMix = null, activeTop = null;
+  let activeMix = null, activeTop = null, activeSample = null;
   let view = null, viewKind = null, viewKey = null, viewEpoch = 0;
   let acquiring = true, rendering = false, renderQueued = false, renderRevision = 0, configurationDepth = 0, navigationError = false, lastShell = null, lastNotifiedMutation = null;
   function clearView() {
@@ -63,7 +66,79 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
     activeMix = null; owner.retired = true; owner.controller.dispose();
     if (!disposed) requestRender();
   };
-  let unsubscribeMix, unsubscribeTop, unsubscribeNotifications, unsubscribeSource, unsubscribeRender, unsubscribeShell;
+  let unsubscribeMix, unsubscribeTop, unsubscribeSample, unsubscribeNotifications, unsubscribeSource, unsubscribeRender, unsubscribeShell;
+  const sampleCurrent = owner => {
+    if (disposed || activeSample !== owner || owner.retired || !lovedRuntimeCurrent()) return false;
+    try {if (owner.originOwner && owner.originOwner.isCurrent() !== true) owner.retired = true;}
+    catch {owner.retired = true;}
+    return !owner.retired;
+  };
+  function clearSample(owner) {
+    if (activeSample !== owner) return;
+    activeSample = null; owner.retired = true; owner.unsubscribe?.(); owner.controller.dispose();
+    if (!disposed) requestRender();
+  }
+  function onSampleShell() {
+    const owner = activeSample; if (!owner) return;
+    const shell = runtime.snapshot();
+    if (!sampleCurrent(owner) || !shell.authenticated || shell.scopeKey !== owner.scopeKey
+      || owner.opened && shell.retainedDraftToken !== owner.token) {
+      runtime.releaseDraft?.(owner.token); clearSample(owner);
+      return;
+    }
+    if(owner.opened){
+      const prior=owner.observedDraftToken;owner.observedDraftToken=shell.draftToken;
+      if(prior===owner.token&&shell.draftToken!==owner.token&&shell.retainedDraftToken===owner.token)
+        owner.controller.invalidateOptions({reason:'suspend'});
+    }
+  }
+  function openSamplePlaylist(input = {}) {
+    const {parent, options, originOwner, originNavigation} = input, typed = Object.hasOwn(input,'originOwner');
+    const origin = typed ? normalizeSampleOrigin(originOwner?.origin) : null;
+    const state = controller.getSnapshot(), shell = runtime.snapshot(), detail = state.resource.data?.detail;
+    let originReady = false;
+    if (typed) {try {originReady = Boolean(origin && !Object.hasOwn(input,'parent') && originOwner.scopeKey === shell.scopeKey
+      && originNavigation && typeof originNavigation.presentation?.suspend === 'function'
+      && (originNavigation.parentRegistration === null || typeof originNavigation.parentRegistration === 'function'
+        && typeof originNavigation.parentRegistration.registerPlaylistChild === 'function')
+      && typeof originOwner.isCurrent === 'function' && typeof originOwner.back === 'function' && originOwner.isCurrent() === true);} catch {}}
+    if (disposed || activeSample || activeTop || activeMix || activeDraft
+      || !shell.authenticated || !lovedRuntimeCurrent()
+      || (typed ? !originReady : !detail || !shell.visible || shell.scopeKey !== state.scopeKey
+        || state.resource.status !== 'ready' || state.mutation.status === 'loading' || draftDirty(detail, playlistDraft(state))
+        || !detail.items_complete || !granted(detail, 'can_open') || !granted(detail, 'can_create_sample') || !detail.track_rows?.length
+        || parent?.playlist_ref !== detail.playlist_id || parent?.revision !== detail.revision)
+      || typeof configuredProviders.captureSamplePlaylist !== 'function' || typeof configuredProviders.readSamplePlaylist !== 'function'
+      || typeof runtime.createSamplePlaylistRuntime !== 'function' || typeof runtime.openDraft !== 'function') return false;
+    const owner = {token: crypto.randomUUID(),scopeKey: shell.scopeKey,retired:false,opened:false,
+      ...(typed ? {origin,originOwner} : {parent:Object.freeze({...parent})}),
+      ...(options!==undefined?{options:options&&typeof options==='object'?Object.freeze({...options}):options}:{})};
+    owner.controller = createSamplePlaylistController({providers:configuredProviders,scopeKey:owner.scopeKey,
+      isCurrent:()=>sampleCurrent(owner),isFacetActive:()=>{
+        const current=runtime.snapshot();
+        return sampleCurrent(owner)&&current.authenticated===true&&current.scopeKey===owner.scopeKey&&current.draftToken===owner.token;
+      },shuffleCopy:(values,random)=>runtime.shuffleSamplePlaylistRefs(values,random)});
+    activeSample = owner;
+    try {
+      owner.runtime = runtime.createSamplePlaylistRuntime({scopeKey:owner.scopeKey,source:()=>owner.controller.source(),isCurrent:()=>sampleCurrent(owner)});
+      const opened = runtime.openDraft({token:owner.token,scopeKey:owner.scopeKey,fromGlobal:typed,isCurrent:()=>sampleCurrent(owner),
+        ...(typed ? {parentRegistration:originNavigation.parentRegistration,presentation:originNavigation.presentation} : {}),
+        onDiscard:()=>clearSample(owner),confirmLeave:async()=>{
+          if (!sampleCurrent(owner) || owner.controller.pendingSave() || owner.controller.getSnapshot().mutation.status === 'loading') return false;
+          const before = owner.controller.getSnapshot();
+          if (!before.dirty) return true;
+          return await runtime.confirmDraft?.(owner.token,'Discard this unsaved Sample Playlist?') === true
+            && sampleCurrent(owner) && !owner.controller.pendingSave() && owner.controller.getSnapshot() === before;
+        }});
+      if (!opened || !sampleCurrent(owner)) {runtime.releaseDraft?.(owner.token);clearSample(owner);return false;}
+      owner.opened = true; owner.observedDraftToken=owner.token; owner.unsubscribe = owner.controller.subscribe(requestRender);requestRender();return true;
+    } catch (error) {runtime.releaseDraft?.(owner.token);clearSample(owner);throw error;}
+  }
+  async function openSavedSample(owner,receipt) {
+    if (!sampleCurrent(owner) || owner.controller.getSnapshot().mutation.data !== receipt) return false;
+    try {return await runtime.completeLibraryMixDraft({token:owner.token,scopeKey:owner.scopeKey,playlist_id:receipt.playlist_id,artistLoved:false,sample:true});}
+    catch {return false;}
+  }
   const topCurrent = owner => !disposed && activeTop === owner && !owner.retired && lovedRuntimeCurrent();
   function clearTop(owner) {
     if (activeTop !== owner) return;
@@ -81,7 +156,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
   }
   function prepareAlbumTop(detail) {
     const state = controller.getSnapshot(), shell = runtime.snapshot();
-    if (disposed || !detail || activeTop || activeMix || activeDraft || state.resource.data?.detail !== detail
+    if (disposed || !detail || activeTop || activeMix || activeDraft || activeSample || state.resource.data?.detail !== detail
       || !shell.visible || !shell.authenticated || shell.scopeKey !== state.scopeKey
       || state.mutation.status === 'loading' || draftDirty(detail, playlistDraft(state))
       || !detail?.track_rows?.length || !granted(detail, 'can_create_album_top')
@@ -330,6 +405,24 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
       } else applyPlaylistShell(controller, shell, customReader);
     }
     if (!current()) return;
+    if (activeSample && sampleCurrent(activeSample) && activeSample.opened && shell.draftToken === activeSample.token) {
+      const owner = activeSample;
+      show('sample-page',owner,props=>mountSamplePlaylistPage(host,owner.runtime,props),
+        {controller:owner.controller,parent:owner.parent,origin:owner.origin,...(Object.hasOwn(owner,'options')?{options:owner.options}:{}),suspended:false,onClose:()=>{
+          if (!sampleCurrent(owner)) return false;
+          return owner.originOwner ? runtime.closeDraft(owner.token,
+            returnToParent=>owner.originOwner.back(returnToParent),()=>owner.originOwner.isCurrent()) : runtime.closeDraft(owner.token);
+        },
+          onSaved:receipt=>openSavedSample(owner,receipt)},current);
+      return;
+    }
+    if(activeSample&&sampleCurrent(activeSample)&&activeSample.opened&&shell.authenticated===true
+      &&shell.scopeKey===activeSample.scopeKey&&shell.retainedDraftToken===activeSample.token
+      &&shell.draftToken!==activeSample.token&&viewKind==='sample-page'&&viewKey===activeSample){
+      // The shell owns visibility; keep this exact form and captured table while
+      // its draft is retained. Activity admission still reads the live snapshot.
+      view?.setSuspended?.(true);return;
+    }
     const mix = activeMix;
     if (mix && mixCurrent(mix) && shell.scopeKey === mix.scopeKey && mix.phase === 'setup') {
       show('mix-setup', mix, props => mountLibraryMixSetup(host, mix.runtime, props),
@@ -373,7 +466,8 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
       {controller, state, integrationProviders: configuredProviders, readDetail: configuredProviders.readDetail,
         navigationError, shareRequest: shareRequest?.row || null,
         onShareRequestHandled: request => {if (shareRequest?.row === request) shareRequest = null;},
-        onSelect: select, onPrepareDraft: prepareDraft, onCreateAlbumTop: prepareAlbumTop}, current);
+        onSelect: select, onPrepareDraft: prepareDraft, onCreateAlbumTop: prepareAlbumTop,
+        onCreateSample: detail=>openSamplePlaylist({parent:{playlist_ref:detail.playlist_id,revision:detail.revision}})}, current);
   }
   function dispose() {
     if (disposed) return;
@@ -387,6 +481,8 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
     clean(() => unsubscribeNotifications?.());
     clean(() => unsubscribeMix?.());
     clean(() => unsubscribeTop?.());
+    clean(() => unsubscribeSample?.());
+    if (activeSample) {const owner=activeSample;clean(()=>runtime.releaseDraft?.(owner.token));clean(()=>clearSample(owner));}
     if (activeTop) {const owner = activeTop; clean(() => runtime.releaseDraft?.(owner.token)); clean(() => clearTop(owner));}
     if (mix) {
       mix.retired = true;
@@ -412,6 +508,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
   try {
     unsubscribeMix = runtime.subscribe(onMixShell);
     unsubscribeTop = runtime.subscribe(onTopShell);
+    unsubscribeSample = runtime.subscribe(onSampleShell);
     unsubscribeNotifications = runtime.subscribeNotificationRegistry?.(() => {if (!acquiring) mountNotifications();});
     unsubscribeSource = controller.subscribe(syncDraftContext);
     unsubscribeRender = controller.subscribe(requestRender);
@@ -424,19 +521,20 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
     throw error;
   }
   return Object.freeze({
+    openSamplePlaylist,
     openArtistLoved({descriptor, launchContext} = {}) {
       const normalized = normalizeArtistLovedDescriptor(descriptor);
       const leaseCurrent = () => {try {return launchContext?.runtime === runtime && lovedRuntimeCurrent()
         && launchContext?.descriptor === descriptor && launchContext?.isCurrent?.() === true;} catch {return false;}};
       if (!normalized || !leaseCurrent()) return false;
       const shell = runtime.snapshot(), configuration = generation;
-      if (disposed || activeTop || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
+      if (disposed || activeTop || activeMix || activeDraft || activeSample || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
         || typeof configuredProviders.beginArtistLoved !== 'function' || typeof runtime.createLibraryMixRuntime !== 'function'
         || typeof runtime.openDraft !== 'function' || !leaseCurrent() || generation !== configuration) return false;
       const owner = {token: crypto.randomUUID(), scopeKey: shell.scopeKey, entryKey: shell.entryKey,
         phase: 'transferring', retired: false, artistLovedDescriptor: normalized, autoPlayConsumed: false};
       owner.playbackIntent = runtime.captureLibraryMixPlaybackIntent?.();
-      if (!leaseCurrent() || disposed || activeTop || activeMix || activeDraft || generation !== configuration) return false;
+      if (!leaseCurrent() || disposed || activeTop || activeMix || activeDraft || activeSample || generation !== configuration) return false;
       owner.controller = createLibraryMixController({providers: configuredProviders, scopeKey: owner.scopeKey,
         artistLovedDescriptor: normalized, isCurrent: () => mixCurrent(owner)});
       activeMix = owner;
@@ -471,7 +569,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
       const artistScope = options.artistScope == null ? null : normalizeArtistMixScope(options.artistScope);
       if (options.artistScope != null && !artistScope) return false;
       const shell = runtime.snapshot();
-      if (disposed || activeTop || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
+      if (disposed || activeTop || activeMix || activeDraft || activeSample || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
         || typeof (artistScope ? configuredProviders.beginArtistMix : configuredProviders.beginLibraryMix) !== 'function' || typeof runtime.createLibraryMixRuntime !== 'function') return false;
       const owner = {token: crypto.randomUUID(), scopeKey: shell.scopeKey, entryKey: shell.entryKey, phase: 'setup', retired: false};
       activeMix = owner;
@@ -494,6 +592,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
         if (disposed || generation !== configuration) return;
         if (activeMix) {const owner = activeMix; owner.retired = true; runtime.releaseDraft?.(owner.token); clearMix(owner);}
         if (activeTop) {const owner = activeTop; runtime.releaseDraft?.(owner.token); clearTop(owner);}
+        if (activeSample) {const owner=activeSample;runtime.releaseDraft?.(owner.token);clearSample(owner);}
         if (disposed || generation !== configuration) return;
         if (activeDraft && changed) {const owner = activeDraft; runtime.releaseDraft?.(owner.token); clearDraft(owner);}
         if (disposed || generation !== configuration) return;

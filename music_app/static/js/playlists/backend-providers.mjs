@@ -1,4 +1,7 @@
 import {normalizeArtistLovedDescriptor, normalizeArtistLovedRecipe} from './artist-loved-recipe.mjs';
+import {normalizeSampleOptions, isSampleInventoryRef, normalizeSampleOrigin, normalizeSampleSelector,
+  isSampleSelectionMethod, normalizeSampleFacetMask, normalizeSampleCountryTargets, sampleJsonWithin,
+  isSampleFacetEnvelope, normalizeSampleFacetDiscovery, normalizeSampleCountryMetadata} from './sample-playlist-input.mjs';
 import {queueOccurrences} from './queue-provenance.mjs';
 import {createFilterPreferenceProviders} from './filter-preferences.mjs';
 import {createAlbumTopBackendProviders} from '../album-tops/backend-providers.mjs';
@@ -21,6 +24,7 @@ const tuple = source => ({kind: source.kind, ref: source.ref, revision: source.r
 const same = (a, b) => a?.kind === b?.kind && a?.ref === b?.ref && a?.revision === b?.revision;
 const sourceProtocols = new Set(['library_selection_v1', 'complete_inventory_selection_v1', 'complete_activity_selection_v1', 'missing_playlist_selection_v1', 'missing_activity_selection_v1', 'library_mix_selection_v1', 'artist_popular_selection_v1', 'artist_loved_selection_v1']);
 const visibilityModes = ['private', 'server_shared'];
+const SAMPLE_PROTOCOL = 'sample_playlist_selection_v1';
 function preferences(value) {
   if (typeof value?.remember_order_mode !== 'boolean' || !['regular', 'shuffle'].includes(value.last_order_mode)
     || value.effective_order_mode !== (value.remember_order_mode ? value.last_order_mode : 'regular') || !revision(value.revision)) throw fail('Invalid Playlist preferences.');
@@ -115,6 +119,36 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
     return data;
   }
   function descriptor(data) {return {...tuple(data.source), source_protocol: data.source_protocol, allowed_actions: {...data.allowed_actions}};}
+  function sampleData(response, token, signal, expected, expectedOptions = null) {
+    active(token, signal);
+    const data = response?.data, normalized = normalizeSampleOptions(data?.options);
+    if (response?.status !== 'ready' || data?.source_protocol !== SAMPLE_PROTOCOL || data.mode !== 'ordinary'
+      || !['playlist','library'].includes(data.source?.kind) || expected.kind && data.source.kind !== expected.kind || !uuid(data.source.ref) || !uuid(data.source.revision)
+      || data.source.ref !== expected.ref || expected.revision && data.source.revision !== expected.revision
+      || data.entries_complete !== true || data.allowed_actions?.can_read !== true
+      || data.allowed_actions.can_use_for_playlist !== false || data.allowed_actions.can_play !== false
+      || !normalized || expectedOptions && JSON.stringify(normalized) !== JSON.stringify(expectedOptions)
+      || !Array.isArray(data.entries) || data.entries.length > 5000) throw fail('Sample source was not acknowledged.');
+    const entryRefs = data.entries.map(row => row?.entry_ref);
+    if (entryRefs.some(ref => !uuid(ref)) || new Set(entryRefs).size !== entryRefs.length
+      || data.entries.some(row => row?.allowed_actions?.can_read !== true || row.allowed_actions.can_select !== false))
+      throw fail('Invalid Sample membership.');
+    acceptActor(data.actor_scope);
+    const previous = sources.get(data.source.ref);
+    if (previous && (!same(previous.source, data.source) || previous.protocol !== SAMPLE_PROTOCOL
+      || JSON.stringify(previous.entryRefs) !== JSON.stringify(entryRefs)
+      || JSON.stringify(previous.sampleOptions) !== JSON.stringify(normalized))) throw fail('Sample source changed.');
+    sources.set(data.source.ref, {source: tuple(data.source), protocol: SAMPLE_PROTOCOL,
+      entryRefs: Object.freeze(entryRefs), sampleOptions: Object.freeze(normalized)});
+    return data;
+  }
+  function sampleInput(options) {
+    const normalized = normalizeSampleOptions(options.options), typed = Object.hasOwn(options, 'origin');
+    const origin = typed ? normalizeSampleOrigin(options.origin, actor?.library_id) : null;
+    if (!normalized || (typed ? !origin || Object.hasOwn(options,'playlist_ref') || Object.hasOwn(options,'revision')
+      : !uuid(options.playlist_ref) || !revision(options.revision))) throw fail('Invalid explicit Sample options.', 400);
+    return typed ? {origin, options: normalized} : {playlist_ref: options.playlist_ref, revision: options.revision, options: normalized};
+  }
   function projection(data, scopeKey) {
     const {actor_scope, context_ref, capture_ref, ...safe} = data;
     if (['library_mix_selection_v1','artist_popular_selection_v1','artist_loved_selection_v1'].includes(data.source_protocol)) delete safe.diagnostics;
@@ -340,6 +374,88 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       return {status: response.status, data: projection(response.data, options.scopeKey)};
     },
     beginPlaylistCreationSource: begin,
+    async readSamplePlaylistFacets(options) {
+      const token=identity(options.scopeKey),[context,scopeKey]=JSON.parse(token),signal=options.signal;
+      const source=normalizeSampleSelector(options.source,actor?.library_id),facets=normalizeSampleFacetMask(options.facets);
+      if(!source||!facets||!isSampleSelectionMethod(options.selectionMethod))throw fail('Invalid Sample facet request.',400);
+      const body={...source,selection_method:options.selectionMethod,facets};
+      if(!sampleJsonWithin(body,32768))throw fail('Sample facet request is too large.',400);
+      active(token,signal);
+      const response=await transport.request('/playlists/creation-source/sample/facets',
+        {method:'POST',body,expected:context,signal});
+      active(token,signal);
+      const data=isSampleFacetEnvelope(response,context)
+        ?normalizeSampleFacetDiscovery(response.data,body.selection_method,facets):null;
+      if(!data)throw fail('Sample facets were not acknowledged.');
+      active(token,signal);
+      return Object.freeze({status:'ready',data:Object.freeze({...data,scopeKey})});
+    },
+    async enrichSamplePlaylistCountryMetadata(options) {
+      const token=identity(options.scopeKey),[context,scopeKey]=JSON.parse(token),signal=options.signal;
+      const source=normalizeSampleSelector(options.source,actor?.library_id),
+        targets=normalizeSampleCountryTargets(options.targets,{libraryId:actor?.library_id});
+      if(!source||!targets||!isSampleSelectionMethod(options.selectionMethod))throw fail('Invalid Country metadata request.',400);
+      const body={...source,selection_method:options.selectionMethod,targets};
+      if(!sampleJsonWithin(body,32768))throw fail('Country metadata request is too large.',400);
+      active(token,signal);
+      const response=await transport.request('/playlists/creation-source/sample/country-metadata',
+        {method:'POST',body,expected:context,signal});
+      active(token,signal);
+      const data=isSampleFacetEnvelope(response,context)
+        ?normalizeSampleCountryMetadata(response.data,body.selection_method,targets):null;
+      if(!data)throw fail('Country metadata result was not acknowledged.');
+      active(token,signal);
+      return Object.freeze({status:'ready',data:Object.freeze({...data,scopeKey})});
+    },
+    async readSamplePlaylistRepresentatives(options) {
+      const token = identity(options.scopeKey), body = sampleInput(options);
+      if (pendingOperation({action: 'create'})) throw fail('Check the original Save before generating another Sample.');
+      if (body.options.selection_method !== 'random') throw fail('Random acquisition requires Random options.', 400);
+      active(token, options.signal);
+      const response = await transport.request('/playlists/creation-source/sample/representatives', {
+        method: 'POST', body, signal: options.signal, expected: JSON.parse(token)[0]});
+      active(token, options.signal);
+      const data = response?.data;
+      if (response?.status !== 'ready' || !data || (body.origin
+        ? Object.hasOwn(data,'parent') || JSON.stringify(normalizeSampleOrigin(data.origin)) !== JSON.stringify(body.origin)
+        : Object.hasOwn(data,'origin') || data.parent?.playlist_ref !== body.playlist_ref || data.parent.revision !== body.revision)
+        || JSON.stringify(normalizeSampleOptions(data.options)) !== JSON.stringify(body.options)
+        || !Array.isArray(data.representative_refs) || data.representative_refs.length > 5000
+        || new Set(data.representative_refs).size !== data.representative_refs.length) throw fail('Sample representatives changed.');
+      acceptActor(data.actor_scope);
+      if (data.representative_refs.some(ref => !isSampleInventoryRef(ref, actor.library_id))) throw fail('Invalid Sample representatives.');
+      const {actor_scope, ...safe} = data;
+      return {status: 'ready', data: {...safe, library_ref: String(actor.library_id), scopeKey: options.scopeKey}};
+    },
+    async captureSamplePlaylist(options) {
+      const token = identity(options.scopeKey), input = sampleInput(options), order = options.random_order;
+      if (pendingOperation({action: 'create'})) throw fail('Check the original Save before generating another Sample.');
+      if (!uuid(options.request_key) || (input.options.selection_method === 'random'
+        ? !Array.isArray(order) || order.length > 5000 || new Set(order).size !== order.length
+          || order.some(ref => !isSampleInventoryRef(ref, actor?.library_id))
+        : order !== null)) throw fail('Invalid Sample capture.', 400);
+      active(token, options.signal);
+      const response = await transport.request('/playlists/creation-source/sample', {method: 'POST',
+        body: {...input, request_key: options.request_key, random_order: order === null ? null : [...order]},
+        signal: options.signal, expected: JSON.parse(token)[0]});
+      const data = sampleData(response, token, options.signal, {ref: options.request_key, kind: input.origin ? 'library' : 'playlist'}, input.options);
+      return {status: 'ready', data: projection(data, options.scopeKey)};
+    },
+    async readSamplePlaylist(options) {
+      const token = identity(options.scopeKey), recovery = Object.hasOwn(options, 'request_key');
+      if (recovery ? !uuid(options.request_key) || Object.hasOwn(options, 'source_ref') || Object.hasOwn(options, 'source_revision')
+        : !uuid(options.source_ref) || !uuid(options.source_revision)) throw fail('Invalid Sample lookup.', 400);
+      const query = recovery ? {request_key: options.request_key}
+        : {source_ref: options.source_ref, source_revision: options.source_revision};
+      const encoded = Object.entries(query).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
+      active(token, options.signal);
+      const response = await transport.request(`/playlists/creation-source/sample?${encoded}`, {
+        signal: options.signal, expected: JSON.parse(token)[0]});
+      const data = sampleData(response, token, options.signal,
+        {ref: recovery ? options.request_key : options.source_ref, revision: recovery ? null : options.source_revision,
+          kind: sources.get(recovery ? options.request_key : options.source_ref)?.source.kind});
+      return {status: 'ready', data: projection(data, options.scopeKey)};
+    },
     async beginLibraryMix(options) {
       const token = identity(options.scopeKey);
       if (await recoverCreate(options)) throw fail('Your previous playlist was saved. Open Playlists before creating another.', 409);
@@ -503,6 +619,7 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       }
       const known = sources.get(options.source?.ref);
       if (!known || !same(known.source, options.source) || options.mode !== 'ordinary') return {status: 'unavailable', data: null};
+      if (known.protocol === SAMPLE_PROTOCOL) return {status: 'unavailable', data: null};
       const isPaged = known.protocol === 'library_selection_v1';
       let response;
       try {
@@ -528,6 +645,10 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
         || options.source_protocol !== known.protocol) throw fail('Playlist source unavailable.', 409);
       if (known.protocol === 'artist_loved_selection_v1' && JSON.stringify(options.entry_refs) !== JSON.stringify(known.entryRefs))
         throw fail('Save requires the complete captured Loved selection.', 409);
+      if (known.protocol === SAMPLE_PROTOCOL && (!known.entryRefs.length
+        || JSON.stringify(options.entry_refs) !== JSON.stringify(known.entryRefs)
+        || Object.hasOwn(options, 'mix_playback_order') || Object.hasOwn(options, 'recipe')))
+        throw fail('Save requires the complete captured Sample selection.', 409);
       return mutate('create', options, '/playlists', 'POST', {source_protocol: known.protocol, mode: options.mode, source: tuple(known.source),
         title: options.title, description: options.description, entry_refs: options.entry_refs,
         ...(['library_mix_selection_v1','artist_popular_selection_v1','artist_loved_selection_v1'].includes(known.protocol) ? {mix_playback_order: options.mix_playback_order} : {})});

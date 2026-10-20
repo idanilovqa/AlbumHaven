@@ -6,6 +6,27 @@ export function openNativeDialog(runtime, initial, callbacks = {}) {
   let options = initial, owner, mountClose, child, mountedHost, fallback, fallbackButton;
   let disposed = false, closed = false, failed = false, closeOptions;
   let opening = true, nativeClosed = false, nativeRetired = false, pendingClose;
+  // Physical cleanup is independent of logical disposal and opening failure.
+  // Only the native owner can provide these two positive settlement proofs.
+  let physicalObserver = typeof callbacks.onNativeSettlement === 'function' ? callbacks.onNativeSettlement : null;
+  if (physicalObserver) {
+    // Do not keep a second observer reference in the retained logical callbacks.
+    callbacks = {...callbacks};
+    delete callbacks.onNativeSettlement;
+  }
+  let physicalEvent = null, physicalDelivered = false;
+  const recordPhysical = (status, next) => {
+    if (!physicalObserver || physicalDelivered || physicalEvent) return;
+    physicalEvent = Object.freeze({status,
+      current: status === 'closed' && next?.current !== false,
+      restoreFocusRequested: status === 'closed' && (next || closeOptions)?.restoreFocus !== false});
+  };
+  const flushPhysical = () => {
+    if (opening || !physicalEvent || physicalDelivered) return;
+    const observer = physicalObserver, event = physicalEvent;
+    physicalDelivered = true; physicalObserver = null; physicalEvent = null;
+    try {observer?.(event);} catch { /* Observation cannot change native cleanup or legacy errors. */ }
+  };
   const disposeChild = () => {const previous = child; child = null; previous?.dispose?.();};
   const disposeFallback = () => {fallbackButton?.dispose(); fallbackButton = null; fallback?.remove(); fallback = null;};
   const finish = next => {
@@ -20,7 +41,10 @@ export function openNativeDialog(runtime, initial, callbacks = {}) {
     owner = null; mountClose = null;
     if (nativeClosed || nativeRetired || !nativeClose) return;
     nativeRetired = true;
-    nativeClose(null, {force: true, restoreFocus: false, returnToParent: false});
+    const completion = nativeClose(null, {force: true, restoreFocus: false, returnToParent: false});
+    if (completion && typeof completion.then === 'function') {
+      Promise.resolve(completion).catch(() => { /* Unknown cleanup is not physical settlement. */ });
+    }
   };
   const close = next => {
     if (disposed || closed) return;
@@ -32,7 +56,9 @@ export function openNativeDialog(runtime, initial, callbacks = {}) {
   };
   let openingError;
   try {
+  try {
     const opened = runtime.openForm({...initial,
+      onAdmissionRejected: () => recordPhysical('not-acquired'),
       returnFocus: () => options.returnFocus?.(),
       beforeDismiss: initial.beforeDismiss ? reason => options.beforeDismiss?.(reason) : undefined,
       onMount: (host, nativeClose) => {
@@ -53,9 +79,11 @@ export function openNativeDialog(runtime, initial, callbacks = {}) {
       onClose: (_host, next) => {
         if (nativeClosed) return;
         nativeClosed = true; mountedHost = null;
+        recordPhysical('closed', next);
         // Native cleanup can precede a throw. It is not consumer success yet.
         if (opening) {pendingClose = next; return;}
-        if (!failed && !disposed) finish(next);
+        try {if (!failed && !disposed) finish(next);}
+        finally {flushPhysical();}
       },
     });
     if (!opened || typeof opened.close !== 'function') throw new Error('This dialog is not available right now.');
@@ -79,6 +107,7 @@ export function openNativeDialog(runtime, initial, callbacks = {}) {
     // Outside the opening catch: a consumer callback throw is not an open failure.
     finish(pendingClose);
   }
+  } finally {opening = false; flushPhysical();}
   return {
     get element() {return mountedHost || null;},
     get closed() {return closed;},

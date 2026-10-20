@@ -1209,7 +1209,12 @@ def _ordered_album_duplicate_track_groups(
     grouped_tracks: dict[str, list[Track]] = {}
     folder_paths: dict[str, str] = {}
     containers = _contextual_album_containers([
-        (track.path, track.disc_number, track.album, track.edition)
+        (
+            getattr(track, "path", None),
+            getattr(track, "disc_number", None),
+            getattr(track, "album", None),
+            getattr(track, "edition", None),
+        )
         for track in tracks
     ])
     for track, container in zip(tracks, containers):

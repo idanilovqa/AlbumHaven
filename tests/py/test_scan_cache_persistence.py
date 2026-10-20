@@ -167,6 +167,17 @@ def test_full_scan_stale_sql_preserves_nested_scan_cache_file_entry():
     assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
 
 
+def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+
+    assert (
+        "coalesce( nullif(btrim(library.local_track_files.metadata #>> "
+        "'{scan_cache,source}'), ''), %(source)s ) = %(source)s"
+    ) in normalized_sql
+
+
 def test_targeted_featured_artist_sync_is_scoped_to_affected_scan_owned_albums():
     from music_app.services import scan_cache_persistence
 

@@ -20,7 +20,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 57],
   ['cover-providers', 28],
   ['metadata-mutations', 14],
-  ['playback-utilities', 45],
+  ['playback-utilities', 46],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 144-case assignment', () => {
+test('functional shard contract pins the approved four-way 145-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 144-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 144);
+  assert.equal(total, 145);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -858,6 +858,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     [
       'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
+      'FTC-LIBROOTS-019 reconciles offline legacy deletions without stale active tracks',
     ],
   );
   const ordinaryInvocationIndex = waves[1].invocations.findIndex(
@@ -944,7 +945,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
     ['gallery-search-visual', { cases: 57, waves: [1, 2] }],
     ['cover-providers', { cases: 28, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 45, waves: [1, 2, 3, 4] }],
+    ['playback-utilities', { cases: 46, waves: [1, 2, 3, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

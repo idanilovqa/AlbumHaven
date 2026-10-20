@@ -3489,6 +3489,36 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/offlineDeletionReconciliation.spec.js",
+    "case": "FTC-LIBROOTS-019 reconciles offline legacy deletions without stale active tracks",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "offline-deletion-reconciliation",
+    "databaseScenarios": [
+      "album-identity:legacy-source-less-track-file"
+    ],
+    "filesystemScenarios": [
+      "media-copy:offline-deletion-reconciliation"
+    ],
+    "expectedContracts": [
+      "offline-deleted-files-become-stale-after-full-scan",
+      "surviving-files-remain-the-only-active-track-projection",
+      "fully-removed-album-remains-an-explicit-missing-card",
+      "offline-deletion-reconciliation-survives-restart"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:offline-deletion-reconciliation",
+      "filesystemCopy": "media/cases/offline-deletion-reconciliation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
     "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
     "profile": "functional-core",

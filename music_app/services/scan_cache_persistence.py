@@ -5932,7 +5932,10 @@ def _mark_stale_track_files_sql() -> str:
           on library.library_roots.library_id = bootstrap_context.library_id
         where library.local_track_files.track_id = library.local_tracks.id
           and library.library_roots.id = library.local_track_files.library_root_id
-          and library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
+          and coalesce(
+            nullif(btrim(library.local_track_files.metadata #>> '{scan_cache,source}'), ''),
+            %(source)s
+          ) = %(source)s
           and library.local_track_files.scan_cache_stale is false
           and coalesce(
             nullif(library.library_roots.metadata ->> 'root_id', ''),

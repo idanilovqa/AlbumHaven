@@ -1005,6 +1005,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/offlineDeletionReconciliation.spec.js",
+              "case": "FTC-LIBROOTS-019 reconciles offline legacy deletions without stale active tracks",
+              "area": "library-roots"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity",
               "area": "gallery-search"

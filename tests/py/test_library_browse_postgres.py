@@ -2888,15 +2888,16 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
     assert "library.local_track_files" in sql
     assert "lower(library.local_artists.name)" not in sql
     assert "root_provenance,primary_category" in sql
-    stale_predicate = (
-        "coalesce((library.local_track_files.metadata #>> '{scan_cache,stale}')::boolean, false) is false"
-    )
+    stale_predicate = "library.local_track_files.scan_cache_stale is false"
     assert sql.count(stale_predicate) == 1
+    assert "metadata #>> '{scan_cache,stale}'" not in sql
     compact_sql = " ".join(sql.split())
     assert (
-        "left join library.local_track_files on library.local_track_files.track_id = library.local_tracks.id "
+        "join library.local_track_files on library.local_track_files.track_id = library.local_tracks.id "
         f"and {stale_predicate}"
     ) in compact_sql
+    assert "left join library.local_tracks" not in compact_sql
+    assert "left join library.local_track_files" not in compact_sql
 
 
 def test_postgres_selected_artist_payload_uses_featured_artist_identity_but_keeps_album_artist_credit():

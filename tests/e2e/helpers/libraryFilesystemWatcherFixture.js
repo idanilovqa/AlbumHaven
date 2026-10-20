@@ -16,6 +16,7 @@ const WATCHER_FIXTURE_DIRECTORIES = new Set([
   'watcher-featured-ownership',
   'watcher-numeric-discs',
   'watcher-year-distinct-releases',
+  'watcher-offline-deletion',
 ]);
 
 const RETAG_SCRIPT = `
@@ -42,6 +43,27 @@ tags.add(TPOS(encoding=3, text=[sys.argv[9]]))
 tags.save(track)
 if sys.argv[8] == "1" and ID3(track).getall("APIC"):
     raise RuntimeError("Watcher cover fixture still contains embedded artwork")
+`;
+
+const REMOVE_SCAN_SOURCE_SCRIPT = `
+import os
+import sys
+
+import psycopg
+
+with psycopg.connect(os.environ["ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"]) as connection:
+    row = connection.execute(
+        """
+        update library.local_track_files
+        set metadata = metadata #- '{scan_cache,source}'
+        where private_path = %s
+          and scan_cache_stale is false
+        returning id
+        """,
+        (sys.argv[1],),
+    ).fetchall()
+    if len(row) != 1:
+        raise RuntimeError("Expected exactly one active watcher-owned track file")
 `;
 
 function assertOwnedPath(mediaRoot, candidate) {
@@ -124,6 +146,17 @@ export async function createWatchedAlbumFixture(options = {}) {
       managedAppLifecycle: options.managedAppLifecycle, originalFailure,
     });
   }
+}
+
+// Call only while the managed application is stopped.
+export async function stageLegacyTrackFileWithoutScanSource(trackPath) {
+  const mediaRoot = resolveWritableFixtureMediaRoot(process.env);
+  const ownedPath = assertOwnedPath(mediaRoot, trackPath);
+  await execFileAsync(resolvePlaywrightPython(process.env), [
+    '-c',
+    REMOVE_SCAN_SOURCE_SCRIPT,
+    ownedPath,
+  ], { encoding: 'utf8', windowsHide: true });
 }
 
 async function buildWatchedAlbumFixture({

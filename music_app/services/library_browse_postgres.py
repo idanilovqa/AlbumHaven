@@ -7711,12 +7711,12 @@ def _selected_artist_sql() -> str:
             false
           ) as exception_override_present
         from selected_artist_albums
-        left join library.local_tracks
+        join library.local_tracks
           on library.local_tracks.library_id = selected_artist_albums.library_id
          and library.local_tracks.album_id = selected_artist_albums.album_id
-        left join library.local_track_files
+        join library.local_track_files
           on library.local_track_files.track_id = library.local_tracks.id
-         and coalesce((library.local_track_files.metadata #>> '{{scan_cache,stale}}')::boolean, false) is false
+         and library.local_track_files.scan_cache_stale is false
         left join lateral (
           select library.exception_overrides.override_payload
           from library.exception_overrides

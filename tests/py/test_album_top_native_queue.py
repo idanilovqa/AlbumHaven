@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from music_app.services import album_top_native_queue as queue
+from music_app.services import album_top_queue_popularity as popularity
 from music_app.services.owned_album_tops import AlbumTopError
 from music_app.services.owned_album_tops_postgres import PostgresOwnedAlbumTopsService
 from music_app.services.policy import ResourceScope
@@ -99,6 +100,17 @@ def owner(monkeypatch):
     calls = []
     monkeypatch.setattr(queue.remote_membership, 'bindings', lambda connection, top: {})
 
+    def inventory(connection, library_id, *, track_ids, lock):
+        assert connection is tops.connection and library_id == tops.live.library_id
+        assert lock is True and track_ids
+        return [{'original_local_track_id': row['id'], 'original_album_id': row['album_id'],
+            'inventory_evidence': [row['track_key']], 'availability': 'local',
+            'recording_mbid': None, 'recording_state': 'unasserted',
+            'recording_source': None, 'file_tags': []}
+            for row in connection.tracks if row['id'] in track_ids]
+
+    monkeypatch.setattr(popularity.inventory, 'read_inventory', inventory)
+
     def capture(self, connection, context, identities, *, constraints=None):
         calls.append(('capture', connection, context, list(identities), constraints))
         return {identity: native_target(identity) for identity in identities
@@ -158,7 +170,8 @@ def test_capture_preserves_curator_album_blocks_and_disc_track_id_order(owner):
                 'source': {'revision': '3', 'item_ref': album['item_ref'], 'catalog_ref': album['catalog_ref'],
                     'inventory_album_ref': album['inventory_album_ref'],
                     'inventory_track_ref': f'inventory-track:7:{identity}',
-                    'canonical_track_ref': f'canonical-{identity}'}, 'native_target': native_target(identity)}
+                    'canonical_track_ref': f'canonical-{identity}'}, 'native_target': native_target(identity),
+                'popularity': None}
     locks = [params for sql, params in con.calls if 'lock_top_native_catalog_binding' in sql]
     assert locks == [(TOP, ITEM, 7, 3, ALBUM), (TOP, SECOND_ITEM, 7, 3, OTHER)]
     candidates = [(sql, params) for sql, params in con.calls if 'from library.local_tracks' in sql]

@@ -4,7 +4,7 @@ This composes the established synthetic db fixture and RemoteCase observation
 owner directly. It intentionally does not request the old remote fixture whose
 teardown disables the pending immutable trigger. No cutoff trigger is disabled.
 """
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -73,7 +73,8 @@ class PreparationCase(RemoteCase):
         facts = facts or self.facts
         return self.sql("finish_top_remote_attempt", (*self.request_args(command, actor=actor, context_ref=context_ref),
             reservation["attempt_ref"], reservation["acquisition_ref"], facts.digest, facts.title,
-            facts.artist_display, facts.first_release_date, facts.primary_type))
+            facts.artist_display, facts.first_release_date, facts.primary_type,
+            None if facts.credited_artist_ids is None else [UUID(value) for value in facts.credited_artist_ids]))
 
     def fail(self, command, reservation, *, actor=None, error="provider_unavailable", context_ref=CONTEXT):
         return self.sql("fail_top_remote_attempt", (*self.request_args(command, actor=actor, context_ref=context_ref),

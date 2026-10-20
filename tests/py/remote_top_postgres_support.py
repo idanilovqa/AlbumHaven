@@ -5,7 +5,7 @@ its real role and real authority owner. Trusted setup can insert immutable test
 retained history only. Fresh pending facts use the actual version-2 lifecycle.
 """
 from contextlib import contextmanager
-from uuid import uuid4
+from uuid import UUID, uuid4
 from threading import get_ident
 
 import psycopg
@@ -270,7 +270,8 @@ class RemoteCase:
         facts = facts or self.facts
         args = (*self.binding_v2(command, actor=actor, context_ref=context_ref), reservation["attempt_ref"],
             reservation["acquisition_ref"], facts.digest, facts.title, facts.artist_display,
-            facts.first_release_date, facts.primary_type)
+            facts.first_release_date, facts.primary_type,
+            None if facts.credited_artist_ids is None else [UUID(value) for value in facts.credited_artist_ids])
         if connection is not None:
             assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
             assert_runtime_role(connection, self.db)

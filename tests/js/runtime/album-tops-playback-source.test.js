@@ -265,7 +265,7 @@ test('receipt guard reevaluates a phased native selection predicate before and a
 });
 
 test('changed mode or Stop setting cancels pending work; invalid, stale, or no-op configuration preserves a ready receipt', async () => {
-  for (const configuration of [{mode: 'random_albums'}, {stopAfterAlbum: true}]) {
+  for (const configuration of [{mode: 'random_albums'}, {mode: 'popular_songs'}, {stopAfterAlbum: true}]) {
     const env = fixture(), pending = deferred(); env.resolveWith(() => pending.promise);
     const result = assert.rejects(env.source.prepare(), isAbort), call = env.calls[0];
     assert.equal(env.source.configure(configuration), true); const after = env.source.snapshot();
@@ -273,7 +273,7 @@ test('changed mode or Stop setting cancels pending work; invalid, stale, or no-o
     assert.equal(env.source.snapshot(), after); assert.equal(after.visitedEnd, -1);
   }
   const env = fixture(), receipt = await env.source.prepare(), before = env.source.snapshot();
-  assert.equal(env.source.configure({mode: 'popular_songs'}), false); assert.equal(env.source.configure({stopAfterAlbum: 1}), false);
+  assert.equal(env.source.configure({mode: 'unsupported_mode'}), false); assert.equal(env.source.configure({stopAfterAlbum: 1}), false);
   assert.equal(env.source.configure({stopAfterAlbum: true}, {...before}), false); assert.equal(env.source.configure({mode: 'in_order'}), true);
   assert.equal(env.source.snapshot(), before); assert.equal(env.source.isReceiptCurrent(receipt), true);
   assert.equal(env.source.commit(receipt, receipt.payload), true);

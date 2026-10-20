@@ -88,11 +88,11 @@ test('end and start remain bounded; Previous deliberately replays visited occurr
   forward(plan, {direction: -1}); assert.equal(plan.snapshot().currentId, 'a1');
   assert.equal(plan.snapshot().visitedEnd, 1); assert.equal(forward(plan), 'a2');
 });
-test('unavailable global popularity and malformed mode changes preserve the accepted plan', () => {
+test('malformed mode changes preserve the accepted plan', () => {
   const plan = createTopQueuePlan(blocks()), current = plan.snapshot();
-  for (const mode of ['popular_songs', 'personal_plays', '', null]) assert.equal(plan.configure({mode}), false);
+  for (const mode of ['unsupported_mode', 'personal_plays', '', null]) assert.equal(plan.configure({mode}), false);
   assert.equal(plan.configure({stopAfterAlbum: 1}), false); assert.equal(plan.snapshot(), current);
-  assert.throws(() => createTopQueuePlan(blocks(), {mode: 'popular_songs'}), TypeError);
+  assert.throws(() => createTopQueuePlan(blocks(), {mode: 'unsupported_mode'}), TypeError);
 });
 test('duplicate, sparse, empty and malformed identities are rejected before scheduling', () => {
   for (const value of [null, [], Array(1), [{id: 'a', tracks: Array(1)}], [{id: 'a', tracks: []}],

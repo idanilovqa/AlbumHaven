@@ -17,6 +17,7 @@ function bridgeFixture() {
     set(target, key, value) {assert.equal(key, 'displayPreferences', 'only shared saved preference writes are allowed'); target[key] = value; return true;},
   });
   const view = Object.freeze({surface: Object.freeze({active: 'album_tops'}), top_ref: TOP, sentinel: 'native view identity'});
+  c.activeAppFormDialog = null; // Actual idle modal-owner ambient for this isolated preference fixture.
   c.state.view = view; c.state.gallery = galleryState; c.state.ui = {activeViewRequestId: 7};
   c.location = {href: 'https://albumhaven.example/?surface=album_tops'};
   c.AlbumHavenHomeRuntime = f.runtime;

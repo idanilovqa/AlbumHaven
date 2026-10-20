@@ -42,7 +42,7 @@ test('saved Top reuses the actual capsule, header progress slot and mixed Choice
   const menu = f.document.querySelector('[role="menu"][aria-label="Top playback options"]');
   assert.ok(menu); const rows = menu.querySelectorAll('[data-foobar-format]');
   assert.deepEqual(rows.map(row => row.getAttribute('data-foobar-format')), ['in_order', 'random_albums', 'random_songs', 'popular_songs', 'stop']);
-  assert.equal(rows[3].disabled, true); assert.equal(rows[4].getAttribute('role'), 'menuitemcheckbox');
+  assert.equal(rows[3].disabled, false); assert.equal(rows[4].getAttribute('role'), 'menuitemcheckbox');
   assert.equal(rows[0].getAttribute('aria-checked'), 'true'); assert.equal(rows[4].getAttribute('aria-checked'), 'false');
   f.click(rows[1]); assert.equal(root.querySelector('[data-playback-mode-badge]').textContent, 'A');
   f.click(options); f.click(f.document.querySelector('[data-foobar-format="stop"]'));

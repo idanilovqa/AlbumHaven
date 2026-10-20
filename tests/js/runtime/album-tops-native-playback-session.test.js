@@ -1,12 +1,16 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const {readRepo} = require('./native-home-harness.cjs');
+const {actualChoiceEnvironment, settle} = require('./album-tops-native-fixtures/actual-choice-runtime.cjs');
 const F = require('./album-tops-membership-fixtures/top-builder-fixtures.cjs');
 const {fixture, start, track: ordinaryTrack} = require('./search-native-fixtures/ownership-platform.cjs');
 
-let getAlbumTopPlaybackSession;
+let getAlbumTopPlaybackSession, mountAlbumTopPlaybackControls;
 test.before(async () => {
   ({getAlbumTopPlaybackSession} = await F.load('album-tops/playback-session.mjs'));
+  ({mountAlbumTopPlaybackControls} = await F.load('album-tops/playback-controls.mjs'));
 });
 const outcome = work => Promise.resolve(work).then(value => ({value}), error => ({error}));
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -15,14 +19,24 @@ const plain = value => JSON.parse(JSON.stringify(value));
 // those owners directly; it replaces neither a provider nor a playback owner.
 // The Set represents mounted-UI notifications only. The actual Album Tops
 // bridge and native consumer have separate connected acceptance coverage.
-async function environment(t, {blocks = [[101, 102], [103, 104], [105, 106]]} = {}) {
+async function environment(t, {blocks = [[101, 102], [103, 104], [105, 106]], popularity = {}, choice = false} = {}) {
   const h = await fixture(t), native = h.owner('TopPlaybackRuntime');
   const transport = h.c.AlbumHavenPrivateUITransport, listeners = new Set();
   const scopeKey = JSON.stringify([h.shell.dataset.nativeAccountId, h.shell.dataset.nativeLibraryId,
     transport.context(), transport.generation()]);
   const context = transport.context(), library = h.shell.dataset.nativeLibraryId;
   const notify = () => {for (const listener of [...listeners]) if (listeners.has(listener)) listener();};
+  const dom = choice ? actualChoiceEnvironment() : null;
+  const choices = [];
+  if (dom) for (const file of ['loop-range-controls.js', 'playback-control-cluster.js']) {
+    vm.runInContext(readRepo(`music_app/static/js/runtime/${file}`), dom.context, {filename: file});
+  }
   const runtime = Object.freeze({
+    ...(dom ? {...dom.runtime,
+      openChoice(trigger, options) {choices.push(options); return dom.runtime.openChoice(trigger, options);},
+      playbackControlHtml: dom.context.renderPlaybackControlCluster,
+      playbackControlElements: dom.context.getPlaybackControlClusterElements,
+      mountPlaybackOptions: dom.context.mountLoopEditActionControl} : {}),
     playback: Object.freeze({
       transport,
       captureScope(key) {
@@ -57,7 +71,10 @@ async function environment(t, {blocks = [[101, 102], [103, 104], [105, 106]]} = 
         tracks: numbers.map(number => ({queue_item_ref: `${item_ref}:${number}`,
           source: {revision, item_ref, catalog_ref, inventory_album_ref,
             inventory_track_ref: `inventory-track:${library}:${number}`, canonical_track_ref: `canonical-${number}`},
-          native_target: target(number, 'captured')}))};
+          native_target: target(number, 'captured'),
+          ...(Object.hasOwn(popularity, number) ? {popularity: popularity[number] === null ? null : {
+            provider: 'lastfm', metric: 'overall_scrobbles', count: popularity[number],
+            observed_at: '2001-01-01T00:00:00+00:00'}} : {})}))};
     });
     return {top_ref: topRef, revision, albums, unavailable_items: unavailable};
   }
@@ -113,9 +130,19 @@ async function environment(t, {blocks = [[101, 102], [103, 104], [105, 106]]} = 
     h.location.pathname = '/settings';
     notify();
   }
-  t.after(async () => {ui.abort(); transport.invalidate(); unsubscribeTransport(); listeners.clear(); await h.flush();});
+  let controls = null, controlProps = null;
+  if (dom) {
+    const status = dom.document.createElement('div'); dom.document.body.append(status);
+    controlProps = {resourceKind: 'album_top', isCurrent: () => uiCurrent,
+      state: {scopeKey, selectedTopRef: F.TOP, directory: {status: 'ready'},
+        detail: {status: 'ready', data: F.detail()}}};
+    controls = mountAlbumTopPlaybackControls(dom.host, status, runtime, controlProps);
+  }
+  t.after(async () => {controls?.dispose(); ui.abort(); transport.invalidate(); unsubscribeTransport(); listeners.clear();
+    await h.flush(); if (dom) {await settle(); dom.assertClean();}});
   return Object.assign(h, {native, transport, sessionRuntime: runtime, session, scopeKey, contextRef: context, listeners, notify, ui,
-    captureRequests, targetRequests, replyCapture, replyTarget, play, finishStart, acceptStart, acceptTransition, openSockets, depart});
+    captureRequests, targetRequests, replyCapture, replyTarget, play, finishStart, acceptStart, acceptTransition, openSockets, depart,
+    dom, controls, controlProps, choices});
 }
 
 function assertNoPlayback(h) {
@@ -483,3 +510,179 @@ for (const observation of ['notification', 'fresh launch', 'snapshot', 'configur
     assert.equal(h.engine().socket, socket); assert.equal(h.engine().context, context);
     assert.equal(socket.closeCount, 0); assert.equal(context.closeCount, 0);
   });
+
+async function chooseTopMode(h, value) {
+  const play = h.dom.host.querySelector('[data-playback-control-action="play"]');
+  play.focus(); h.dom.click(h.dom.host.querySelector('[data-playback-control-action="options"]'));
+  const row = h.dom.document.querySelector(`[data-foobar-format="${value}"]`);
+  assert.ok(row, 'canonical Choice renders the requested mode'); assert.equal(row.disabled, false);
+  h.dom.click(row); await settle(); await h.flush();
+}
+function queueTrackIds(h) {
+  return Array.from(h.state.player.playbackQueue.tracks, row => Number(row.path.split('/').at(-1).split('.')[0]));
+}
+async function startFromTopControl(h) {
+  h.dom.click(h.dom.host.querySelector('[data-playback-control-action="play"]'));
+  await h.flush(); h.replyCapture(); await h.flush(); h.replyTarget(); await h.openSockets(); await settle();
+  assert.ok(h.engine().roles.current, 'actual Top session and streaming owner accepted the Choice/Play command');
+  assert.equal(h.dom.host.querySelector('[data-playback-control-action="play"]').disabled, false);
+}
+
+for (const unknown of [false, true]) test(`actual Choice popular Play captures every album occurrence (${unknown ? 'all unknown' : 'ties and zero'})`, async t => {
+  const blocks = [[101, 102, 103, 104, 105], [201, 202, 203]];
+  const h = await environment(t, {choice: true, blocks,
+    popularity: unknown ? {101: null, 202: null} : {101: null, 102: 0, 103: 8, 104: 8, 201: null, 202: 7}});
+  await chooseTopMode(h, 'popular_songs');
+  assert.equal(h.dom.host.querySelector('[data-playback-mode-badge]').textContent, 'P');
+  assert.match(h.dom.host.querySelector('[data-playback-control-action="play"]').getAttribute('aria-label'), /Most popular songs/);
+  assert.equal(h.captureRequests().length, 0); assert.equal(h.targetRequests().length, 0);
+  await startFromTopControl(h);
+  const expected = unknown ? blocks.flat() : [103, 104, 102, 101, 105, 202, 201, 203];
+  assert.deepEqual(queueTrackIds(h), expected);
+  assert.equal(h.state.player.current.path, `/synthetic/fresh/${expected[0]}.flac`);
+  assert.deepEqual(JSON.parse(h.captureRequests()[0].options.body), {revision: '7'});
+  assert.equal(h.captureRequests().length, 1); assert.equal(h.targetRequests().length, 1);
+  assert.equal(Object.keys(JSON.parse(h.targetRequests()[0].options.body)).length, 6);
+  assert.equal(h.session.snapshot(F.TOP, h.scopeKey).mode, 'popular_songs');
+  assert.equal(h.c.buildPersistedPlayerState(), null);
+});
+
+test('actual Choice popularity edit after Previous preserves audio and the full visited prefix', async t => {
+  const h = await environment(t, {choice: true, blocks: [[101, 102, 103, 104], [201, 202, 203]],
+    popularity: {103: 0, 104: 8, 201: 1, 202: 9}});
+  await h.acceptStart(); await h.acceptTransition(outcome(h.c.playCompactQueueOffset(1)));
+  await h.acceptTransition(outcome(h.c.playCompactQueueOffset(-1)));
+  const queue = h.state.player.playbackQueue, prefix = queue.tracks.slice(0, 2);
+  const current = h.state.player.current, role = h.engine().roles.current;
+  const socket = h.engine().socket, context = h.engine().context;
+  const opens = () => h.platform.sockets.flatMap(value => value.sent).filter(value => value.type === 'open').length;
+  const before = opens();
+  const nextSource = JSON.parse(h.targetRequests()[1].options.body);
+  await chooseTopMode(h, 'popular_songs');
+  assert.deepEqual(queueTrackIds(h), [101, 102, 104, 103, 202, 201, 203]);
+  assert.equal(queue.currentIndex, 0); assert.equal(queue.tracks[0], prefix[0]); assert.equal(queue.tracks[1], prefix[1]);
+  assert.equal(h.state.player.current, current); assert.equal(h.engine().roles.current, role);
+  assert.equal(h.engine().socket, socket); assert.equal(h.engine().context, context); assert.equal(opens(), before);
+  assert.equal(h.captureRequests().length, 1); assert.equal(h.targetRequests().length, 4);
+  const continuity = h.targetRequests()[3];
+  assert.deepEqual(JSON.parse(continuity.options.body), nextSource);
+  assert.equal(Object.keys(nextSource).length, 6);
+  assert.equal(continuity.options.signal.aborted, false);
+  assert.equal(h.session.snapshot(F.TOP, h.scopeKey).mode, 'popular_songs');
+  assert.equal(h.dom.host.querySelector('[data-playback-mode-badge]').textContent, 'P');
+  const next = outcome(h.c.playCompactQueueOffset(1)); await h.flush();
+  assert.equal(continuity.options.signal.aborted, true, 'deliberate Next supersedes pending continuity authority');
+  assert.equal(h.targetRequests().length, 5);
+  assert.deepEqual(JSON.parse(h.targetRequests()[4].options.body), nextSource);
+  h.replyTarget(continuity); await h.flush();
+  assert.equal(h.state.player.current, current); assert.equal(h.engine().roles.current, role);
+  assert.equal(queue.currentIndex, 0); assert.equal(opens(), before);
+  await h.acceptTransition(next);
+  assert.equal(h.state.player.current.path, '/synthetic/fresh/102.flac');
+  assert.equal(h.captureRequests().length, 1); assert.equal(h.targetRequests().length, 5);
+});
+
+test('actual popular session keeps Stop independent and deliberate Next crosses only after the album boundary', async t => {
+  const h = await environment(t, {choice: true, blocks: [[101, 102], [201, 202]],
+    popularity: {101: 0, 102: 9, 201: 0, 202: 7}});
+  await chooseTopMode(h, 'popular_songs'); await chooseTopMode(h, 'stop'); await startFromTopControl(h);
+  assert.deepEqual(queueTrackIds(h), [102, 101, 202, 201]);
+  assert.equal(h.session.snapshot(F.TOP, h.scopeKey).stopAfterAlbum, true);
+  await h.acceptTransition(outcome(h.c.playCompactQueueOffset(1)));
+  const queue = h.state.player.playbackQueue, requests = h.targetRequests().length;
+  assert.equal(h.state.player.current.path, '/synthetic/fresh/101.flac');
+  assert.equal(h.native.shouldStop(queue), true); assert.equal(await h.native.prepareNext(queue), null);
+  assert.equal(h.targetRequests().length, requests);
+  await h.acceptTransition(outcome(h.c.playCompactQueueOffset(1)));
+  assert.equal(h.state.player.current.path, '/synthetic/fresh/202.flac');
+  assert.equal(h.session.snapshot(F.TOP, h.scopeKey).mode, 'popular_songs');
+  assert.equal(h.session.snapshot(F.TOP, h.scopeKey).stopAfterAlbum, true);
+});
+
+test('actual Choice toggles Stop during active popular playback without restarting audio or reusing stale continuity', async t => {
+  const h = await environment(t, {choice: true, blocks: [[101], [201, 202]],
+    popularity: {101: 0, 201: 0, 202: 9}});
+  await chooseTopMode(h, 'popular_songs'); await startFromTopControl(h);
+  const queue = h.state.player.playbackQueue, current = h.state.player.current, role = h.engine().roles.current;
+  const socket = h.engine().socket, context = h.engine().context;
+  const opens = () => h.platform.sockets.flatMap(value => value.sent).filter(value => value.type === 'open').length;
+  const before = opens(), library = h.shell.dataset.nativeLibraryId;
+  const nextSource = {revision: '7', item_ref: F.id(22), catalog_ref: F.id(12),
+    inventory_album_ref: `inventory-album:${library}:12`, inventory_track_ref: `inventory-track:${library}:202`,
+    canonical_track_ref: 'canonical-202'};
+  const assertCurrent = stopAfterAlbum => {
+    assert.equal(h.state.player.playbackQueue, queue); assert.deepEqual(queueTrackIds(h), [101, 202, 201]);
+    assert.equal(queue.currentIndex, 0); assert.equal(h.state.player.current, current);
+    assert.equal(h.engine().roles.current, role); assert.equal(h.engine().roles.continuity, null);
+    assert.equal(h.engine().socket, socket); assert.equal(h.engine().context, context);
+    assert.equal(socket.closeCount, 0); assert.equal(context.closeCount, 0); assert.equal(opens(), before);
+    assert.equal(h.captureRequests().length, 1); assert.equal(h.c.buildPersistedPlayerState(), null);
+    assert.equal(h.session.snapshot(F.TOP, h.scopeKey).mode, 'popular_songs');
+    assert.equal(h.session.snapshot(F.TOP, h.scopeKey).stopAfterAlbum, stopAfterAlbum);
+    assert.equal(h.dom.host.querySelector('[data-playback-mode-badge]').textContent, 'P');
+    assert.equal(h.native.shouldStop(queue), stopAfterAlbum);
+  };
+  assertCurrent(false); assert.equal(h.targetRequests().length, 1);
+
+  await chooseTopMode(h, 'stop');
+  assertCurrent(true); assert.equal(h.targetRequests().length, 1);
+  assert.equal(await h.native.prepareNext(queue), null);
+  assert.equal(h.targetRequests().length, 1);
+
+  await chooseTopMode(h, 'stop');
+  assertCurrent(false); assert.equal(h.targetRequests().length, 2);
+  const stale = h.targetRequests()[1];
+  assert.deepEqual(JSON.parse(stale.options.body), nextSource);
+  assert.equal(stale.options.signal.aborted, false);
+  await chooseTopMode(h, 'stop');
+  assertCurrent(true); assert.equal(stale.options.signal.aborted, true);
+  assert.equal(h.targetRequests().length, 2);
+  h.replyTarget(stale); await h.flush();
+  assertCurrent(true); assert.equal(h.engine().pendingContinuityTrack, null);
+
+  await chooseTopMode(h, 'stop');
+  assertCurrent(false); assert.equal(h.targetRequests().length, 3);
+  const fresh = h.targetRequests()[2];
+  assert.notEqual(fresh.options.signal, stale.options.signal);
+  assert.equal(fresh.options.signal.aborted, false);
+  assert.deepEqual(JSON.parse(fresh.options.body), nextSource);
+  h.replyTarget(fresh); await h.flush();
+  assertCurrent(false);
+  assert.equal(h.engine().pendingContinuityTrack?.path, '/synthetic/fresh/202.flac');
+  assert.equal(h.native.peek(queue), h.engine().pendingContinuityTrack);
+
+  await chooseTopMode(h, 'stop');
+  assertCurrent(true); assert.equal(h.targetRequests().length, 3);
+  assert.equal(h.engine().pendingContinuityTrack, null); assert.equal(h.native.peek(queue), null);
+});
+
+for (const stage of ['capture', 'target']) test(`popular pending ${stage} cannot revive after current UI retirement`, async t => {
+  const h = await environment(t, {popularity: {102: 20}}), work = h.play({mode: 'popular_songs'});
+  await h.flush(); if (stage === 'target') {h.replyCapture(); await h.flush();}
+  const stale = stage === 'capture' ? h.captureRequests().at(-1) : h.targetRequests().at(-1);
+  h.depart(); assert.equal(stale.options.signal.aborted, true);
+  if (stage === 'capture') h.replyCapture(stale); else h.replyTarget(stale);
+  assert.equal((await work).error?.name, 'AbortError'); await h.flush(); assertNoPlayback(h);
+  assert.equal(h.targetRequests().length, stage === 'capture' ? 0 : 1);
+});
+
+test('retained actual popular Choice callback cannot reconfigure after scope retirement', async t => {
+  const h = await environment(t, {choice: true, popularity: {102: 20}});
+  await chooseTopMode(h, 'popular_songs'); await startFromTopControl(h);
+  const play = h.dom.host.querySelector('[data-playback-control-action="play"]');
+  play.focus(); h.dom.click(h.dom.host.querySelector('[data-playback-control-action="options"]'));
+  const callback = h.choices.at(-1).onSelect;
+  const oldRow = h.dom.document.querySelector('[data-foobar-format="popular_songs"]');
+  const requests = h.targetRequests().length, captures = h.captureRequests().length;
+  h.depart(); h.transport.invalidate(); h.controls.update(h.controlProps); await h.flush();
+  assert.equal(callback('popular_songs'), false); assert.equal(callback('stop'), false);
+  h.dom.click(oldRow); await settle();
+  assert.equal(h.session.snapshot(F.TOP, h.scopeKey), null); assert.equal(h.engine().roles.current, null);
+  assert.equal(h.targetRequests().length, requests); assert.equal(h.captureRequests().length, captures);
+});
+
+test('invalid popularity never reaches real session native admission', async t => {
+  const h = await environment(t, {popularity: {101: -1}}), work = h.play({mode: 'popular_songs'});
+  await h.flush(); h.replyCapture(); assert.equal((await work).error?.status, 502);
+  assert.equal(h.targetRequests().length, 0); assertNoPlayback(h);
+});

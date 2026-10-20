@@ -27,10 +27,11 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 2
+FILE_METADATA_SCHEMA_VERSION = 3
 
 if EasyID3 is not None:
     EasyID3.RegisterTXXXKey("albumrating", "Album Rating")
+    EasyID3.RegisterTXXXKey("albumedition", "Album Edition")
 _FULL_TAG_TEXT_ALIASES = {
     "talb": "album",
     "tpe2": "albumartist",
@@ -41,7 +42,7 @@ _FULL_TAG_TEXT_ALIASES = {
     "tdor": "originaldate",
     "trck": "tracknumber",
     "tpos": "discnumber",
-    "tit3": "version",
+    "tit3": "subtitle",
     "tsst": "discsubtitle",
     "tso2": "albumartistsort",
     "\xa9alb": "album",
@@ -392,7 +393,7 @@ def apply_text_repairs_to_file(path: Path, repairs: dict[str, str]) -> tuple[boo
         "year": "date",
         "track_number": "tracknumber",
         "disc_number": "discnumber",
-        "edition": "version",
+        "edition": "albumedition",
         "album_rating": "albumrating",
     }
 
@@ -525,7 +526,7 @@ def read_editable_tag_values(path: Path, fields: set[str]) -> dict[str, str]:
         "year": "date",
         "track_number": "tracknumber",
         "disc_number": "discnumber",
-        "edition": "version",
+        "edition": "albumedition",
         "album_rating": "albumrating",
     }
     requested_fields = {str(field) for field in fields}

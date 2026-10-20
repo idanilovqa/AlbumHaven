@@ -11,7 +11,7 @@ import pytest
 from music_app.services import metadata
 
 
-@pytest.mark.parametrize("subtitle_tag", ["subtitle", "discsubtitle", "TSST"])
+@pytest.mark.parametrize("subtitle_tag", ["subtitle", "discsubtitle", "TSST", "TIT3", "TXXX:part"])
 def test_track_and_disc_subtitles_do_not_split_album_editions(monkeypatch, tmp_path, subtitle_tag):
     from music_app.services.library import build_albums_from_file_cache
 
@@ -36,7 +36,71 @@ def test_track_and_disc_subtitles_do_not_split_album_editions(monkeypatch, tmp_p
     assert len(albums[0].tracks) == 2
 
 
-@pytest.mark.parametrize("edition_tag", ["edition", "album edition", "albumedition", "version", "VERSION", "TIT3"])
+@pytest.mark.parametrize(
+    ("album_artist", "album_name", "track_frames"),
+    [
+        (
+            "Art Zoyd",
+            "Génération sans futur",
+            [
+                {"TIT3": ["La Ville"], "TXXX:part": ["La Ville"]},
+                {"TIT3": ["Speedy Gonzalez"], "TXXX:part": ["Speedy Gonzalez"]},
+            ],
+        ),
+        (
+            "I Monster",
+            "Neveroddoreven",
+            [
+                {"TIT3": ["Glamour Puss Mix"]},
+                {"TIT3": ["Sticky Black Vinyl Mix"]},
+            ],
+        ),
+        (
+            "Annot Rhül",
+            "Leviathan",
+            [
+                {"TXXX:part": ["Part I"]},
+                {"TXXX:part": ["Part II"]},
+            ],
+        ),
+    ],
+)
+def test_track_part_regressions_collapse_to_one_release(
+    monkeypatch,
+    tmp_path,
+    album_artist,
+    album_name,
+    track_frames,
+):
+    from music_app.services.library import build_albums_from_file_cache
+
+    entries = {}
+    for number, frames in enumerate(track_frames, start=1):
+        path = tmp_path / f"{number:02d}.mp3"
+        path.touch()
+        tags = {
+            "album": [album_name],
+            "albumartist": [album_artist],
+            "artist": [album_artist],
+            "title": [f"Track {number}"],
+            "tracknumber": [str(number)],
+            "date": ["2001"],
+            **frames,
+        }
+        monkeypatch.setattr(
+            metadata,
+            "MutagenFile",
+            lambda _path, tags=tags: SimpleNamespace(tags=tags),
+        )
+        entries[str(path)] = metadata.read_metadata_for_file(path)
+
+    albums = build_albums_from_file_cache(entries)
+    assert len(albums) == 1
+    assert albums[0].edition is None
+    assert len(albums[0].tracks) == len(track_frames)
+
+
+@pytest.mark.parametrize("edition_tag", ["edition", "album edition", "albumedition", "version", "VERSION"])
 def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, edition_tag):
     from music_app.services.library import build_albums_from_file_cache
 
@@ -72,8 +136,11 @@ def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, 
         ({"metadata_schema_version": "1"}, False),
         ({"metadata_schema_version": 1}, False),
         ({"metadata_schema_version": 2}, False),
-        ({"metadata_schema_version": 2, "release_date": None}, True),
-        ({"metadata_schema_version": 2, "release_date": "2004-07-16"}, True),
+        ({"metadata_schema_version": 2, "release_date": None}, False),
+        ({"metadata_schema_version": 2, "release_date": "2004-07-16"}, False),
+        ({"metadata_schema_version": 3}, False),
+        ({"metadata_schema_version": 3, "release_date": None}, True),
+        ({"metadata_schema_version": 3, "release_date": "2004-07-16"}, True),
     ],
 )
 def test_file_metadata_schema_is_current_requires_exact_non_bool_version(
@@ -238,7 +305,7 @@ def test_full_tag_aliases_preserve_easy_id3_names_used_by_metadata_extraction():
         "originaldate": frames["tdor"],
         "tracknumber": frames["trck"],
         "discnumber": frames["tpos"],
-        "version": frames["tit3"],
+        "subtitle": frames["tit3"],
         "discsubtitle": frames["tsst"],
         "albumartistsort": frames["tso2"],
     }
@@ -349,6 +416,12 @@ def test_apply_text_repairs_round_trips_every_exposed_physical_field(tmp_path: P
     track_path = tmp_path / "all-fields.mp3"
     _generate_tagged_mp3(track_path, album_rating=4)
 
+    from mutagen.id3 import ID3, TIT3
+
+    original_tags = ID3(track_path)
+    original_tags.add(TIT3(encoding=3, text=["Track Subtitle"]))
+    original_tags.save(track_path)
+
     repairs = {
         "artist": "Edited Artist",
         "album_artist": "Edited Album Artist",
@@ -366,6 +439,15 @@ def test_apply_text_repairs_round_trips_every_exposed_physical_field(tmp_path: P
 
     assert changed is True
     assert set(changed_fields) == set(repairs)
+
+    physical_tags = ID3(track_path)
+    assert [str(value) for value in physical_tags.getall("TXXX:Album Edition")[0].text] == [
+        "Anniversary Edition"
+    ]
+    assert [str(value) for value in physical_tags.getall("TIT3")[0].text] == [
+        "Track Subtitle"
+    ]
+
     parsed = metadata.read_metadata_for_file(track_path)
     assert {
         "artist": parsed["artist"],
@@ -470,7 +552,7 @@ def test_read_metadata_for_generated_mp3_parses_real_id3_album_rating_txxx(
     assert parsed["album_artist"] == "Christopher Tin"
     assert parsed["genre"] == "Classical Crossover"
     assert parsed["album_rating"] == 9
-    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 2
+    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 3
 
 def test_read_editable_tag_values_returns_exact_blanks_and_requested_fields(monkeypatch):
     audio = {

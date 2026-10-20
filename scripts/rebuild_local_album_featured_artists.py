@@ -5,6 +5,11 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from music_app.services.music_identity_matching import same_artist_credit_spelling
+from music_app.services.relation_projection_postgres import (
+    inventory_publication_advisory_lock_sql,
+)
+
 try:
     import psycopg
     from psycopg.rows import dict_row
@@ -105,9 +110,80 @@ def _bootstrap_context_cte() -> str:
     """
 
 
-def _repair_source_rows_sql() -> str:
+def _owner_equivalent_featured_candidates_sql() -> str:
     return (
         _bootstrap_context_cte()
+        + """
+        , candidate_rows as (
+          select distinct
+            library.local_albums.id as album_id,
+            owner_artist.name as owner_name,
+            track_artist.id as artist_id,
+            track_artist.name as artist_name
+          from library.local_albums
+          join bootstrap_context
+            on bootstrap_context.library_id = library.local_albums.library_id
+          join library.local_artists as owner_artist
+            on owner_artist.id = library.local_albums.artist_id
+          join library.local_tracks
+            on library.local_tracks.album_id = library.local_albums.id
+          join library.local_artists as track_artist
+            on track_artist.id = library.local_tracks.artist_id
+          where track_artist.id <> owner_artist.id
+
+          union
+
+          select distinct
+            library.local_albums.id as album_id,
+            owner_artist.name as owner_name,
+            member_artist.id as artist_id,
+            member_artist.name as artist_name
+          from library.local_albums
+          join bootstrap_context
+            on bootstrap_context.library_id = library.local_albums.library_id
+          join library.local_artists as owner_artist
+            on owner_artist.id = library.local_albums.artist_id
+          join lateral jsonb_array_elements_text(
+            coalesce(library.local_albums.metadata -> 'featured_artists', '[]'::jsonb)
+          ) as featured_artist(name)
+            on true
+          join library.local_artists as member_artist
+            on member_artist.library_id = library.local_albums.library_id
+           and member_artist.artist_key = lower(featured_artist.name)
+          where member_artist.id <> owner_artist.id
+        )
+        select album_id, owner_name, artist_id, artist_name
+        from candidate_rows
+        """
+    )
+
+
+def _owner_equivalent_featured_pairs(rows: list[dict[str, Any]]) -> set[tuple[int, int]]:
+    return {
+        (int(row["album_id"]), int(row["artist_id"]))
+        for row in rows
+        if same_artist_credit_spelling(row.get("owner_name"), row.get("artist_name"))
+    }
+
+
+def _owner_equivalent_rows_cte(pairs: set[tuple[int, int]]) -> str:
+    values = ",\n".join(
+        f"({album_id}::bigint, {artist_id}::bigint)"
+        for album_id, artist_id in sorted(pairs)
+    )
+    if not values:
+        values = "(null::bigint, null::bigint)"
+    return f"""
+        , owner_equivalent_rows (album_id, artist_id) as (
+          values {values}
+        )
+    """
+
+
+def _repair_source_rows_sql(owner_equivalent_pairs: set[tuple[int, int]]) -> str:
+    return (
+        _bootstrap_context_cte()
+        + _owner_equivalent_rows_cte(owner_equivalent_pairs)
         + """
         ,
         owner_rows as (
@@ -142,6 +218,12 @@ def _repair_source_rows_sql() -> str:
             on library.local_artists.library_id = library.local_albums.library_id
            and library.local_artists.artist_key = lower(featured_artist.name)
           where library.local_artists.id <> coalesce(library.local_albums.artist_id, -1)
+            and not exists (
+              select 1
+              from owner_equivalent_rows
+              where owner_equivalent_rows.album_id = library.local_albums.id
+                and owner_equivalent_rows.artist_id = library.local_artists.id
+            )
         ),
         track_rows as (
           select distinct
@@ -161,6 +243,12 @@ def _repair_source_rows_sql() -> str:
             on library.local_albums.id = library.local_tracks.album_id
           where library.local_tracks.album_id is not null
             and library.local_tracks.artist_id is not null
+            and not exists (
+              select 1
+              from owner_equivalent_rows
+              where owner_equivalent_rows.album_id = library.local_tracks.album_id
+                and owner_equivalent_rows.artist_id = library.local_tracks.artist_id
+            )
         ),
         source_rows as (
           select * from owner_rows
@@ -178,9 +266,10 @@ def _repair_source_rows_sql() -> str:
     )
 
 
-def _apply_repair_sql() -> str:
+def _apply_repair_sql(owner_equivalent_pairs: set[tuple[int, int]]) -> str:
     return (
         _bootstrap_context_cte()
+        + _owner_equivalent_rows_cte(owner_equivalent_pairs)
         + """
         ,
         deleted_rows as (
@@ -221,6 +310,12 @@ def _apply_repair_sql() -> str:
             on library.local_artists.library_id = library.local_albums.library_id
            and library.local_artists.artist_key = lower(featured_artist.name)
           where library.local_artists.id <> coalesce(library.local_albums.artist_id, -1)
+            and not exists (
+              select 1
+              from owner_equivalent_rows
+              where owner_equivalent_rows.album_id = library.local_albums.id
+                and owner_equivalent_rows.artist_id = library.local_artists.id
+            )
         ),
         track_rows as (
           select distinct
@@ -240,6 +335,12 @@ def _apply_repair_sql() -> str:
             on library.local_albums.id = library.local_tracks.album_id
           where library.local_tracks.album_id is not null
             and library.local_tracks.artist_id is not null
+            and not exists (
+              select 1
+              from owner_equivalent_rows
+              where owner_equivalent_rows.album_id = library.local_tracks.album_id
+                and owner_equivalent_rows.artist_id = library.local_tracks.artist_id
+            )
         ),
         source_rows as (
           select * from owner_rows
@@ -283,7 +384,16 @@ def rebuild_featured_artist_rows(*, apply: bool) -> RepairReport:
     with _connect(database_url) as connection:
         if apply:
             _ensure_apply_ready(connection)
-        sql = _apply_repair_sql() if apply else _repair_source_rows_sql()
+            connection.execute(inventory_publication_advisory_lock_sql())
+        candidate_rows = connection.execute(
+            _owner_equivalent_featured_candidates_sql()
+        ).fetchall()
+        owner_equivalent_pairs = _owner_equivalent_featured_pairs(candidate_rows)
+        sql = (
+            _apply_repair_sql(owner_equivalent_pairs)
+            if apply
+            else _repair_source_rows_sql(owner_equivalent_pairs)
+        )
         row = connection.execute(sql).fetchone()
         if apply:
             connection.commit()

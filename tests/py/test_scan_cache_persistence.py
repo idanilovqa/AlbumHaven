@@ -2044,11 +2044,6 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
             "artist_key": "broadcast",
             "featured_kind": "owner",
         },
-        {
-            "album_key": "broadcast::tender buttons",
-            "artist_key": "broadcast",
-            "featured_kind": "featured_track_artist",
-        },
     ]
 
 
@@ -2757,7 +2752,6 @@ def test_postgres_scan_cache_adapter_splits_featured_track_artists_into_featured
         for row in featured_rows
     } == {
         ("artist one", "owner"),
-        ("artist one", "featured_track_artist"),
         ("guest one", "featured_track_artist"),
     }
 

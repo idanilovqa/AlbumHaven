@@ -57,6 +57,88 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
         isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_featured_artist_rebuild_preserves_guests_and_suppresses_owner_variants(
+    watcher_repair_inventory,
+    monkeypatch,
+):
+    from scripts import rebuild_local_album_featured_artists as rebuild
+
+    fixture = watcher_repair_inventory
+    owner = fixture.entry(
+        "Owner/Rebuild Album/01.flac",
+        artist="Owner",
+        album="Rebuild Album",
+    )
+    guest = fixture.entry(
+        "Owner/Rebuild Album/02.flac",
+        artist="Guest Artist",
+        album="Rebuild Album",
+    )
+    fixture.seed(owner, guest)
+    monkeypatch.setenv("ALBUM_HAVEN_DATABASE_URL", fixture.setup_url)
+    monkeypatch.setattr(rebuild, "_connect", isolatedPostgres._connect)
+
+    rebuild.rebuild_featured_artist_rows(apply=True)
+
+    alias = fixture.entry(
+        "Owner/Rebuild Album/03.flac",
+        artist="OWNER.",
+        album="Rebuild Album",
+    )
+    fixture.seed(owner, guest, alias)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """
+            insert into library.local_album_featured_artists (
+              library_id,
+              album_id,
+              artist_id,
+              featured_kind,
+              metadata
+            )
+            select
+              album.library_id,
+              album.id,
+              artist.id,
+              'featured_track_artist',
+              '{"source":"test_owner_variant"}'::jsonb
+            from library.local_albums as album
+            join library.local_artists as artist
+              on artist.library_id = album.library_id
+             and artist.name = 'OWNER.'
+            where album.title = 'Rebuild Album'
+            on conflict do nothing
+            """
+        )
+        connection.commit()
+
+    rebuild.rebuild_featured_artist_rows(apply=True)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute(
+            """
+            select artist.name, featured.featured_kind
+            from library.local_album_featured_artists as featured
+            join library.local_albums as album
+              on album.id = featured.album_id
+            join library.local_artists as artist
+              on artist.id = featured.artist_id
+            where album.title = 'Rebuild Album'
+            order by artist.name, featured.featured_kind
+            """
+        ).fetchall()
+
+    assert ("OWNER.", "featured_track_artist") not in {
+        (row["name"], row["featured_kind"]) for row in rows
+    }, rows
+    assert ("Owner", "owner") in {
+        (row["name"], row["featured_kind"]) for row in rows
+    }, rows
+    assert ("Guest Artist", "featured_track_artist") in {
+        (row["name"], row["featured_kind"]) for row in rows
+    }, rows
+
+
 @pytest.mark.parametrize("missing_cover", [False, True])
 def test_live_spotify_quota_problem_is_durable_and_clears_after_recovery(watcher_repair_inventory, missing_cover):
     from music_app.services.cover_provider_outcomes_postgres import persist_cover_provider_outcomes

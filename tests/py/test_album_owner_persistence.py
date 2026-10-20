@@ -181,6 +181,109 @@ def test_unanimous_dominant_owner_keeps_one_off_guest_album_non_compilation(
 
 
 @pytest.mark.parametrize(
+    "track_artist",
+    [
+        pytest.param("BEYONCÉ", id="case"),
+        pytest.param("Beyoncé.", id="punctuation"),
+        pytest.param("Beyonce\u0301", id="unicode-composition"),
+        pytest.param("Beyonce", id="diacritic"),
+    ],
+)
+def test_owner_equivalent_track_credit_is_not_persisted_as_featured(
+    monkeypatch,
+    track_artist,
+):
+    _album, rows = _published_rows(
+        monkeypatch,
+        album="Owner Credit Variants",
+        album_artist="Beyoncé",
+        track_artists=(track_artist,),
+    )
+
+    _artist_rows, _album_rows, featured_rows, _track_rows, _track_file_rows = rows
+
+    assert [
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+    ] == [("beyoncé", "owner")]
+
+
+def test_owner_equivalent_album_member_does_not_create_duplicate_artist(
+    monkeypatch,
+):
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    file_cache = _file_cache(
+        album="Owner Member Variant",
+        album_artist="Beyoncé",
+        track_artists=("Beyoncé",),
+    )
+    albums = build_albums_from_file_cache(file_cache)
+    assert len(albums) == 1
+    albums[0].artists = ["Beyoncé", "Beyonce"]
+
+    artist_rows, _album_rows, featured_rows, _track_rows, _track_file_rows = (
+        scan_cache_persistence._inventory_rows_from_albums(file_cache, albums)
+    )
+
+    assert [row["artist_key"] for row in artist_rows] == ["beyoncé"]
+    assert [
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+    ] == [("beyoncé", "owner")]
+
+
+def test_owner_variant_with_guest_keeps_only_guest_featured(monkeypatch):
+    _album, rows = _published_rows(
+        monkeypatch,
+        album="Owner Variant With Guest",
+        album_artist="Beyoncé",
+        track_artists=("BEYONCE. feat. Guest Artist",),
+    )
+
+    _artist_rows, _album_rows, featured_rows, _track_rows, _track_file_rows = rows
+
+    assert {
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+    } == {
+        ("beyoncé", "owner"),
+        ("guest artist", "featured_track_artist"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("album_artist", "track_artist"),
+    [
+        pytest.param("Kino", "Кино", id="different-script"),
+        pytest.param("M", "MØ", id="non-ascii-letter"),
+        pytest.param("क", "क़", id="script-letter-mark"),
+        pytest.param("M", "M+", id="meaningful-symbol"),
+    ],
+)
+def test_distinct_artist_credit_remains_featured(
+    monkeypatch,
+    album_artist,
+    track_artist,
+):
+    _album, rows = _published_rows(
+        monkeypatch,
+        album="Distinct Artist Credits",
+        album_artist=album_artist,
+        track_artists=(track_artist,),
+    )
+
+    _artist_rows, _album_rows, featured_rows, _track_rows, _track_file_rows = rows
+
+    assert {
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+    } == {
+        (album_artist.casefold(), "owner"),
+        (track_artist.casefold(), "featured_track_artist"),
+    }
+
+
+@pytest.mark.parametrize(
     "persisted_album_artists",
     [
         pytest.param((None, None), id="missing"),

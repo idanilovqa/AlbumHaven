@@ -54,7 +54,7 @@ const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
     artist: 'Bella Ramsey',
     album: 'Hilda: Season 2 (Original Series Soundtrack)',
     albumArtist: 'Ryan Carlson',
-    trackArtists: ['Bella Ramsey', 'Ryan Carlson'],
+    trackArtists: ['Bella Ramsey', 'RYAN CARLSON.'],
     year: 2020,
   }),
 ]);
@@ -102,6 +102,40 @@ async function expectFeaturedAlbumOccurrence({
     return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
   });
   expect(subsectionTitle).toBe('Featured On');
+}
+
+async function expectOwnedAlbumOccurrence({
+  artist,
+  album,
+  equivalentArtist,
+  galleryActions,
+  navigationPanelActions,
+  page,
+}) {
+  await expect.poll(
+    () => navigationPanelActions.readSidebarArtistLabelCount(artist),
+    { timeout: 60000, intervals: [250, 500, 1000] },
+  ).toBe(1);
+  await expect.poll(
+    () => navigationPanelActions.readSidebarArtistLabelCount(equivalentArtist),
+    { timeout: 60000, intervals: [250, 500, 1000] },
+  ).toBe(0);
+  await navigationPanelActions.selectSidebarArtistByName(artist);
+  await navigationPanelActions.waitForSidebarSelection(artist);
+  await galleryActions.waitForArtistHeadings([artist]);
+  await galleryActions.waitForAlbumVisible(album, 60000);
+
+  const albumRows = page.locator('.album-row', {
+    has: page.locator('.album-title-button', { hasText: album }),
+  });
+  await expect(albumRows).toHaveCount(1);
+  const subsectionTitle = await albumRows.locator('.album-title-button').evaluate((button) => {
+    const row = button.closest('.album-row');
+    let sibling = row?.previousElementSibling || null;
+    while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
+    return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
+  });
+  expect(subsectionTitle).toBeNull();
 }
 
 test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal', { tag: '@area:album-details' }, async ({
@@ -548,6 +582,15 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
           ...target,
         });
       }
+      const ownedTarget = FEATURED_OWNERSHIP_TARGETS.at(-1);
+      await expectOwnedAlbumOccurrence({
+        artist: ownedTarget.albumArtist,
+        album: ownedTarget.album,
+        equivalentArtist: ownedTarget.trackArtists.at(-1),
+        page,
+        galleryActions,
+        navigationPanelActions,
+      });
     });
 
     await stepLogger.step('Keep soundtrack ownership stable after application restart', async () => {
@@ -563,6 +606,15 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
           ...target,
         });
       }
+      const ownedTarget = FEATURED_OWNERSHIP_TARGETS.at(-1);
+      await expectOwnedAlbumOccurrence({
+        artist: ownedTarget.albumArtist,
+        album: ownedTarget.album,
+        equivalentArtist: ownedTarget.trackArtists.at(-1),
+        page,
+        galleryActions,
+        navigationPanelActions,
+      });
     });
   } catch (error) {
     originalFailure = error;

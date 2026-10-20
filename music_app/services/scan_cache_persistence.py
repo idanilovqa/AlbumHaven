@@ -29,6 +29,7 @@ from music_app.services.library import (
 from music_app.services.library_inventory_postgres import local_inventory_identity_key
 from music_app.services.library_roots import build_root_provenance_payload, summarize_root_provenance_payloads
 from music_app.services.metadata import normalize_exception_value
+from music_app.services.music_identity_matching import same_artist_credit_spelling
 from music_app.services.non_album_view_payloads import infer_blank_album_membership
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.relation_projection_postgres import (
@@ -2613,8 +2614,6 @@ def _inventory_rows_from_albums(
         if not member_artist_names:
             if owner_name is not None:
                 member_artist_names = [owner_name]
-        for member in member_artist_names:
-            ensure_artist(member)
         album_key = str(getattr(album, "key", "") or "").strip()
         if not album_key:
             continue
@@ -2657,6 +2656,8 @@ def _inventory_rows_from_albums(
         )
         owner_key = _key(owner_name) if owner_name is not None else None
         for member_name in member_artist_names:
+            if owner_name and same_artist_credit_spelling(owner_name, member_name):
+                continue
             member_key = ensure_artist(member_name)
             featured_kind = "owner" if member_key == owner_key else "featured_member"
             _append_featured_artist_row(
@@ -2682,6 +2683,8 @@ def _inventory_rows_from_albums(
             )
             track_artist_names.extend(attached_track_artist_names)
             for attached_artist_name in attached_track_artist_names:
+                if owner_name and same_artist_credit_spelling(owner_name, attached_artist_name):
+                    continue
                 attached_artist_key = ensure_artist(attached_artist_name)
                 _append_featured_artist_row(
                     featured_artist_rows,
@@ -2744,7 +2747,7 @@ def _inventory_rows_from_albums(
                 "featured_artists": [
                     artist_name
                     for artist_name in _deduped_artist_names([*member_artist_names, *track_artist_names])
-                    if _key(artist_name) != owner_key
+                    if not (owner_name and same_artist_credit_spelling(owner_name, artist_name))
                 ],
                 "edition": getattr(album, "edition", None),
                 "cover_revision": getattr(album, "cover_revision", None),
@@ -2870,10 +2873,10 @@ def _attached_track_artist_names(track_artist_name: str | None, owner_name: str 
     owner = _text_or_none(owner_name)
     if owner is None:
         return [artist_name]
-    if _key(artist_name) == _key(owner):
+    if same_artist_credit_spelling(artist_name, owner):
         return [owner]
     match = _OWNER_LED_FEATURE_RE.match(artist_name)
-    if match is None or _key(match.group("owner")) != _key(owner):
+    if match is None or not same_artist_credit_spelling(match.group("owner"), owner):
         return [artist_name]
     featured = _NUMERIC_ARTIST_SLASH_RE.sub("/", match.group("featured").strip())
     return _deduped_artist_names([owner, featured])

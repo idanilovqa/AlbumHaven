@@ -471,12 +471,12 @@ def test_dry_run_reports_library_cache_local_inventory_source_counts(tmp_path: P
         if summary["source_family"] == "local_library_inventory"
     )
     assert inventory_summary["source_path"] == str(data_dir / "library_cache.json")
-    assert inventory_summary["source_count"] == 6
+    assert inventory_summary["source_count"] == 5
     assert inventory_summary["artist_count"] == 1
     assert inventory_summary["album_count"] == 1
     assert inventory_summary["track_count"] == 1
     assert inventory_summary["track_file_count"] == 1
-    assert inventory_summary["featured_artist_count"] == 2
+    assert inventory_summary["featured_artist_count"] == 1
     assert inventory_summary["target_count"] == 0
 
 
@@ -490,7 +490,7 @@ def test_dry_run_uses_library_cache_payload_identity_for_local_inventory(tmp_pat
         summary for summary in report["summaries"]
         if summary["source_family"] == "local_library_inventory"
     )
-    assert inventory_summary["source_count"] == 6
+    assert inventory_summary["source_count"] == 5
 
 
 def test_apply_writes_local_inventory_to_expected_library_tables(tmp_path: Path):
@@ -511,8 +511,8 @@ def test_apply_writes_local_inventory_to_expected_library_tables(tmp_path: Path)
         summary for summary in report["summaries"]
         if summary["source_family"] == "local_library_inventory"
     )
-    assert inventory_summary["source_count"] == 6
-    assert inventory_summary["target_count"] == 6
+    assert inventory_summary["source_count"] == 5
+    assert inventory_summary["target_count"] == 5
 
 
 def test_apply_writes_local_track_file_relative_path_from_library_cache_root(tmp_path: Path):
@@ -564,7 +564,7 @@ def test_apply_batches_local_inventory_rows_when_target_supports_batches(tmp_pat
         summary for summary in report["summaries"]
         if summary["source_family"] == "local_library_inventory"
     )
-    assert inventory_summary["target_count"] == 6
+    assert inventory_summary["target_count"] == 5
 
 
 def test_local_inventory_rows_split_featured_track_artists_into_featured_rows(
@@ -579,7 +579,7 @@ def test_local_inventory_rows_split_featured_track_artists_into_featured_rows(
                 key="artist one::album one",
                 name="Album One",
                 album_artist="Artist One",
-                artists=["Artist One"],
+                artists=["Artist One", "ARTIST ONE."],
                 year=2024,
                 cover_path=None,
                 edition=None,
@@ -588,7 +588,7 @@ def test_local_inventory_rows_split_featured_track_artists_into_featured_rows(
                     SimpleNamespace(
                         path="C:/Music/Artist One/Album One/01 Song One.flac",
                         title="Song One",
-                        artist="Artist One feat. Guest One",
+                        artist="ARTIST ONE. feat. Guest One",
                         album="Album One",
                         album_artist="Artist One",
                         disc_number=1,
@@ -628,7 +628,6 @@ def test_local_inventory_rows_split_featured_track_artists_into_featured_rows(
         for row in rows["featured_artists"]
     } == {
         ("artist one", "owner"),
-        ("artist one", "featured_track_artist"),
         ("guest one", "featured_track_artist"),
     }
 

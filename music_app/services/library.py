@@ -1512,7 +1512,10 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             [],
         ).append(entry)
 
-    construction_count = 0
+    classified_buckets: list[
+        tuple[list[dict[str, object]], bool, str, list[str], str, str, str | None, str, int | None]
+    ] = []
+    release_years_by_base_key: dict[str, set[int]] = {}
     for bucket_entries in grouped_entries.values():
         is_compilation, display_album_artist, member_artists = _classify_album_artists(bucket_entries)
         identity_album_artist = display_album_artist
@@ -1535,13 +1538,58 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             ):
                 identity_album_artist = raw_album_artist
 
+        first_entry = bucket_entries[0]
+        album_name = cached_display_text(first_entry["album"])
+        raw_edition = str(first_entry.get("edition") or "").strip()
+        edition = cached_display_text(raw_edition) if raw_edition else None
+        base_key = album_separate_release_key(identity_album_artist, album_name, edition)
+        bucket_years = {
+            year
+            for entry in bucket_entries
+            if (year := safe_int(entry.get("year"))) is not None and 1000 <= year <= 9999
+        }
+        bucket_release_year = next(iter(bucket_years)) if len(bucket_years) == 1 else None
+        if bucket_release_year is not None:
+            release_years_by_base_key.setdefault(base_key, set()).add(bucket_release_year)
+        classified_buckets.append(
+            (
+                bucket_entries,
+                is_compilation,
+                display_album_artist,
+                member_artists,
+                identity_album_artist,
+                album_name,
+                edition,
+                base_key,
+                bucket_release_year,
+            )
+        )
+
+    year_distinct_release_keys = {
+        base_key
+        for base_key, release_years in release_years_by_base_key.items()
+        if len(release_years) > 1
+    }
+    construction_count = 0
+    for (
+        bucket_entries,
+        is_compilation,
+        display_album_artist,
+        member_artists,
+        identity_album_artist,
+        album_name,
+        edition,
+        base_key,
+        bucket_release_year,
+    ) in classified_buckets:
         for entry in bucket_entries:
             construction_count += 1
-            album_name = cached_display_text(entry["album"])
-            raw_edition = str(entry.get('edition') or '').strip()
-            edition = cached_display_text(raw_edition) if raw_edition else None
-            base_key = album_separate_release_key(identity_album_artist, album_name, edition)
-            key = _album_key(identity_album_artist, album_name, edition, entry.get("year")) if base_key in separate_release_keys else base_key
+            if base_key in separate_release_keys:
+                key = _album_key(identity_album_artist, album_name, edition, entry.get("year"))
+            elif base_key in year_distinct_release_keys and bucket_release_year is not None:
+                key = _album_key(identity_album_artist, album_name, edition, bucket_release_year)
+            else:
+                key = base_key
             track_root_provenance = cached_root_provenance(
                 entry.get("library_root_id"),
                 entry.get("library_root_category"),

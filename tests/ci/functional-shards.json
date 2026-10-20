@@ -109,6 +109,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/yearDistinctReleaseProjection.spec.js",
+              "case": "FTC-ALBUM-DETAILS-028 year-distinct folders remain separate releases",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
               "case": "FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks",
               "area": "problematic-files"

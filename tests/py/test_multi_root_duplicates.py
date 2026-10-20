@@ -361,8 +361,25 @@ def test_partial_duplicate_group_preserves_all_own_source_categories():
         _track("arrivals/other-year", year=2002, library_root_category="new_arrivals_roots"),
     ]
     albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
-    assert len(albums) == 1
-    assert set(albums[0].root_provenance["categories"]) == {"main_library", "hoard", "new_arrivals"}
+    assert len(albums) == 2
+    albums_by_year = {album.year: album for album in albums}
+    assert set(albums_by_year) == {2001, 2002}
+    assert set(albums_by_year[2001].root_provenance["categories"]) == {"main_library", "hoard"}
+    assert set(albums_by_year[2002].root_provenance["categories"]) == {"new_arrivals"}
+
+
+def test_year_distinct_release_uses_the_bucket_year_when_its_first_track_has_none():
+    tracks = [
+        _track("main/original", year=None),
+        _track("main/original", 2),
+        _track("main/reissue", year=2002),
+        _track("main/reissue", 2, year=2002),
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert {album.year for album in albums} == {2001, 2002}
+    assert {album.key.rsplit("::year::", 1)[-1] for album in albums} == {"2001", "2002"}
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,7 @@ const WATCHER_FIXTURE_DIRECTORIES = new Set([
   'watcher-possessive-identity',
   'watcher-featured-ownership',
   'watcher-numeric-discs',
+  'watcher-year-distinct-releases',
 ]);
 
 const RETAG_SCRIPT = `

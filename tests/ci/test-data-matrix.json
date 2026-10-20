@@ -405,6 +405,35 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/yearDistinctReleaseProjection.spec.js",
+    "case": "FTC-ALBUM-DETAILS-028 year-distinct folders remain separate releases",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "year-distinct-release-projection",
+    "databaseScenarios": [
+      "album-identity:year-distinct-release-projection"
+    ],
+    "filesystemScenarios": [
+      "media-copy:year-distinct-release-projection"
+    ],
+    "expectedContracts": [
+      "year-distinct-folders-form-separate-releases",
+      "year-distinct-releases-do-not-create-duplicate-sources",
+      "year-distinct-release-identities-persist-after-restart"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:year-distinct-release-projection",
+      "filesystemCopy": "media/cases/year-distinct-release-projection"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
     "case": "FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks",
     "profile": "functional-core",

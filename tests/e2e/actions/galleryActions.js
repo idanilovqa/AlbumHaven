@@ -2030,6 +2030,13 @@ export class GalleryActions {
     ).count();
   }
 
+  async readAlbumCardCount(expected) {
+    return this.galleryPage.albumCard.cardsByArtistAndAlbum(
+      String(expected.artist || '').trim(),
+      String(expected.album || '').trim(),
+    ).count();
+  }
+
   async expectAlbumAbsentFromSettledGallery(expected) {
     const deadline = Date.now() + 30000;
     await expect.poll(async () => {

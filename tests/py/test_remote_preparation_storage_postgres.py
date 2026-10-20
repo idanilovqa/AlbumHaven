@@ -8,7 +8,7 @@ from datetime import datetime
 from math import isfinite
 from threading import Barrier
 from time import monotonic, sleep
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -70,6 +70,8 @@ def test_indexable_candidate_cutoffs_keep_authoritative_mutation_clocks(preparat
             and p.proname in ('guard_top_remote_pending_facts','finish_top_remote_attempt',
               'fail_top_remote_attempt','expire_top_remote_attempt_locked','reclaim_top_remote_parent_locked',
               'maintain_top_remote_preparations')
+            and (p.proname<>'finish_top_remote_attempt' or p.oid=
+              'app.finish_top_remote_attempt(uuid,bigint,bigint,bigint,text,text,uuid,bigint,bigint,uuid,text,text,uuid,uuid,text,text,text,text,text,uuid[])'::regprocedure)
             """).fetchall()}
     guard = bodies["guard_top_remote_pending_facts"]
     assert "sampled:=clock_timestamp()" in guard
@@ -137,7 +139,8 @@ def test_same_transaction_reserve_finish_cannot_claim_committed_dispatch(prepara
         reservation = invoke(connection, "reserve_top_remote_attempt", preparations.request_args(command))
         facts = preparations.facts
         args = (*preparations.request_args(command), reservation["attempt_ref"], reservation["acquisition_ref"],
-            facts.digest, facts.title, facts.artist_display, facts.first_release_date, facts.primary_type)
+            facts.digest, facts.title, facts.artist_display, facts.first_release_date, facts.primary_type,
+            None if facts.credited_artist_ids is None else [UUID(value) for value in facts.credited_artist_ids])
         sql_error(connection, "55000", lambda: invoke(connection, "finish_top_remote_attempt", args),
             constraint="top_remote_expired")
         connection.rollback()
@@ -171,7 +174,8 @@ def test_completion_after_real_parent_lock_wait_refuses_expired_lease(preparatio
     reserved = preparations.reserve(command)
     facts = preparations.facts
     args = (*preparations.request_args(command), reserved["attempt_ref"], reserved["acquisition_ref"],
-        facts.digest, facts.title, facts.artist_display, facts.first_release_date, facts.primary_type)
+        facts.digest, facts.title, facts.artist_display, facts.first_release_date, facts.primary_type,
+            None if facts.credited_artist_ids is None else [UUID(value) for value in facts.credited_artist_ids])
     def finish_after_wait():
         with runtime(preparations.db) as connection:
             assert_runtime_role(connection, preparations.db)
@@ -214,7 +218,8 @@ def test_finish_counter_fact_state_and_reply_roll_back_as_one_transaction(prepar
     with runtime(preparations.db) as connection:
         result = invoke(connection, "finish_top_remote_attempt", (*preparations.request_args(command),
             reserved["attempt_ref"], reserved["acquisition_ref"], facts.digest, facts.title,
-            facts.artist_display, facts.first_release_date, facts.primary_type))
+            facts.artist_display, facts.first_release_date, facts.primary_type,
+            None if facts.credited_artist_ids is None else [UUID(value) for value in facts.credited_artist_ids]))
         assert result["state"] == "pending" and result["capacity"]["actor_reservations"] == 0
         connection.rollback()
     assert preparations.state() == before
@@ -639,7 +644,8 @@ def test_2048_actor_pending_slots_are_real_distinct_committed_fact_rows(preparat
                 facts = evidence(mbid=command["release_group_id"])
                 result = invoke(connection, "finish_top_remote_attempt", (*args, reservation["attempt_ref"],
                     reservation["acquisition_ref"], facts.digest, facts.title, facts.artist_display,
-                    facts.first_release_date, facts.primary_type))
+                    facts.first_release_date, facts.primary_type,
+                    None if facts.credited_artist_ids is None else [UUID(value) for value in facts.credited_artist_ids]))
                 assert result["state"] == "pending"
                 connection.commit()
     state = preparations.state()
@@ -715,7 +721,8 @@ def test_maximum_normalized_fields_fit_and_oversize_never_spends_more_than_reser
     before = preparations.state()
     with runtime(preparations.db) as connection:
         args = (*preparations.request_args(command2), reserved2["attempt_ref"], reserved2["acquisition_ref"],
-            large.digest, "\U0001f600" * 5000, large.artist_display, large.first_release_date, large.primary_type)
+            large.digest, "\U0001f600" * 5000, large.artist_display, large.first_release_date, large.primary_type,
+            None if large.credited_artist_ids is None else [UUID(value) for value in large.credited_artist_ids])
         sql_error(connection, "55000", lambda: invoke(connection, "finish_top_remote_attempt", args),
             constraint="top_remote_expired")
     assert preparations.state() == before

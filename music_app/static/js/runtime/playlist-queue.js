@@ -19,16 +19,21 @@ function playlistQueueNextIndex(queue, currentPath) {
   if (current + 1 < queue.tracks.length) return current + 1;
   return queue.repeatMode === 'all' ? 0 : -1;
 }
+function playlistQueueShuffleCopy(tracks, random = Math.random) {
+  const values = [...tracks];
+  for (let end = values.length - 1; end > 0; end--) {
+    const target = Math.floor(random() * (end + 1));
+    [values[end], values[target]] = [values[target], values[end]];
+  }
+  return values;
+}
 function playlistQueueOrder(tracks, shuffle, currentPath = '', currentItemId = null) {
   const values = [...tracks];
   if (!shuffle) return values;
   const index = values.findIndex(track => currentItemId ? track.playlistItemId === currentItemId : track.path === currentPath);
   const current = index >= 0 ? values.splice(index, 1)[0] : null;
-  for (let end = values.length - 1; end > 0; end--) {
-    const target = Math.floor(Math.random() * (end + 1));
-    [values[end], values[target]] = [values[target], values[end]];
-  }
-  return current ? [current, ...values] : values;
+  const shuffled = playlistQueueShuffleCopy(values);
+  return current ? [current, ...shuffled] : shuffled;
 }
 function replacePlaylistQueueModes(queue, {shuffle = queue?.shuffle === true, repeat = queue?.repeatMode || 'off'} = {}) {
   if (state.player.playbackQueue !== queue || !queue?.playlistId || typeof shuffle !== 'boolean'

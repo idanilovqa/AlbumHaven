@@ -87,29 +87,114 @@
     let disposeContent = () => {};
     let destroyed = false;
     let navigationPending = false;
-    let collectionDraft = null, draftDeparture = null, retainedDraft = null;
+    let collectionDraft = null, draftDeparture = null, retainedDraft = null, draftRelationship = null;
     const draftMarker = owner => owner ? {token: owner.token, scopeKey: owner.scopeKey} : null;
     const ownsDraft = (owner, snapshot) => {
       if (!owner) return false;
       if (owner.playlist) return snapshot?.playlistDraft?.token === owner.token && snapshot.playlistDraft.scopeKey === owner.scopeKey;
       try {return owner.ownsHistoryEntry(snapshot, window.location.href) === true;} catch {return false;}
     };
+    const ownerCurrent = owner => {try {return owner?.isCurrent() === true;} catch {return false;}};
+    const discardOwner = (owner, reason) => {if (!owner || owner.discarded) return; owner.discarded = true; owner.discard(reason);};
+    const retireRelationship = relationship => {
+      if (draftRelationship !== relationship) return;
+      draftRelationship = null; collectionDraft = null; draftDeparture = null;
+      try {discardOwner(relationship.child, 'external');} finally {discardOwner(relationship.parent, 'external');}
+    };
     const liveDraft = () => {
+      if (draftRelationship && (!ownerCurrent(draftRelationship.parent) || !ownerCurrent(draftRelationship.child))) {
+        retireRelationship(draftRelationship);
+      }
       const owner = collectionDraft;
-      if (owner && owner.isCurrent() !== true) {
-        collectionDraft = null; draftDeparture = null; owner.discard();
+      if (owner && !ownerCurrent(owner)) {
+        collectionDraft = null; draftDeparture = null; discardOwner(owner, 'external');
       }
       return collectionDraft;
     };
+    const validDraftOwner = (owner, playlist) => Boolean(owner && typeof owner.token === 'string' && owner.token
+      && typeof owner.scopeKey === 'string' && typeof owner.isCurrent === 'function'
+      && typeof owner.confirmLeave === 'function' && typeof owner.discard === 'function'
+      && (playlist || typeof owner.ownsHistoryEntry === 'function'));
+    const ownsParent = (relationship, snapshot, url) => {
+      try {return historyPosition(snapshot) === relationship.position && url === relationship.url
+        && relationship.parent.ownsHistoryEntry(snapshot, url) === true;} catch {return false;}
+    };
+    const parentRetained = relationship => ownsParent(relationship, relationship.snapshot, relationship.url);
+    const leaveRelationship = (relationship, parentOnly, callback, leaveContext = null) => {
+      let done = false;
+      const outcome = (status, reason) => {if (!done) {done = true; leaveContext?.onOutcome?.({status, reason});} return false;};
+      if (draftDeparture || restoringPosition !== null) return Promise.resolve(outcome('cancelled', 'busy'));
+      const position = historyPosition(window.history.state), url = window.location.href;
+      const departure = {owner: relationship.child}; draftDeparture = departure;
+      const current = () => {
+        if (liveDraft() !== relationship.child || draftRelationship !== relationship) return false;
+        try {return !destroyed && draftDeparture === departure && (!leaveContext || leaveContext.isCurrent())
+          && position === historyPosition(window.history.state) && url === window.location.href
+          && parentRetained(relationship);} catch {return false;}
+      };
+      return Promise.resolve().then(async () => {
+        if (!current()) return outcome('superseded', 'settings-owner');
+        const childAccepted = await relationship.child.confirmLeave();
+        if (!current()) return outcome('superseded', 'settings-owner');
+        if (childAccepted !== true) return outcome('cancelled', 'blocked');
+        if (!parentOnly) {
+          const parentAccepted = await relationship.parent.confirmLeave();
+          if (!current()) return outcome('superseded', 'settings-owner');
+          if (parentAccepted !== true) return outcome('cancelled', 'blocked');
+        }
+        draftDeparture = null; draftRelationship = null;
+        collectionDraft = parentOnly ? relationship.parent : null;
+        try {discardOwner(relationship.child, parentOnly ? 'parent' : 'external');}
+        finally {if (!parentOnly) discardOwner(relationship.parent, 'external');}
+        // Intentional child disposal is not source staleness. All independent
+        // parent/destination fences still apply before the accepted effect.
+        if (destroyed || position !== historyPosition(window.history.state) || url !== window.location.href
+          || parentOnly && (collectionDraft !== relationship.parent || !ownerCurrent(relationship.parent))
+          || !parentOnly && collectionDraft !== null || leaveContext && !leaveContext.isCurrent()) return outcome('superseded', 'stale-intent');
+        done = true; return callback?.();
+      }).catch(() => outcome('failed', 'settings-leave-error')).finally(() => {if (draftDeparture === departure) draftDeparture = null;});
+    };
+    const setPlaylistDraftChildOwner = (parentRegistration, owner) => {
+      const parent = liveDraft();
+      if (destroyed || draftRelationship || draftDeparture || restoringPosition !== null || navigationPending
+        || !parent || parent.playlist || parent.registration !== parentRegistration || !validDraftOwner(owner, true)
+        || !ownerCurrent(owner)) return false;
+      let snapshot;
+      try {snapshot = structuredClone(sanitizeHistorySnapshot(window.history.state));}
+      catch {return false;}
+      const url = window.location.href, position = historyPosition(snapshot);
+      const child = {...owner, playlist: true};
+      const relationship = {parent, child, snapshot, url, position};
+      if (position === null || !parentRetained(relationship)) return false;
+      draftRelationship = relationship; collectionDraft = child;
+      const unregister = () => {
+        if (draftRelationship !== relationship) return;
+        draftRelationship = null; draftDeparture = null; collectionDraft = parent;
+        discardOwner(child, 'rollback');
+        liveDraft();
+      };
+      unregister.deferParentDeparture = (callback, leaveContext = null) => {
+        if (typeof callback !== 'function' || liveDraft() !== child || draftRelationship !== relationship
+          || !parentRetained(relationship)) return Promise.resolve(false);
+        return leaveRelationship(relationship, true, callback, leaveContext);
+      };
+      return unregister;
+    };
     const setDraftOwner = (owner, playlist) => {
-      if (destroyed || !owner || typeof owner.token !== 'string' || !owner.token || typeof owner.scopeKey !== 'string'
-        || typeof owner.isCurrent !== 'function' || typeof owner.confirmLeave !== 'function' || typeof owner.discard !== 'function'
-        || !playlist && typeof owner.ownsHistoryEntry !== 'function' || liveDraft()) return false;
+      if (destroyed || !validDraftOwner(owner, playlist) || liveDraft() || draftDeparture || restoringPosition !== null) return false;
       const registered = {...owner, playlist};
       collectionDraft = registered;
-      return () => {if (collectionDraft === registered) {collectionDraft = null; draftDeparture = null;}};
+      const unregister = () => {
+        if (draftRelationship?.parent === registered) {retireRelationship(draftRelationship); return;}
+        if (collectionDraft === registered) {collectionDraft = null; draftDeparture = null;}
+      };
+      registered.registration = unregister;
+      if (!playlist) unregister.registerPlaylistChild = child => setPlaylistDraftChildOwner(unregister, child);
+      return unregister;
     };
     const deferCollectionDraftNavigation = (callback, leaveContext = null) => {
+      liveDraft();
+      if (draftRelationship) return leaveRelationship(draftRelationship, false, callback, leaveContext);
       if (leaveContext) {
         let done=false;
         const outcome=(status,reason)=>{if(done)return false;done=true;leaveContext.onOutcome?.({status,reason});return false;};
@@ -382,6 +467,21 @@
       const owner = liveDraft();
       if (owner && !ownsDraft(owner, window.history.state)) {
         event.stopImmediatePropagation();
+        if (draftRelationship) {
+          const relationship = draftRelationship;
+          const parentOnly = ownsParent(relationship, window.history.state, window.location.href);
+          const destination = window.location.href, position = historyPosition(window.history.state);
+          draftDeparture = null; ++sequence; pending?.abort(); navigationPending = false;
+          void leaveRelationship(relationship, parentOnly, () => {
+            onPopState(event);
+            if (!isSettingsPath(window.location.pathname) && !window.handleMobilePagePopState?.()) window.handleGalleryBootstrapPopState?.();
+            return true;
+          }).then(accepted => {
+            if (accepted !== true && draftRelationship === relationship && destination === window.location.href
+              && position === historyPosition(window.history.state)) restoreHistory();
+          });
+          return;
+        }
         // Native history remains the sole stack. A later traversal supersedes
         // this prompt, and cancellation returns to the displayed entry.
         draftDeparture = null;
@@ -455,15 +555,16 @@
       deferPlaylistDraftNavigation: deferCollectionDraftNavigation,
       isCollectionDraftDeparturePending(token) {
         const owner = liveDraft();
-        return Boolean(owner && owner.token === token && (draftDeparture?.owner === owner || restoringPosition !== null));
+        return Boolean(owner && (owner.token === token || draftRelationship?.parent.token === token)
+          && (draftDeparture?.owner === owner || restoringPosition !== null));
       },
       retainPlaylistDraftNavigation(token, callback) {
         const owner = liveDraft();
-        if (!owner?.playlist || owner.token !== token || typeof callback !== 'function') return false;
+        if (draftRelationship || !owner?.playlist || owner.token !== token || typeof callback !== 'function') return false;
         const previous = retainedDraft; retainedDraft = owner;
         try {return callback();} finally {retainedDraft = previous;}
       },
-      retainedPlaylistDraft() {const owner = liveDraft(); return owner?.playlist && retainedDraft === owner ? draftMarker(owner) : null;},
+      retainedPlaylistDraft() {const owner = liveDraft(); return !draftRelationship && owner?.playlist && retainedDraft === owner ? draftMarker(owner) : null;},
       isPlaylistDraftCurrent(marker) {const owner = liveDraft(); return Boolean(owner?.playlist && ownsDraft(owner, {playlistDraft: marker}));},
       writeLibraryHistory(value, stateSnapshot, { mode } = {}) {
         const url = urlFor(value);
@@ -479,7 +580,8 @@
         destroyed = true;
         ++sequence;
         pending?.abort();
-        const owner = collectionDraft; collectionDraft = null; draftDeparture = null; owner?.discard();
+        if (draftRelationship) retireRelationship(draftRelationship);
+        else {const owner = collectionDraft; collectionDraft = null; draftDeparture = null; discardOwner(owner, 'external');}
         disposeContent();
         disposeDismissal?.();
         document.removeEventListener('album-haven:surface-opening', onSurfaceOpening);

@@ -1859,6 +1859,14 @@ function captureTrackModalAlbumPreferenceFocus(album, lease = trackModalAlbumPre
 }
 function refreshOwnAlbumPreferenceCaches(album, preference, scope, isCurrent) {
   if (!isCurrent() || !runtimeAlbumPreferenceScopeIsCurrent(scope) || !isCurrent()) return false;
+  // Caller validated the acknowledged POST. Retire captured export taste before
+  // any gallery/cache presentation can reenter or throw, without minting a read
+  // receipt from the mutation response or replaying an uncertain write.
+  const observation = normalizeRuntimeAlbumPreference(preference, scope);
+  if (!observation || observation.taste_state !== 'available'
+    || runtimeAlbumPreferenceGeneration(album, scope) !== observation.album_ref) return false;
+  publishRuntimeAlbumPreferenceObservation(scope, observation.album_ref, observation);
+  if (!isCurrent() || !runtimeAlbumPreferenceScopeIsCurrent(scope) || !isCurrent()) return false;
   const candidates = [album, ...(typeof flattenVisibleAlbums === 'function' ? flattenVisibleAlbums() : [])];
   const matched = [];
   for (const candidate of new Set(candidates)) {
@@ -2113,7 +2121,9 @@ function renderTrackModalRelease(album, albumPreferenceFocus = null) {
       year: album.year || '',
       releaseType: album.release_type || 'ALBUM',
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
-      actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
+      actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing, sampleDisabled: !sampleDetailsBrowseAllowed()
+        || trackModalPresentationRestrictions?.can_open_album_page === false || album.source_readable === false || album.allowed_actions?.can_read === false
+        || !sampleDetailsTrackRefs(album.tracks, TrackActionsRuntime.scope().library) }),
     });
     if (album.read_only_subject) {
       const summary = document.createElement('div'); summary.className = 'playlists__note';
@@ -2286,7 +2296,10 @@ function renderTrackModalRelease(album, albumPreferenceFocus = null) {
             'data-duplicate-source-index': String(index),
             'aria-pressed': String(index === duplicateSourceIndex),
           },
-        })).join(''),
+        }) + ButtonComponent.renderActionButton({ariaLabel:`Create sample playlist from folder ${index + 1}`, title:'Create sample playlist',
+          disabled:!sampleDetailsBrowseAllowed() || trackModalPresentationRestrictions?.can_open_album_page === false
+            || !sampleDetailsTrackRefs(source.tracks, TrackActionsRuntime.scope().library),
+          attributes:{'data-create-sample-playlist':'1','data-album-key':resolvedAlbumKey,'data-duplicate-source-index':String(index)}})).join(''),
       });
       els.duplicateTabs.hidden = false;
       els.duplicateTabs.innerHTML = duplicateSources.map((source, index) => {

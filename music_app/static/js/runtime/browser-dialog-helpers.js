@@ -14,13 +14,13 @@ function appFormScopeIdentity() {
     shell?.dataset?.nativeLibraryId ?? home?.dataset?.homeLibraryId ?? '']);
 }
 function getActiveAppFormPage() {
-  return activeAppFormDialog?.pageId && activeAppFormDialog.isActive() ? activeAppFormDialog : null;
+  return activeAppFormDialog?.pageId && activeAppFormDialog.isActive() && !activeAppFormDialog.isPresentationSuspended?.() ? activeAppFormDialog : null;
 }
 function showAppFormDialog(options = {}) {
   if (typeof isMobileFormReturning === 'function' && isMobileFormReturning()) return Promise.resolve(null);
   if (activeAppFormDialog) {
     const active = activeAppFormDialog;
-    if (options.anchor && active.anchor === options.anchor) active.dismiss('cancel');
+    if (!active.isPresentationSuspended?.() && options.anchor && active.anchor === options.anchor) active.dismiss('cancel');
     return active.promise;
   }
   const get = name => document.getElementById(`app-form-${name}`);
@@ -55,7 +55,8 @@ function showAppFormDialog(options = {}) {
   const contentInert = content.inert;
   let submitEnabled = options.submitEnabled !== false, submitting = false, finishing = false, dismissal = null;
   let dismissDisabled = options.dismissDisabled === true;
-  let dismissalRecord = null;
+  let dismissalRecord = null, presentationState = null;
+  const foregroundSuspended = () => Boolean(presentationState);
   const syncSubmit = () => {
     if (activeAppFormDialog !== owner) return;
     submit.disabled = submitting || Boolean(dismissal) || !submitEnabled;
@@ -75,6 +76,11 @@ function showAppFormDialog(options = {}) {
     if (searchReplacement && typeof canDismissAdvancedMobileForm === 'function'
       && !canDismissAdvancedMobileForm(owner.token, searchReplacement)) return false;
     finishing = true;
+    if (presentationState) {
+      const flags = presentationState.flags; presentationState.consumed = true;
+      modal.inert = flags.inert; flags.aria === null ? modal.removeAttribute('aria-hidden') : modal.setAttribute('aria-hidden',flags.aria);
+      presentationState = null;
+    }
     modal.hidden = true;
     listeners.forEach(([node, name, handler]) => node.removeEventListener(name, handler));
     positionObserver?.disconnect();
@@ -162,7 +168,7 @@ function showAppFormDialog(options = {}) {
       };
       if (!current()) return Promise.resolve(terminal('superseded', 'stale-intent'));
       if (activeAppFormDialog !== owner || !owner.isCurrentContext()) return Promise.resolve(terminal('superseded', 'form-owner'));
-      if (finishing || submitting || dismissal || dismissalRecord) return Promise.resolve(terminal('cancelled', 'busy'));
+      if (finishing || submitting || dismissal || dismissalRecord || foregroundSuspended()) return Promise.resolve(terminal('cancelled', 'busy'));
       if (dismissDisabled && closeOptions.force !== true) return Promise.resolve(terminal('cancelled', 'disabled'));
       if (!closeOptions.searchReplacement || closeOptions.searchReplacement.operation !== operation.identity
         || (typeof canDismissAdvancedMobileForm === 'function' && !canDismissAdvancedMobileForm(owner.token, closeOptions.searchReplacement))) {
@@ -194,7 +200,7 @@ function showAppFormDialog(options = {}) {
       dismissal = record.promise; syncSubmit();
       return record.promise;
     }
-    if (activeAppFormDialog !== owner || finishing || (guarded && submitting)) return Promise.resolve(false);
+    if (activeAppFormDialog !== owner || finishing || foregroundSuspended() && closeOptions.force !== true || (guarded && submitting)) return Promise.resolve(false);
     if (dismissal) return dismissal;
     if (dismissDisabled && closeOptions?.force !== true) return Promise.resolve(false);
     if (!guarded) return Promise.resolve(finish(value ?? null, closeOptions));
@@ -229,7 +235,29 @@ function showAppFormDialog(options = {}) {
   owner.dismiss = controls.dismiss;
   owner.isActive = () => activeAppFormDialog === owner && !finishing;
   owner.isCurrentContext = () => appFormSequence === sequence && appFormScopeIdentity() === scope;
+  owner.isPresentationSuspended = foregroundSuspended;
+  controls.suspendPresentation = () => {
+    if (!owner.isActive() || !owner.isCurrentContext() || submitting || finishing || dismissal || dismissalRecord || presentationState) return false;
+    const exactNodes = () => get('modal') === modal && get('title') === title && get('content') === content;
+    if (!exactNodes()) return false;
+    const nodes = [modal,title,content,...content.querySelectorAll('*')];
+    const bindings = nodes.map(node => ({node,parent:node.parentNode}));
+    if (bindings.some(({node}) => !node.isConnected)) return false;
+    const saved = {consumed:false, flags:{hidden:modal.hidden,inert:modal.inert,aria:modal.getAttribute('aria-hidden')}, focus:document.activeElement};
+    presentationState = saved; modal.hidden = true;modal.inert = true;modal.setAttribute('aria-hidden','true');
+    const restore = () => {
+      if(saved.consumed)return false;saved.consumed=true;
+      if(presentationState!==saved || !owner.isActive() || !owner.isCurrentContext() || !exactNodes()
+        || bindings.some(({node,parent})=>!node.isConnected || node.parentNode!==parent)) return false;
+      presentationState=null;modal.hidden=saved.flags.hidden;modal.inert=saved.flags.inert;
+      saved.flags.aria===null?modal.removeAttribute('aria-hidden'):modal.setAttribute('aria-hidden',saved.flags.aria);
+      const focus=saved.focus;if(focus?.isConnected && !focus.disabled && !focus.closest?.('[hidden],[inert]'))focus.focus?.({preventScroll:true});
+      return true;
+    };
+    return Object.freeze({restore,retire(){if(saved.consumed)return false;saved.consumed=true;return true;}});
+  };
   const apply = async event => {
+    if (foregroundSuspended()) return;
     event?.preventDefault?.();
     if (submit.disabled || dismissal || options.mode === 'reading') return;
     submitting = true; syncSubmit(); error.textContent = '';
@@ -298,6 +326,7 @@ function showAppFormDialog(options = {}) {
     .filter(node => !node.disabled && !node.hidden && node.type !== 'hidden'
       && !node.closest?.('[hidden], [inert]') && (!node.getClientRects || node.getClientRects().length));
   listen(modal, 'keydown', event => {
+    if (foregroundSuspended()) return;
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); return requestDismiss('escape'); }
     if (event.key !== 'Tab') return;
     if (modal.classList?.contains?.('is-mobile-page')) return;
@@ -312,6 +341,7 @@ function showAppFormDialog(options = {}) {
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   });
   listen(modal, 'click', event => {
+    if (foregroundSuspended()) return;
     if (parent) event.stopPropagation();
     if (!modal.classList?.contains?.('is-mobile-page') && typeof overlayClickStartedOnOverlay === 'function'
       && overlayClickStartedOnOverlay(modal, event)) return requestDismiss('overlay');
@@ -328,7 +358,7 @@ function showAppFormDialog(options = {}) {
     // initial focus when controls arrive, without stealing it after interaction.
     if (typeof MutationObserver === 'function') {
       focusObserver = new MutationObserver(() => {
-        if (activeAppFormDialog === owner && document.activeElement === content) focusContent();
+        if (activeAppFormDialog === owner && !foregroundSuspended() && document.activeElement === content) focusContent();
       });
       focusObserver.observe(content, {childList: true, subtree: true});
     }
@@ -336,8 +366,11 @@ function showAppFormDialog(options = {}) {
   return promise;
 }
 
-function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, parentSurface, returnFocus, retainParentView, showCloseButton = false, dismissDisabled = false, contentOwnsFooter = true} = {}, isAvailable = () => true) {
-  if (!isAvailable() || typeof showAppFormDialog !== 'function' || activeAppFormDialog) throw new Error('The form dialog is unavailable.');
+function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, onAdmissionRejected, parentSurface, returnFocus, retainParentView, showCloseButton = false, dismissDisabled = false, contentOwnsFooter = true} = {}, isAvailable = () => true) {
+  if (!isAvailable() || typeof showAppFormDialog !== 'function' || activeAppFormDialog) {
+    try {onAdmissionRejected?.();} catch { /* An observer cannot change admission or its error. */ }
+    throw new Error('The form dialog is unavailable.');
+  }
   let controls, host;
   const close = (value, options) => controls?.close(value, options);
   const promise = showAppFormDialog({title, pageId, beforeDismiss, parentSurface, returnFocus, retainParentView, showCloseButton, dismissDisabled, mode: 'reading', contentOwnsFooter: contentOwnsFooter === true,
@@ -345,7 +378,7 @@ function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, pa
     onAfterClose(_content, closeOptions) {onClose?.(host, closeOptions);},
   });
   if (!controls) throw new Error('The form dialog is unavailable.');
-  return Object.freeze({promise, close, setDismissDisabled: value => controls?.setDismissDisabled(value), updatePresentation: value => controls?.updatePresentation(value), dismiss: (reason, options) => controls?.dismiss(reason, options)});
+  return Object.freeze({promise, close, suspendPresentation: () => controls?.suspendPresentation() ?? false, setDismissDisabled: value => controls?.setDismissDisabled(value), updatePresentation: value => controls?.updatePresentation(value), dismiss: (reason, options) => controls?.dismiss(reason, options)});
 }
 
 function showBrowserAlert(message) {

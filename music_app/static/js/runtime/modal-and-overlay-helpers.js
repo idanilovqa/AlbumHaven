@@ -1,3 +1,4 @@
+let nonAlbumSampleOwner = null, nonAlbumSampleSuspension = null;
 // The existing shared React/native Choice owner renders every Album action.
 // Native code retains source authority; there is no second menu DOM renderer.
 let albumCardContextMenuOwner = null;
@@ -299,10 +300,10 @@ function buildNonAlbumTrackSectionsMarkup(items) {
   }).filter(Boolean);
   const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
   const tableConfig = {groups, showPath: true, showProblem: true};
-  if (typeof NativePlaytables !== 'undefined') NativePlaytables.prepare('loose-tracks', sourceView, groups, privateRows, () => {
+  if (typeof NativePlaytables !== 'undefined') nonAlbumSampleOwner = NativePlaytables.prepare('loose-tracks', sourceView, groups, privateRows, () => {
     const overlay = document.getElementById('non-album-modal');
     const retained = typeof mobilePageState !== 'undefined' && mobilePageState.pages.some(page => page.kind === 'non-album');
-    return Boolean(overlay?.isConnected && (!overlay.hidden || retained) && state.view === sourceView);
+    return Boolean(overlay?.isConnected && (!overlay.hidden || retained || nonAlbumSampleSuspension?.preparedOwner === nonAlbumSampleOwner) && state.view === sourceView);
   }, undefined, {columns: albumTrackTableColumns(tableConfig)});
   return buildAlbumTrackTableHtml({
     ...tableConfig,
@@ -413,7 +414,8 @@ function openNonAlbumModal() {
       subtitle,
       titleId: 'non-album-modal-title',
       subtitleId: 'non-album-modal-subtitle',
-      actionsHtml: buildLooseTracksHeaderActionsHtml(),
+      actionsHtml: buildLooseTracksHeaderActionsHtml({sampleDisabled:!sampleDetailsBrowseAllowed()
+        || !sampleDetailsTrackRefs(looseTracks, TrackActionsRuntime.scope().library)}),
     });
   }
   if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
@@ -426,6 +428,13 @@ function openNonAlbumModal() {
     if (looseTracks.length) NativePlaytables.mount('loose-tracks', els.table);
     else NativePlaytables.retire('loose-tracks');
   }
+  const sampleButton = els.header?.querySelector('[data-create-non-album-sample-playlist="1"]');
+  if (sampleButton) sampleButton.addEventListener('click', event => {
+    event.preventDefault(); event.stopPropagation();
+    const lease = captureNonAlbumSampleOrigin({libraryRef:TrackActionsRuntime.scope().library});
+    if (lease) {const originNavigation = captureSampleModalNavigation(els.overlay, lease, () => nonAlbumSampleSuspension, value => {nonAlbumSampleSuspension = value ? Object.assign(value, {preparedOwner:nonAlbumSampleOwner}) : null;});
+      if (originNavigation) window.AlbumHavenPlaylistUI?.openSamplePlaylist({originOwner:lease, originNavigation});}
+  });
   attachSharedPlayer();
 }
 
@@ -677,8 +686,9 @@ function overlayClickStartedOnOverlay(overlay, event) {
 }
 
 function closeNonAlbumModal() {
-  if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
+  nonAlbumSampleOwner = null;
   if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('loose-tracks');
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
@@ -1365,3 +1375,27 @@ function getTagEditConfirmElements() {
   };
 }
 
+
+function captureNonAlbumSampleOrigin({libraryRef} = {}) {
+  const surface = getNonAlbumModalElements().overlay;
+  if (nonAlbumSampleSuspension || !surface?.isConnected || surface.hidden) return null;
+  const owner = nonAlbumSampleOwner, sourceView = state.view, scope = TrackActionsRuntime.scope();
+  const refs = sampleDetailsTrackRefs(getVisibleNonAlbumTracks(), libraryRef);
+  if (!owner || !refs || !sampleDetailsBrowseAllowed() || scope.library != null && scope.library !== libraryRef) return null;
+  let retired = false, lease;
+  const current = () => {
+    if (retired) return false;
+    try {
+      const live = TrackActionsRuntime.scope(), next = sampleDetailsTrackRefs(getVisibleNonAlbumTracks(),libraryRef);
+      if (!surface.isConnected || surface.hidden && nonAlbumSampleSuspension?.lease !== lease
+        || nonAlbumSampleOwner !== owner || state.view !== sourceView || live.token !== scope.token
+        || live.library != null && live.library !== libraryRef || !sampleDetailsBrowseAllowed()
+        || !owner.source?.snapshot() || !next || JSON.stringify(next) !== JSON.stringify(refs)) retired = true;
+    } catch {retired = true;}
+    return !retired;
+  };
+  if (!current()) return null;
+  lease = Object.freeze({scopeKey:scope.token,origin:Object.freeze({kind:'album_details',track_refs:refs}),isCurrent:current,
+    back(returnToParent) {return current() && typeof returnToParent === 'function' ? returnToParent() : false;}});
+  return lease;
+}

@@ -525,13 +525,16 @@ function compactRuntimeMoveAvailability(availability) {
 // separate receipt: bootstrap dictionaries and arbitrary copies never admit it.
 const runtimeAlbumProgressReceipts = new WeakMap();
 const runtimeAlbumPreferenceReceipts = new WeakMap();
+const runtimeAlbumPreferenceScopes = new WeakSet();
 const runtimeAlbumProgressKeys = Object.freeze(['to_listen', 'is_relisten', 'can_toggle_to_listen']);
 function captureRuntimeAlbumPreferenceScope() {
   if (typeof captureGalleryReadScope !== 'function') return null;
   const scope = captureGalleryReadScope();
-  return scope.transport && /^[1-9]\d*$/.test(scope.actor) && /^[1-9]\d*$/.test(scope.library)
+  const valid = scope.transport && /^[1-9]\d*$/.test(scope.actor) && /^[1-9]\d*$/.test(scope.library)
     && /^[a-f0-9]{64}$/.test(scope.context || '') && scope.context === scope.stamp
-    && galleryReadScopeIsCurrent(scope) ? Object.freeze(scope) : null;
+    && galleryReadScopeIsCurrent(scope);
+  if (!valid) return null;
+  Object.freeze(scope); runtimeAlbumPreferenceScopes.add(scope); return scope;
 }
 function runtimeAlbumPreferenceScopeIsCurrent(scope) {
   return !!scope && galleryReadScopeIsCurrent(scope) && scope.context === scope.stamp;
@@ -606,13 +609,169 @@ function compactRuntimeAlbumPreference(album) {
   // progress receipt. Opening its controls first performs an authorized read.
   return verified ? retainRuntimeAlbumPreferenceReceipt(result, album, scope) : result;
 }
+
+// Only live observations are retained here, never a history of personal taste.
+// Receipt authority stays with the successful native read/mutation owners.
+const runtimeAlbumPreferenceObservations = new Set();
+const runtimeAlbumPreferenceObservationTransports = new Map();
+let runtimeAlbumPreferenceObservationObserver = null;
+let runtimeAlbumPreferenceObservationSearch = null;
+let runtimeAlbumPreferenceObservationSearchRelease = null;
+function runtimeAlbumPreferenceUnavailable() {
+  return Object.assign(new Error('Your album ratings are unavailable.'), {code: 'own_ratings_unavailable'});
+}
+function runtimeAlbumPreferenceSyncFunction(value) {
+  return typeof value === 'function' && Object.prototype.toString.call(value) === '[object Function]';
+}
+function runtimeAlbumPreferenceObservationCurrent(scope) {
+  try {return runtimeAlbumPreferenceScopeIsCurrent(scope) === true;} catch {return false;}
+}
+function runtimeAlbumPreferenceObservationSameScope(a, b) {
+  return !!a && !!b && a.transport === b.transport && a.generation === b.generation && a.actor === b.actor
+    && a.library === b.library && a.context === b.context;
+}
+function runtimeAlbumPreferenceObservationCleanup() {
+  const used = new Set([...runtimeAlbumPreferenceObservations].map(owner => owner.scope.transport));
+  for (const [transport, release] of [...runtimeAlbumPreferenceObservationTransports]) {
+    if (used.has(transport)) continue;
+    runtimeAlbumPreferenceObservationTransports.delete(transport);
+    try {release();} catch { /* Subscription is no longer an authority owner. */ }
+  }
+  if (runtimeAlbumPreferenceObservations.size) return;
+  const observer = runtimeAlbumPreferenceObservationObserver; runtimeAlbumPreferenceObservationObserver = null;
+  try {observer?.disconnect();} catch { /* Retired subscriptions cannot regain authority. */ }
+  const release = runtimeAlbumPreferenceObservationSearchRelease;
+  runtimeAlbumPreferenceObservationSearchRelease = null; runtimeAlbumPreferenceObservationSearch = null;
+  try {release?.();} catch { /* All observations are already retired. */ }
+}
+function retireRuntimeAlbumPreferenceObservations(owners, notify = true) {
+  const callbacks = [];
+  // Commit every retirement before the first callback may synchronously reenter.
+  for (const owner of owners) {
+    if (!owner.live) continue;
+    owner.live = false; runtimeAlbumPreferenceObservations.delete(owner);
+    const callback = owner.onChange; owner.onChange = null; owner.baselines.clear(); owner.scope = null;
+    if (notify && callback) callbacks.push(callback);
+  }
+  runtimeAlbumPreferenceObservationCleanup();
+  for (const callback of callbacks) {
+    try {callback();} catch { /* One consumer cannot block other privacy retirement. */ }
+  }
+}
+function reconcileRuntimeAlbumPreferenceObservations() {
+  const retired = [];
+  for (const owner of [...runtimeAlbumPreferenceObservations]) {
+    if (!runtimeAlbumPreferenceObservationCurrent(owner.scope)) retired.push(owner);
+  }
+  retireRuntimeAlbumPreferenceObservations(retired);
+}
+function registerRuntimeAlbumPreferenceObservation(scope, baselines, onChange) {
+  if (!runtimeAlbumPreferenceScopes.has(scope) || !runtimeAlbumPreferenceObservationCurrent(scope)
+    || !Array.isArray(baselines) || !baselines.length || baselines.length > 5000
+    || !runtimeAlbumPreferenceSyncFunction(onChange)) throw runtimeAlbumPreferenceUnavailable();
+  const values = new Map();
+  for (const value of baselines) {
+    if (!isRuntimePlainObject(value) || Reflect.ownKeys(value).length !== 4
+      || !['albumRef', 'rating', 'preferenceRevision', 'tasteState'].every(key => Object.hasOwn(value, key))
+      || typeof value.albumRef !== 'string' || !new RegExp('^inventory-album:' + scope.library + ':[1-9]\\d*$').test(value.albumRef)
+      || values.has(value.albumRef) || value.tasteState !== 'available'
+      || !(value.rating === null || Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= 10)
+      || !Number.isSafeInteger(value.preferenceRevision) || value.preferenceRevision < 0) throw runtimeAlbumPreferenceUnavailable();
+    values.set(value.albumRef, Object.freeze({albumRef: value.albumRef, rating: value.rating,
+      preferenceRevision: value.preferenceRevision, tasteState: 'available'}));
+  }
+  const owner = {scope, baselines: values, onChange, live: true};
+  runtimeAlbumPreferenceObservations.add(owner);
+  try {
+    if (!runtimeAlbumPreferenceObservationTransports.has(scope.transport)) {
+      const release = scope.transport.subscribe(reconcileRuntimeAlbumPreferenceObservations);
+      if (typeof release !== 'function') throw runtimeAlbumPreferenceUnavailable();
+      runtimeAlbumPreferenceObservationTransports.set(scope.transport, release);
+    }
+    if (!runtimeAlbumPreferenceObservationObserver) {
+      const shell = document.getElementById('app-shell');
+      if (!shell || typeof MutationObserver !== 'function') throw runtimeAlbumPreferenceUnavailable();
+      runtimeAlbumPreferenceObservationObserver = new MutationObserver(reconcileRuntimeAlbumPreferenceObservations);
+      runtimeAlbumPreferenceObservationObserver.observe(shell, {attributes: true,
+        attributeFilter: ['data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
+    }
+    const search = typeof window === 'undefined' ? null : window.AlbumHavenSearchRuntime;
+    if (!runtimeAlbumPreferenceObservationSearch && typeof search?.subscribe === 'function') {
+      runtimeAlbumPreferenceObservationSearch = search;
+      runtimeAlbumPreferenceObservationSearchRelease = search.subscribe(reconcileRuntimeAlbumPreferenceObservations);
+    }
+    if (!runtimeAlbumPreferenceObservationCurrent(scope)) throw runtimeAlbumPreferenceUnavailable();
+  } catch {
+    retireRuntimeAlbumPreferenceObservations([owner], false); throw runtimeAlbumPreferenceUnavailable();
+  }
+  return owner;
+}
+function observeRuntimeAlbumPreferenceChanges(scope, baselines, onChange) {
+  const owner = registerRuntimeAlbumPreferenceObservation(scope, baselines, onChange);
+  return () => retireRuntimeAlbumPreferenceObservations([owner], false);
+}
+function createRuntimeAlbumPreferenceObservationLease(scope, baseline, onChange) {
+  // This closure is deliberately outside the DTO admission function. It cannot
+  // retain that function's payload, candidate album or receipt object.
+  // Read the registry's committed liveness, including before another retired
+  // owner's callback runs. Admission retains this same subscription throughout.
+  let owner = null;
+  owner = registerRuntimeAlbumPreferenceObservation(scope, [baseline], () => {
+    baseline = null; scope = null;
+    const callback = onChange; onChange = null;
+    callback?.();
+  });
+  return Object.freeze({
+    read() {
+      if (!owner || !owner.live) return null;
+      if (!runtimeAlbumPreferenceObservationCurrent(scope)) {
+        reconcileRuntimeAlbumPreferenceObservations(); return null;
+      }
+      return baseline;
+    },
+    release() {
+      onChange = null; baseline = null; scope = null;
+      const retired = owner; owner = null;
+      if (retired) retireRuntimeAlbumPreferenceObservations([retired], false);
+    },
+  });
+}
+function publishRuntimeAlbumPreferenceObservation(scope, albumRef, preference) {
+  if (!runtimeAlbumPreferenceObservationCurrent(scope)) return;
+  const core = normalizeRuntimeAlbumPreference(preference, scope);
+  if (!core || !albumRef || core.taste_state === 'available' && core.album_ref !== albumRef) return;
+  const retired = [];
+  for (const owner of [...runtimeAlbumPreferenceObservations]) {
+    if (!owner.live) continue;
+    if (!runtimeAlbumPreferenceObservationCurrent(owner.scope)) {retired.push(owner); continue;}
+    if (!owner.live) continue;
+    if (!runtimeAlbumPreferenceObservationSameScope(owner.scope, scope)) continue;
+    const before = owner.baselines.get(albumRef);
+    if (before && (core.taste_state !== before.tasteState || core.rating !== before.rating
+      || core.preference_revision !== before.preferenceRevision)) retired.push(owner);
+  }
+  retireRuntimeAlbumPreferenceObservations(retired);
+}
 // Called only by successful current native HTTP read owners, never bootstrap,
 // mutation responses, tag edits, subject copies, or metadata/path lookups.
-function admitRuntimeAlbumPreferenceRead(payload, scope) {
-  if (!runtimeAlbumPreferenceScopeIsCurrent(scope)) return;
+function admitRuntimeAlbumPreferenceRead(payload, scope, observationRequest) {
+  const observed = observationRequest !== undefined;
+  const callerCurrent = () => {
+    try {return runtimeAlbumPreferenceObservationCurrent(scope)
+      && (!observed || observationRequest.isCurrent() === true);} catch {return false;}
+  };
+  if (!observed && !runtimeAlbumPreferenceScopeIsCurrent(scope)) return;
+  if (observed && (!runtimeAlbumPreferenceScopes.has(scope) || !isRuntimePlainObject(observationRequest)
+    || Reflect.ownKeys(observationRequest).length !== 4
+    || !['inventoryAlbumRef', 'isCurrent', 'onAdmitted', 'onChange'].every(key => Object.hasOwn(observationRequest, key))
+    || !['isCurrent', 'onAdmitted', 'onChange'].every(key => runtimeAlbumPreferenceSyncFunction(observationRequest[key]))
+    || typeof observationRequest.inventoryAlbumRef !== 'string'
+    || !new RegExp('^inventory-album:' + scope.library + ':[1-9]\\d*$').test(observationRequest.inventoryAlbumRef)
+    || !callerCurrent())) throw runtimeAlbumPreferenceUnavailable();
   const seen = new Set(), queue = [payload];
   const containers = ['album', 'albums', 'artist_groups', 'primary_artist_groups', 'family_artist_groups',
     'chronological_artist_groups', 'selected_artist_groups', 'sections', 'subsections', 'duplicate_sources'];
+  const candidates = [], identities = [];
   while (queue.length) {
     const value = queue.shift();
     if (!value || typeof value !== 'object' || seen.has(value) || value.read_only_subject) continue;
@@ -621,7 +780,20 @@ function admitRuntimeAlbumPreferenceRead(payload, scope) {
     for (const key of containers) if (value[key]) queue.push(value[key]);
     const core = runtimeAlbumPreferenceForAlbum(value, scope, false);
     const albumRef = runtimeAlbumPreferenceGeneration(value, scope);
+    if (albumRef) identities.push(albumRef);
     if (!core || !albumRef) continue;
+    candidates.push({value, core, albumRef});
+  }
+  let target = null, lease = null;
+  if (observed) {
+    const matches = candidates.filter(candidate => candidate.albumRef === observationRequest.inventoryAlbumRef);
+    if (matches.length !== 1 || identities.filter(ref => ref === observationRequest.inventoryAlbumRef).length !== 1
+      || matches[0].core.taste_state !== 'available'
+      || matches[0].value.source_readable === false || matches[0].value.allowed_actions?.can_read === false
+      || !callerCurrent()) throw runtimeAlbumPreferenceUnavailable();
+    target = matches[0];
+  }
+  for (const {value, albumRef} of candidates) {
     retainRuntimeAlbumPreferenceReceipt(value.album_preference, value, scope);
     const values = {};
     for (const key of runtimeAlbumProgressKeys) {
@@ -629,6 +801,30 @@ function admitRuntimeAlbumPreferenceRead(payload, scope) {
     }
     if (Object.keys(values).length) runtimeAlbumProgressReceipts.set(value.album_preference,
       {scope, albumRef, values: Object.freeze(values)});
+  }
+  try {
+    if (observed) {
+      const baseline = Object.freeze({albumRef: target.albumRef, rating: target.core.rating,
+        preferenceRevision: target.core.preference_revision, tasteState: 'available'});
+      lease = createRuntimeAlbumPreferenceObservationLease(scope, baseline, observationRequest.onChange);
+    }
+    // The new guard already exists before old watcher callbacks can change it.
+    for (const {value, core, albumRef} of candidates) {
+      if (value.source_readable !== false && value.allowed_actions?.can_read !== false)
+        publishRuntimeAlbumPreferenceObservation(scope, albumRef, core);
+    }
+    if (observed) {
+      const current = () => callerCurrent() && lease.read() !== null
+        && JSON.stringify(runtimeAlbumPreferenceForAlbum(target.value, scope)) === JSON.stringify(target.core);
+      if (!current()) throw runtimeAlbumPreferenceUnavailable();
+      observationRequest.onAdmitted(lease);
+      if (!current()) throw runtimeAlbumPreferenceUnavailable();
+      return lease;
+    }
+  } catch (error) {
+    lease?.release();
+    if (observed) throw runtimeAlbumPreferenceUnavailable();
+    throw error;
   }
 }
 

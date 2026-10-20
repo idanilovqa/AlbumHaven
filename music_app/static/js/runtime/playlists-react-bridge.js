@@ -4,7 +4,7 @@ const PlaylistReactRuntime = (() => {
   const listeners = new Set();
   let current = null, lastView = null, identity = null, generation = 0, denied = false;
   let sequence = 0, playlistReadEpoch = 0, raw = null, projected = null;
-  let draft = null, draftConfirmation = null, nativeSequence = 0;
+  let draft = null, draftConfirmation = null, nativeSequence = 0, sampleDestinationAttempt = null;
   const nativeTracks = new Map(), nativeAlbums = new Map();
   const playbackListeners = new Set();
   let playbackPreferences = {}, orderChoice = null, queueRevision = 0;
@@ -18,6 +18,87 @@ const PlaylistReactRuntime = (() => {
   const unreadable = row => row?.source_readable === false
     || Object.prototype.hasOwnProperty.call(row?.allowed_actions || {}, 'can_read') && row.allowed_actions.can_read === false;
   const selectionApi = () => window.AlbumHavenResourceSelection;
+  function createGeneratedPlaylistRuntime({scopeKey, source, order, isCurrent, automaticPlayCurrent}, sample = false) {
+    const targets = new Map();
+    let activation = 0;
+    const current = () => isCurrent() === true && sync().authenticated && sync().scopeKey === scopeKey;
+    const canPlay = row => {
+      const selected = current() ? source() : null;
+      return Boolean(selected?.detail.track_rows.includes(row)
+        && (!sample || selected.source_protocol === 'sample_playlist_selection_v1' && ['playlist','library'].includes(selected.source.kind))
+        && (sample ? exactGrant(selected.detail.native_actions, 'can_play') : selected.detail.allowed_actions.can_play === true)
+        && exactGrant(sample ? row.native_actions : row.allowed_actions, 'can_play') && row.availability === 'local'
+        && current() && source() === selected);
+    };
+    return {...PlaylistReactRuntime,
+      openForm: options => openReactFormDialog(options, current),
+      createPlaytableSource: undefined,
+      trackPreference: () => null, setTrackLove: undefined,
+      canResourceIntent: () => false, mountResourceSelection: undefined,
+      canTrackIntent: (intent, row) => intent === 'play' && canPlay(row),
+      trackPlayback: row => current() && targets.has(row.playlist_item_id) && state.player.playbackQueue?.libraryMixRef === source()?.source.ref
+        ? TrackActionsRuntime.playback(targets.get(row.playlist_item_id)) : {isCurrent: false, isPlaying: false},
+      async trackIntent(intent, row, options = {}) {
+        if (intent !== 'play' || options.automatic === true && automaticPlayCurrent?.() !== true || !canPlay(row)) throw failure('Mix playback is unavailable.', 403);
+        const retained = source(), sequence = ++activation;
+        let publishing = false;
+        const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
+        const valid = () => current() && source() === retained && activation === sequence && !options.signal?.aborted
+          && (options.automatic !== true || publishing || automaticPlayCurrent?.() === true)
+          && playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null);
+        const ids = options.displayedItemIds || retained.entry_refs;
+        if (!Array.isArray(ids) || ids.length !== retained.entry_refs.length || new Set(ids).size !== ids.length
+          || sample && ids.some((id, index) => id !== retained.entry_refs[index])
+          || ids.some(id => !retained.entry_refs.includes(id)) || !ids.includes(row.playlist_item_id)) throw failure('Mix membership changed.', 409);
+        const readQueue = sample ? (typeof readSamplePlaylistNativeQueue === 'function' ? readSamplePlaylistNativeQueue : null)
+          : (typeof readLibraryMixNativeQueue === 'function' ? readLibraryMixNativeQueue : null);
+        if (!readQueue) throw failure('Mix playback is unavailable.');
+        const starting = sample && options.fromStart === true ? ids[0] : row.playlist_item_id;
+        const data = await readQueue({sourceRef: retained.source.ref, sourceRevision: retained.source.revision,
+          entryRefs: ids, startingEntryRef: starting, signal: options.signal, sourceProtocol:retained.source_protocol, sourceKind:retained.source.kind});
+        if (!valid()) throw aborted();
+        let tracks = data.tracks.map(item => {
+          const target = item.native_target;
+          const native = {...target, playback_state: {can_start_here: true}};
+          targets.set(item.playlist_item_id, native);
+          return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
+            artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
+            inventory_track_ref: target.inventory_track_ref, playlistItemId: item.playlist_item_id,
+            personalPlayCount: Number.isSafeInteger(item.play_count) && item.play_count >= 0 ? item.play_count : null};
+        });
+        const mode = order();
+        if (mode === 'unplayed_first') tracks = [...tracks.filter(item => item.personalPlayCount === 0), ...tracks.filter(item => item.personalPlayCount !== 0)];
+        const regularTracks = tracks;
+        let selected = tracks.find(item => item.playlistItemId === row.playlist_item_id);
+        if (mode === 'shuffle' && typeof playlistQueueOrder === 'function') tracks = playlistQueueOrder(tracks, true,
+          options.fromStart === true ? null : selected.path, options.fromStart === true ? null : selected.playlistItemId);
+        if (options.fromStart === true) selected = tracks[0];
+        if (!selected || !valid() || typeof playTrackFromPayload !== 'function') throw aborted();
+        publishing = true;
+        const previousQueue = state.player.playbackQueue;
+        const queue = {tracks, regularTracks, shuffle: mode === 'shuffle', repeatMode: 'off', currentIndex: tracks.indexOf(selected),
+          playbackContext: null, albumRef: '', albumSnapshot: null, playlistId: null, libraryMixRef: retained.source.ref,
+          playlistRevision: retained.source.revision, libraryMixProtocol:retained.source_protocol, ...(sample ? {libraryMixSourceKind:retained.source.kind} : {}), sourceEntryRefs: [...retained.entry_refs],
+          displayedItemIds: [...ids], contextGeneration: PrivateUITransport.generation()};
+        if (state.player.current?.path === selected.path) {
+          if (typeof commitPlaylistQueue !== 'function') throw failure('Mix queue replacement is unavailable.');
+          commitPlaylistQueue(queue, previousQueue); notifyPlayback();
+          if (!valid() || state.player.playbackQueue !== queue) {
+            if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+            throw aborted();
+          }
+          TrackActionsRuntime.play(targets.get(selected.playlistItemId)); return;
+        }
+        state.player.playbackQueue = queue; notifyPlayback();
+        if (!valid() || state.player.playbackQueue !== queue) {
+          if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+          throw aborted();
+        }
+        try {if (await playTrackFromPayload(selected) !== true) throw failure('Mix playback did not start.');}
+        catch (error) {if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue; throw error;}
+      },
+    };
+  }
   function resourceOrigin(detail) {
     return selectionApi()?.projectOrigin({source: 'playlist', account_ref: null, playlist_ref: detail?.playlist_id,
       ...(detail?.revision != null ? {snapshot_ref: detail.revision} : {})});
@@ -38,6 +119,16 @@ const PlaylistReactRuntime = (() => {
     return JSON.stringify([shell?.dataset?.nativeAccountId ?? home?.dataset?.homeAccountId ?? '',
       shell?.dataset?.nativeLibraryId ?? home?.dataset?.homeLibraryId ?? '', PrivateUITransport.generation()]);
   };
+  function isCurrentPrivateScope(scopeKey) {
+    if (identity === null || scopeKey !== `${identity}:${generation}` || denied) return false;
+    const transportGeneration = PrivateUITransport.peekGeneration();
+    if (transportGeneration === null) return false;
+    const shell = document.getElementById('app-shell'), home = document.getElementById('mobile-home');
+    const observedIdentity = JSON.stringify([shell?.dataset?.nativeAccountId ?? home?.dataset?.homeAccountId ?? '',
+      shell?.dataset?.nativeLibraryId ?? home?.dataset?.homeLibraryId ?? '', transportGeneration]);
+    return observedIdentity === identity && shell?.hidden !== true
+      && Boolean(shell?.dataset?.nativeAccountId || home?.dataset?.homeAccountId);
+  }
   const draftCurrent = owner => Boolean(owner && draft === owner && owner.scopeKey === `${scopeIdentity()}:${generation}` && owner.isCurrent() === true);
   function interruptDraftNavigation() {
     state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
@@ -47,7 +138,13 @@ const PlaylistReactRuntime = (() => {
       finishPendingViewTransition(state.ui.activeViewRequestId, {restoreCurrentGallery: true});
     }
   }
-  function releaseDraft(token) {
+  function settlePresentation(owner, restore) {
+    const suspension = owner?.suspension;
+    if (!suspension) return;
+    owner.suspension = null;
+    if (restore) suspension.restore(); else suspension.retire();
+  }
+  function releaseDraft(token, reason = 'external') {
     if (!draft || draft.token !== token) return false;
     const owner = draft; draft = null; owner.unregister?.();
     if (draftConfirmation?.owner === owner) {
@@ -63,24 +160,44 @@ const PlaylistReactRuntime = (() => {
         const snapshot = {...window.history.state}; delete snapshot.playlistDraft;
         window.AlbumHavenSettingsNavigation?.instance?.writeLibraryHistory(window.location.href, snapshot, {mode: 'replace'});
       }
-    } finally {owner.onDiscard();}
+    } finally {
+      try {
+        if (!owner.returnPending) settlePresentation(owner, !owner.committed || reason === 'parent' || reason === 'rollback');
+      } finally {owner.onDiscard();}
+    }
     return true;
   }
-  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null, fromGlobal = false, onTransfer = null} = {}) {
+  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null, fromGlobal = false, onTransfer = null, parentRegistration = null, presentation = null} = {}) {
     const start = sync(), navigation = window.AlbumHavenSettingsNavigation?.instance;
     const home = externalScopeKey === null ? null : window.AlbumHavenHomeRuntime?.snapshot();
     const external = home?.visible === true && home.authenticated === true && home.scopeKey === externalScopeKey;
     const global = fromGlobal === true && start.authenticated === true && externalScopeKey === null;
     if (draft || !(start.visible || external || global) || (external || global) && typeof syncMobileHome !== 'function' || start.scopeKey !== scopeKey || typeof token !== 'string' || !token || /[\\/\x00-\x1f]/.test(token)
       || typeof isCurrent !== 'function' || typeof confirmLeave !== 'function' || typeof onDiscard !== 'function'
-      || !navigation?.setPlaylistDraftOwner || !navigation.writeLibraryHistory) return false;
+      || !navigation?.setPlaylistDraftOwner || !navigation.writeLibraryHistory
+      || parentRegistration !== null && (typeof parentRegistration !== 'function' || typeof parentRegistration.registerPlaylistChild !== 'function')
+      || presentation !== null && typeof presentation?.suspend !== 'function'
+      || parentRegistration !== null && presentation === null) return false;
     if (isCurrent() !== true) return false;
     const owner = {token, scopeKey, isCurrent, onDiscard, parentPosition: start.entryKey,
       parentQuery: external || global ? new URL(window.location.href).search : null};
     draft = owner;
-    owner.unregister = navigation.setPlaylistDraftOwner({token, scopeKey, isCurrent: () => draftCurrent(owner),
-      confirmLeave: () => {interruptDraftNavigation(); return confirmLeave();}, discard: () => {releaseDraft(token); sync();}});
+    const registration = {token, scopeKey, isCurrent: () => draftCurrent(owner),
+      confirmLeave: () => {interruptDraftNavigation(); return confirmLeave();}, discard: reason => {releaseDraft(token, reason); sync();}};
+    owner.unregister = parentRegistration === null ? navigation.setPlaylistDraftOwner(registration)
+      : parentRegistration.registerPlaylistChild(registration);
     if (!owner.unregister) {if (draft === owner) draft = null; return false;}
+    if (presentation) {
+      try {
+        if (!draftCurrent(owner)) {releaseDraft(token, 'rollback'); return false;}
+        const suspension = presentation.suspend();
+        if (!suspension || typeof suspension.restore !== 'function' || typeof suspension.retire !== 'function') {
+          releaseDraft(token, 'rollback'); return false;
+        }
+        owner.suspension = suspension;
+        if (!draftCurrent(owner)) {releaseDraft(token, 'rollback'); return false;}
+      } catch {releaseDraft(token, 'rollback'); return false;}
+    }
     if (onTransfer) {
       if (!draftCurrent(owner)) {if (draft === owner) releaseDraft(token); return false;}
       onTransfer();
@@ -91,32 +208,69 @@ const PlaylistReactRuntime = (() => {
     try {navigation.writeLibraryHistory(url.href, {playlistDraft: {token, scopeKey}}, {mode: 'push'});}
     catch {releaseDraft(token); return false;}
     if (window.history.state?.playlistDraft?.token !== token) {releaseDraft(token); return false;}
-    if (external || global) syncMobileHome();
+    owner.committed = true;
+    // Typed origins retain the actual source view. Only the existing temporary
+    // Playlist marker paints the child; no source payload replacement occurs.
+    if ((external || global) && !presentation) syncMobileHome();
     sync(); return draftCurrent(owner);
   }
   function retainDraft(token, callback) {
     if (!draftCurrent(draft) || draft.token !== token) return false;
     return window.AlbumHavenSettingsNavigation?.instance?.retainPlaylistDraftNavigation(token, callback) ?? false;
   }
-  function closeDraft(token) {
-    const owner = draft;
-    if (!draftCurrent(owner) || owner.token !== token) return Promise.resolve(false);
-    const deferred = window.AlbumHavenSettingsNavigation?.instance?.deferPlaylistDraftNavigation(() => {
+  function closeDraft(token, returnToOrigin, originIsCurrent) {
+    const owner = draft, originReturn = returnToOrigin !== undefined;
+    if (!draftCurrent(owner) || owner.token !== token || originReturn && (typeof returnToOrigin !== 'function'
+      || typeof originIsCurrent !== 'function')) return Promise.resolve(false);
+    const navigation = window.AlbumHavenSettingsNavigation?.instance, runtime = window.AlbumHavenPlaylistRuntime;
+    const departurePosition = window.history.state?.albumHavenNavigationPosition, departureUrl = window.location.href;
+    const sourceCurrent = () => {try {return originIsCurrent() === true;} catch {return false;}};
+    const departureCurrent = () => window.AlbumHavenSettingsNavigation?.instance === navigation
+      && window.AlbumHavenPlaylistRuntime === runtime && owner.scopeKey === (scopeIdentity() + ":" + generation)
+      && departureUrl === window.location.href && departurePosition === window.history.state?.albumHavenNavigationPosition;
+    if (originReturn && !sourceCurrent()) return Promise.resolve(false);
+    const leave = originReturn && typeof owner.unregister?.deferParentDeparture === 'function'
+      ? callback => owner.unregister.deferParentDeparture(callback)
+      : callback => navigation?.deferPlaylistDraftNavigation(callback);
+    if (originReturn) owner.returnPending = true;
+    const deferred = leave(async () => {
+      if (originReturn) {
+        let pendingReturn = true, used = false, succeeded = false;
+        const returnToParent = () => {
+          if (!pendingReturn || used) return false;
+          used = true;
+          if (!sourceCurrent() || !departureCurrent() || !Number.isSafeInteger(owner.parentPosition)
+            || !Number.isSafeInteger(departurePosition) || departurePosition <= owner.parentPosition) return false;
+          window.history.go(owner.parentPosition - departurePosition); return true;
+        };
+        try {
+          if (!sourceCurrent() || !departureCurrent()) return false;
+          succeeded = await returnToOrigin(returnToParent) === true;
+          // A successful source return may deliberately replace its own source
+          // owner and vacate this destination. Never demand either remain open.
+          return succeeded;
+        } finally {pendingReturn = false; settlePresentation(owner, succeeded);}
+      }
       const position = window.history.state?.albumHavenNavigationPosition;
       if (Number.isSafeInteger(owner.parentPosition) && Number.isSafeInteger(position) && position > owner.parentPosition) {
         window.history.go(owner.parentPosition - position); return true;
       }
       return typeof fetchAndRender === 'function' ? fetchAndRender(owner.parentQuery === null
-        ? '/view-data?surface=playlists' : `/view-data${owner.parentQuery}`, true) : false;
+        ? '/view-data?surface=playlists' : '/view-data' + owner.parentQuery, true) : false;
     });
-    return Promise.resolve(deferred || false);
+    return Promise.resolve(deferred || false).finally(() => {
+      owner.returnPending = false;
+      // Cancellation retains the active child's suspension. A discarded child
+      // whose callback was superseded must not retain an obsolete surface.
+      if (draft !== owner && owner.suspension) settlePresentation(owner, false);
+    });
   }
   function restoreDraftFromHistory() {
     const snapshot = sync();
     if (!snapshot.draftToken || document.getElementById('app-shell')?.hidden === true
       || new URL(window.location.href).pathname !== '/') return false;
     interruptDraftNavigation();
-    if (typeof syncMobileHome === 'function') syncMobileHome();
+    if (!draft?.suspension && typeof syncMobileHome === 'function') syncMobileHome();
     sync(); return true;
   }
   function confirmDraft(token, message) {
@@ -676,7 +830,7 @@ const PlaylistReactRuntime = (() => {
   if (shell && typeof MutationObserver === 'function') new MutationObserver(sync).observe(shell, {attributes: true, attributeFilter: ['hidden', 'data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
   const resourceSelection = selectionApi()?.create({sourceResource, retainResource, revalidateResource, authorizeResource: resolveNativeAlbum});
   return {
-    snapshot: sync, sync, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
+    snapshot: sync, sync, isCurrentPrivateScope, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
     readPlaylists, readSidebarDirectory, navigate, navigateFromPlaytable, createPlaytableSource,
     notificationRegistry: () => window.AlbumHavenNotifications,
     subscribeNotificationRegistry(listener) {
@@ -708,81 +862,12 @@ const PlaylistReactRuntime = (() => {
         && playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null)
         && state.player.playbackQueue === queue;
     },
-    createLibraryMixRuntime({scopeKey, source, order, isCurrent, automaticPlayCurrent}) {
-      const targets = new Map();
-      let activation = 0;
-      const current = () => isCurrent() === true && sync().authenticated && sync().scopeKey === scopeKey;
-      const canPlay = row => {
-        const selected = current() ? source() : null;
-        return Boolean(selected?.detail.track_rows.includes(row) && selected.detail.allowed_actions.can_play === true
-          && exactGrant(row.allowed_actions, 'can_play') && row.availability === 'local'
-          && current() && source() === selected);
-      };
-      return {...PlaylistReactRuntime,
-        openForm: options => openReactFormDialog(options, current),
-        createPlaytableSource: undefined,
-        trackPreference: () => null, setTrackLove: undefined,
-        canResourceIntent: () => false, mountResourceSelection: undefined,
-        canTrackIntent: (intent, row) => intent === 'play' && canPlay(row),
-        trackPlayback: row => current() && targets.has(row.playlist_item_id) && state.player.playbackQueue?.libraryMixRef === source()?.source.ref
-          ? TrackActionsRuntime.playback(targets.get(row.playlist_item_id)) : {isCurrent: false, isPlaying: false},
-        async trackIntent(intent, row, options = {}) {
-          if (intent !== 'play' || options.automatic === true && automaticPlayCurrent?.() !== true || !canPlay(row)) throw failure('Mix playback is unavailable.', 403);
-          const retained = source(), sequence = ++activation;
-          let publishing = false;
-          const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
-          const valid = () => current() && source() === retained && activation === sequence && !options.signal?.aborted
-            && (options.automatic !== true || publishing || automaticPlayCurrent?.() === true)
-            && playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null);
-          const ids = options.displayedItemIds || retained.entry_refs;
-          if (!Array.isArray(ids) || ids.length !== retained.entry_refs.length || new Set(ids).size !== ids.length
-            || ids.some(id => !retained.entry_refs.includes(id)) || !ids.includes(row.playlist_item_id)) throw failure('Mix membership changed.', 409);
-          if (typeof readLibraryMixNativeQueue !== 'function') throw failure('Mix playback is unavailable.');
-          const data = await readLibraryMixNativeQueue({sourceRef: retained.source.ref, sourceRevision: retained.source.revision,
-            entryRefs: ids, startingEntryRef: row.playlist_item_id, signal: options.signal, sourceProtocol:retained.source_protocol});
-          if (!valid()) throw aborted();
-          let tracks = data.tracks.map(item => {
-            const target = item.native_target;
-            const native = {...target, playback_state: {can_start_here: true}};
-            targets.set(item.playlist_item_id, native);
-            return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
-              artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
-              inventory_track_ref: target.inventory_track_ref, playlistItemId: item.playlist_item_id,
-              personalPlayCount: Number.isSafeInteger(item.play_count) && item.play_count >= 0 ? item.play_count : null};
-          });
-          const mode = order();
-          if (mode === 'unplayed_first') tracks = [...tracks.filter(item => item.personalPlayCount === 0), ...tracks.filter(item => item.personalPlayCount !== 0)];
-          const regularTracks = tracks;
-          let selected = tracks.find(item => item.playlistItemId === row.playlist_item_id);
-          if (mode === 'shuffle' && typeof playlistQueueOrder === 'function') tracks = playlistQueueOrder(tracks, true,
-            options.fromStart === true ? null : selected.path, options.fromStart === true ? null : selected.playlistItemId);
-          if (options.fromStart === true) selected = tracks[0];
-          if (!selected || !valid() || typeof playTrackFromPayload !== 'function') throw aborted();
-          publishing = true;
-          const previousQueue = state.player.playbackQueue;
-          const queue = {tracks, regularTracks, shuffle: mode === 'shuffle', repeatMode: 'off', currentIndex: tracks.indexOf(selected),
-            playbackContext: null, albumRef: '', albumSnapshot: null, playlistId: null, libraryMixRef: retained.source.ref,
-            playlistRevision: retained.source.revision, libraryMixProtocol:retained.source_protocol, sourceEntryRefs: [...retained.entry_refs],
-            displayedItemIds: [...ids], contextGeneration: PrivateUITransport.generation()};
-          if (state.player.current?.path === selected.path) {
-            if (typeof commitPlaylistQueue !== 'function') throw failure('Mix queue replacement is unavailable.');
-            commitPlaylistQueue(queue, previousQueue); notifyPlayback();
-            if (!valid() || state.player.playbackQueue !== queue) {
-              if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
-              throw aborted();
-            }
-            TrackActionsRuntime.play(targets.get(selected.playlistItemId)); return;
-          }
-          state.player.playbackQueue = queue; notifyPlayback();
-          if (!valid() || state.player.playbackQueue !== queue) {
-            if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
-            throw aborted();
-          }
-          try {if (await playTrackFromPayload(selected) !== true) throw failure('Mix playback did not start.');}
-          catch (error) {if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue; throw error;}
-        },
-      };
+    createLibraryMixRuntime(options) {return createGeneratedPlaylistRuntime(options);},
+    shuffleSamplePlaylistRefs(values, random = Math.random) {
+      if (typeof playlistQueueShuffleCopy !== 'function') throw failure('Sample ordering is unavailable.');
+      return playlistQueueShuffleCopy(values, random);
     },
+    createSamplePlaylistRuntime(options) {return createGeneratedPlaylistRuntime({...options, order: () => 'regular'}, true);},
     readPlayback, playbackIntent,
     createAlbumTopPreviewRuntime({token, scopeKey, preview, resolveAlbum, isCurrent}) {
       const api = selectionApi(), targets = new Map();
@@ -843,10 +928,35 @@ const PlaylistReactRuntime = (() => {
       if (opened !== true || !draftCurrent(owner) || tops !== window.AlbumHavenAlbumTopsRuntime || tops.snapshot().topRef !== top_ref) return false;
       releaseDraft(token); lastView = null; sync(); return true;
     },
-    async completeLibraryMixDraft({token, playlist_id, scopeKey, artistLoved = false}) {
+    async completeLibraryMixDraft({token, playlist_id, scopeKey, artistLoved = false, sample = false}) {
       const start = sync();
       if (!draftCurrent(draft) || draft.token !== token || start.scopeKey !== scopeKey || !start.authenticated) return false;
-      if (artistLoved) {
+      if (sample === true && typeof draft.unregister?.deferParentDeparture === 'function') {
+        // A saved destination leaves the entire relationship. Its authority is
+        // independent of the child that approved departure intentionally disposes.
+        if (sampleDestinationAttempt || typeof playlist_id !== 'string' || !playlist_id.trim()) return false;
+        const navigation = window.AlbumHavenSettingsNavigation?.instance, runtime = window.AlbumHavenPlaylistRuntime;
+        if (typeof navigation?.deferCollectionDraftNavigation !== 'function') return false;
+        const sourceView = state.view, sourceUrl = window.location.href;
+        const sourcePosition = window.history.state?.albumHavenNavigationPosition;
+        const attempt = {}; sampleDestinationAttempt = attempt;
+        const ownerCurrent = () => sampleDestinationAttempt === attempt && window.AlbumHavenPlaylistRuntime === runtime
+          && window.AlbumHavenSettingsNavigation?.instance === navigation && sync().scopeKey === scopeKey
+          && sync().authenticated && document.getElementById('app-shell')?.hidden !== true;
+        const departureCurrent = () => ownerCurrent() && state.view === sourceView
+          && window.location.href === sourceUrl && window.history.state?.albumHavenNavigationPosition === sourcePosition;
+        try {
+          const accepted = await navigation.deferCollectionDraftNavigation(async () => {
+            if (!departureCurrent()) return false;
+            await navigateCurrent(playlist_id, start, departureCurrent);
+            const destination = sync();
+            return ownerCurrent() && destination.playlistId === playlist_id
+              && destination.payload?.playlist_detail?.playlist_id === playlist_id;
+          }, {isCurrent: departureCurrent});
+          return accepted === true;
+        } finally {if (sampleDestinationAttempt === attempt) sampleDestinationAttempt = null;}
+      }
+      if (artistLoved || sample === true) {
         const owner = draft;
         const accepted = await retainDraft(token, async () => {
           await navigateCurrent(playlist_id, start, () => draftCurrent(owner), token);

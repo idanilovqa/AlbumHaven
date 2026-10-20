@@ -45,6 +45,9 @@ GALLERY_PROJECTION_ARTIST_LOOKUP_MIGRATION = (
 LOCALE_INDEPENDENT_SEARCH_PREFILTER_MIGRATION = (
     MIGRATIONS_DIR / "0092_add_locale_independent_search_prefilter.sql"
 )
+DUPLICATE_IDENTITY_LOOKUP_MIGRATION = (
+    MIGRATIONS_DIR / "0093_add_duplicate_identity_lookup_index.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -450,7 +453,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-52:] == [
+    assert migration_names[-53:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -503,6 +506,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0090_patch_local_artist_search_projection.sql",
         "0091_add_gallery_projection_artist_lookup_indexes.sql",
         "0092_add_locale_independent_search_prefilter.sql",
+        "0093_add_duplicate_identity_lookup_index.sql",
     ]
 
 
@@ -534,6 +538,46 @@ def test_locale_independent_search_prefilter_migration_adds_fixed_utf8_indexes()
     assert "local_track_files_search_utf8_hex_trgm_idx" in sql
     assert "library.search_utf8_hex(lower(btrim(coalesce(title, ''))))" in sql
     assert "library.search_utf8_hex(lower(coalesce(private_path, '')))" in sql
+
+
+def test_duplicate_identity_lookup_migration_adds_exact_unicode_index():
+    sql = _normalized_sql(
+        DUPLICATE_IDENTITY_LOOKUP_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create or replace function library.duplicate_identity_text(value text)" in sql
+    assert "current_setting('server_version_num')::integer >= 180000" in sql
+    assert "normalize(casefold(value collate \"und-x-icu\"), nfc)" in sql
+    assert "normalize(lower(value collate \"und-x-icu\"), nfc)" in sql
+    assert "regexp_replace(" in sql
+    assert "'[[:space:]]+', ' ', 'g'" in sql
+    assert "create or replace function library.duplicate_identity_year(value text)" in sql
+    assert "normalize(btrim(value), nfkc)" in sql
+    assert (
+        "revoke all on function library.duplicate_identity_text(text) from public"
+        in sql
+    )
+    assert (
+        "revoke all on function library.duplicate_identity_year(text) from public"
+        in sql
+    )
+    for role in ("album_haven_app", "album_haven_migrator"):
+        assert (
+            f"grant execute on function library.duplicate_identity_text(text) to {role}"
+            in sql
+        )
+        assert (
+            f"grant execute on function library.duplicate_identity_year(text) to {role}"
+            in sql
+        )
+    assert (
+        "create index if not exists local_track_files_active_duplicate_identity_idx"
+        in sql
+    )
+    assert "library.duplicate_identity_text(scan_file_album_artist)" in sql
+    assert "library.duplicate_identity_text(scan_file_album)" in sql
+    assert "library.duplicate_identity_year(scan_file_year)" in sql
+    assert "where scan_cache_stale is false" in sql
 
 
 def test_album_raw_artist_search_index_matches_search_preview_expression():

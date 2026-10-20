@@ -1097,16 +1097,40 @@ def _ordered_album_duplicate_track_groups(
     return [group for group, identity in zip(ordered_groups, identities) if identity is not None and counts[identity] > 1]
 
 
+def _duplicate_album_identity_values(
+    album_artist: object,
+    album: object,
+    year: object,
+) -> tuple[str, str, int] | None:
+    artist = " ".join(
+        unicodedata.normalize("NFC", str(album_artist or "")).casefold().split()
+    )
+    title = " ".join(
+        unicodedata.normalize("NFC", str(album or "")).casefold().split()
+    )
+    normalized_year = safe_int(year)
+    if (
+        not artist
+        or not title
+        or normalized_year is None
+        or not 1000 <= normalized_year <= 9999
+    ):
+        return None
+    return (artist, title, normalized_year)
+
+
 def _duplicate_album_identity(tracks: list[Track]) -> tuple[str, str, int] | None:
     """Require complete, consistent album tags; never infer identity from encodes."""
     identities = set()
     for track in tracks:
-        artist = " ".join(unicodedata.normalize("NFC", str(track.album_artist or "")).casefold().split())
-        title = " ".join(unicodedata.normalize("NFC", str(track.album or "")).casefold().split())
-        year = safe_int(track.year)
-        if not artist or not title or year is None or not 1000 <= year <= 9999:
+        identity = _duplicate_album_identity_values(
+            track.album_artist,
+            track.album,
+            track.year,
+        )
+        if identity is None:
             return None
-        identities.add((artist, title, year))
+        identities.add(identity)
     return next(iter(identities)) if len(identities) == 1 else None
 
 

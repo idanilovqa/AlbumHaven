@@ -22,9 +22,9 @@ def inventory_selection_refs(value, library_id):
     return ids
 
 
-def _header(connection,context,now,*,protocol,kind,origin=None):
+def _header(connection,context,now,*,protocol,kind,origin=None,source_ref=None):
     from psycopg.types.json import Jsonb
-    source={"ref":str(uuid4()),"revision":str(uuid4()),"library_id":context.library_id,
+    source={"ref":str(uuid4()) if source_ref is None else uuid_ref(source_ref),"revision":str(uuid4()),"library_id":context.library_id,
         "actor_account_id":context.actor.account_id,"session_id":context.actor.session_id,
         "expires_at":now+sources.SOURCE_LIFETIME,"inventory_upper_id":0,
         "protocol":protocol,"source_kind":kind,"origin_descriptor":origin}

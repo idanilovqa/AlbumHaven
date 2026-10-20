@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from copy import deepcopy
+from math import isfinite
 
 _MIN_REQUEST_INTERVAL_SECONDS = 1.05
 _MAX_ATTEMPTS = 3
@@ -356,3 +357,149 @@ def default_user_agent(app_name: str, app_version: str, contact_email: str) -> s
     comment_name = str(app_name or "Album Haven").strip() or "Album Haven"
     email = str(contact_email or "").strip() or "albumhaven@example.com"
     return f"{product_name}/{str(app_version or '').strip() or '0.0.0'} ({comment_name}; {email})"
+
+
+# Artist identity evidence is a separate cache and policy from both historical
+# permissive metadata and release-group evidence. No global urllib configuration.
+STRICT_ARTIST_EVIDENCE_POLICY = "musicbrainz-artist-v1"
+_STRICT_ARTIST_URL_CACHE: dict[str, dict[str, object]] = {}
+_STRICT_ARTIST_MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+
+
+def _artist_cache(url, payload=_CACHE_MISS, *, write=False):
+    key = _cache_key(url, "application/json")
+    with _CACHE_LOCK:
+        if write:
+            _STRICT_ARTIST_URL_CACHE[key] = {"updated_at": time.time(), "ok": isinstance(payload, dict),
+                "payload": deepcopy(payload) if isinstance(payload, dict) else None,
+                "evidence_policy": STRICT_ARTIST_EVIDENCE_POLICY}
+            return None
+        entry = _STRICT_ARTIST_URL_CACHE.get(key)
+        if not isinstance(entry, dict):
+            return None
+        ttl = _SUCCESS_CACHE_TTL_SECONDS if entry.get("ok") else _MISS_CACHE_TTL_SECONDS
+        if (entry.get("evidence_policy") != STRICT_ARTIST_EVIDENCE_POLICY
+                or not entry.get("updated_at") or time.time() - float(entry["updated_at"]) > ttl):
+            _STRICT_ARTIST_URL_CACHE.pop(key, None)
+            return None
+        return deepcopy(entry["payload"]) if entry.get("ok") and isinstance(entry.get("payload"), dict) else _CACHE_MISS
+
+
+def _artist_json(body, identity):
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                raise _StrictEvidenceError("invalid_payload")
+            value[key] = item
+        return value
+    def constant(_value):
+        raise _StrictEvidenceError("invalid_payload")
+    def scalars(value):
+        if type(value) is float and not isfinite(value):
+            raise _StrictEvidenceError("invalid_payload")
+        if type(value) is str and any(0xd800 <= ord(c) <= 0xdfff for c in value):
+            raise _StrictEvidenceError("invalid_payload")
+        if type(value) is dict:
+            for key, item in value.items():
+                scalars(key)
+                scalars(item)
+        elif type(value) is list:
+            for item in value:
+                scalars(item)
+    try:
+        value = json.loads(body.decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+        scalars(value)
+        if type(value) is not dict or value.get("id") != identity:
+            raise _StrictEvidenceError("invalid_payload")
+        return value
+    except (UnicodeError, ValueError, RecursionError):
+        raise _StrictEvidenceError("invalid_payload") from None
+
+
+def get_artist_json(artist_mbid, user_agent, *, timeout=15.0, should_cancel=None):
+    """Finite strict exact-artist transport, sharing existing pacing and backoff."""
+    cancelled = should_cancel if callable(should_cancel) else lambda: False
+    if cancelled():
+        return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
+    if type(artist_mbid) is not str or _STRICT_ARTIST_MBID.fullmatch(artist_mbid) is None:
+        return None, {"status": "invalid_evidence_request", "cache_hit": False, "attempt": 0}
+    url = "https://musicbrainz.org/ws/2/artist/" + artist_mbid + "?fmt=json"
+    def cache_result():
+        cached = _artist_cache(url)
+        if cached is _CACHE_MISS:
+            return None, {"status": "cached_miss", "cache_hit": True}
+        if isinstance(cached, dict):
+            if cached.get("id") != artist_mbid:
+                with _CACHE_LOCK:
+                    _STRICT_ARTIST_URL_CACHE.pop(_cache_key(url, "application/json"), None)
+                return None
+            return cached, {"status": "cache", "cache_hit": True, "evidence_policy": STRICT_ARTIST_EVIDENCE_POLICY}
+        return None
+    cached = cache_result()
+    if cached is not None:
+        return cached
+    with _REQUEST_LOCK:
+        if cancelled():
+            return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
+        cached = cache_result()
+        if cached is not None:
+            return cached
+        blocked, delay, reason = _blocked_state()
+        if blocked:
+            _artist_cache(url, None, write=True)
+            return None, {"status": "blocked", "cache_hit": False, "blocked_reason": reason,
+                "retry_after_seconds": round(delay, 2)}
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            if cancelled():
+                return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
+            _wait_for_slot()
+            if cancelled():
+                return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
+            request = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "application/json"})
+            retry = False
+            try:
+                opener = urllib.request.build_opener(_StrictEvidenceHTTPErrorProcessor())
+                with opener.open(request, timeout=float(timeout or 15.0)) as response:
+                    payload = _artist_json(_strict_success_bytes(response), artist_mbid)
+                _mark_request_complete()
+                if cancelled():
+                    return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
+                _artist_cache(url, payload, write=True)
+                return payload, {"status": "network", "cache_hit": False, "attempt": attempt,
+                    "evidence_policy": STRICT_ARTIST_EVIDENCE_POLICY}
+            except _StrictEvidenceError as error:
+                status = str(error)
+            except urllib.error.HTTPError as error:
+                try:
+                    body = error.read(_STRICT_ERROR_MAX_BYTES)
+                except Exception:
+                    body = b""
+                finally:
+                    error.close()
+                code = int(getattr(error, "code", 0) or 0)
+                reason = _block_reason_from_http_error(code, body)
+                if reason:
+                    _set_block(reason)
+                    status = "blocked"
+                else:
+                    status = f"http_{code}"
+                    retry = _is_retryable_http_status(code)
+            except (urllib.error.URLError, ssl.SSLError, TimeoutError, socket.timeout) as error:
+                reason = _block_reason_from_exception(getattr(error, "reason", error))
+                if reason:
+                    _set_block(reason)
+                    status = "blocked"
+                else:
+                    status, retry = "connection_error", True
+            except Exception as error:
+                status = type(error).__name__
+            _mark_request_complete()
+            if cancelled():
+                return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
+            if retry and attempt < _MAX_ATTEMPTS:
+                time.sleep(_backoff_delay(attempt))
+                continue
+            _artist_cache(url, None, write=True)
+            return None, {"status": status, "cache_hit": False, "attempt": attempt}
+    return None, {"status": "exhausted", "cache_hit": False}

@@ -1,3 +1,4 @@
+import {captureAlbumTopSampleOrigin} from '../playlists/sample-playlist-origins.mjs';
 import {mountButton, mountStatus} from '../home-friends/native-controls.mjs';
 import {mountAlbumProgress} from '../home-friends/album-progress.mjs';
 import {mountSharedHeader} from '../home-friends/shared-header.mjs';
@@ -63,6 +64,13 @@ export function mountAlbumTopsView(host, runtime, props) {
             if (disposed || controller.getSnapshot().selectedTopRef || !albumTopActionAllowed(controller.getSnapshot(), 'create') || !latest.canImport) return;
             const opener = event.target.closest('button'); latest.onImport(() => returnHeaderFocus(opener));
           }});
+        if (selected && detail) {
+          const captureSample = () => captureAlbumTopSampleOrigin({controller, libraryRef: runtime.sampleLibraryRef?.(),
+            isCurrent: () => !disposed && !headerDisposed && runtime.isCurrentSampleScope?.(state.scopeKey) === true,
+            returnToOrigin: returnToParent => typeof returnToParent === 'function' ? returnToParent() : false});
+          control('sample', 'Create sample playlist', {icon: 'add', disabled: busy || !captureSample() || typeof runtime.openSamplePlaylist !== 'function',
+            onClick: () => {const lease = captureSample(), originNavigation = runtime.captureSampleOriginNavigation?.(); if (lease && originNavigation) runtime.openSamplePlaylist({originOwner: lease, originNavigation});}});
+        }
         const guarded = action => {const current = controller.getSnapshot(); return current.detail.data === detail && albumTopActionAllowed(current, action, detail?.top_ref);};
         if (selected && albumTopActionAllowed(state, 'set_activity')) {
           const active = detail.top_viewer_overlay.activity.active;
@@ -152,7 +160,8 @@ export function mountAlbumTopsView(host, runtime, props) {
     if (dialogToken && dialogToken.key !== key) retireDialog();
     if (dialogIntent && !dialogToken) {
       const intent = dialogIntent, opener = intent.opener, token = {key}; dialogToken = token;
-      const options = {runtime, controller, state, providers: intent.providers || latest.providers, existing: intent.top || null, fallbackHost: failureHost,
+      const options = {runtime, controller, state, providers: intent.providers || latest.providers, imageExportCoordinator: latest.imageExportCoordinator,
+        existing: intent.top || null, fallbackHost: failureHost,
         onClose: options => {if (!disposed && dialogToken === token) closeDialog(options);},
         onFormSaved: latest.onFormSaved, returnFocus: () => returnHeaderFocus(opener)};
       const opened = intent.kind === 'share' ? openShareAlbumTop(options) : intent.kind === 'add' ? openAddAlbumTop(options) : openAlbumTopBuilder(options);

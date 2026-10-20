@@ -224,6 +224,7 @@ def search(connection, live, scope, *, query, cursor, limit, cursor_secret, top_
                for key in ('title', 'artist')):
             continue
         albums.append({'local_album_id': row['id'],
+            'inventory_album_ref': f"inventory-album:{live.library_id}:{row['id']}",
             'album_ref': str(row['catalog_ref']) if row['catalog_ref'] is not None else None,
             'title': row['title'], 'artist': row['artist'],
             'year': row['release_year'] if type(row['release_year']) is int

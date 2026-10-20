@@ -12,7 +12,8 @@ from music_app.services.popularity_snapshots import (
 
 
 _FACTS = """
- select inventory.*, t.mbid::text as recording_mbid,
+ select inventory.*, t.artist_id as local_track_artist_id, a.artist_id as local_album_artist_id,
+   t.mbid::text as recording_mbid,
    t.mbid_assertion_state as recording_state, t.evidence_source as recording_source,
    ar.mbid::text as artist_mbid, ar.mbid_assertion_state as artist_state,
    ar.evidence_source as artist_source,
@@ -32,8 +33,7 @@ _FACTS = """
    s.retry_after, s.last_result, s.last_attempt_at,
    m.inventory_revision as mapped_inventory_revision,
    m.recording_mbid::text as mapped_recording_mbid,
-   m.artist_mbid::text as mapped_artist_mbid, m.source_entity_id,
-   o.source_revision, o.observed_at, o.imported_at, o.count, o.attribution_state
+   m.artist_mbid::text as mapped_artist_mbid, m.source_entity_id{observation_fields}
  from inventory
  join library.local_tracks t on t.id=inventory.original_local_track_id
  left join library.local_albums a on a.id=t.album_id and a.library_id=t.library_id
@@ -42,24 +42,31 @@ _FACTS = """
  left join library.track_popularity_mapping_slots s on s.track_id=t.id
  left join library.track_popularity_mapping_versions m
    on m.track_id=t.id and m.revision=s.current_revision
+{observation_joins}
+ order by t.id
+"""
+
+_OBSERVATION_FIELDS = ", o.source_revision, o.observed_at, o.imported_at, o.count, o.attribution_state"
+_OBSERVATION_JOINS = """
  left join catalog.popularity_source_slots p on p.provider='lastfm'
    and p.metric='overall_scrobbles' and p.source_entity_id=m.source_entity_id
  left join catalog.popularity_source_observations o on o.provider=p.provider
    and o.metric=p.metric and o.source_entity_id=p.source_entity_id
    and o.source_revision=p.current_revision
- order by t.id
 """
 
 
-def read_inventory(connection, library_id, *, track_ids=None, lock=False):
-    if type(library_id) is not int or library_id < 1 or connection.autocommit:
+def read_inventory(connection, library_id, *, track_ids=None, lock=False, include_popularity=True, preflight=None):
+    if (type(include_popularity) is not bool or type(library_id) is not int
+            or library_id < 1 or connection.autocommit):
         raise ValueError("Mix inventory requires a current library transaction")
     if lock:
         if track_ids is None:
             track_ids = [row["id"] for row in connection.execute(
                 "select id from library.local_tracks where library_id=%s order by id",
                 (library_id,)).fetchall()]
-        sources.inventory_rows(connection, library_id, track_ids, lock=True)
+        sources.inventory_rows(connection, library_id, track_ids, lock=True,
+            **({"preflight": preflight} if preflight is not None else {}))
         connection.execute("""select id from library.local_artists where library_id=%s
             and id in (select a.artist_id from library.local_albums a
               join library.local_tracks t on t.album_id=a.id and t.library_id=a.library_id
@@ -70,8 +77,10 @@ def read_inventory(connection, library_id, *, track_ids=None, lock=False):
     if track_ids is not None:
         clause += " and t.id=any(%s::bigint[])"
         params += (track_ids,)
+    facts = _FACTS.replace("{observation_fields}", _OBSERVATION_FIELDS if include_popularity else "").replace(
+        "{observation_joins}", _OBSERVATION_JOINS if include_popularity else "")
     return connection.execute("with inventory as (" + sources._INVENTORY + clause
-                              + ")" + _FACTS, params).fetchall()
+                              + ")" + facts, params).fetchall()
 
 
 def _single(values):
@@ -119,10 +128,10 @@ def inventory_revision(row):
         "is_compilation", "file_tags")})
 
 
-def normalize_cached_inventory_row(row):
-    """Normalize one captured row without I/O or Mix grouping decisions."""
+def normalize_cached_track_identity(row):
+    """Resolve a current provider mapping without reading its observation."""
     if row["availability"] != "local":
-        return None, None, None
+        return None, None
     track_id = row["original_local_track_id"]
     recording, artist, reason = local_identity(row)
     if reason is None and (not row["mapping_revision"]
@@ -132,11 +141,19 @@ def normalize_cached_inventory_row(row):
                   and row["last_result"] in ("ambiguous_attribution", "provider_unavailable")
                   else "missing_provider_mapping")
     if reason:
-        return None, None, reason
+        return None, reason
     track = LocalTrackEvidence(track_id, row["mapping_revision"], "lastfm",
         row["source_entity_id"], recording, "lastfm.track.getInfo.mbid",
         row["mapped_artist_mbid"], "lastfm.track.getInfo.artist.mbid"
         if row["mapped_artist_mbid"] else None)
+    return track, None
+
+
+def normalize_cached_inventory_row(row):
+    """Normalize one captured row without I/O or Mix grouping decisions."""
+    track, reason = normalize_cached_track_identity(row)
+    if track is None:
+        return None, None, reason
     snapshot = None
     if row["source_revision"] is not None:
         if any(value.utcoffset() is None for value in (row["observed_at"], row["imported_at"])):
@@ -146,8 +163,60 @@ def normalize_cached_inventory_row(row):
             row["observed_at"].astimezone(timezone.utc),
             row["imported_at"].astimezone(timezone.utc), row["count"], row["attribution_state"])
         validate_observation(observation)
-        snapshot = CachedPopularity(track_id, row["mapping_revision"], observation)
+        snapshot = CachedPopularity(track.track_id, row["mapping_revision"], observation)
     return track, snapshot, None
+
+
+def primary_artist_bindings(rows, *, track_artist_ids):
+    """Use primary album credits, or the resolved primary track for compilations."""
+    album_artists = {}
+    for row in rows:
+        if row["availability"] == "local" and row["original_album_id"] is not None:
+            value = _artist(row, "album_artist_", "album_artists")
+            album_artists.setdefault(row["original_album_id"], set()).add(value)
+    result = {}
+    for row in rows:
+        if row["availability"] != "local":
+            continue
+        track_id, album_id = row["original_local_track_id"], row["original_album_id"]
+        credits = album_artists.get(album_id, set())
+        primary = track_artist_ids.get(track_id) if row["is_compilation"] is True or album_id is None else (
+            next(iter(credits)) if len(credits) == 1 else None)
+        track_basis = row["is_compilation"] is True or album_id is None
+        result[track_id] = {"primary_artist_ref": f"musicbrainz-artist:{primary}" if primary else None,
+            "local_artist_id": row.get("local_track_artist_id" if track_basis else "local_album_artist_id"),
+            "basis": "track" if track_basis else "album"}
+    # A truthful FK is necessary but not sufficient: its current assertion must
+    # be compatible with the canonical identity already resolved above. Do not
+    # change the old grouping result when the optional Country binding fails.
+    canonical_by_row = {}
+    for row in rows:
+        track_id = row["original_local_track_id"]
+        binding = result.get(track_id)
+        if binding is None or binding["local_artist_id"] is None:
+            continue
+        prefix = "artist_" if binding["basis"] == "track" else "album_artist_"
+        mbid = row[prefix + "mbid"]
+        canonical = canonical_mbid(mbid) if mbid is not None else None
+        primary = binding["primary_artist_ref"]
+        compatible = (row[prefix + "state"] not in ("conflicting", "ambiguous")
+            and (mbid is None or canonical is not None)
+            and not (row[prefix + "state"] == "asserted" and canonical is not None
+                and primary != f"musicbrainz-artist:{canonical}"))
+        if not compatible:
+            binding["local_artist_id"] = None
+        if binding["local_artist_id"] is not None and primary is not None:
+            canonical_by_row.setdefault(binding["local_artist_id"], set()).add(primary)
+    for binding in result.values():
+        if len(canonical_by_row.get(binding["local_artist_id"], ())) > 1:
+            binding["local_artist_id"] = None
+    return result
+
+
+def primary_artist_refs(rows, *, track_artist_ids):
+    """Compatibility wrapper: grouping identities remain byte-for-byte unchanged."""
+    return {track: binding["primary_artist_ref"] for track, binding in
+        primary_artist_bindings(rows, track_artist_ids=track_artist_ids).items()}
 
 
 def read_snapshot(connection, live_context, *, is_readable, track_ids=None, album_order=None):
@@ -169,11 +238,8 @@ def read_snapshot(connection, live_context, *, is_readable, track_ids=None, albu
         from music_app.services.owned_playlists import PlaylistError
         raise PlaylistError("library_mix_unavailable", 503)
     candidates, snapshots, diagnostics = [], {}, []
-    album_artists = {}
-    for row in rows:
-        if row["availability"] == "local" and row["original_album_id"] is not None:
-            value = _artist(row, "album_artist_", "album_artists")
-            album_artists.setdefault(row["original_album_id"], set()).add(value)
+    groups = primary_artist_refs(rows, track_artist_ids={row["original_local_track_id"]:
+        row["mapped_artist_mbid"] for row in rows if row["availability"] == "local"})
     for row in rows:
         if row["availability"] != "local":
             continue
@@ -183,12 +249,9 @@ def read_snapshot(connection, live_context, *, is_readable, track_ids=None, albu
             diagnostics.append((track_id, reason))
             continue
         album_id = row["original_album_id"]
-        credits = album_artists.get(album_id, set())
-        primary = row["mapped_artist_mbid"] if row["is_compilation"] is True or album_id is None else (
-            next(iter(credits)) if len(credits) == 1 else None)
         candidates.append(LibraryMixCandidate(track,
             f"inventory-album:{library_id}:{album_id}" if album_id is not None else None,
-            f"musicbrainz-artist:{primary}" if primary else None,
+            groups[track_id],
             (album_order.index(album_id) if album_order is not None
              else album_id if album_id is not None else 2**63 - 1),
             row["disc_number"], row["track_number"]))

@@ -24,7 +24,7 @@ from music_app.services.album_top_artist_scope import artist_scope, scope_projec
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.social_cursors import encode_social_cursor
 from music_app.services.private_library_authority import (
-    current_library_transaction, PrivateLibraryAuthorityError,
+    current_library_transaction, PrivateLibraryAuthorityError, require_private_action,
 )
 
 
@@ -207,6 +207,7 @@ class PostgresOwnedAlbumTopsService:
                 if any(type(row[key]) is not str or not row[key].strip() or len(row[key]) > 1000 for key in ('title', 'artist')):
                     continue
                 albums.append({'local_album_id': row['id'],
+                    'inventory_album_ref': f"inventory-album:{live.library_id}:{row['id']}",
                     'album_ref': str(row['catalog_ref']) if row['catalog_ref'] is not None else None,
                     'title': row['title'], 'artist': row['artist'],
                     'year': row['release_year'] if type(row['release_year']) is int and 1 <= row['release_year'] <= 9999 else None})
@@ -296,9 +297,26 @@ class PostgresOwnedAlbumTopsService:
             if actions.get('can_edit'):
                 working = publication.working_items(connection, top)
                 link = publication.lock_link(connection, top)
+                draft_items = (remote_membership.typed_draft(working, remote) if remote
+                               else publication.as_draft(working))
+                # Project the exact DB identity before a browser can round the
+                # legacy numeric field. Admission/source-choice DTOs stay closed.
+                selected = {str(row['ref']): row for row in working}
+                for item in draft_items:
+                    if remote and item['source']['kind'] != 'local':
+                        continue
+                    binding = selected[item['item_ref']]
+                    album_id = binding['selected_local_album_id']
+                    if binding['selected_source_ref'] is None or type(album_id) is not int or album_id <= 0:
+                        continue
+                    try:
+                        require_private_action(live, BROWSE,
+                            resource=ResourceScope('album', str(album_id)), constraints=constraints)
+                    except PrivateLibraryAuthorityError:
+                        continue
+                    item['selected_inventory_album_ref'] = f'inventory-album:{live.library_id}:{album_id}'
                 edit['edit_draft'] = {
-                    **({'item_selections': remote_membership.typed_draft(working, remote)} if remote
-                       else {'items': publication.as_draft(working)}),
+                    **({'item_selections': draft_items} if remote else {'items': draft_items}),
                     'publication_preview_required': top['owner_account_id'] == live.actor.account_id
                         and link is not None and link['state'] == 'enabled'}
             overlay = {**progress.read_overlay(connection, live, top), "activity": state}

@@ -1,7 +1,7 @@
 """Transactional same-server Playlists; PostgreSQL is the sole durable authority."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
@@ -12,7 +12,7 @@ from music_app.services.admin_member_mutation_postgres import lock_current_actor
 from music_app.services.private_library_authority import current_library_transaction, PrivateLibraryAuthorityError
 from music_app.services.owned_playlists import (
     BROWSE, CREATE, MANAGE, ITEMS, ACCESS, SETTINGS, LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL,
-    ARTIST_LOVED_PROTOCOL, PlaylistError, PlaylistCommand,
+    ARTIST_LOVED_PROTOCOL, SAMPLE_PLAYLIST_PROTOCOL, PlaylistError, PlaylistCommand,
     command_actions, inventory_identity, normalize_playlist_command,
     require_playlist_authority, uuid_ref,
 )
@@ -115,6 +115,16 @@ class PostgresOwnedPlaylistsService:
             raise RuntimeError("Playlist policy constraints are invalid.")
         return PolicyEvaluator().evaluate(target, constraints=specific).decision.allowed
 
+    def read_sample_facets(self, context, selector, selection_method, facets, constraints=None):
+        from music_app.services.sample_playlist_facets import read_sample_facets
+        return read_sample_facets(self, context, selector, selection_method, facets, constraints)
+
+    def enrich_sample_country_metadata(self, context, selector, selection_method, targets,
+                                       constraints=None, should_cancel=None):
+        from music_app.services.sample_playlist_facets import enrich_sample_country_metadata
+        return enrich_sample_country_metadata(self, context, selector, selection_method, targets,
+            constraints, should_cancel)
+
     def begin_source(self, context, *, constraints=None):
         with self._authorized(context, constraints) as (connection, live, now):
             self._require(live,(BROWSE,CREATE),constraints)
@@ -162,7 +172,7 @@ class PostgresOwnedPlaylistsService:
         if command.action=="create" and command.data["source"]["kind"]=="activity":
             from music_app.services import playlist_activity_sources as activity
             lock_target=activity.lock_target(self,context,source_ref=command.data["source"]["ref"],constraints=constraints)
-        with self._authorized(context,constraints,target_account_id=lock_target,target_account_ids=queue_targets) as (connection,live,now):
+        with self._authorized(context,constraints,target_account_id=lock_target,target_account_ids=queue_targets) as (connection,live,now), ExitStack() as validations:
             prior = connection.execute("""select * from app.playlist_operations
                 where actor_account_id=%s and library_id=%s and request_key=%s for update""",
                 (live.actor.account_id,live.library_id,command.request_key)).fetchone()
@@ -187,7 +197,13 @@ class PostgresOwnedPlaylistsService:
                     receipt = artist_loves.create_from_source(self, connection, live, command, source,
                                                               constraints=constraints)
                 else:
-                    if source["protocol"] in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL):
+                    if source["protocol"] == SAMPLE_PLAYLIST_PROTOCOL:
+                        from music_app.services import sample_playlist_receipts as samples
+                        selected = validations.enter_context(samples.validated_source(
+                            self, connection, live, source, constraints=constraints))
+                        if not selected or [str(row["ref"]) for row in selected] != command.data["entry_refs"]:
+                            raise PlaylistError("source_changed", 409)
+                    elif source["protocol"] in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL):
                         selected = library_mixes.selected(self, connection, live, source,
                             command.data["entry_refs"], constraints=constraints)
                     elif queue.is_queue(source):

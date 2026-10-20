@@ -68,7 +68,7 @@ def entry_evidence(row):
                             ("original_local_track_id", "inventory_evidence", *_FACT_FIELDS)})
 
 
-def inventory_rows(connection, library_id, track_ids, *, lock=False, config=None):
+def inventory_rows(connection, library_id, track_ids, *, lock=False, config=None, preflight=None):
     """Resolve expected real IDs, never paths or labels; optionally freeze rows."""
     if not track_ids:
         return {}
@@ -81,8 +81,12 @@ def inventory_rows(connection, library_id, track_ids, *, lock=False, config=None
         connection.execute("select id from library.local_tracks where library_id=%s and id=any(%s::bigint[]) order by id for update", (library_id, ids)).fetchall()
         connection.execute("select id from library.local_albums where library_id=%s and id in (select album_id from library.local_tracks where library_id=%s and id=any(%s::bigint[])) order by id for share", (library_id, library_id, ids)).fetchall()
         connection.execute("select id from library.local_artists where library_id=%s and id in (select artist_id from library.local_tracks where library_id=%s and id=any(%s::bigint[])) order by id for share", (library_id, library_id, ids)).fetchall()
+        if preflight is not None:
+            preflight(connection, library_id, ids)
         connection.execute("select id from library.local_track_files where track_id=any(%s::bigint[]) order by id for share", (ids,)).fetchall()
         connection.execute("select id from library.library_roots where library_id=%s and id in (select library_root_id from library.local_track_files where track_id=any(%s::bigint[])) order by id for share", (library_id, ids)).fetchall()
+        if preflight is not None:
+            preflight(connection, library_id, ids)
     rows = connection.execute(_INVENTORY + " where t.library_id=%s and t.id=any(%s::bigint[]) order by t.id", (library_id, ids)).fetchall()
     result={int(row["original_local_track_id"]): _plain(row) for row in rows}
     if config is not None:

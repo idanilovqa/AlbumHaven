@@ -22,6 +22,7 @@ MISSING_ACTIVITY_PROTOCOL = "missing_activity_selection_v1"
 LIBRARY_MIX_PROTOCOL = "library_mix_selection_v1"
 ARTIST_MIX_PROTOCOL = "artist_popular_selection_v1"
 ARTIST_LOVED_PROTOCOL = "artist_loved_selection_v1"
+SAMPLE_PLAYLIST_PROTOCOL = "sample_playlist_selection_v1"
 MISSING_SOURCE_PROTOCOLS = frozenset((MISSING_PLAYLIST_PROTOCOL, MISSING_ACTIVITY_PROTOCOL))
 SOURCE_PROTOCOL_KINDS = {
     PLAYLIST_SOURCE_PROTOCOL: "library", COMPLETE_INVENTORY_PROTOCOL: "library",
@@ -30,6 +31,7 @@ SOURCE_PROTOCOL_KINDS = {
     LIBRARY_MIX_PROTOCOL: "library",
     ARTIST_MIX_PROTOCOL: "library",
     ARTIST_LOVED_PROTOCOL: "library",
+    SAMPLE_PLAYLIST_PROTOCOL: "playlist",
 }
 BROWSE = "library.browse.read"
 CREATE = "library.playlists.create"
@@ -145,14 +147,15 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
                 or payload.get("mode") != ("missing" if protocol in MISSING_SOURCE_PROTOCOLS else "ordinary")):
             raise PlaylistError("invalid_command")
         source = payload.get("source")
-        if not isinstance(source, dict) or set(source) != {"kind", "ref", "revision"} or source["kind"] != SOURCE_PROTOCOL_KINDS[protocol]:
+        if not isinstance(source, dict) or set(source) != {"kind", "ref", "revision"} or (source["kind"] not in ("playlist", "library") if protocol == SAMPLE_PLAYLIST_PROTOCOL else source["kind"] != SOURCE_PROTOCOL_KINDS[protocol]):
             raise PlaylistError("invalid_command")
         data = {"mode": payload["mode"], "source_protocol": protocol,
                 "source": {"kind": source["kind"], "ref": uuid_ref(source["ref"]),
                     "revision": playlist_revision(source["revision"]) if protocol==MISSING_PLAYLIST_PROTOCOL else uuid_ref(source["revision"])},
                 "title": _text(payload.get("title"), maximum=MAX_PLAYLIST_TITLE_LENGTH, title=True),
                 "description": _text(payload.get("description", ""), maximum=MAX_PLAYLIST_DESCRIPTION_LENGTH),
-                "entry_refs": _refs(payload.get("entry_refs"), empty=protocol not in MISSING_SOURCE_PROTOCOLS)}
+                "entry_refs": _refs(payload.get("entry_refs"), empty=protocol not in MISSING_SOURCE_PROTOCOLS
+                                    and protocol != SAMPLE_PLAYLIST_PROTOCOL)}
         if "mix_playback_order" in payload:
             if protocol not in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL, ARTIST_LOVED_PROTOCOL) or payload["mix_playback_order"] not in ("regular", "shuffle", "unplayed_first"):
                 raise PlaylistError("invalid_command")

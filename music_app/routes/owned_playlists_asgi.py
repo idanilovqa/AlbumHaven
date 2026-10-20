@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import hmac
+import asyncio
+from contextlib import suppress
+from threading import Event, Lock
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -60,6 +63,14 @@ def _require_context_header(request):
 def _response(request, payload):
     # One shared shell/session freshness anchor, outside any nested data envelope.
     return JSONResponse({**payload, "context_ref": _context_ref(request)}, headers=_NO_STORE)
+
+
+def _sample_facet_response(request, payload):
+    from music_app.services.sample_playlist_facets import json_bytes
+    complete = {**payload, "context_ref": _context_ref(request)}
+    # The new facet ceiling includes the final freshness anchor and JSON escapes.
+    json_bytes(complete, 524288)
+    return JSONResponse(complete, headers=_NO_STORE)
 
 
 def _service(request):
@@ -131,6 +142,215 @@ def playlist_source_entries(request: Request):
             source_ref=params.get("source_ref"), source_revision=params.get("source_revision"),
             query=params.get("q", ""), cursor=params.get("cursor"), limit=int(value),
             constraints=constraints))
+    except PlaylistError as error:
+        return _error(error)
+
+
+def _sample_input(payload, context, *, capture):
+    from music_app.services import sample_playlist as evaluator
+    from music_app.services.owned_playlists import inventory_identity, playlist_revision, uuid_ref, MAX_PLAYLIST_ITEMS_PER_COMMAND
+    typed = isinstance(payload, dict) and "origin" in payload
+    fields = ({"origin", "options"} if typed else {"playlist_ref", "revision", "options"}) | ({"request_key", "random_order"} if capture else set())
+    option_fields = {"selection_basis", "songs_per_group", "unknown_facets", "selection_method", "length", "styles", "countries"}
+    if (not isinstance(payload, dict) or set(payload) != fields
+            or not isinstance(payload["options"], dict) or set(payload["options"]) != option_fields):
+        raise PlaylistError("invalid_command")
+    try:
+        from music_app.services.sample_playlist_facets import decode_options
+        options = decode_options(payload["options"])
+        evaluator._validate_options(options)
+    except (TypeError, ValueError):
+        raise PlaylistError("invalid_command") from None
+    if not capture and options.selection_method != "random":
+        raise PlaylistError("invalid_command")
+    if typed:
+        from music_app.services.sample_playlist_sources import normalize_sample_origin
+        result = {"origin": normalize_sample_origin(payload["origin"], context.library_id), "options": options}
+    else:
+        result = {"playlist_ref": uuid_ref(payload["playlist_ref"]),
+                  "revision": playlist_revision(payload["revision"]), "options": options}
+    if capture:
+        result["request_key"] = uuid_ref(payload["request_key"])
+        order = payload["random_order"]
+        if options.selection_method == "most_listened":
+            if order is not None:
+                raise PlaylistError("invalid_command")
+            result["random_order"] = None
+        else:
+            if type(order) is not list:
+                raise PlaylistError("invalid_command")
+            if len(order) > MAX_PLAYLIST_ITEMS_PER_COMMAND:
+                raise PlaylistError("source_too_large", 413)
+            identities = [inventory_identity(value) for value in order]
+            if any(library != context.library_id for library, _track in identities):
+                raise PlaylistError("source_changed", 409)
+            ids = tuple(track for _library, track in identities)
+            if len(set(ids)) != len(ids):
+                raise PlaylistError("invalid_command")
+            result["random_order"] = ids
+    return result
+
+
+# These events bridge ASGI disconnect/task cancellation and router shutdown to
+# the actual synchronous worker. Cancelling an await alone cannot stop a commit.
+_SAMPLE_COUNTRY_EVENTS = set()
+_SAMPLE_COUNTRY_EVENTS_LOCK = Lock()
+
+
+@router.on_event("shutdown")
+def _cancel_sample_country_workers():
+    with _SAMPLE_COUNTRY_EVENTS_LOCK:
+        for event in _SAMPLE_COUNTRY_EVENTS:
+            event.set()
+
+
+def _sample_facet_input(payload, context, *, acquire):
+    from music_app.services import sample_playlist_facets as facets
+    field = "targets" if acquire else "facets"
+    typed = type(payload) is dict and "origin" in payload
+    keys = ({"origin"} if typed else {"playlist_ref", "revision"}) | {"selection_method", field}
+    if type(payload) is not dict or set(payload) != keys:
+        raise PlaylistError("invalid_command")
+    selector = facets.normalize_selector({k: payload[k] for k in
+        ("origin",) if k in payload} if typed else {k: payload[k] for k in ("playlist_ref", "revision")}, context.library_id)
+    selection_method = facets.method(payload["selection_method"])
+    values = facets.normalize_targets(payload[field], context.library_id) if acquire else list(facets.facet_mask(payload[field]))
+    return selector, selection_method, values
+
+
+@router.post("/playlists/creation-source/sample/facets")
+async def read_sample_facets(request: Request):
+    try:
+        context, constraints = _context(request, CREATE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=32768)
+        selector, selection_method, facets = _sample_facet_input(payload, context, acquire=False)
+        result = await run_in_threadpool(_service(request).read_sample_facets,
+            context, selector, selection_method, facets, constraints=constraints)
+        return _sample_facet_response(request, result)
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except PlaylistError as error:
+        return _error(PlaylistError("invalid_command", 400) if error.code == "invalid_command" else error)
+
+
+@router.post("/playlists/creation-source/sample/country-metadata")
+async def enrich_sample_country_metadata(request: Request):
+    event, watcher = Event(), None
+    try:
+        context, constraints = _context(request, "library.refresh")
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=32768)
+        selector, selection_method, targets = _sample_facet_input(payload, context, acquire=True)
+        async def disconnected():
+            while not event.is_set():
+                message = await request.receive()
+                if message["type"] == "http.disconnect":
+                    event.set()
+                    return
+                await asyncio.sleep(0.01)
+        with _SAMPLE_COUNTRY_EVENTS_LOCK:
+            _SAMPLE_COUNTRY_EVENTS.add(event)
+        watcher = asyncio.create_task(disconnected())
+        result = await run_in_threadpool(_service(request).enrich_sample_country_metadata,
+            context, selector, selection_method, targets, constraints=constraints,
+            should_cancel=event.is_set)
+        return _sample_facet_response(request, result)
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except PlaylistError as error:
+        return _error(PlaylistError("invalid_command", 400) if error.code == "invalid_command" else error)
+    finally:
+        event.set()
+        if watcher is not None:
+            watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await watcher
+        with _SAMPLE_COUNTRY_EVENTS_LOCK:
+            _SAMPLE_COUNTRY_EVENTS.discard(event)
+
+
+@router.post("/playlists/creation-source/sample/representatives")
+async def sample_representatives(request: Request):
+    from music_app.services import sample_playlist_receipts as samples
+    try:
+        context, constraints = _context(request, CREATE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=MAX_PLAYLIST_COMMAND_BYTES)
+        arguments = _sample_input(payload, context, capture=False)
+        result = await run_in_threadpool(samples.representatives, _service(request), context,
+                                        **arguments, constraints=constraints)
+        return _response(request, result)
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.post("/playlists/creation-source/sample")
+async def capture_sample_source(request: Request):
+    from music_app.services import sample_playlist_receipts as samples
+    try:
+        context, constraints = _context(request, CREATE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=MAX_PLAYLIST_COMMAND_BYTES)
+        arguments = _sample_input(payload, context, capture=True)
+        result = await run_in_threadpool(samples.capture, _service(request), context,
+                                        **arguments, constraints=constraints, native=True)
+        return _response(request, result)
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except (TypeError, ValueError):
+        return _error(PlaylistError("invalid_command"))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.get("/playlists/creation-source/sample")
+def read_sample_source(request: Request):
+    from music_app.services import sample_playlist_receipts as samples
+    from music_app.services.owned_playlists import uuid_ref
+    try:
+        params = request.query_params
+        if len(params.multi_items()) != len(params):
+            raise PlaylistError("invalid_source_query")
+        context, constraints = _context(request, CREATE)
+        if set(params) == {"source_ref", "source_revision"}:
+            result = samples.read(_service(request), context,
+                source_ref=uuid_ref(params["source_ref"]), source_revision=uuid_ref(params["source_revision"]),
+                constraints=constraints, native=True)
+        elif set(params) == {"request_key"}:
+            result = samples.read_capture(_service(request), context,
+                request_key=uuid_ref(params["request_key"]), constraints=constraints, native=True)
+        else:
+            raise PlaylistError("invalid_source_query")
+        return _response(request, result)
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.post("/playlists/creation-source/sample/native-queue")
+async def sample_native_queue(request: Request):
+    from music_app.services import sample_playlist_receipts as samples
+    try:
+        context, constraints = _context(request, BROWSE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=MAX_PLAYLIST_COMMAND_BYTES)
+        result = await run_in_threadpool(samples.native_queue, _service(request), context,
+                                        payload, constraints=constraints)
+        return _response(request, {"status": "ready", "data": result})
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
     except PlaylistError as error:
         return _error(error)
 

@@ -1,3 +1,4 @@
+import {captureAlbumTopSampleOrigin} from '../playlists/sample-playlist-origins.mjs';
 import {mountViewControl} from '../home-friends/view-control.mjs';
 import {mountScopedCreationFilterControls} from './scoped-filter-controls.mjs';
 import {mountScopedCreationPreview} from './scoped-creation-preview.mjs';
@@ -364,6 +365,12 @@ function mountEditor(host, runtime, options, inline, close) {
   const saveHost = element(actions), cancelHost = element(actions);
   const save = acquire(mountButton(saveHost, runtime, {label: existing ? 'Save' : 'Create Album Top', type: 'submit', variant: 'primary'}));
   const cancelButton = acquire(mountButton(cancelHost, runtime, {label: 'Cancel', onClick: () => cancel()}));
+  const captureSample = () => captureAlbumTopSampleOrigin({controller, draft, libraryRef: runtime.sampleLibraryRef?.(),
+    isCurrent: () => !disposed && controller.getSnapshot().scopeKey === creationScopeKey && runtime.isCurrentSampleScope?.(creationScopeKey) === true,
+    returnToOrigin: returnToParent => !disposed && form.isConnected && typeof returnToParent === 'function' ? returnToParent() : false});
+  const launchSample = () => {const lease = captureSample(), originNavigation = inline ? runtime.captureSampleOriginNavigation?.() : options.captureSampleOriginNavigation?.(); if (lease && originNavigation && typeof runtime.openSamplePlaylist === 'function') runtime.openSamplePlaylist({originOwner: lease, originNavigation});};
+  const sample = acquire(mountButton(element(actions), runtime, {label: 'Create sample playlist', type: 'button', icon: 'add', onClick: launchSample}));
+
   const header = inline ? acquire(mountHeader(form, {fields, actions, busy: access.busy, cancel})) : null;
   if (!inline) form.append(fields);
   const content = element(form, 'div', inline ? 'album-top-inline-edit__content' : '');
@@ -502,6 +509,7 @@ function mountEditor(host, runtime, options, inline, close) {
     if (value.error) alert('error', albumTopDraftErrorMessage(value.error) || value.error.message || 'These changes could not be prepared. Your draft is preserved.');
     if (closeError) alert('error', 'The Top was saved, but this form could not return to its parent. Close it to continue.');
     if (access.stale && !saved) alert('info', inline ? 'This Top changed. Your draft is preserved; cancel and reopen it to review the current values.' : 'This Top changed. Your draft is preserved; close and reopen it to review the current values.');
+    sample.update({label: 'Create sample playlist', type: 'button', icon: 'add', onClick: launchSample, disabled: !captureSample() || typeof runtime.openSamplePlaylist !== 'function'});
     notice.update({controller, value: state.mutation}); if (yieldPass()) return; options.onAccess?.(access); if (yieldPass()) return;
     if (inline && guardReady && !focused) {focused = true; inputs[0].input.focus({preventScroll: true});}
     if (inline) {
@@ -521,16 +529,16 @@ function mountEditor(host, runtime, options, inline, close) {
   const unsubscribe = partialUnsubscribe = draft.subscribe(render); render(); acquiring = false; acquired.length = 0;
   return {update(next) {state = next.state; render();}, beforeDismiss: () => scopedAcknowledged ? sessionCurrent() : access.busy ? false : draft.getSnapshot().dirty
     ? runtime.confirm('Discard these unsaved Album Top changes?', {title: 'Discard Album Top changes', acceptLabel: 'Discard', danger: true}) : true,
-    dispose() {if (disposed) return; disposed = true; unsubscribe(); releaseOwner?.(); filters?.dispose(); family?.dispose(); populationRetry?.dispose(); draft.dispose(); picker?.dispose(); header?.dispose(); find.dispose(); notice.dispose(); save.dispose(); cancelButton.dispose(); form.removeEventListener('submit', submit); inputs.forEach(({input, change}) => input.removeEventListener('input', change)); form.remove();}};
+    dispose() {if (disposed) return; disposed = true; unsubscribe(); releaseOwner?.(); filters?.dispose(); family?.dispose(); populationRetry?.dispose(); draft.dispose(); picker?.dispose(); header?.dispose(); find.dispose(); notice.dispose(); save.dispose(); cancelButton.dispose(); sample.dispose(); form.removeEventListener('submit', submit); inputs.forEach(({input, change}) => input.removeEventListener('input', change)); form.remove();}};
   } catch (error) {partialUnsubscribe?.(); partialRelease?.(); partialDraft?.dispose(); for (const owner of acquired.reverse()) {try {owner.dispose?.();} catch {}} partialForm?.remove(); throw error;}
 }
 
 export function mountInlineAlbumTopEdit(host, runtime, options) {return mountEditor(host, runtime, options, true);}
 export function openAlbumTopBuilder({runtime, ...options}) {
-  let editor = null, dialog = null, busy = false;
-  const dialogOptions = () => ({title: options.existing ? 'Edit Album Top' : 'Create Album Top', pageId: options.existing ? 'album-top-edit' : 'album-top-create',
+  let editor = null, dialog = null, busy = false, captureSampleOriginNavigation = null;
+  const dialogOptions = () => ({onSampleOriginNavigationCapture: factory => {captureSampleOriginNavigation = factory;}, title: options.existing ? 'Edit Album Top' : 'Create Album Top', pageId: options.existing ? 'album-top-edit' : 'album-top-create',
     returnFocus: options.returnFocus, showCloseButton: true, dismissDisabled: busy, beforeDismiss: () => editor?.beforeDismiss() ?? false});
-  dialog = openNativeDialog(runtime, dialogOptions(), {fallbackHost: options.fallbackHost, mount(host, close) {editor = mountEditor(host, runtime, {...options, onAccess: access => {busy = access.busy; dialog?.update(dialogOptions());}}, false, close); return editor;}, onClose: options.onClose});
+  dialog = openNativeDialog(runtime, dialogOptions(), {fallbackHost: options.fallbackHost, mount(host, close) {editor = mountEditor(host, runtime, {...options, captureSampleOriginNavigation: () => captureSampleOriginNavigation?.(), onAccess: access => {busy = access.busy; dialog?.update(dialogOptions());}}, false, close); return editor;}, onClose: options.onClose});
   return {update(next) {editor?.update(next); dialog.update(dialogOptions());}, dispose() {dialog.dispose();}};
 }
 

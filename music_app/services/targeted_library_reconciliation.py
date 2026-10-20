@@ -24,6 +24,7 @@ class TargetedReconciliationResult:
     revision: int
     affected_album_keys: tuple[str, ...]
     health: str = "healthy"
+    active_track_paths: tuple[str, ...] = ()
 
 
 class TargetedLibraryReconciler:
@@ -294,6 +295,7 @@ class TargetedLibraryReconciler:
                         }
                     )
                 ),
+                active_track_paths=tuple(sorted(active_entries, key=str.casefold)),
             )
             if self._after_commit is not None:
                 self._after_commit(result)

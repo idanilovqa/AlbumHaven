@@ -20,7 +20,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 55],
   ['cover-providers', 28],
   ['metadata-mutations', 14],
-  ['playback-utilities', 41],
+  ['playback-utilities', 42],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 138-case assignment', () => {
+test('functional shard contract pins the approved four-way 139-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 138-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 138);
+  assert.equal(total, 139);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -864,10 +864,18 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     (invocation) => invocation.config === 'playwright.config.js'
       && invocation.baselineMode === 'owned-mutation',
   );
-  assert.equal(waves[3].invocations.length, 1);
-  assert.equal(waves[3].invocations[0].baselineMode, 'global-mutation');
-  assert.deepEqual(waves[3].invocations[0].cases.map(({ case: name }) => name), [
+  assert.equal(waves[3].invocations.length, 2);
+  const globalMutation = waves[3].invocations.find(
+    (invocation) => invocation.baselineMode === 'global-mutation',
+  );
+  assert.deepEqual(globalMutation.cases.map(({ case: name }) => name), [
     'FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership',
+  ]);
+  const watcherMutation = waves[3].invocations.find(
+    (invocation) => invocation.baselineMode === 'owned-mutation',
+  );
+  assert.deepEqual(watcherMutation.cases.map(({ case: name }) => name), [
+    'FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan',
   ]);
   const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 5 } : row);
   assert.throws(() => validator.executionWavesForShard(shard, overflow), /executionWave 1 through 4/);
@@ -931,7 +939,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
     ['gallery-search-visual', { cases: 55, waves: [1, 2] }],
     ['cover-providers', { cases: 28, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 41, waves: [1, 2, 3, 4] }],
+    ['playback-utilities', { cases: 42, waves: [1, 2, 3, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

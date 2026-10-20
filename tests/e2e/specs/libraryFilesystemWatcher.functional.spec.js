@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { expect, test } from '../support/baseFixtures.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
 import {
@@ -10,6 +11,11 @@ const TARGET_ALBUM = 'Watcher Reconciliation Album';
 const TARGET_YEAR = 2004;
 const EARLIER_ALBUM = 'Watcher Earlier Album';
 const LATER_ALBUM = 'Watcher Later Album';
+const WATCHER_COVER_TARGET = Object.freeze({
+  artist: 'Watcher Automatic Cover Artist',
+  album: 'Watcher Automatic Cover Album',
+  year: '2006',
+});
 
 async function viewResponseHasAlbumTrackCount(response, albumName, expectedCount) {
   if (!response.ok() || new URL(response.url()).pathname !== '/view-data') return false;
@@ -233,6 +239,143 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
     originalFailure = error;
   } finally {
     testArtifacts.queueJsonAttachment('watcher-latency-samples.json', latencySamples);
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan', { tag: '@area:cover-providers' }, async ({
+  appBarActions,
+  context,
+  coverLookupActions,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  page,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  let fixture;
+  let originalFailure;
+
+  try {
+    await stepLogger.step('Add a coverless album to the watched library', async () => {
+      await coverLookupActions.setProviderFixtureMode('automatic-coverless');
+      await coverLookupActions.resetProviderFixtureEvidence();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      fixture = await createWatchedAlbumFixture({
+        ...WATCHER_COVER_TARGET,
+        year: Number(WATCHER_COVER_TARGET.year),
+        removeEmbeddedArtwork: true,
+        context,
+        managedAppLifecycle,
+      });
+      const committed = await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+      expect(committed.scan_in_progress).toBe(false);
+      await expect.poll(async () => {
+        const identity = await queryPersistedAlbumIdentity({
+          ...WATCHER_COVER_TARGET,
+          year: Number(WATCHER_COVER_TARGET.year),
+        });
+        return { albumCount: identity.album_ids.length, trackCounts: identity.track_counts };
+      }, { timeout: 60000, intervals: [250, 500, 1000] }).toEqual({
+        albumCount: 1,
+        trackCounts: [2],
+      });
+    });
+
+    await stepLogger.step('Apply the automatic cover through the watcher follow-up', async () => {
+      await coverLookupActions.waitForAutomaticProviderSearch(
+        WATCHER_COVER_TARGET,
+      );
+      await expect.poll(async () => {
+        const evidence = await coverLookupActions.readProviderFixtureEvidence();
+        return {
+          appleSearchRequests: evidence.apple_search_requests,
+          appleArtworkRequests: evidence.apple_artwork_requests,
+        };
+      }, { timeout: 60000, intervals: [250, 500, 1000] }).toEqual({
+        appleSearchRequests: 1,
+        appleArtworkRequests: 1,
+      });
+
+      let opened;
+      await expect(async () => {
+        await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(WATCHER_COVER_TARGET.artist)}`);
+        await galleryActions.waitForGalleryReady();
+        opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(
+          WATCHER_COVER_TARGET,
+          { timeout: 60000 },
+        );
+        expect(opened.album.cover_selection_origin).toBe('automatic');
+        expect(opened.album.cover_path).toMatch(/[\\/]cover\.jpg$/i);
+      }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
+
+      await trackModalActions.waitForLoadedSummary();
+      await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
+      const coverFiles = fs.readdirSync(fixture.albumDirectory)
+        .filter((name) => /^cover\.(?:jpe?g|png|webp)$/i.test(name));
+      expect(coverFiles).toEqual(['cover.jpg']);
+      fixture.coverPath = opened.album.cover_path;
+      fixture.coverRevision = opened.album.cover_revision;
+      await trackModalActions.close();
+    });
+
+    await stepLogger.step('Restart without duplicating the projection, lookup, or cover file', async () => {
+      await coverLookupActions.resetProviderFixtureEvidence();
+      await managedAppLifecycle.restart();
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+      await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(WATCHER_COVER_TARGET.artist)}`);
+      await galleryActions.waitForGalleryReady();
+      const reopened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(
+        WATCHER_COVER_TARGET,
+        { timeout: 60000 },
+      );
+      expect(reopened.album.cover_selection_origin).toBe('automatic');
+      expect(reopened.album.cover_path).toBe(fixture.coverPath);
+      expect(reopened.album.cover_revision).toBe(fixture.coverRevision);
+      await trackModalActions.waitForLoadedSummary();
+      await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
+      await trackModalActions.close();
+
+      const identity = await queryPersistedAlbumIdentity({
+        ...WATCHER_COVER_TARGET,
+        year: Number(WATCHER_COVER_TARGET.year),
+      });
+      expect(identity.album_ids).toHaveLength(1);
+      expect(identity.track_counts).toEqual([2]);
+      expect(fs.readdirSync(fixture.albumDirectory)
+        .filter((name) => /^cover\.(?:jpe?g|png|webp)$/i.test(name))).toEqual(['cover.jpg']);
+      const evidence = await coverLookupActions.readProviderFixtureEvidence();
+      expect(evidence).toMatchObject({
+        apple_search_requests: 0,
+        apple_artwork_requests: 0,
+        apple_search_terms: [],
+        manual_page_requests: 0,
+        manual_image_requests: 0,
+        later_provider_started: 0,
+        later_provider_completed: 0,
+        musicbrainz_started: 0,
+        musicbrainz_queries: [],
+        musicbrainz_completed: 0,
+        cover_art_archive_requests: 0,
+        cover_art_archive_release_ids: [],
+        discogs_search_requests: 0,
+        discogs_detail_requests: 0,
+        candidate_image_requests: 0,
+      });
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
     if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
     else if (originalFailure) throw originalFailure;
   }

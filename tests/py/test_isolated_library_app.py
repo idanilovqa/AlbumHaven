@@ -4385,6 +4385,16 @@ def test_provider_fixture_automatic_coverless_primes_fixture09_without_improving
             "automatic-candidate-primary",
         ]
 
+        watcher_specs = handler._matching_specs(
+            "Watcher Automatic Cover Album"
+        )
+        assert [spec["cover_id"] for spec in watcher_specs] == [
+            "watcher-automatic-candidate",
+        ]
+        assert service._server.apple_artwork_payload(
+            "watcher-automatic-candidate"
+        )
+
         fixture09_specs = handler._matching_specs(
             "Mastodon Crack The Skye Fixture 09",
         )

@@ -411,6 +411,7 @@ def create_asgi_app():
         hydrate_runtime_scan_metadata_on_startup,
         recover_runtime_library_persistence_on_startup,
         invalidate_targeted_library_projections,
+        queue_watcher_cover_refresh_for_track_paths_for_state,
         start_background_refresh_for_state,
     )
 
@@ -507,6 +508,21 @@ def create_asgi_app():
                 ),
                 max_outstanding=1,
             )
+            def after_targeted_reconciliation_commit(result) -> None:
+                invalidate_targeted_library_projections(
+                    runtime.library_state,
+                    runtime.config,
+                    revision=result.revision,
+                    affected_album_keys=result.affected_album_keys,
+                )
+                queue_watcher_cover_refresh_for_track_paths_for_state(
+                    runtime.library_state,
+                    runtime.config,
+                    runtime.logger,
+                    set(result.active_track_paths),
+                    affected_album_keys=result.affected_album_keys,
+                )
+
             targeted_reconciler = TargetedLibraryReconciler(
                 runtime.config,
                 repository=select_scan_cache_adapter(runtime.config),
@@ -514,12 +530,7 @@ def create_asgi_app():
                 exception_overrides_provider=lambda: load_exception_overrides(
                     runtime.config
                 ),
-                after_commit=lambda result: invalidate_targeted_library_projections(
-                    runtime.library_state,
-                    runtime.config,
-                    revision=result.revision,
-                    affected_album_keys=result.affected_album_keys,
-                ),
+                after_commit=after_targeted_reconciliation_commit,
                 reservation_acquirer=acquire_structural_tag_edit_reservation,
                 publication_guard=runtime.library_watch_health_service.publication_guard,
             )

@@ -5,6 +5,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
 
 from music_app.services.app_logging import flush_log_handlers, flush_log_handlers_debounced, log_app_event
@@ -56,6 +57,7 @@ def _cover_selection_values(entry: Mapping[str, object]) -> tuple[object, ...]:
 def _recover_existing_cover_selection(
     *, config, job, cover_path, file_cache, get_state, library_state,
     cache_lock, scan_generation, cover_generation,
+    expected_inventory_mutation_revision=None,
 ) -> tuple[bool, bool]:
     """Commit recovered artwork before publishing its cover fields to runtime."""
     folder = Path(job["folder"]).resolve()
@@ -136,6 +138,7 @@ def _recover_existing_cover_selection(
             config, paths, selected, cover_revision=revision,
             cover_selection_origin="automatic", reject_if_user_controlled=True,
             expected_cover_state=(expected_origin or None, expected_revision or None),
+            expected_inventory_mutation_revision=expected_inventory_mutation_revision,
             commit_guard=commit_current,
         )
         if result.get("blocked_by_user_selection") or result.get("blocked_by_expected_cover_state"):
@@ -169,7 +172,13 @@ def _build_automatic_cover_write_guard(
     config: dict[str, object],
     folder: Path,
     track_paths: set[str],
+    automatic_write_is_current: Callable[[], bool] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    cache_lock=None,
 ) -> Callable[..., object]:
+    if automatic_write_is_current is not None and cache_lock is None:
+        raise ValueError("Automatic cover currentness requires the runtime cache lock.")
+
     def automatic_write_guard(
         write_action: Callable[[], object],
         *,
@@ -200,6 +209,11 @@ def _build_automatic_cover_write_guard(
             raise RuntimeError("Same-art automatic upgrade is missing its guarded baseline.")
 
         def persist_and_write() -> object:
+            if (
+                automatic_write_is_current is not None
+                and not automatic_write_is_current()
+            ):
+                return False
             current_cover = folder / "cover.jpg"
             if preserve_user_ownership and (
                 not current_cover.is_file()
@@ -210,22 +224,34 @@ def _build_automatic_cover_write_guard(
             written_holder: dict[str, Path] = {}
 
             def commit_after_write(commit_action: Callable[[], object]) -> object:
-                promotion = begin_external_cover_write_promotion(
-                    folder,
-                    serialize_selection=False,
-                )
-                try:
-                    written = write_action()
-                    if not written:
-                        raise RuntimeError("Automatic cover write returned no file.")
-                    written_holder["path"] = Path(written)
-                    record_external_cover_write(promotion)
-                    result = commit_action()
-                except Exception:
-                    rollback_local_image_promotion(promotion)
-                    raise
-                complete_local_image_promotion(promotion)
-                return result
+                with (
+                    cache_lock
+                    if cache_lock is not None
+                    else nullcontext()
+                ):
+                    if (
+                        automatic_write_is_current is not None
+                        and not automatic_write_is_current()
+                    ):
+                        raise RuntimeError(
+                            "Automatic cover refresh changed before commit."
+                        )
+                    promotion = begin_external_cover_write_promotion(
+                        folder,
+                        serialize_selection=False,
+                    )
+                    try:
+                        written = write_action()
+                        if not written:
+                            raise RuntimeError("Automatic cover write returned no file.")
+                        written_holder["path"] = Path(written)
+                        record_external_cover_write(promotion)
+                        result = commit_action()
+                    except Exception:
+                        rollback_local_image_promotion(promotion)
+                        raise
+                    complete_local_image_promotion(promotion)
+                    return result
 
             persistence_origin = "user" if preserve_user_ownership else "automatic"
             persistence_result = persist_cover_selection_for_tracks_for_config(
@@ -245,6 +271,7 @@ def _build_automatic_cover_write_guard(
                 expected_cover_revision=(
                     expected_cover_revision if preserve_user_ownership else None
                 ),
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 commit_guard=commit_after_write,
             )
             if bool(
@@ -273,6 +300,7 @@ def _build_automatic_cover_write_guard(
                     expected_cover_revision=(
                         provisional_revision if preserve_user_ownership else None
                     ),
+                    expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 )
             return written_path
 
@@ -295,6 +323,9 @@ def execute_cover_job(
     config: dict[str, object] | None = None,
     candidate_callback: Callable[..., object] | None = None,
     automatic_write_guard: Callable[..., object] | None = None,
+    automatic_write_is_current: Callable[[], bool] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    cache_lock=None,
     search_run: cover_refresh_provider.AutomaticCoverSearchRun | None = None,
 ) -> tuple[Path | None, bool, dict[str, object]]:
     folder = job["folder"]
@@ -346,7 +377,18 @@ def execute_cover_job(
                     config=config,
                     folder=Path(folder),
                     track_paths=track_paths,
+                    automatic_write_is_current=automatic_write_is_current,
+                    expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                    cache_lock=cache_lock,
                 )
+        elif effective_write_guard is not None and automatic_write_is_current is not None:
+            underlying_write_guard = effective_write_guard
+
+            def effective_write_guard(write_action, **kwargs):
+                if not automatic_write_is_current():
+                    return False
+                return underlying_write_guard(write_action, **kwargs)
+
         if effective_write_guard is not None:
             provider_kwargs["automatic_write_guard"] = effective_write_guard
         if enabled_provider_groups is not None:
@@ -388,11 +430,13 @@ def run_cover_jobs(
     cover_cache,
     scan_generation: int | None = None,
     cover_generation: int | None = None,
+    expected_inventory_mutation_revision: int | None = None,
     force_search: bool = False,
     allow_apple_web_fallback: bool = False,
     allow_apple_web_fallback_when_has_cover: bool = True,
     negative_cache_ttl_seconds: float | None = None,
     job_workers: int = 1,
+    allow_full_snapshot_persistence: bool = True,
 ) -> dict[str, object]:
     library_state = get_state()
     changed = False
@@ -423,6 +467,14 @@ def run_cover_jobs(
             and (cover_generation is None or int(current.get("cover_generation") or 0) == cover_generation)
             and (scan_generation is None or int(current.get("scan_generation") or 0) == scan_generation)
         )
+
+    def write_authority_if_current(write_action: Callable[[], object]) -> bool:
+        with cache_lock:
+            if not owns_progress():
+                return False
+            write_action()
+            return True
+
     candidate_publishers: dict[int, object] = {}
     candidate_callbacks: dict[int, Callable[..., object]] = {}
     selected_cover_baselines = {
@@ -462,7 +514,8 @@ def run_cover_jobs(
                 search_generation=str(uuid.uuid4()),
                 search_kind="automatic",
             )
-            publisher.begin_candidate_generation()
+            if not write_authority_if_current(publisher.begin_candidate_generation):
+                continue
             candidate_publishers[id(job)] = publisher
 
             def publish_candidate(
@@ -473,19 +526,27 @@ def run_cover_jobs(
                 _album_id=album_id,
             ) -> None:
                 try:
-                    candidate_payload = _automatic_candidate_payload(candidate)
-                    accepted = _publisher.publish_candidates([candidate_payload])
-                    mark_improvement = getattr(
-                        _publisher, "mark_automatic_improvement", None
-                    )
-                    candidate_id_for = getattr(_publisher, "candidate_id_for", None)
-                    if accepted and automatic_improvement and callable(mark_improvement):
-                        qualifying_candidate_id = (
-                            candidate_id_for(candidate_payload)
-                            if callable(candidate_id_for)
-                            else None
+                    def publish_if_current() -> None:
+                        candidate_payload = _automatic_candidate_payload(candidate)
+                        accepted = _publisher.publish_candidates([candidate_payload])
+                        mark_improvement = getattr(
+                            _publisher, "mark_automatic_improvement", None
                         )
-                        mark_improvement(qualifying_candidate_id)
+                        candidate_id_for = getattr(_publisher, "candidate_id_for", None)
+                        if (
+                            accepted
+                            and automatic_improvement
+                            and callable(mark_improvement)
+                            and owns_progress()
+                        ):
+                            qualifying_candidate_id = (
+                                candidate_id_for(candidate_payload)
+                                if callable(candidate_id_for)
+                                else None
+                            )
+                            mark_improvement(qualifying_candidate_id)
+
+                    write_authority_if_current(publish_if_current)
                 except Exception as exc:
                     logger.warning(
                         "Automatic candidate snapshot publication failed album_id=%s error=%r",
@@ -516,7 +577,7 @@ def run_cover_jobs(
         if not callable(terminal):
             return
         try:
-            terminal()
+            write_authority_if_current(terminal)
         except Exception as exc:
             logger.warning(
                 "Automatic candidate snapshot terminal update failed album_id=%s error=%r",
@@ -546,9 +607,11 @@ def run_cover_jobs(
             }
         if provider_outcomes:
             try:
-                persist_cover_provider_outcomes(
-                    config, album_id=job.get("album_id"),
-                    album_key=job.get("album_key"), outcomes=provider_outcomes,
+                write_authority_if_current(
+                    lambda: persist_cover_provider_outcomes(
+                        config, album_id=job.get("album_id"),
+                        album_key=job.get("album_key"), outcomes=provider_outcomes,
+                    )
                 )
             except Exception as exc:
                 logger.warning(
@@ -707,6 +770,7 @@ def run_cover_jobs(
                     file_cache=file_cache, get_state=get_state, library_state=library_state,
                     cache_lock=cache_lock, scan_generation=scan_generation,
                     cover_generation=cover_generation,
+                        expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 )
             except Exception as exc:
                 origin = exc.__traceback__
@@ -854,6 +918,9 @@ def run_cover_jobs(
                     enabled_provider_groups=config.get("COVER_PROVIDER_GROUPS"),
                     config=config,
                     candidate_callback=candidate_callbacks.get(id(job)),
+                    automatic_write_is_current=owns_progress,
+                    expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                    cache_lock=cache_lock,
                     search_run=search_run,
                 ): (index, job)
                 for index, job in enumerate(jobs, start=1)
@@ -953,6 +1020,9 @@ def run_cover_jobs(
                 enabled_provider_groups=config.get("COVER_PROVIDER_GROUPS"),
                 config=config,
                 candidate_callback=candidate_callbacks.get(id(job)),
+                automatic_write_is_current=owns_progress,
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                cache_lock=cache_lock,
                 search_run=search_run,
             )
             finish_job(index, job, cover_path, downloaded, detail)
@@ -968,7 +1038,7 @@ def run_cover_jobs(
     if changed:
         snapshot = None
         snapshot_options = {}
-        if needs_snapshot and not selection_conflict:
+        if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
             adapter = select_scan_cache_adapter(config)
             snapshot_options = {
                 "expected_cover_mutation_revision": adapter.load_cover_mutation_revision(),
@@ -1002,7 +1072,7 @@ def run_cover_jobs(
                     accepted_updates[path] = selection
                     if selection.get("cover_path") is not None:
                         entry.update(selection)
-                if needs_snapshot and not selection_conflict:
+                if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
                     baseline_entries = {path: dict(entry) for path, entry in current_entries.items()}
                     snapshot = {path: dict(entry) for path, entry in current_entries.items()}
                     for path, selection in accepted_updates.items():

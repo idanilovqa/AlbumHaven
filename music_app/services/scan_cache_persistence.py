@@ -167,6 +167,7 @@ class ScanCacheAdapter(Protocol):
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
         expected_cover_state: tuple[str | None, str | None] | None = None,
+        expected_inventory_mutation_revision: int | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         ...
@@ -621,6 +622,7 @@ class PostgresScanCacheAdapter:
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
         expected_cover_state: tuple[str | None, str | None] | None = None,
+        expected_inventory_mutation_revision: int | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         normalized_track_paths = sorted(
@@ -699,6 +701,14 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            if (
+                expected_inventory_mutation_revision is not None
+                and _load_inventory_mutation_revision(connection)
+                != int(expected_inventory_mutation_revision)
+            ):
+                raise ScanCachePublicationSuperseded(
+                    "Inventory changed while cover selection was prepared."
+                )
             expected_cover_state_guard = expected_cover_state is not None or normalized_expected_origin is not None
             if not reject_if_user_controlled and not expected_cover_state_guard:
                 connection.execute(_increment_cover_mutation_revision_sql())

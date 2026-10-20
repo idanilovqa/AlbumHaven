@@ -915,12 +915,118 @@ def test_cache_wrapper_forwards_explicit_expected_cover_state(monkeypatch, expec
     assert "expected_cover_revision" not in calls[0]
 
 
+@pytest.mark.parametrize("revision", [0, 12])
+def test_cache_wrapper_forwards_expected_inventory_revision(monkeypatch, revision):
+    from music_app.services import cache
+
+    calls = []
+    adapter = SimpleNamespace(
+        persist_cover_selection=lambda **kwargs: calls.append(kwargs)
+        or {"album_rows_updated": 1}
+    )
+    monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+
+    result = cache.persist_cover_selection_for_tracks_for_config(
+        {},
+        {"generated-track"},
+        Path("generated-cover"),
+        expected_inventory_mutation_revision=revision,
+    )
+
+    assert result == {"album_rows_updated": 1}
+    assert calls[0]["expected_inventory_mutation_revision"] == revision
+
+
 @pytest.mark.parametrize("legacy", [{"expected_cover_selection_origin": "automatic"}, {"expected_cover_revision": "old"}, {"expected_cover_selection_origin": "invalid", "expected_cover_revision": "old"}])
 def test_legacy_expected_cover_state_still_rejects_partial_or_invalid_values(legacy):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     adapter = PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated-test"}, connect=lambda _url: pytest.fail("Invalid legacy guard must not connect"))
     with pytest.raises(ValueError):
         adapter.persist_cover_selection(track_paths={"C:/Generated/song.mp3"}, selected_cover_path=Path("C:/Generated/cover.jpg"), cover_revision="new", **legacy)
+
+
+def test_postgres_cover_selection_rejects_stale_inventory_revision_after_lock_before_mutation(
+    monkeypatch,
+):
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import (
+        PostgresScanCacheAdapter,
+        ScanCachePublicationSuperseded,
+    )
+
+    events: list[str] = []
+    publication_lock_sql = _normalized_sql(
+        scan_cache_persistence._inventory_publication_advisory_lock_sql()
+    )
+    inventory_revision_sql = _normalized_sql(
+        scan_cache_persistence._load_inventory_mutation_revision_sql()
+    )
+
+    class StaleInventoryConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            normalized_sql = _normalized_sql(sql)
+            cursor = super().execute(sql, params)
+            if normalized_sql == publication_lock_sql:
+                events.append("publication-lock")
+            elif "bootstrap_context_ready" in normalized_sql:
+                events.append("bootstrap-context")
+            elif normalized_sql == inventory_revision_sql:
+                events.append("inventory-revision-read")
+                return FakeCursor([{"inventory_mutation_revision": 12}])
+            elif (
+                "cover_mutation_revision" in normalized_sql
+                and "update library.libraries" in normalized_sql
+            ):
+                events.append("cover-revision-increment")
+            elif "updated_albums" in normalized_sql:
+                events.append("cover-mutation")
+                return FakeCursor([{
+                    "input_path_count": 1,
+                    "resolved_path_count": 1,
+                    "selected_album_count": 1,
+                    "album_track_file_count": 1,
+                    "album_rows_updated": 1,
+                    "track_file_rows_updated": 1,
+                }])
+            return cursor
+
+        def commit(self):
+            events.append("database-commit")
+            super().commit()
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append("transaction-exit")
+            return super().__exit__(exc_type, exc, traceback)
+
+    connection = StaleInventoryConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://stale-cover-inventory"},
+        connect=lambda _url: connection,
+    )
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+
+    commit_guard_calls = []
+    with pytest.raises(
+        ScanCachePublicationSuperseded,
+        match="Inventory changed while cover selection was prepared",
+    ):
+        adapter.persist_cover_selection(
+            track_paths={"C:/Generated/Artist/Album/song.mp3"},
+            selected_cover_path=Path("C:/Generated/Artist/Album/cover.jpg"),
+            cover_revision="prepared-cover-revision",
+            expected_inventory_mutation_revision=11,
+            commit_guard=lambda commit: commit_guard_calls.append(commit),
+        )
+
+    assert events == [
+        "publication-lock",
+        "bootstrap-context",
+        "inventory-revision-read",
+        "transaction-exit",
+    ]
+    assert commit_guard_calls == []
+    assert connection.commit_calls == 0
+    assert connection.exit_exc_type is ScanCachePublicationSuperseded
 
 
 def test_postgres_cover_selection_invokes_commit_guard_after_mutation_before_exit(monkeypatch):

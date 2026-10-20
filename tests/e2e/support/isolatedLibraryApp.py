@@ -3948,6 +3948,16 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 1800,
             "candidate_fixture_mode": "automatic-candidate",
         })
+        self.cover_lookup_watcher_candidate_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "cover_id": "watcher-automatic-candidate",
+            "artist": "Watcher Automatic Cover Artist",
+            "album": "Watcher Automatic Cover Album",
+            "year": 2006,
+            "width": 1800,
+            "height": 1800,
+            "candidate_fixture_mode": "watcher-automatic-candidate",
+        })
         neutral_user_cover_source = cover_specs[1] if len(cover_specs) > 1 else cover_specs[0]
         neutral_user_cover_source_path = Path(
             str(
@@ -4041,6 +4051,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             *(dict(spec) for spec in cover_specs),
             *(dict(spec) for spec in self.cover_lookup_matching_specs),
             self.cover_lookup_automatic_candidate_spec,
+            self.cover_lookup_watcher_candidate_spec,
             self.cover_lookup_neutral_user_cover_spec,
             self.cover_lookup_user_improvement_spec,
             self.cover_lookup_same_art_improvement_spec,
@@ -4076,6 +4087,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.cover_lookup_evidence_lock = threading.Lock()
         self.cover_lookup_evidence = {
             "apple_search_requests": 0,
+            "apple_artwork_requests": 0,
             "apple_search_terms": [],
             "manual_page_requests": 0,
             "manual_image_requests": 0,
@@ -4181,6 +4193,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         with self.cover_lookup_evidence_lock:
             self.cover_lookup_evidence = {
                 "apple_search_requests": 0,
+                "apple_artwork_requests": 0,
                 "apple_search_terms": [],
                 "manual_page_requests": 0,
                 "manual_image_requests": 0,
@@ -4651,6 +4664,10 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                 return [dict(self.server.cover_lookup_automatic_candidate_spec)]
             if _normalize_provider_query("Mastodon Crack The Skye Fixture 09") in normalized_query:
                 return [dict(self.server.cover_lookup_neutral_user_cover_spec)]
+            if _normalize_provider_query(
+                "Watcher Automatic Cover Album"
+            ) in normalized_query:
+                return [dict(self.server.cover_lookup_watcher_candidate_spec)]
             return []
         if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
             return [dict(self.server.cover_lookup_automatic_candidate_spec)]
@@ -4792,6 +4809,7 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             cover_id == "provider-storage-policy-cover" and provider == "apple"
         ) or cover_id == "selection-concurrency-b":
             self.server.wait_for_cover_lookup_candidate_image()
+        self.server.record_cover_lookup_request("apple_artwork_requests")
         payload = self.server.apple_artwork_payload(cover_id)
         if payload is None:
             self.send_error(404)

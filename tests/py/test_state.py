@@ -511,6 +511,623 @@ def test_refresh_cover_artwork_for_track_paths_for_state_uses_explicit_dependenc
     assert captured[0]["force_search"] is True
 
 
+def test_watcher_cover_refresh_coalesces_paths_and_loads_committed_projection(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {
+        "scan_generation": 4,
+        "cover_generation": 7,
+        "separate_release_keys": {"artist::album::deluxe"},
+    }
+    submissions = []
+    repository_calls = []
+    refresh_calls = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, repository_config):
+            assert repository_config is config
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            repository_calls.append(("files", set(track_paths)))
+            return {
+                path: {"path": path, "album": "New Album", "album_artist": "Artist"}
+                for path in track_paths
+            }
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            repository_calls.append(("albums", set(track_paths)))
+            return [{
+                "album": "New Album",
+                "tracks": [
+                    {"path": sorted(track_paths)[0]},
+                    {"path": "track-existing"},
+                ],
+            }]
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(
+        state_module,
+        "refresh_cover_artwork_request",
+        lambda **kwargs: refresh_calls.append(kwargs),
+    )
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-b"},
+    )
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a", "track-b"},
+    )
+
+    assert len(submissions) == 1
+    submissions[0]()
+
+    assert repository_calls == [
+        ("albums", {"track-a", "track-b"}),
+        ("files", {"track-a", "track-b", "track-existing"}),
+    ]
+    targeted_state = refresh_calls[0]["get_state"]()
+    assert set(targeted_state["file_cache"]) == {
+        "track-a",
+        "track-b",
+        "track-existing",
+    }
+    assert targeted_state["albums"][0]["album"] == "New Album"
+    assert targeted_state["scan_generation"] == 4
+    assert targeted_state["cover_generation"] == 7
+    assert targeted_state["separate_release_keys"] == {"artist::album::deluxe"}
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == set()
+    assert library_state["_watcher_cover_refresh_scheduled"] is False
+
+
+def test_watcher_cover_refresh_failure_retries_without_another_filesystem_event(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {}
+    submissions = []
+    attempts = 0
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, _track_paths):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("database temporarily unavailable")
+            return {}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(state_module, "refresh_cover_artwork_request", lambda **_kwargs: None)
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+    )
+    submissions[0]()
+
+    assert logger.exception_messages
+    assert len(submissions) == 2
+    submissions[1]()
+    assert attempts == 2
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == set()
+    assert library_state["_watcher_cover_refresh_scheduled"] is False
+
+
+def test_watcher_cover_refresh_executor_rejection_retries_without_another_filesystem_event(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {}
+    submissions = []
+
+    class ExecutorStub:
+        attempts = 0
+
+        @classmethod
+        def submit(cls, callback):
+            cls.attempts += 1
+            if cls.attempts == 1:
+                raise RuntimeError("executor shutting down")
+            submissions.append(callback)
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+    )
+
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-a"}
+    assert logger.exception_messages
+    assert len(submissions) == 1
+
+
+def test_watcher_cover_refresh_uses_live_state_as_its_commit_guard(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {
+        "scan_generation": 4,
+        "cover_generation": 7,
+        "inventory_mutation_revision": 11,
+    }
+    submissions = []
+    captured = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(
+        state_module,
+        "refresh_cover_artwork_request",
+        lambda **kwargs: captured.append(kwargs) or {"changed": False},
+    )
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+    )
+    submissions[0]()
+
+    get_state = captured[0]["get_state"]
+    targeted_state = get_state()
+    assert targeted_state is not library_state
+    library_state["scan_in_progress"] = True
+    stale_state = get_state()
+    assert stale_state["scan_in_progress"] is True
+    assert stale_state["scan_generation"] == -1
+    assert stale_state["cover_generation"] == -1
+    library_state["scan_in_progress"] = False
+    library_state["inventory_mutation_revision"] = 12
+    assert get_state()["scan_generation"] == -1
+
+
+def test_watcher_cover_refresh_requeues_when_projection_changes_during_lookup(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {
+        "scan_generation": 4,
+        "cover_generation": 7,
+        "inventory_mutation_revision": 11,
+    }
+    submissions = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    def stale_during_refresh(**_kwargs):
+        library_state["inventory_mutation_revision"] = 12
+        library_state["scan_in_progress"] = True
+        return {"changed": False, "failed": 0}
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(state_module, "refresh_cover_artwork_request", stale_during_refresh)
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+        affected_album_keys=("artist::album",),
+    )
+    submissions[0]()
+
+    assert len(submissions) == 2
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-a"}
+    assert library_state["_watcher_cover_refresh_album_keys_by_track_path"] == {
+        "track-a": {"artist::album"}
+    }
+    assert library_state["pending_cover_refresh_after_scan"] is True
+
+
+def test_watcher_cover_refresh_retries_failed_provider_work(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {}
+    submissions = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(
+        state_module,
+        "refresh_cover_artwork_request",
+        lambda **_kwargs: {"changed": False, "failed": 1},
+    )
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+    )
+    submissions[0]()
+
+    assert len(submissions) == 2
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-a"}
+
+
+def test_watcher_cover_refresh_new_work_gets_a_fresh_retry_budget(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {}
+    submissions = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    def fail_after_new_work_arrives(**_kwargs):
+        state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+            library_state,
+            config,
+            logger,
+            {"track-b"},
+        )
+        return {"changed": False, "failed": 1}
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(
+        state_module,
+        "refresh_cover_artwork_request",
+        fail_after_new_work_arrives,
+    )
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+    )
+    library_state["_watcher_cover_refresh_attempts_by_track_path"]["track-a"] = 2
+    submissions[0]()
+
+    assert len(submissions) == 2
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == {
+        "track-b",
+    }
+    assert library_state["_watcher_cover_refresh_attempts"] == 0
+    assert library_state["_watcher_cover_refresh_attempts_by_track_path"] == {
+        "track-b": 0,
+    }
+    assert library_state.get("_watcher_cover_refresh_pending_album_keys", set()) == set()
+    assert library_state.get("_watcher_cover_refresh_album_keys_by_track_path", {}) == {}
+
+
+def test_watcher_cover_refresh_discards_exhausted_paths_and_their_album_keys(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {}
+    submissions = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    def fail_after_unrelated_work_arrives(**_kwargs):
+        state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+            library_state,
+            config,
+            logger,
+            {"track-b"},
+        )
+        return {"changed": False, "failed": 1}
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(
+        state_module,
+        "refresh_cover_artwork_request",
+        fail_after_unrelated_work_arrives,
+    )
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+        affected_album_keys=("artist-a::album-a",),
+    )
+    library_state["_watcher_cover_refresh_attempts_by_track_path"]["track-a"] = 2
+    submissions[0]()
+
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-b"}
+    assert library_state["_watcher_cover_refresh_attempts_by_track_path"] == {
+        "track-b": 0,
+    }
+    assert library_state.get("_watcher_cover_refresh_pending_album_keys", set()) == set()
+    assert library_state.get("_watcher_cover_refresh_album_keys_by_track_path", {}) == {}
+
+
+def test_watcher_cover_refresh_does_not_mutate_newer_enqueue_for_same_path(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {}
+    submissions = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    def fail_after_reenqueue(**_kwargs):
+        state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+            library_state,
+            config,
+            logger,
+            {"track-a"},
+            affected_album_keys=("artist-b::album-b",),
+        )
+        return {"changed": False, "failed": 1}
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(
+        state_module,
+        "refresh_cover_artwork_request",
+        fail_after_reenqueue,
+    )
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+        affected_album_keys=("artist-a::album-a",),
+    )
+    library_state["_watcher_cover_refresh_attempts_by_track_path"]["track-a"] = 2
+    submissions[0]()
+
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-a"}
+    assert library_state["_watcher_cover_refresh_attempts_by_track_path"] == {
+        "track-a": 0,
+    }
+    assert library_state["_watcher_cover_refresh_album_keys_by_track_path"] == {
+        "track-a": {"artist-b::album-b"},
+    }
+
+
+def test_watcher_cover_refresh_disables_full_snapshot_and_invalidates_after_commit(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {
+        "scan_generation": 4,
+        "cover_generation": 7,
+        "inventory_mutation_revision": 11,
+    }
+    submissions = []
+    invalidations = []
+    runner_calls = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    def fake_refresh(**kwargs):
+        kwargs["run_cover_jobs"](marker="targeted")
+        return {"changed": True}
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(state_module, "refresh_cover_artwork_request", fake_refresh)
+    monkeypatch.setattr(
+        state_module,
+        "run_cover_jobs",
+        lambda **kwargs: runner_calls.append(kwargs) or {"changed": True},
+    )
+    monkeypatch.setattr(
+        state_module,
+        "invalidate_targeted_library_projections",
+        lambda *args, **kwargs: invalidations.append((args, kwargs)),
+    )
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+        affected_album_keys=("artist::album",),
+    )
+    submissions[0]()
+
+    assert runner_calls == [{
+        "marker": "targeted",
+        "allow_full_snapshot_persistence": False,
+        "expected_inventory_mutation_revision": 11,
+    }]
+    assert invalidations == [((library_state, config), {
+        "revision": 11,
+        "affected_album_keys": ("artist::album",),
+    })]
+
+
+def test_watcher_cover_refresh_invalidates_successful_commit_before_retrying_failure(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {
+        "inventory_mutation_revision": 11,
+    }
+    submissions = []
+    invalidations = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(
+        state_module,
+        "refresh_cover_artwork_request",
+        lambda **_kwargs: {"changed": True, "failed": 1},
+    )
+    monkeypatch.setattr(
+        state_module,
+        "invalidate_targeted_library_projections",
+        lambda *args, **kwargs: invalidations.append((args, kwargs)),
+    )
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {"track-a"},
+        affected_album_keys=("artist::album",),
+    )
+    submissions[0]()
+
+    assert invalidations == [((library_state, config), {
+        "revision": 11,
+        "affected_album_keys": ("artist::album",),
+    })]
+    assert len(submissions) == 2
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-a"}
+
+
 def test_hydrate_library_state_worker_uses_explicit_dependencies_without_flask_context(config, logger, monkeypatch):
     library_state = {"hydrate_in_progress": True, "last_error": None}
     captured = []
@@ -2286,6 +2903,371 @@ def test_recovered_cover_legacy_clear_publishes_without_cache_lock_and_rechecks_
     assert len(snapshots) == 1
 
 
+def test_targeted_cover_refresh_never_publishes_a_partial_inventory_snapshot(
+    recovered_cover_case,
+    monkeypatch,
+):
+    case = recovered_cover_case
+    for entry in case.entries.values():
+        entry["cover_path"] = str(case.cover.parent / "missing.jpg")
+    worker_entries = {path: dict(entry) for path, entry in case.entries.items()}
+    case.kwargs.update(
+        file_cache=worker_entries,
+        cover_generation=2,
+        scan_generation=4,
+        allow_full_snapshot_persistence=False,
+    )
+    case.state.update(cover_generation=2, scan_generation=4)
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "execute_cover_job",
+        lambda **_kwargs: (None, False, {"reason": "no_match"}),
+    )
+
+    cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+
+def test_cover_job_write_guard_rechecks_live_refresh_ownership(
+    tmp_path,
+    monkeypatch,
+):
+    writes = []
+
+    def ensure_best_cover_for_folder(**kwargs):
+        written = kwargs["automatic_write_guard"](
+            lambda: writes.append(True),
+            cover_selection_origin="automatic",
+        )
+        return None, False, {"reason": "automatic_write_blocked" if written is False else "written"}
+
+    monkeypatch.setattr(
+        cover_refresh_execution.cover_refresh_provider,
+        "ensure_best_cover_for_folder",
+        ensure_best_cover_for_folder,
+    )
+
+    _cover_path, downloaded, detail = cover_refresh_execution.execute_cover_job(
+        job={
+            "folder": tmp_path,
+            "artist": "Artist",
+            "album": "Album",
+            "track_paths": ["track-a"],
+            "cover_selection_origin": "automatic",
+        },
+        image_extensions={".jpg"},
+        user_agent="AlbumHavenTests/1.0",
+        cover_cache=object(),
+        force_search=False,
+        allow_apple_web_fallback=False,
+        allow_apple_web_fallback_when_has_cover=False,
+        negative_cache_ttl_seconds=None,
+        automatic_write_guard=lambda action, **_kwargs: action(),
+        automatic_write_is_current=lambda: False,
+    )
+
+    assert downloaded is False
+    assert detail["reason"] == "automatic_write_blocked"
+    assert writes == []
+
+
+def test_automatic_cover_guard_rechecks_currentness_inside_album_lock(
+    tmp_path,
+    monkeypatch,
+):
+    current = [True]
+    writes = []
+
+    def run_after_waiting_for_lock(_folder, action):
+        current[0] = False
+        return action()
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "run_serialized_cover_selection",
+        run_after_waiting_for_lock,
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "persist_cover_selection_for_tracks_for_config",
+        lambda *_args, **_kwargs: pytest.fail(
+            "A stale automatic writer must stop inside the album lock"
+        ),
+    )
+
+    guard = cover_refresh_execution._build_automatic_cover_write_guard(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://stale-watcher"},
+        folder=tmp_path,
+        track_paths={"track-a"},
+        automatic_write_is_current=lambda: current[0],
+        cache_lock=threading.Lock(),
+    )
+    write_action = lambda: writes.append(True)
+    write_action.provisional_cover_revision = "candidate-revision"
+
+    assert guard(
+        write_action,
+        cover_selection_origin="automatic",
+    ) is False
+    assert writes == []
+
+
+def test_automatic_cover_guard_rechecks_currentness_immediately_before_commit(
+    tmp_path,
+    monkeypatch,
+):
+    current = [True]
+    promotions = []
+    writes = []
+    selection_commits = []
+    selected_cover = tmp_path / "cover.jpg"
+    promotion = object()
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "run_serialized_cover_selection",
+        lambda _folder, action: action(),
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "begin_external_cover_write_promotion",
+        lambda *_args, **_kwargs: promotions.append("begin") or promotion,
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "record_external_cover_write",
+        lambda _promotion: promotions.append("record"),
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "complete_local_image_promotion",
+        lambda _promotion: promotions.append("complete"),
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "rollback_local_image_promotion",
+        lambda _promotion: promotions.append("rollback"),
+    )
+
+    def persist_selection(*_args, commit_guard=None, **_kwargs):
+        if commit_guard is not None:
+            current[0] = False
+            commit_guard(lambda: selection_commits.append("commit"))
+        return {"album_rows_updated": 1}
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "persist_cover_selection_for_tracks_for_config",
+        persist_selection,
+    )
+
+    guard = cover_refresh_execution._build_automatic_cover_write_guard(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://stale-watcher"},
+        folder=tmp_path,
+        track_paths={"track-a"},
+        automatic_write_is_current=lambda: current[0],
+        cache_lock=threading.Lock(),
+    )
+
+    def write_action():
+        writes.append("write")
+        selected_cover.write_bytes(b"stale-cover")
+        return selected_cover
+
+    write_action.provisional_cover_revision = "candidate-revision"
+
+    with pytest.raises(RuntimeError, match="changed before commit"):
+        guard(write_action, cover_selection_origin="automatic")
+
+    assert promotions == []
+    assert writes == []
+    assert selection_commits == []
+    assert not selected_cover.exists()
+
+
+def test_automatic_cover_commit_blocks_generation_invalidation_until_committed(
+    config,
+    logger,
+    library_state,
+    monkeypatch,
+):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    selected_cover = track_path.parent / "cover.jpg"
+    file_cache = {
+        str(track_path): {
+            "path": str(track_path),
+            "album_id": 101,
+            "album": "Album",
+            "album_artist": "Artist",
+            "cover_path": None,
+        }
+    }
+    library_state.update(
+        file_cache=file_cache,
+        cover_generation=3,
+        scan_generation=4,
+        covers_in_progress=True,
+        covers_completed=0,
+    )
+    cache_lock = threading.Lock()
+    persistence_started = [False]
+    final_check_reached = threading.Event()
+    invalidation_attempted = threading.Event()
+    invalidation_finished = threading.Event()
+    events = []
+
+    def get_state():
+        if persistence_started[0] and not final_check_reached.is_set():
+            final_check_reached.set()
+        return library_state
+
+    def invalidate_progress():
+        assert final_check_reached.wait(timeout=2)
+        invalidation_attempted.set()
+        with cache_lock:
+            library_state["cover_generation"] = 4
+            events.append("invalidation")
+        invalidation_finished.set()
+
+    invalidator = threading.Thread(target=invalidate_progress)
+    invalidator.start()
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+    class Publisher:
+        def __init__(self, _repository, **_kwargs):
+            pass
+
+        def begin_candidate_generation(self):
+            return None
+
+        def complete(self):
+            return True
+
+    def persist_selection(*_args, commit_guard=None, **_kwargs):
+        if commit_guard is not None:
+            persistence_started[0] = True
+            commit_guard(lambda: events.append("commit"))
+        return {"album_rows_updated": 1}
+
+    def ensure_best_cover_for_folder(**kwargs):
+        def write_action():
+            assert invalidation_attempted.wait(timeout=2)
+            invalidation_finished.wait(timeout=2)
+            events.append("write")
+            selected_cover.write_bytes(b"current-cover")
+            return selected_cover
+
+        write_action.provisional_cover_revision = "candidate-revision"
+        written = kwargs["automatic_write_guard"](
+            write_action,
+            cover_selection_origin="automatic",
+        )
+        return Path(written), True, {"reason": "cover_written"}
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "AlbumCoverCandidateSnapshotRepository",
+        Repository,
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "AlbumCoverCandidatePublisher",
+        Publisher,
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "persist_cover_selection_for_tracks_for_config",
+        persist_selection,
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution.cover_refresh_provider,
+        "ensure_best_cover_for_folder",
+        ensure_best_cover_for_folder,
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "log_app_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    try:
+        cover_refresh_execution.run_cover_jobs(
+            get_state=get_state,
+            config={**config, "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://covers"},
+            logger=logger,
+            cache_lock=cache_lock,
+            jobs=[{
+                "album_id": 101,
+                "album_key": "artist::album",
+                "folder": track_path.parent,
+                "artist": "Artist",
+                "album": "Album",
+                "track_paths": [str(track_path)],
+                "cover_selection_origin": None,
+            }],
+            file_cache=file_cache,
+            separate_release_keys=set(),
+            image_extensions={".jpg"},
+            user_agent="Album Haven Test",
+            cover_cache=SimpleNamespace(save=lambda: None),
+            scan_generation=4,
+            cover_generation=3,
+            job_workers=1,
+            allow_full_snapshot_persistence=False,
+        )
+    finally:
+        final_check_reached.set()
+        invalidator.join(timeout=3)
+
+    assert not invalidator.is_alive()
+    assert events == ["write", "commit", "invalidation"]
+    assert library_state["cover_generation"] == 4
+    assert selected_cover.read_bytes() == b"current-cover"
+
+
+@pytest.mark.parametrize("workers", [1, 2], ids=["serial", "parallel"])
+def test_cover_runner_supplies_live_write_guard_to_every_worker(
+    recovered_cover_case,
+    monkeypatch,
+    workers,
+):
+    case = recovered_cover_case
+    observed = []
+    jobs = [case.job]
+    if workers > 1:
+        jobs.append(dict(case.job))
+
+    def execute_cover_job(**kwargs):
+        case.state["scan_generation"] = 99
+        observed.append((
+            kwargs["automatic_write_is_current"](),
+            kwargs["expected_inventory_mutation_revision"],
+        ))
+        return None, False, {"reason": "no_match"}
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "execute_cover_job",
+        execute_cover_job,
+    )
+    case.state.update(scan_generation=4, cover_generation=2)
+    case.kwargs.update(
+        jobs=jobs,
+        job_workers=workers,
+        scan_generation=4,
+        cover_generation=2,
+        expected_inventory_mutation_revision=13,
+    )
+
+    cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert observed == [(False, 13)] * len(jobs)
+
+
 @pytest.mark.parametrize("same_path", [False, True])
 def test_recovered_cover_selection_commits_before_memory_and_survives_interruption(
     recovered_cover_case, monkeypatch, same_path,
@@ -3278,6 +4260,303 @@ def test_run_cover_jobs_preserves_user_controlled_linked_cover_fields_when_write
 
     assert result["changed"] is False
     assert file_cache[str(track_path)] == original_entry
+
+
+def test_run_cover_jobs_stops_authority_writes_when_progress_is_superseded(
+    config,
+    logger,
+    library_state,
+    monkeypatch,
+):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    file_cache = {
+        str(track_path): {
+            "path": str(track_path),
+            "album_id": 101,
+            "album": "Album",
+            "album_artist": "Artist",
+            "cover_path": None,
+        }
+    }
+    library_state.update(
+        file_cache=file_cache,
+        cover_generation=3,
+        scan_generation=4,
+        covers_in_progress=True,
+        covers_completed=0,
+    )
+    candidate_writes = []
+    provider_writes = []
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+    class Publisher:
+        def __init__(self, _repository, *, album_id, **_kwargs):
+            self.album_id = album_id
+
+        def begin_candidate_generation(self):
+            candidate_writes.append(("begin", self.album_id))
+
+        def publish_candidates(self, candidates, **_kwargs):
+            candidate_writes.append(
+                ("publish", self.album_id, candidates[0]["url"])
+            )
+            library_state["cover_generation"] = 4
+            return True
+
+        def candidate_id_for(self, _candidate):
+            return "candidate-1"
+
+        def mark_automatic_improvement(self, candidate_id):
+            candidate_writes.append(("improvement", self.album_id, candidate_id))
+            return True
+
+        def complete(self):
+            candidate_writes.append(("complete", self.album_id))
+            return True
+
+        def fail(self):
+            candidate_writes.append(("fail", self.album_id))
+            return True
+
+    def execute(**kwargs):
+        callback = kwargs["candidate_callback"]
+        callback(
+            {
+                "id": "candidate-1",
+                "source": "cover_art_archive",
+                "url": "https://images.example/first.jpg",
+                "width": 1400,
+                "height": 1400,
+                "score": 0.95,
+            },
+            automatic_improvement=True,
+        )
+        callback(
+            {
+                "id": "candidate-2",
+                "source": "apple",
+                "url": "https://images.example/second.jpg",
+                "width": 1500,
+                "height": 1500,
+                "score": 0.96,
+            }
+        )
+        return None, False, {
+            "reason": "remote_search_timed_out",
+            "resolver_trace": [
+                {
+                    "resolver": "_search_spotify",
+                    "status": "failed",
+                    "reason": "timeout",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "AlbumCoverCandidateSnapshotRepository",
+        Repository,
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "AlbumCoverCandidatePublisher",
+        Publisher,
+    )
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "persist_cover_provider_outcomes",
+        lambda *_args, **kwargs: provider_writes.append(kwargs),
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "log_app_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = cover_refresh_execution.run_cover_jobs(
+        get_state=lambda: library_state,
+        config={**config, "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://covers"},
+        logger=logger,
+        cache_lock=threading.Lock(),
+        jobs=[
+            {
+                "album_id": 101,
+                "album_key": "artist::album",
+                "folder": track_path.parent,
+                "artist": "Artist",
+                "album": "Album",
+                "track_paths": [str(track_path)],
+                "cover_selection_origin": None,
+            }
+        ],
+        file_cache=file_cache,
+        separate_release_keys=set(),
+        image_extensions={".jpg"},
+        user_agent="Album Haven Test",
+        cover_cache=SimpleNamespace(save=lambda: None),
+        scan_generation=4,
+        cover_generation=3,
+        job_workers=1,
+    )
+
+    assert candidate_writes == [
+        ("begin", 101),
+        ("publish", 101, "https://images.example/first.jpg"),
+    ]
+    assert provider_writes == []
+    assert result["processed"] == 1
+    assert result["failed"] == 1
+    assert library_state["cover_generation"] == 4
+    assert library_state["covers_completed"] == 0
+
+
+@pytest.mark.parametrize(
+    "authority_write",
+    ["candidate", "terminal", "provider_outcome"],
+)
+def test_run_cover_jobs_serializes_authority_writes_with_progress_ownership(
+    config,
+    logger,
+    library_state,
+    monkeypatch,
+    authority_write,
+):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    file_cache = {
+        str(track_path): {
+            "path": str(track_path),
+            "album_id": 101,
+            "album": "Album",
+            "album_artist": "Artist",
+            "cover_path": None,
+        }
+    }
+    library_state.update(
+        file_cache=file_cache,
+        cover_generation=3,
+        scan_generation=4,
+        covers_in_progress=True,
+        covers_completed=0,
+    )
+    cache_lock = threading.Lock()
+    begin_invalidation = threading.Event()
+    invalidation_finished = threading.Event()
+    writes = []
+
+    def invalidate_progress():
+        assert begin_invalidation.wait(timeout=2)
+        with cache_lock:
+            library_state["cover_generation"] = 4
+            writes.append("invalidation")
+        invalidation_finished.set()
+
+    invalidator = threading.Thread(target=invalidate_progress)
+    invalidator.start()
+
+    def race_authority_write(name):
+        if name == authority_write:
+            begin_invalidation.set()
+            invalidation_finished.wait(timeout=2)
+        writes.append(name)
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+    class Publisher:
+        def __init__(self, _repository, **_kwargs):
+            pass
+
+        def begin_candidate_generation(self):
+            return None
+
+        def publish_candidates(self, _candidates, **_kwargs):
+            race_authority_write("candidate")
+            return True
+
+        def complete(self):
+            race_authority_write("terminal")
+            return True
+
+    def execute(**kwargs):
+        if authority_write == "candidate":
+            kwargs["candidate_callback"]({
+                "id": "candidate-1",
+                "source": "apple",
+                "url": "https://images.example/candidate.jpg",
+                "width": 1500,
+                "height": 1500,
+                "score": 0.96,
+            })
+        return None, False, {
+            "reason": "no_match",
+            "resolver_trace": ([{
+                "resolver": "_search_spotify",
+                "status": "matched",
+                "reason": "matched",
+            }] if authority_write == "provider_outcome" else []),
+        }
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "AlbumCoverCandidateSnapshotRepository",
+        Repository,
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "AlbumCoverCandidatePublisher",
+        Publisher,
+    )
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "persist_cover_provider_outcomes",
+        lambda *_args, **_kwargs: race_authority_write("provider_outcome"),
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "log_app_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    try:
+        cover_refresh_execution.run_cover_jobs(
+            get_state=lambda: library_state,
+            config={**config, "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://covers"},
+            logger=logger,
+            cache_lock=cache_lock,
+            jobs=[{
+                "album_id": 101,
+                "album_key": "artist::album",
+                "folder": track_path.parent,
+                "artist": "Artist",
+                "album": "Album",
+                "track_paths": [str(track_path)],
+                "cover_selection_origin": None,
+            }],
+            file_cache=file_cache,
+            separate_release_keys=set(),
+            image_extensions={".jpg"},
+            user_agent="Album Haven Test",
+            cover_cache=SimpleNamespace(save=lambda: None),
+            scan_generation=4,
+            cover_generation=3,
+            job_workers=1,
+        )
+    finally:
+        begin_invalidation.set()
+        invalidator.join(timeout=3)
+
+    assert not invalidator.is_alive()
+    assert writes.index(authority_write) < writes.index("invalidation")
 
 
 @pytest.mark.parametrize("failure_reason", [

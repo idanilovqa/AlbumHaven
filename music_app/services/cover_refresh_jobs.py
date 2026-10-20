@@ -16,6 +16,7 @@ def select_background_cover_refresh_jobs(
     build_cover_jobs: BuildCoverJobs,
     logger,
     scan_generation: int,
+    exclude_user_owned: bool = False,
 ) -> list[CoverJob]:
     planned_jobs = build_cover_jobs(file_cache, cover_cache=cover_cache)
     owned_paths = {str(path) for path in (user_owned_track_paths or set())}
@@ -28,7 +29,7 @@ def select_background_cover_refresh_jobs(
         if belongs_to_user_owned_album:
             job["cover_selection_origin"] = "user"
         if str(job.get("cover_selection_origin") or "").strip().casefold() == "user":
-            if job.get("needs_cover_fetch") is False:
+            if exclude_user_owned or job.get("needs_cover_fetch") is False:
                 continue
         if bool(job.get("needs_cover_fetch")) or belongs_to_user_owned_album or (
             str(job.get("cover_selection_origin") or "").strip().casefold() == "user"

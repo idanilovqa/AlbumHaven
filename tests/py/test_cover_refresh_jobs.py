@@ -27,7 +27,7 @@ def test_select_background_cover_refresh_jobs_includes_missing_and_user_owned_co
             {
                 "folder": "user",
                 "track_paths": ["track-2"],
-                "needs_cover_fetch": False,
+                "needs_cover_fetch": True,
                 "cover_selection_origin": None,
             },
             {"folder": "automatic", "needs_cover_fetch": False, "cover_selection_origin": "automatic"},
@@ -42,7 +42,7 @@ def test_select_background_cover_refresh_jobs_includes_missing_and_user_owned_co
         {
             "folder": "user",
             "track_paths": ["track-2"],
-            "needs_cover_fetch": False,
+            "needs_cover_fetch": True,
             "cover_selection_origin": "user",
         },
     ]
@@ -50,6 +50,29 @@ def test_select_background_cover_refresh_jobs_includes_missing_and_user_owned_co
         {"track-1": {}, "track-2": {}, "track-3": {}},
         {"cover_cache": cover_cache},
     )]
+
+
+def test_select_background_cover_refresh_jobs_can_exclude_user_owned_covers():
+    logger = _LoggerStub()
+
+    jobs = cover_refresh_jobs.select_background_cover_refresh_jobs(
+        file_cache={"track-1": {}, "track-2": {}},
+        user_owned_track_paths={"track-2"},
+        cover_cache=object(),
+        build_cover_jobs=lambda *_args, **_kwargs: [
+            {"folder": "missing", "needs_cover_fetch": True},
+            {
+                "folder": "user",
+                "track_paths": ["track-2"],
+                "needs_cover_fetch": True,
+            },
+        ],
+        logger=logger,
+        scan_generation=1,
+        exclude_user_owned=True,
+    )
+
+    assert jobs == [{"folder": "missing", "needs_cover_fetch": True}]
 
 
 def test_select_manual_track_cover_refresh_jobs_filters_requested_paths():

@@ -22,6 +22,8 @@ except ID3NoHeaderError:
     tags = ID3()
 for frame in ("TALB", "TDRC", "TIT2", "TPE1", "TPE2", "TPOS", "TRCK"):
     tags.delall(frame)
+if sys.argv[7] == "1":
+    tags.delall("APIC")
 tags.add(TPE1(encoding=3, text=[sys.argv[2]]))
 tags.add(TPE2(encoding=3, text=[sys.argv[2]]))
 tags.add(TALB(encoding=3, text=[sys.argv[3]]))
@@ -30,6 +32,8 @@ tags.add(TIT2(encoding=3, text=[sys.argv[5]]))
 tags.add(TRCK(encoding=3, text=[sys.argv[6]]))
 tags.add(TPOS(encoding=3, text=["1/1"]))
 tags.save(track)
+if sys.argv[7] == "1" and ID3(track).getall("APIC"):
+    raise RuntimeError("Watcher cover fixture still contains embedded artwork")
 `;
 
 function assertOwnedPath(mediaRoot, candidate) {
@@ -75,9 +79,12 @@ function firstPlayableMp3(mediaRoot) {
   throw new Error('The functional fixture contains no playable MP3 source.');
 }
 
-async function retag(trackPath, { artist, album, year, title, trackNumber }) {
+async function retag(trackPath, {
+  artist, album, year, title, trackNumber, removeEmbeddedArtwork = false,
+}) {
   await execFileAsync(resolvePlaywrightPython(process.env), [
     '-c', RETAG_SCRIPT, trackPath, artist, album, String(year), title, String(trackNumber),
+    removeEmbeddedArtwork ? '1' : '0',
   ], { encoding: 'utf8', windowsHide: true });
 }
 
@@ -98,6 +105,7 @@ async function buildWatchedAlbumFixture({
   artist = 'Watcher Reconciliation Artist',
   album = 'Watcher Reconciliation Album',
   year = 2004,
+  removeEmbeddedArtwork = false,
 } = {}) {
   const mediaRoot = resolveWritableFixtureMediaRoot(process.env);
   const ownedRoot = assertOwnedPath(mediaRoot, path.join(mediaRoot, 'cases', 'watcher-reconciliation'));
@@ -119,6 +127,7 @@ async function buildWatchedAlbumFixture({
         year: albumYear,
         title,
         trackNumber: index + 1,
+        removeEmbeddedArtwork,
       });
       createdTracks.push({ filename, title, path: destination });
     }
@@ -138,7 +147,9 @@ async function buildWatchedAlbumFixture({
     tracks,
     async renameTrack(index, title) {
       const track = tracks[index];
-      await retag(track.path, { artist, album, year, title, trackNumber: index + 1 });
+      await retag(track.path, {
+        artist, album, year, title, trackNumber: index + 1, removeEmbeddedArtwork,
+      });
       track.title = title;
     },
     createSiblingAlbum(options) {

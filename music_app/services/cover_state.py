@@ -6,7 +6,10 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from music_app.services.covers import image_dimensions
-from music_app.services.cover_workflow import is_generated_cover_artifact
+from music_app.services.cover_workflow import (
+    cover_revision_for_path,
+    is_generated_cover_artifact,
+)
 from music_app.services.library import album_to_dict
 
 
@@ -164,8 +167,7 @@ def _matching_local_cover_sources(
     try:
         size = active_path.stat().st_size
         if not revision:
-            with active_path.open("rb") as image:
-                revision = hashlib.file_digest(image, "sha256").hexdigest()
+            revision = cover_revision_for_path(active_path)
     except OSError:
         return
     for item in candidates:
@@ -175,8 +177,7 @@ def _matching_local_cover_sources(
         try:
             if candidate.stat().st_size != size:
                 continue
-            with candidate.open("rb") as image:
-                digest = hashlib.file_digest(image, "sha256").hexdigest()
+            digest = cover_revision_for_path(candidate)
             if digest == revision:
                 yield str(candidate)
         except OSError:

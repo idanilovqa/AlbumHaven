@@ -20,6 +20,7 @@ const ALLOWED_MATCH_RESOLUTIONS = new Set([
 const FALSE_MATCH_NAMES = [
   'Kill "Em" All (feat. Discrepancies) - Single',
   "Kill 'Em All (Featuring Discrepancies)",
+  "Kill 'Em All (Remastered)",
   "Kill 'Em All - Remixed",
   "Kill 'Em",
   "Kill 'Em All II",
@@ -29,6 +30,7 @@ const FALSE_MATCH_RESOLUTIONS = new Set([
   '3200x3200',
   '3400x3400',
   '3600x3600',
+  '3700x3700',
   '3800x3800',
   '3900x3900',
   '4000x4000',
@@ -47,6 +49,7 @@ const FALSE_ARTIST_IDENTITIES = [
 const EXPECTED_PROVIDER_ROLES = [
   'base',
   'deluxe',
+  'false-remastered-version',
   'false-single-feature',
   'false-tribute-artist',
   'false-remix',

@@ -5238,6 +5238,7 @@ def test_provider_fixture_serves_every_cover_matching_candidate_image(tmp_path):
     } == {
         "metallica-kill-em-all-base",
         "metallica-kill-em-all-deluxe",
+        "metallica-kill-em-all-false-remastered",
         "metallica-kill-em-all-false-single",
         "metallica-kill-em-all-false-tribute",
         "metallica-kill-em-all-false-remix",

@@ -3786,6 +3786,15 @@ def _cover_matching_provider_specs(
         ),
         build_spec(
             larger_source,
+            cover_id="metallica-kill-em-all-false-remastered",
+            artist=COVER_MATCHING_ARTIST,
+            album="Kill 'Em All (Remastered)",
+            width=3700,
+            height=3700,
+            fixture_role="false-remastered-version",
+        ),
+        build_spec(
+            larger_source,
             cover_id="metallica-kill-em-all-false-single",
             artist=COVER_MATCHING_ARTIST,
             album='Kill "Em" All (feat. Discrepancies) - Single',

@@ -1087,6 +1087,91 @@ function artistLovedLaunchIsCurrent(launch) {
   return Boolean(receipt && receipt.generation === artistLovedTransportGeneration() && receipt.epoch === artistLovedReadEpoch
     && (!receipt.readScope || galleryReadScopeIsCurrent(receipt.readScope)));
 }
+// Top launches share the existing response read lifetime, never Loved grants.
+const artistListenThroughLaunchReceipts = new WeakMap();
+function artistListenThroughDescriptor(value) {
+  const fields = (object, keys) => {
+    if (!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).length !== keys.length) return null;
+    const descriptors = Object.getOwnPropertyDescriptors(object);
+    return keys.every(key => descriptors[key] && Object.hasOwn(descriptors[key], 'value')) ? descriptors : null;
+  };
+  const outer = fields(value, ['context_ref', 'artist_ref', 'artist_scope']);
+  if (!outer) return null;
+  const inner = fields(outer.artist_scope.value, ['root_artist_id', 'mode']);
+  if (!inner) return null;
+  const stamp = outer.context_ref.value, artist = outer.artist_ref.value, root = inner.root_artist_id.value, mode = inner.mode.value;
+  if (typeof stamp !== 'string' || stamp.length !== 64 || !/^[0-9a-f]{64}$/.test(stamp)
+    || typeof artist !== 'string' || !artist.trim() || typeof root !== 'string' || root.trim() !== root
+    || !/^[1-9][0-9]{0,18}$/.test(root) || root.length === 19 && root > '9223372036854775807' || mode !== 'artist') return null;
+  return {context_ref: stamp, artist_ref: artist, artist_scope: {root_artist_id: root, mode}};
+}
+function artistListenThroughDescriptorMatches(value, expected) {
+  const actual = artistListenThroughDescriptor(value);
+  return Boolean(actual && actual.context_ref === expected.context_ref && actual.artist_ref === expected.artist_ref
+    && actual.artist_scope.root_artist_id === expected.artist_scope.root_artist_id && actual.artist_scope.mode === expected.artist_scope.mode);
+}
+function artistListenThroughScopeMatches(scope, descriptor, generation) {
+  const shell = document.getElementById('app-shell');
+  return Boolean(scope && shell && scope.context === descriptor.context_ref && scope.stamp === descriptor.context_ref
+    && scope.generation === generation && scope.transport === window.AlbumHavenPrivateUITransport
+    && scope.actor === String(shell.dataset?.nativeAccountId || '')
+    && scope.library === String(shell.dataset?.nativeLibraryId || '')
+    && scope.stamp === String(shell.dataset?.privateUiContext || ''));
+}
+function normalizeRuntimeArtistListenThroughLaunch(value, stamp, anchor, epoch = artistLovedReadEpoch) {
+  try {
+    const descriptor = artistListenThroughDescriptor(value), entryEpoch = artistLovedReadEpoch;
+    if (!descriptor || descriptor.context_ref !== stamp || descriptor.artist_ref !== anchor
+      || typeof captureGalleryReadScope !== 'function' || typeof galleryReadScopeIsCurrent !== 'function') return null;
+    const prior = artistListenThroughLaunchReceipts.get(value), generation = artistLovedTransportGeneration();
+    if (generation === null || generation === undefined || prior && (prior.generation !== generation || prior.epoch !== epoch
+      || !artistListenThroughDescriptorMatches(value, prior.launch))) return null;
+    const readScope = prior?.readScope || captureGalleryReadScope();
+    if (!artistListenThroughScopeMatches(readScope, descriptor, generation)
+      || artistLovedTransportGeneration() !== generation || !galleryReadScopeIsCurrent(readScope)
+      || artistLovedTransportGeneration() !== generation || artistLovedReadEpoch !== entryEpoch
+      || !artistListenThroughScopeMatches(readScope, descriptor, generation)
+      || !artistListenThroughDescriptorMatches(value, descriptor)) return null;
+    if (prior) return prior.launch;
+    const launch = Object.freeze({...descriptor, artist_scope: Object.freeze(descriptor.artist_scope)});
+    const receipt = Object.freeze({generation, epoch, readScope, launch});
+    artistListenThroughLaunchReceipts.set(value, receipt); artistListenThroughLaunchReceipts.set(launch, receipt);
+    return launch;
+  } catch {return null;}
+}
+function artistListenThroughLaunchIsCurrent(launch) {
+  try {
+    const receipt = launch && artistListenThroughLaunchReceipts.get(launch);
+    if (!receipt || typeof captureGalleryReadScope !== 'function' || typeof galleryReadScopeIsCurrent !== 'function'
+      || receipt.epoch !== artistLovedReadEpoch || !artistListenThroughDescriptorMatches(launch, receipt.launch)) return false;
+    const generation = artistLovedTransportGeneration();
+    if (generation === null || generation === undefined || receipt.generation !== generation || !galleryReadScopeIsCurrent(receipt.readScope)) return false;
+    return artistLovedTransportGeneration() === generation && receipt.epoch === artistLovedReadEpoch
+      && artistListenThroughScopeMatches(receipt.readScope, receipt.launch, generation)
+      && artistListenThroughDescriptorMatches(launch, receipt.launch);
+  } catch {return false;}
+}
+function replaceArtistListenThroughViewLaunches(view, source, {local = false, epoch = artistLovedReadEpoch} = {}) {
+  const candidate = source?.artist_listen_through_context_ref;
+  const stamp = typeof candidate === 'string' && candidate.length === 64 && /^[0-9a-f]{64}$/.test(candidate)
+    && !view.private_search && !['playlists', 'album_tops', 'home'].includes(view.surface?.active || view.surface_request) ? candidate : null;
+  view.artist_listen_through_context_ref = stamp;
+  const normalize = (launch, anchor) => {
+    if (local && !artistListenThroughLaunchIsCurrent(launch)) return null;
+    return normalizeRuntimeArtistListenThroughLaunch(launch, stamp, anchor, epoch);
+  };
+  for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups', 'related_filter_base_primary_groups', 'related_filter_base_family_groups']) {
+    if (!Array.isArray(view[key])) continue;
+    const admitted = local || Array.isArray(source?.[key]);
+    view[key] = view[key].map(group => ({...group, artist_listen_through_launch: admitted ? normalize(group?.artist_listen_through_launch, group?.artist) : null}));
+  }
+  if (view.artist_page) {
+    const launch = local ? view.artist_page.artist_listen_through_launch : source?.artist_page?.artist_listen_through_launch;
+    view.artist_page = {...view.artist_page, artist_listen_through_launch: normalize(launch, view.artist_page.artist_ref)};
+  }
+  return view;
+}
+
 function replaceArtistLovedViewLaunches(view, source, {local = false, epoch = artistLovedReadEpoch} = {}) {
   const stamp = typeof source?.artist_loved_context_ref === 'string' && /^[0-9a-f]{64}$/.test(source.artist_loved_context_ref)
     && !view.private_search && !['playlists', 'album_tops', 'home'].includes(view.surface?.active || view.surface_request)
@@ -1109,7 +1194,7 @@ function replaceArtistLovedViewLaunches(view, source, {local = false, epoch = ar
   return view;
 }
 
-function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = artistLovedReadEpoch} = {}) {
+function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = artistLovedReadEpoch, artistListenThroughLocal = false} = {}) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
     : {};
@@ -1118,7 +1203,7 @@ function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = 
     ...(isRuntimePlainObject(fallbackView) ? fallbackView : {}),
   };
   const source = isRuntimePlainObject(payload) ? payload : {};
-  if (source.private_search === true) return normalizePrivateSearchNavigation(source, base);
+  if (source.private_search === true) return replaceArtistListenThroughViewLaunches(normalizePrivateSearchNavigation(source, base), {}, {epoch: artistLovedEpoch});
   // A subsequent ordinary response must not inherit private routing from its
   // fallback view. Its ordinary normalizer and response fields remain intact.
   if (base.private_search === true) {
@@ -1285,7 +1370,8 @@ function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = 
     delete normalizedView.search_context;
   }
   const localLovedPatch = Object.keys(source).every(key => ['gallery_display_mode', 'gallery_scale_percent'].includes(key));
-  return replaceArtistLovedViewLaunches(normalizedView, localLovedPatch ? base : source, {local: localLovedPatch, epoch: artistLovedEpoch});
+  replaceArtistLovedViewLaunches(normalizedView, localLovedPatch ? base : source, {local: localLovedPatch, epoch: artistLovedEpoch});
+  return replaceArtistListenThroughViewLaunches(normalizedView, localLovedPatch ? base : source, {local: localLovedPatch || artistListenThroughLocal, epoch: artistLovedEpoch});
 }
 
 function buildSelectedArtistChronologicalArtistGroups(primaryGroups = [], familyGroups = []) {
@@ -1623,7 +1709,7 @@ function applyViewPayload(payload, options = {}) {
     : sidebarReconciledPayload;
   const nextLovedEpoch = artistLovedReadEpoch + ((!options.rootGalleryContinuation && !options.localArtistLovedTransition
     || artistLovedReadScope({...mountedPreviousView, ...nextPayload}) !== artistLovedReadScope(mountedPreviousView)) ? 1 : 0);
-  const normalizedNextView = normalizeViewPayload(nextPayload, previousView, {artistLovedEpoch: nextLovedEpoch});
+  const normalizedNextView = normalizeViewPayload(nextPayload, previousView, {artistLovedEpoch: nextLovedEpoch, artistListenThroughLocal: options.localArtistLovedTransition === true});
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
@@ -1678,10 +1764,18 @@ function applyViewPayload(payload, options = {}) {
     // be retired. Never mutate a group still referenced by the previous view.
     for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
       const groups = mountedPreviousView[key];
-      nextView[key] = Array.isArray(groups) && groups.some(group => group?.artist_loved_launch != null)
-        ? groups.map(group => group?.artist_loved_launch != null ? {...group, artist_loved_launch: null} : group)
+      nextView[key] = Array.isArray(groups) && groups.some(group => group?.artist_loved_launch != null || group?.artist_listen_through_launch != null)
+        ? groups.map(group => group?.artist_loved_launch != null || group?.artist_listen_through_launch != null
+          ? {...group, ...(group.artist_loved_launch != null ? {artist_loved_launch: null} : {}),
+            ...(group.artist_listen_through_launch != null ? {artist_listen_through_launch: null} : {})} : group)
         : groups;
     }
+    for (const key of ['related_filter_base_primary_groups', 'related_filter_base_family_groups']) {
+      if (Array.isArray(nextView[key])) nextView[key] = nextView[key].map(group => group?.artist_listen_through_launch != null
+        ? {...group, artist_listen_through_launch: null} : group);
+    }
+    nextView.artist_listen_through_context_ref = null;
+    if (nextView.artist_page) nextView.artist_page = {...nextView.artist_page, artist_listen_through_launch: null};
     nextView.related_artists = mountedPreviousView.related_artists;
     nextView.related_filter_artists = mountedPreviousView.related_filter_artists;
     nextView.primary_filter_active = Boolean(mountedPreviousView.primary_filter_active);
@@ -1793,6 +1887,7 @@ function mergeViewPayload(patch, options = {}) {
   const local = Object.keys(nextPatch).every(key => ['gallery_display_mode', 'gallery_scale_percent'].includes(key));
   return applyViewPayload({ ...baseView, ...nextPatch,
     artist_loved_context_ref: local ? baseView.artist_loved_context_ref : nextPatch.artist_loved_context_ref ?? null,
+    artist_listen_through_context_ref: local ? baseView.artist_listen_through_context_ref : nextPatch.artist_listen_through_context_ref ?? null,
   }, {...options, localArtistLovedTransition: local || options.localArtistLovedTransition === true});
 }
 
@@ -1858,6 +1953,7 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
 
   return mergeViewPayload({
     artist_loved_context_ref: currentView.artist_loved_context_ref,
+    artist_listen_through_context_ref: currentView.artist_listen_through_context_ref,
     related_filter_artists: [...activeArtists],
     primary_filter_active: nextPrimaryFilterActive,
     primary_artist_groups: nextPrimaryGroups,

@@ -272,7 +272,7 @@ const TopPlaybackRuntime = (() => {
       if (!current(entry) || entry.starting || engine.pendingPromotion || engine.pendingSeek) return false;
       const before = entry.source.snapshot();
       if (!options || typeof options !== 'object'
-        || options.mode !== undefined && !['in_order', 'random_albums', 'random_songs'].includes(options.mode)
+        || options.mode !== undefined && !['in_order', 'random_albums', 'random_songs', 'popular_songs'].includes(options.mode)
         || options.stopAfterAlbum !== undefined && typeof options.stopAfterAlbum !== 'boolean') return false;
       if ((options.mode === undefined || options.mode === before.mode)
         && (options.stopAfterAlbum === undefined || options.stopAfterAlbum === before.stopAfterAlbum)) return true;

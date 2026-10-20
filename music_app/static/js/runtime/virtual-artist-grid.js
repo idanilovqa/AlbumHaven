@@ -299,12 +299,13 @@ const resourceGalleryHosts = new WeakMap();
 // Flat collection galleries share native card sizing without borrowing the
 // Artist index, viewport, history, or renderer. Family keeps its one virtualizer.
 class ResourceGalleryHost {
-  constructor({host, readSnapshot, renderCard, onAction, isCurrent}) {
+  constructor({host, readSnapshot, renderCard, renderSeparator, onAction, isCurrent}) {
     if (!host?.ownerDocument || typeof readSnapshot !== 'function'
       || typeof renderCard !== 'function' || typeof isCurrent !== 'function') {
       throw new TypeError('A scoped native Gallery host and owners are required.');
     }
     this.host = host; this.readSnapshot = readSnapshot; this.renderCard = renderCard;
+    this.renderSeparator = renderSeparator;
     this.onAction = onAction; this.isCurrent = isCurrent; this.cards = new Map(); this.elements = new WeakMap();
     this.snapshot = null; this.disposed = false; this.revision = 0; this.committedRevision = 0; this.frame = 0;
     this.geometry = {columns: 1, cardTrackWidth: 0}; this.preserveWidth = false;
@@ -326,7 +327,9 @@ class ResourceGalleryHost {
       for (let element = action; element && element !== this.root; element = element.parentElement) {
         const card = this.elements.get(element);
         if (card) {
-          if (this.current(snapshot) && this.committedRevision === this.revision) this.onAction?.(card.row, event, snapshot);
+          if (card.kind === 'album' && this.current(snapshot) && this.committedRevision === this.revision) {
+            this.onAction?.(card.row, event, snapshot);
+          }
           return;
         }
       }
@@ -368,6 +371,12 @@ class ResourceGalleryHost {
       || new Set(rows.map(row => row.key)).size !== rows.length) {
       throw new TypeError('Native Gallery requires unique stable row keys.');
     }
+    const kinds = rows.map(row => Object.prototype.hasOwnProperty.call(row, 'kind') ? row.kind : 'album');
+    if (kinds.some((kind, index) => !['album', 'separator'].includes(kind)
+      || kind === 'separator' && typeof this.renderSeparator !== 'function'
+      || this.cards.has(rows[index].key) && this.cards.get(rows[index].key).kind !== kind)) {
+      throw new TypeError('Native Gallery requires valid, stable row kinds and their renderer.');
+    }
     this.snapshot = snapshot; this.preserveWidth = false; const revision = ++this.revision;
     const current = () => this.current(snapshot, revision), wanted = new Set(rows.map(row => row.key));
     const focused = this.root.contains(this.host.ownerDocument.activeElement) ? this.host.ownerDocument.activeElement : null;
@@ -381,17 +390,19 @@ class ResourceGalleryHost {
         if (!current()) return false;
         let card = this.cards.get(row.key);
         if (!card) {
-          const owner = this.renderCard(row, snapshot);
+          const owner = kinds[index] === 'separator'
+            ? this.renderSeparator(row, snapshot) : this.renderCard(row, snapshot);
           if (!current()) {owner?.dispose?.(); return false;}
           if (!owner?.element || owner.element.ownerDocument !== this.host.ownerDocument
             || owner.element.parentNode || typeof owner.update !== 'function') {
             owner?.dispose?.(); throw new TypeError('Gallery renderer must return a detached native card owner.');
           }
-          card = {row, owner}; this.cards.set(row.key, card); this.elements.set(owner.element, card);
+          card = {row, owner, kind: kinds[index]}; this.cards.set(row.key, card); this.elements.set(owner.element, card);
         } else {
           card.row = row; card.owner.update(row, snapshot);
           if (!current()) return false;
         }
+        if (card.kind === 'separator') card.owner.element.style.gridColumn = '1 / -1';
         if (this.root.children[index] !== card.owner.element) {
           this.root.insertBefore(card.owner.element, this.root.children[index] || null);
         }
@@ -422,7 +433,8 @@ class ResourceGalleryHost {
       columns: snapshot.mobileColumns ?? 3, gap,
     });
     if (!this.current(snapshot, revision)) return;
-    const geometry = resolveGalleryColumnGeometry({width, columnGap: gap, itemCount: this.cards.size,
+    const itemCount = [...this.cards.values()].filter(card => card.kind === 'album').length;
+    const geometry = resolveGalleryColumnGeometry({width, columnGap: gap, itemCount,
       selectedCardWidth: resolveGalleryCardWidth(snapshot.layoutConfig, snapshot.galleryScalePercent ?? DEFAULT_GALLERY_SCALE_PERCENT),
       columns: this.geometry.columns, cardTrackWidth: this.geometry.cardTrackWidth,
       preserveCardTrackWidth: this.preserveWidth, mobileGeometry});

@@ -459,7 +459,7 @@ def test_match_score_preserves_normalized_same_artist_identities(candidate_artis
         target_edition=None,
         target_year=1983,
         candidate_artist=candidate_artist,
-        candidate_album="Kill 'Em All (Remastered Deluxe Edition)",
+        candidate_album="Kill 'Em All (Deluxe Edition)",
         candidate_year=1983,
     ) > 0.0
 
@@ -472,7 +472,6 @@ def test_match_score_preserves_normalized_same_artist_identities(candidate_artis
         ("Single", "Single"),
         ("The Mix", "The Mix"),
         ("Control Album", "Control Album (Deluxe Edition)"),
-        ("Control Album", "Control Album (Remastered Version)"),
     ],
 )
 def test_match_score_preserves_compatible_intrinsic_markers_and_editions(
@@ -488,6 +487,40 @@ def test_match_score_preserves_compatible_intrinsic_markers_and_editions(
         candidate_album=candidate_album,
         candidate_year=2001,
     ) > 0.0
+
+
+@pytest.mark.parametrize(
+    ("target_album", "target_edition", "candidate_album", "candidate_year", "matches"),
+    [
+        ("The Knowing", None, "The Knowing", 2000, True),
+        ("The Knowing", None, "The Knowing (Remastered)", 2000, False),
+        ("The Knowing", "Remastered", "The Knowing", 2000, False),
+        ("The Knowing [Remastered]", None, "The Knowing", 2000, False),
+        ("The Knowing", "Digitally Remastered", "The Knowing - Remaster", 2000, True),
+        ("The Knowing", "2011 REMASTER", "The Knowing (2011 Remastered)", 2011, True),
+        ("The Knowing [2011 Remaster]", None, "The Knowing (2020 Remastered)", 2000, False),
+        ("The Knowing", "2011 Remastered", "The Knowing - 2020 Remaster", 2000, False),
+        ("The Knowing", "2011 Digitally Remastered", "The Knowing - 2020 Remaster", 2000, False),
+    ],
+)
+def test_match_score_requires_compatible_remaster_identity(
+    target_album,
+    target_edition,
+    candidate_album,
+    candidate_year,
+    matches,
+):
+    score = matching.match_score(
+        target_artist="Novembers Doom",
+        target_album=target_album,
+        target_edition=target_edition,
+        target_year=2000,
+        candidate_artist="Novembers Doom",
+        candidate_album=candidate_album,
+        candidate_year=candidate_year,
+    )
+
+    assert (score > 0.0) is matches
 
 
 @pytest.mark.parametrize("variant", ["Remixed", "Remixes", "Remixing"])

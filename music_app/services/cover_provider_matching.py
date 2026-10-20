@@ -46,6 +46,7 @@ _ALBUM_VARIANT_KEYWORDS = (
 )
 _FEATURE_VARIANT_KEYWORDS = {"feat", "feature", "featured", "featuring", "ft"}
 _MIX_VARIANT_KEYWORDS = {"mix", "mixed", "mixes", "mixing"}
+_REMASTER_VARIANT_KEYWORDS = {"remaster", "remastered"}
 _REMIX_VARIANT_KEYWORDS = {"remix", "remixed", "remixes", "remixing"}
 _SIMPLE_NUMBER_WORDS = {
     "one": 1,
@@ -260,6 +261,20 @@ def has_release_type_marker(value: str) -> bool:
     return any(token in tokens for token in {"single", "ep"})
 
 
+def remaster_identity(value: str) -> tuple[bool, frozenset[int]]:
+    tokens = normalize(value).split()
+    marker_indexes = [
+        index for index, token in enumerate(tokens)
+        if token in _REMASTER_VARIANT_KEYWORDS
+    ]
+    years: set[int] = set()
+    for marker_index in marker_indexes:
+        for year_index in (marker_index - 1, marker_index + 1):
+            if 0 <= year_index < len(tokens) and re.fullmatch(r"(?:19|20)\d{2}", tokens[year_index]):
+                years.add(int(tokens[year_index]))
+    return bool(marker_indexes), frozenset(years)
+
+
 def incompatible_album_variant_markers(value: str) -> set[str]:
     normalized_initialisms = re.sub(
         r"(?<![A-Za-z0-9])e\s*\.\s*p\.?(?![A-Za-z0-9])",
@@ -399,6 +414,17 @@ def match_score(
         return 0.0
     if incompatible_album_variant_markers(target_album) != incompatible_album_variant_markers(
         candidate_album
+    ):
+        return 0.0
+    target_album_is_remaster, target_album_remaster_years = remaster_identity(target_album)
+    target_edition_is_remaster, target_edition_remaster_years = remaster_identity(target_edition or "")
+    candidate_is_remaster, candidate_remaster_years = remaster_identity(candidate_album)
+    target_is_remaster = target_album_is_remaster or target_edition_is_remaster
+    if target_is_remaster != candidate_is_remaster:
+        return 0.0
+    target_remaster_years = target_album_remaster_years | target_edition_remaster_years
+    if target_remaster_years and candidate_remaster_years and target_remaster_years.isdisjoint(
+        candidate_remaster_years
     ):
         return 0.0
     target_album_core = canonical_album_title(target_album)

@@ -82,11 +82,8 @@ _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
     {"title", "genre", "track_number", "disc_number"}
 )
 _OWNER_LED_FEATURE_RE = re.compile(
-    r"^(?P<owner>.+?)(?:\s+(?:feat\.?|featuring|with|vs|x)\s+|\s*&\s*|/|;|,\s*)(?P<featured>.+)$",
+    r"^(?P<owner>.+?)\s+(?:feat\.?|featuring|with|vs|x)\s+(?P<featured>.+)$",
     re.IGNORECASE,
-)
-_FEATURED_MEMBER_SPLIT_RE = re.compile(
-    r"\s+(?:and|и)\s+|(?:\s*&\s*)|(?<!\d)/|/(?!\d)|;|,"
 )
 _NUMERIC_ARTIST_SLASH_RE = re.compile(r"(?<=\d)\s*/\s*(?=\d)")
 
@@ -2857,18 +2854,8 @@ def _attached_track_artist_names(track_artist_name: str | None, owner_name: str 
     match = _OWNER_LED_FEATURE_RE.match(artist_name)
     if match is None or _key(match.group("owner")) != _key(owner):
         return [artist_name]
-    return _deduped_artist_names([owner, *_split_featured_member_names(match.group("featured"))])
-
-
-def _split_featured_member_names(value: object) -> list[str]:
-    names: list[str] = []
-    text = _NUMERIC_ARTIST_SLASH_RE.sub("/", str(value or ""))
-    for part in _FEATURED_MEMBER_SPLIT_RE.split(text):
-        name = _text_or_none(part)
-        if name is None:
-            continue
-        names.append(name)
-    return names
+    featured = _NUMERIC_ARTIST_SLASH_RE.sub("/", match.group("featured").strip())
+    return _deduped_artist_names([owner, featured])
 
 
 def _file_entries_by_path(file_cache: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:

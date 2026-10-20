@@ -3329,7 +3329,7 @@ def test_postgres_scan_publication_persists_album_compilation_state(monkeypatch)
     assert persisted_album_metadata["Ordinary Contract"]["is_compilation"] is False
 
 
-def test_attached_track_artist_names_keeps_numeric_slash_artist_intact():
+def test_attached_track_artist_names_keeps_featured_credit_intact():
     from music_app.services import scan_cache_persistence
 
     assert scan_cache_persistence._attached_track_artist_names(
@@ -3339,7 +3339,48 @@ def test_attached_track_artist_names_keeps_numeric_slash_artist_intact():
     assert scan_cache_persistence._attached_track_artist_names(
         "Owner feat Guest / Partner",
         "Owner",
-    ) == ["Owner", "Guest", "Partner"]
+    ) == ["Owner", "Guest / Partner"]
+
+
+@pytest.mark.parametrize(
+    ("track_artist", "album_owner"),
+    [
+        ("Fire & Ash", "Fire"),
+        ("To/Die/For", "To"),
+        ("Чиж & Co", "Чиж"),
+    ],
+)
+def test_attached_track_artist_names_does_not_split_punctuation_only_band_names(
+    track_artist,
+    album_owner,
+):
+    from music_app.services import scan_cache_persistence
+
+    assert scan_cache_persistence._attached_track_artist_names(
+        track_artist,
+        album_owner,
+    ) == [track_artist]
+
+
+@pytest.mark.parametrize(
+    ("track_artist", "album_owner", "featured_band"),
+    [
+        ("Owner feat. Fire & Ash", "Owner", "Fire & Ash"),
+        ("Owner feat. To/Die/For", "Owner", "To/Die/For"),
+        ("Owner feat. Чиж & Co", "Owner", "Чиж & Co"),
+    ],
+)
+def test_attached_track_artist_names_keeps_featured_band_credit_intact(
+    track_artist,
+    album_owner,
+    featured_band,
+):
+    from music_app.services import scan_cache_persistence
+
+    assert scan_cache_persistence._attached_track_artist_names(
+        track_artist,
+        album_owner,
+    ) == [album_owner, featured_band]
 
 
 def test_local_album_inventory_retains_cover_revision_after_track_metadata_rewrite(

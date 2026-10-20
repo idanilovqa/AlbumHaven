@@ -465,6 +465,35 @@ def test_connector_words_in_ascii_artist_names_do_not_merge_distinct_identities(
         assert relation_views["alias_to_canonical"][artist] == artist
 
 
+@pytest.mark.parametrize(
+    ("short_name", "punctuation_name"),
+    [
+        ("Fire", "Fire & Ash"),
+        ("To", "To/Die/For"),
+        ("Чиж", "Чиж & Co"),
+    ],
+)
+def test_punctuation_only_band_names_do_not_alias_to_prefix_artist(
+    short_name,
+    punctuation_name,
+):
+    rows = [
+        _row(
+            album_id=1,
+            artist=short_name,
+            member=punctuation_name,
+            featured_kind="featured_track_artist",
+            relative_path=rf"Artists\{short_name}\Band Album\01.flac",
+            private_path=rf"C:\Music\Artists\{short_name}\Band Album\01.flac",
+        ),
+    ]
+
+    relation_views = _build(rows)
+
+    assert relation_views["alias_to_canonical"][short_name] == short_name
+    assert relation_views["alias_to_canonical"][punctuation_name] == punctuation_name
+
+
 def test_root_relative_parts_prefers_valid_stored_relative_path():
     builder = importlib.import_module(
         "music_app.services.relation_projection_builder"

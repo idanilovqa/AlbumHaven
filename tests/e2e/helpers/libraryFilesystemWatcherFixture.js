@@ -9,6 +9,10 @@ import { resolveWritableFixtureMediaRoot } from './fixtureMediaRoot.js';
 const require = createRequire(import.meta.url);
 const { resolvePlaywrightPython } = require('../../../scripts/playwright-python.cjs');
 const execFileAsync = promisify(execFile);
+const WATCHER_FIXTURE_DIRECTORIES = new Set([
+  'watcher-reconciliation',
+  'watcher-punctuation-identity',
+]);
 
 const RETAG_SCRIPT = `
 import sys
@@ -22,35 +26,49 @@ except ID3NoHeaderError:
     tags = ID3()
 for frame in ("TALB", "TDRC", "TIT2", "TPE1", "TPE2", "TPOS", "TRCK"):
     tags.delall(frame)
-if sys.argv[7] == "1":
+if sys.argv[8] == "1":
     tags.delall("APIC")
 tags.add(TPE1(encoding=3, text=[sys.argv[2]]))
-tags.add(TPE2(encoding=3, text=[sys.argv[2]]))
-tags.add(TALB(encoding=3, text=[sys.argv[3]]))
-tags.add(TDRC(encoding=3, text=[sys.argv[4]]))
-tags.add(TIT2(encoding=3, text=[sys.argv[5]]))
-tags.add(TRCK(encoding=3, text=[sys.argv[6]]))
+tags.add(TPE2(encoding=3, text=[sys.argv[3]]))
+tags.add(TALB(encoding=3, text=[sys.argv[4]]))
+tags.add(TDRC(encoding=3, text=[sys.argv[5]]))
+tags.add(TIT2(encoding=3, text=[sys.argv[6]]))
+tags.add(TRCK(encoding=3, text=[sys.argv[7]]))
 tags.add(TPOS(encoding=3, text=["1/1"]))
 tags.save(track)
-if sys.argv[7] == "1" and ID3(track).getall("APIC"):
+if sys.argv[8] == "1" and ID3(track).getall("APIC"):
     raise RuntimeError("Watcher cover fixture still contains embedded artwork")
 `;
 
 function assertOwnedPath(mediaRoot, candidate) {
   const resolved = path.resolve(candidate);
-  const ownedRoot = path.resolve(mediaRoot, 'cases', 'watcher-reconciliation');
-  const relative = path.relative(ownedRoot, resolved);
-  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  const ownsCandidate = [...WATCHER_FIXTURE_DIRECTORIES].some((directory) => {
+    const ownedRoot = path.resolve(mediaRoot, 'cases', directory);
+    const relative = path.relative(ownedRoot, resolved);
+    return relative !== '..'
+      && !relative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relative);
+  });
+  if (!ownsCandidate) {
     throw new Error(`Watcher fixture path escaped its owned directory: ${resolved}`);
   }
   return resolved;
 }
 
+function watcherOwnedRoot(mediaRoot, fixtureDirectory = 'watcher-reconciliation') {
+  if (!WATCHER_FIXTURE_DIRECTORIES.has(fixtureDirectory)) {
+    throw new Error(`Unsupported watcher fixture directory: ${fixtureDirectory}`);
+  }
+  return path.resolve(mediaRoot, 'cases', fixtureDirectory);
+}
+
 export async function cleanupWatchedAlbumFixture({
   mediaRoot, ownedRoot, context, managedAppLifecycle, originalFailure,
 }) {
-  const expectedRoot = path.resolve(mediaRoot, 'cases', 'watcher-reconciliation');
-  if (path.resolve(ownedRoot) !== expectedRoot) throw new Error('Watcher cleanup requires its exact owned directory.');
+  const expectedRoot = [...WATCHER_FIXTURE_DIRECTORIES]
+    .map((directory) => watcherOwnedRoot(mediaRoot, directory))
+    .find((candidate) => candidate === path.resolve(ownedRoot));
+  if (!expectedRoot) throw new Error('Watcher cleanup requires an exact owned directory.');
   try {
     await context.close();
     if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true });
@@ -80,17 +98,18 @@ function firstPlayableMp3(mediaRoot) {
 }
 
 async function retag(trackPath, {
-  artist, album, year, title, trackNumber, removeEmbeddedArtwork = false,
+  trackArtist, albumArtist, album, year, title, trackNumber, removeEmbeddedArtwork = false,
 }) {
   await execFileAsync(resolvePlaywrightPython(process.env), [
-    '-c', RETAG_SCRIPT, trackPath, artist, album, String(year), title, String(trackNumber),
+    '-c', RETAG_SCRIPT, trackPath, trackArtist, albumArtist, album, String(year), title,
+    String(trackNumber),
     removeEmbeddedArtwork ? '1' : '0',
   ], { encoding: 'utf8', windowsHide: true });
 }
 
 export async function createWatchedAlbumFixture(options = {}) {
   const mediaRoot = resolveWritableFixtureMediaRoot(process.env);
-  const ownedRoot = assertOwnedPath(mediaRoot, path.join(mediaRoot, 'cases', 'watcher-reconciliation'));
+  const ownedRoot = watcherOwnedRoot(mediaRoot, options.fixtureDirectory);
   try {
     return await buildWatchedAlbumFixture(options);
   } catch (originalFailure) {
@@ -103,12 +122,15 @@ export async function createWatchedAlbumFixture(options = {}) {
 
 async function buildWatchedAlbumFixture({
   artist = 'Watcher Reconciliation Artist',
+  trackArtist = artist,
+  albumArtist = artist,
   album = 'Watcher Reconciliation Album',
   year = 2004,
   removeEmbeddedArtwork = false,
+  fixtureDirectory = 'watcher-reconciliation',
 } = {}) {
   const mediaRoot = resolveWritableFixtureMediaRoot(process.env);
-  const ownedRoot = assertOwnedPath(mediaRoot, path.join(mediaRoot, 'cases', 'watcher-reconciliation'));
+  const ownedRoot = watcherOwnedRoot(mediaRoot, fixtureDirectory);
   const albumDirectory = assertOwnedPath(mediaRoot, path.join(ownedRoot, artist, album));
   if (fs.existsSync(ownedRoot)) fs.rmSync(ownedRoot, { recursive: true });
   fs.mkdirSync(albumDirectory, { recursive: true });
@@ -122,7 +144,8 @@ async function buildWatchedAlbumFixture({
       const destination = assertOwnedPath(mediaRoot, path.join(directory, filename));
       fs.copyFileSync(source, destination);
       await retag(destination, {
-        artist,
+        trackArtist,
+        albumArtist,
         album: albumName,
         year: albumYear,
         title,
@@ -148,7 +171,8 @@ async function buildWatchedAlbumFixture({
     async renameTrack(index, title) {
       const track = tracks[index];
       await retag(track.path, {
-        artist, album, year, title, trackNumber: index + 1, removeEmbeddedArtwork,
+        trackArtist, albumArtist, album, year, title, trackNumber: index + 1,
+        removeEmbeddedArtwork,
       });
       track.title = title;
     },

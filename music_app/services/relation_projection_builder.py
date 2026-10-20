@@ -38,6 +38,10 @@ _ARTIST_PUNCT_TRANSLATION = str.maketrans(
         "`": "'",
     }
 )
+_EXPLICIT_COLLABORATION_RE = re.compile(
+    r"\s+(?:feat\.?|featuring|with|vs|x)\s+",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -415,6 +419,11 @@ def _build_alias_views(
     artist_counts: Counter[str] = Counter()
     normalized_buckets: dict[str, list[str]] = defaultdict(list)
     container_to_artists: dict[tuple[str, tuple[str, ...]], set[str]] = defaultdict(set)
+    structured_collaboration_names = {
+        album.album_artist
+        for album in albums
+        if len(set(album.artists) - {album.album_artist}) >= 2
+    }
     for album in albums:
         candidates = list(dict.fromkeys((album.album_artist, *album.artists)))
         containers = {
@@ -495,7 +504,14 @@ def _build_alias_views(
                     solo_candidates[normalized] = canonical_artist
         solo_keys = set(solo_candidates)
         for artist in artists:
-            if not artist or _is_va_name(artist) or not _looks_like_collaboration(artist):
+            if (
+                not artist
+                or _is_va_name(artist)
+                or (
+                    artist not in structured_collaboration_names
+                    and not _EXPLICIT_COLLABORATION_RE.search(artist)
+                )
+            ):
                 continue
             matched = _contains_single_base(_normalize_key(artist), solo_keys)
             if matched:

@@ -16,6 +16,12 @@ const WATCHER_COVER_TARGET = Object.freeze({
   album: 'Watcher Automatic Cover Album',
   year: '2006',
 });
+const PUNCTUATION_BAND_TARGET = Object.freeze({
+  artist: 'Fire',
+  trackArtist: 'Fire & Ash',
+  album: 'Watcher Punctuation Identity',
+  year: 2007,
+});
 
 async function viewResponseHasAlbumTrackCount(response, albumName, expectedCount) {
   if (!response.ok() || new URL(response.url()).pathname !== '/view-data') return false;
@@ -239,6 +245,84 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
     originalFailure = error;
   } finally {
     testArtifacts.queueJsonAttachment('watcher-latency-samples.json', latencySamples);
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+test('FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity', {
+  tag: '@area:gallery-search',
+}, async ({
+  appBarActions,
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  navigationPanelActions,
+  searchToolbarActions,
+  stepLogger,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add album whose track artist is one punctuation-bearing band', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      fixture = await createWatchedAlbumFixture({
+        artist: PUNCTUATION_BAND_TARGET.artist,
+        trackArtist: PUNCTUATION_BAND_TARGET.trackArtist,
+        albumArtist: PUNCTUATION_BAND_TARGET.artist,
+        album: PUNCTUATION_BAND_TARGET.album,
+        year: PUNCTUATION_BAND_TARGET.year,
+        fixtureDirectory: 'watcher-punctuation-identity',
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+    });
+
+    await stepLogger.step('Expose one intact band identity and no punctuation fragment', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await expect.poll(
+        () => navigationPanelActions.readSidebarArtistLabelCount(
+          PUNCTUATION_BAND_TARGET.trackArtist,
+        ),
+        { timeout: 60000, intervals: [250, 500, 1000] },
+      ).toBe(1);
+      expect(await navigationPanelActions.readSidebarArtistLabelCount('Ash')).toBe(0);
+
+      await searchToolbarActions.search(PUNCTUATION_BAND_TARGET.trackArtist, {
+        submitWithEnter: true,
+      });
+      await searchToolbarActions.waitForQuery(PUNCTUATION_BAND_TARGET.trackArtist);
+      await galleryActions.waitForAlbumVisible(PUNCTUATION_BAND_TARGET.album, 60000);
+    });
+
+    await stepLogger.step('Keep the identity stable after application restart', async () => {
+      await managedAppLifecycle.restart();
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await expect.poll(
+        () => navigationPanelActions.readSidebarArtistLabelCount(
+          PUNCTUATION_BAND_TARGET.trackArtist,
+        ),
+        { timeout: 60000, intervals: [250, 500, 1000] },
+      ).toBe(1);
+      expect(await navigationPanelActions.readSidebarArtistLabelCount('Ash')).toBe(0);
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
     if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
     else if (originalFailure) throw originalFailure;
   }

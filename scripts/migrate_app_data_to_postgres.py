@@ -2039,23 +2039,14 @@ def _attached_track_artist_names(track_artist_name: str | None, owner_name: str 
     if _local_inventory_key(artist_name) == _local_inventory_key(owner):
         return [owner]
     match = re.match(
-        r"^(?P<owner>.+?)(?:\s+(?:feat\.?|featuring|with|vs|x)\s+|\s*&\s*|/|;|,\s*)(?P<featured>.+)$",
+        r"^(?P<owner>.+?)\s+(?:feat\.?|featuring|with|vs|x)\s+(?P<featured>.+)$",
         artist_name,
         re.IGNORECASE,
     )
     if match is None or _local_inventory_key(match.group("owner")) != _local_inventory_key(owner):
         return [artist_name]
-    return _deduped_artist_names([owner, *_split_featured_member_names(match.group("featured"))])
-
-
-def _split_featured_member_names(value: object) -> list[str]:
-    names: list[str] = []
-    for part in re.split(r"\s+(?:and|и)\s+|(?:\s*&\s*)|/|;|,", str(value or "")):
-        name = str(part or "").strip()
-        if not name:
-            continue
-        names.append(name)
-    return names
+    featured = re.sub(r"(?<=\d)\s*/\s*(?=\d)", "/", match.group("featured").strip())
+    return _deduped_artist_names([owner, featured])
 
 
 def _deduped_artist_names(values: list[object]) -> list[str]:

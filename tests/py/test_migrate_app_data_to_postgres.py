@@ -79,6 +79,44 @@ def _load_script_module():
     return module
 
 
+@pytest.mark.parametrize(
+    ("track_artist", "album_owner"),
+    [
+        ("Fire & Ash", "Fire"),
+        ("To/Die/For", "To"),
+        ("Чиж & Co", "Чиж"),
+    ],
+)
+def test_legacy_migration_does_not_split_punctuation_only_band_names(
+    track_artist,
+    album_owner,
+):
+    module = _load_script_module()
+
+    assert module._attached_track_artist_names(track_artist, album_owner) == [track_artist]
+
+
+@pytest.mark.parametrize(
+    ("track_artist", "album_owner", "featured_band"),
+    [
+        ("Owner feat. Fire & Ash", "Owner", "Fire & Ash"),
+        ("Owner feat. To/Die/For", "Owner", "To/Die/For"),
+        ("Owner feat. Чиж & Co", "Owner", "Чиж & Co"),
+    ],
+)
+def test_legacy_migration_keeps_featured_band_credit_intact(
+    track_artist,
+    album_owner,
+    featured_band,
+):
+    module = _load_script_module()
+
+    assert module._attached_track_artist_names(track_artist, album_owner) == [
+        album_owner,
+        featured_band,
+    ]
+
+
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")

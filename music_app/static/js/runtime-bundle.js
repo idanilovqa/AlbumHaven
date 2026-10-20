@@ -1428,6 +1428,91 @@ function artistLovedLaunchIsCurrent(launch) {
   return Boolean(receipt && receipt.generation === artistLovedTransportGeneration() && receipt.epoch === artistLovedReadEpoch
     && (!receipt.readScope || galleryReadScopeIsCurrent(receipt.readScope)));
 }
+// Top launches share the existing response read lifetime, never Loved grants.
+const artistListenThroughLaunchReceipts = new WeakMap();
+function artistListenThroughDescriptor(value) {
+  const fields = (object, keys) => {
+    if (!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).length !== keys.length) return null;
+    const descriptors = Object.getOwnPropertyDescriptors(object);
+    return keys.every(key => descriptors[key] && Object.hasOwn(descriptors[key], 'value')) ? descriptors : null;
+  };
+  const outer = fields(value, ['context_ref', 'artist_ref', 'artist_scope']);
+  if (!outer) return null;
+  const inner = fields(outer.artist_scope.value, ['root_artist_id', 'mode']);
+  if (!inner) return null;
+  const stamp = outer.context_ref.value, artist = outer.artist_ref.value, root = inner.root_artist_id.value, mode = inner.mode.value;
+  if (typeof stamp !== 'string' || stamp.length !== 64 || !/^[0-9a-f]{64}$/.test(stamp)
+    || typeof artist !== 'string' || !artist.trim() || typeof root !== 'string' || root.trim() !== root
+    || !/^[1-9][0-9]{0,18}$/.test(root) || root.length === 19 && root > '9223372036854775807' || mode !== 'artist') return null;
+  return {context_ref: stamp, artist_ref: artist, artist_scope: {root_artist_id: root, mode}};
+}
+function artistListenThroughDescriptorMatches(value, expected) {
+  const actual = artistListenThroughDescriptor(value);
+  return Boolean(actual && actual.context_ref === expected.context_ref && actual.artist_ref === expected.artist_ref
+    && actual.artist_scope.root_artist_id === expected.artist_scope.root_artist_id && actual.artist_scope.mode === expected.artist_scope.mode);
+}
+function artistListenThroughScopeMatches(scope, descriptor, generation) {
+  const shell = document.getElementById('app-shell');
+  return Boolean(scope && shell && scope.context === descriptor.context_ref && scope.stamp === descriptor.context_ref
+    && scope.generation === generation && scope.transport === window.AlbumHavenPrivateUITransport
+    && scope.actor === String(shell.dataset?.nativeAccountId || '')
+    && scope.library === String(shell.dataset?.nativeLibraryId || '')
+    && scope.stamp === String(shell.dataset?.privateUiContext || ''));
+}
+function normalizeRuntimeArtistListenThroughLaunch(value, stamp, anchor, epoch = artistLovedReadEpoch) {
+  try {
+    const descriptor = artistListenThroughDescriptor(value), entryEpoch = artistLovedReadEpoch;
+    if (!descriptor || descriptor.context_ref !== stamp || descriptor.artist_ref !== anchor
+      || typeof captureGalleryReadScope !== 'function' || typeof galleryReadScopeIsCurrent !== 'function') return null;
+    const prior = artistListenThroughLaunchReceipts.get(value), generation = artistLovedTransportGeneration();
+    if (generation === null || generation === undefined || prior && (prior.generation !== generation || prior.epoch !== epoch
+      || !artistListenThroughDescriptorMatches(value, prior.launch))) return null;
+    const readScope = prior?.readScope || captureGalleryReadScope();
+    if (!artistListenThroughScopeMatches(readScope, descriptor, generation)
+      || artistLovedTransportGeneration() !== generation || !galleryReadScopeIsCurrent(readScope)
+      || artistLovedTransportGeneration() !== generation || artistLovedReadEpoch !== entryEpoch
+      || !artistListenThroughScopeMatches(readScope, descriptor, generation)
+      || !artistListenThroughDescriptorMatches(value, descriptor)) return null;
+    if (prior) return prior.launch;
+    const launch = Object.freeze({...descriptor, artist_scope: Object.freeze(descriptor.artist_scope)});
+    const receipt = Object.freeze({generation, epoch, readScope, launch});
+    artistListenThroughLaunchReceipts.set(value, receipt); artistListenThroughLaunchReceipts.set(launch, receipt);
+    return launch;
+  } catch {return null;}
+}
+function artistListenThroughLaunchIsCurrent(launch) {
+  try {
+    const receipt = launch && artistListenThroughLaunchReceipts.get(launch);
+    if (!receipt || typeof captureGalleryReadScope !== 'function' || typeof galleryReadScopeIsCurrent !== 'function'
+      || receipt.epoch !== artistLovedReadEpoch || !artistListenThroughDescriptorMatches(launch, receipt.launch)) return false;
+    const generation = artistLovedTransportGeneration();
+    if (generation === null || generation === undefined || receipt.generation !== generation || !galleryReadScopeIsCurrent(receipt.readScope)) return false;
+    return artistLovedTransportGeneration() === generation && receipt.epoch === artistLovedReadEpoch
+      && artistListenThroughScopeMatches(receipt.readScope, receipt.launch, generation)
+      && artistListenThroughDescriptorMatches(launch, receipt.launch);
+  } catch {return false;}
+}
+function replaceArtistListenThroughViewLaunches(view, source, {local = false, epoch = artistLovedReadEpoch} = {}) {
+  const candidate = source?.artist_listen_through_context_ref;
+  const stamp = typeof candidate === 'string' && candidate.length === 64 && /^[0-9a-f]{64}$/.test(candidate)
+    && !view.private_search && !['playlists', 'album_tops', 'home'].includes(view.surface?.active || view.surface_request) ? candidate : null;
+  view.artist_listen_through_context_ref = stamp;
+  const normalize = (launch, anchor) => {
+    if (local && !artistListenThroughLaunchIsCurrent(launch)) return null;
+    return normalizeRuntimeArtistListenThroughLaunch(launch, stamp, anchor, epoch);
+  };
+  for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups', 'related_filter_base_primary_groups', 'related_filter_base_family_groups']) {
+    if (!Array.isArray(view[key])) continue;
+    const admitted = local || Array.isArray(source?.[key]);
+    view[key] = view[key].map(group => ({...group, artist_listen_through_launch: admitted ? normalize(group?.artist_listen_through_launch, group?.artist) : null}));
+  }
+  if (view.artist_page) {
+    const launch = local ? view.artist_page.artist_listen_through_launch : source?.artist_page?.artist_listen_through_launch;
+    view.artist_page = {...view.artist_page, artist_listen_through_launch: normalize(launch, view.artist_page.artist_ref)};
+  }
+  return view;
+}
+
 function replaceArtistLovedViewLaunches(view, source, {local = false, epoch = artistLovedReadEpoch} = {}) {
   const stamp = typeof source?.artist_loved_context_ref === 'string' && /^[0-9a-f]{64}$/.test(source.artist_loved_context_ref)
     && !view.private_search && !['playlists', 'album_tops', 'home'].includes(view.surface?.active || view.surface_request)
@@ -1450,7 +1535,7 @@ function replaceArtistLovedViewLaunches(view, source, {local = false, epoch = ar
   return view;
 }
 
-function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = artistLovedReadEpoch} = {}) {
+function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = artistLovedReadEpoch, artistListenThroughLocal = false} = {}) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
     : {};
@@ -1459,7 +1544,7 @@ function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = 
     ...(isRuntimePlainObject(fallbackView) ? fallbackView : {}),
   };
   const source = isRuntimePlainObject(payload) ? payload : {};
-  if (source.private_search === true) return normalizePrivateSearchNavigation(source, base);
+  if (source.private_search === true) return replaceArtistListenThroughViewLaunches(normalizePrivateSearchNavigation(source, base), {}, {epoch: artistLovedEpoch});
   // A subsequent ordinary response must not inherit private routing from its
   // fallback view. Its ordinary normalizer and response fields remain intact.
   if (base.private_search === true) {
@@ -1626,7 +1711,8 @@ function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = 
     delete normalizedView.search_context;
   }
   const localLovedPatch = Object.keys(source).every(key => ['gallery_display_mode', 'gallery_scale_percent'].includes(key));
-  return replaceArtistLovedViewLaunches(normalizedView, localLovedPatch ? base : source, {local: localLovedPatch, epoch: artistLovedEpoch});
+  replaceArtistLovedViewLaunches(normalizedView, localLovedPatch ? base : source, {local: localLovedPatch, epoch: artistLovedEpoch});
+  return replaceArtistListenThroughViewLaunches(normalizedView, localLovedPatch ? base : source, {local: localLovedPatch || artistListenThroughLocal, epoch: artistLovedEpoch});
 }
 
 function buildSelectedArtistChronologicalArtistGroups(primaryGroups = [], familyGroups = []) {
@@ -1964,7 +2050,7 @@ function applyViewPayload(payload, options = {}) {
     : sidebarReconciledPayload;
   const nextLovedEpoch = artistLovedReadEpoch + ((!options.rootGalleryContinuation && !options.localArtistLovedTransition
     || artistLovedReadScope({...mountedPreviousView, ...nextPayload}) !== artistLovedReadScope(mountedPreviousView)) ? 1 : 0);
-  const normalizedNextView = normalizeViewPayload(nextPayload, previousView, {artistLovedEpoch: nextLovedEpoch});
+  const normalizedNextView = normalizeViewPayload(nextPayload, previousView, {artistLovedEpoch: nextLovedEpoch, artistListenThroughLocal: options.localArtistLovedTransition === true});
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
@@ -2019,10 +2105,18 @@ function applyViewPayload(payload, options = {}) {
     // be retired. Never mutate a group still referenced by the previous view.
     for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
       const groups = mountedPreviousView[key];
-      nextView[key] = Array.isArray(groups) && groups.some(group => group?.artist_loved_launch != null)
-        ? groups.map(group => group?.artist_loved_launch != null ? {...group, artist_loved_launch: null} : group)
+      nextView[key] = Array.isArray(groups) && groups.some(group => group?.artist_loved_launch != null || group?.artist_listen_through_launch != null)
+        ? groups.map(group => group?.artist_loved_launch != null || group?.artist_listen_through_launch != null
+          ? {...group, ...(group.artist_loved_launch != null ? {artist_loved_launch: null} : {}),
+            ...(group.artist_listen_through_launch != null ? {artist_listen_through_launch: null} : {})} : group)
         : groups;
     }
+    for (const key of ['related_filter_base_primary_groups', 'related_filter_base_family_groups']) {
+      if (Array.isArray(nextView[key])) nextView[key] = nextView[key].map(group => group?.artist_listen_through_launch != null
+        ? {...group, artist_listen_through_launch: null} : group);
+    }
+    nextView.artist_listen_through_context_ref = null;
+    if (nextView.artist_page) nextView.artist_page = {...nextView.artist_page, artist_listen_through_launch: null};
     nextView.related_artists = mountedPreviousView.related_artists;
     nextView.related_filter_artists = mountedPreviousView.related_filter_artists;
     nextView.primary_filter_active = Boolean(mountedPreviousView.primary_filter_active);
@@ -2134,6 +2228,7 @@ function mergeViewPayload(patch, options = {}) {
   const local = Object.keys(nextPatch).every(key => ['gallery_display_mode', 'gallery_scale_percent'].includes(key));
   return applyViewPayload({ ...baseView, ...nextPatch,
     artist_loved_context_ref: local ? baseView.artist_loved_context_ref : nextPatch.artist_loved_context_ref ?? null,
+    artist_listen_through_context_ref: local ? baseView.artist_listen_through_context_ref : nextPatch.artist_listen_through_context_ref ?? null,
   }, {...options, localArtistLovedTransition: local || options.localArtistLovedTransition === true});
 }
 
@@ -2199,6 +2294,7 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
 
   return mergeViewPayload({
     artist_loved_context_ref: currentView.artist_loved_context_ref,
+    artist_listen_through_context_ref: currentView.artist_listen_through_context_ref,
     related_filter_artists: [...activeArtists],
     primary_filter_active: nextPrimaryFilterActive,
     primary_artist_groups: nextPrimaryGroups,
@@ -4775,7 +4871,7 @@ function buildGalleryDividerHtml(config = {}) {
 }
 
 function buildFamilyArtistHeaderHtml(config = {}) {
-  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2><button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${config.showInfo === false ? '' : `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`}<span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildGalleryRatingHtml(config = {}) {
@@ -8251,7 +8347,10 @@ function updateGalleryMainChrome() {
   const renderedView = state.view, renderedRequestId = state.ui?.activeViewRequestId;
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
-  if (!bar || !scroll) return;
+  if (!bar || !scroll) {
+    if (typeof syncAlbumTopArtistCreationContext === 'function') syncAlbumTopArtistCreationContext();
+    return;
+  }
   syncGalleryBarSearchVisibility();
   updateGalleryMainControls();
   const model = getFilteredGalleryMainModel();
@@ -8335,6 +8434,8 @@ function updateGalleryMainChrome() {
     const active = galleryMainSurfaceController?.current?.();
     if (active?.surface === panel) positionArtistFamilyPanelEnvelope(panel, active.anchor);
   }
+  if (state.view === renderedView && state.ui?.activeViewRequestId === renderedRequestId
+    && typeof syncAlbumTopArtistCreationContext === 'function') syncAlbumTopArtistCreationContext();
 }
 
 function transitionGalleryMain(action) {
@@ -19938,8 +20039,21 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       && galleryReadScopeIsCurrent(readScope)
       && state.ui.activeViewRequestId === requestId
       && (settledApplied || requestOwnsCurrentViewState(requestId, requestViewStateRevision))) {
-      try {requestOptions.onSettled?.({applied: settledApplied, error: settledError, requestId});}
-      catch (_error) { /* An observer cannot change the request outcome. */ }
+      // Successful rendering ran while busy was still held. Publish the
+      // newly actionable Artist origin only from this existing terminal owner.
+      const terminalView = state.view, terminalRevision = readViewStateRevision();
+      try {if (typeof syncAlbumTopArtistCreationContext === 'function') syncAlbumTopArtistCreationContext();}
+      catch (_error) { /* Presentation observers never own request completion. */ }
+      // A subscriber may synchronously start another request or change scope.
+      // Its successor owns the slot; do not deliver the old settlement afterward.
+      if (!cleanupWorkRetired && requestStarted && state.ui.activeViewRequestId === requestId
+        && !controller?.signal.aborted && galleryReadScopeIsCurrent(readScope)
+        && state.ui.activeViewRequestId === requestId && state.view === terminalView
+        && readViewStateRevision() === terminalRevision
+        && (settledApplied || requestOwnsCurrentViewState(requestId, requestViewStateRevision))) {
+        try {requestOptions.onSettled?.({applied: settledApplied, error: settledError, requestId});}
+        catch (_error) { /* An observer cannot change the request outcome. */ }
+      }
     }
     } finally {
       if (albumPreferenceFocus && albumPreferenceFocus.owner === null) albumPreferenceFocus.dispose();
@@ -39057,12 +39171,13 @@ const resourceGalleryHosts = new WeakMap();
 // Flat collection galleries share native card sizing without borrowing the
 // Artist index, viewport, history, or renderer. Family keeps its one virtualizer.
 class ResourceGalleryHost {
-  constructor({host, readSnapshot, renderCard, onAction, isCurrent}) {
+  constructor({host, readSnapshot, renderCard, renderSeparator, onAction, isCurrent}) {
     if (!host?.ownerDocument || typeof readSnapshot !== 'function'
       || typeof renderCard !== 'function' || typeof isCurrent !== 'function') {
       throw new TypeError('A scoped native Gallery host and owners are required.');
     }
     this.host = host; this.readSnapshot = readSnapshot; this.renderCard = renderCard;
+    this.renderSeparator = renderSeparator;
     this.onAction = onAction; this.isCurrent = isCurrent; this.cards = new Map(); this.elements = new WeakMap();
     this.snapshot = null; this.disposed = false; this.revision = 0; this.committedRevision = 0; this.frame = 0;
     this.geometry = {columns: 1, cardTrackWidth: 0}; this.preserveWidth = false;
@@ -39084,7 +39199,9 @@ class ResourceGalleryHost {
       for (let element = action; element && element !== this.root; element = element.parentElement) {
         const card = this.elements.get(element);
         if (card) {
-          if (this.current(snapshot) && this.committedRevision === this.revision) this.onAction?.(card.row, event, snapshot);
+          if (card.kind === 'album' && this.current(snapshot) && this.committedRevision === this.revision) {
+            this.onAction?.(card.row, event, snapshot);
+          }
           return;
         }
       }
@@ -39126,6 +39243,12 @@ class ResourceGalleryHost {
       || new Set(rows.map(row => row.key)).size !== rows.length) {
       throw new TypeError('Native Gallery requires unique stable row keys.');
     }
+    const kinds = rows.map(row => Object.prototype.hasOwnProperty.call(row, 'kind') ? row.kind : 'album');
+    if (kinds.some((kind, index) => !['album', 'separator'].includes(kind)
+      || kind === 'separator' && typeof this.renderSeparator !== 'function'
+      || this.cards.has(rows[index].key) && this.cards.get(rows[index].key).kind !== kind)) {
+      throw new TypeError('Native Gallery requires valid, stable row kinds and their renderer.');
+    }
     this.snapshot = snapshot; this.preserveWidth = false; const revision = ++this.revision;
     const current = () => this.current(snapshot, revision), wanted = new Set(rows.map(row => row.key));
     const focused = this.root.contains(this.host.ownerDocument.activeElement) ? this.host.ownerDocument.activeElement : null;
@@ -39139,17 +39262,19 @@ class ResourceGalleryHost {
         if (!current()) return false;
         let card = this.cards.get(row.key);
         if (!card) {
-          const owner = this.renderCard(row, snapshot);
+          const owner = kinds[index] === 'separator'
+            ? this.renderSeparator(row, snapshot) : this.renderCard(row, snapshot);
           if (!current()) {owner?.dispose?.(); return false;}
           if (!owner?.element || owner.element.ownerDocument !== this.host.ownerDocument
             || owner.element.parentNode || typeof owner.update !== 'function') {
             owner?.dispose?.(); throw new TypeError('Gallery renderer must return a detached native card owner.');
           }
-          card = {row, owner}; this.cards.set(row.key, card); this.elements.set(owner.element, card);
+          card = {row, owner, kind: kinds[index]}; this.cards.set(row.key, card); this.elements.set(owner.element, card);
         } else {
           card.row = row; card.owner.update(row, snapshot);
           if (!current()) return false;
         }
+        if (card.kind === 'separator') card.owner.element.style.gridColumn = '1 / -1';
         if (this.root.children[index] !== card.owner.element) {
           this.root.insertBefore(card.owner.element, this.root.children[index] || null);
         }
@@ -39180,7 +39305,8 @@ class ResourceGalleryHost {
       columns: snapshot.mobileColumns ?? 3, gap,
     });
     if (!this.current(snapshot, revision)) return;
-    const geometry = resolveGalleryColumnGeometry({width, columnGap: gap, itemCount: this.cards.size,
+    const itemCount = [...this.cards.values()].filter(card => card.kind === 'album').length;
+    const geometry = resolveGalleryColumnGeometry({width, columnGap: gap, itemCount,
       selectedCardWidth: resolveGalleryCardWidth(snapshot.layoutConfig, snapshot.galleryScalePercent ?? DEFAULT_GALLERY_SCALE_PERCENT),
       columns: this.geometry.columns, cardTrackWidth: this.geometry.cardTrackWidth,
       preserveCardTrackWidth: this.preserveWidth, mobileGeometry});
@@ -50124,7 +50250,7 @@ const TopPlaybackRuntime = (() => {
       if (!current(entry) || entry.starting || engine.pendingPromotion || engine.pendingSeek) return false;
       const before = entry.source.snapshot();
       if (!options || typeof options !== 'object'
-        || options.mode !== undefined && !['in_order', 'random_albums', 'random_songs'].includes(options.mode)
+        || options.mode !== undefined && !['in_order', 'random_albums', 'random_songs', 'popular_songs'].includes(options.mode)
         || options.stopAfterAlbum !== undefined && typeof options.stopAfterAlbum !== 'boolean') return false;
       if ((options.mode === undefined || options.mode === before.mode)
         && (options.stopAfterAlbum === undefined || options.stopAfterAlbum === before.stopAfterAlbum)) return true;
@@ -54179,6 +54305,10 @@ window.dispatchEvent(new Event('albumhaven:playlist-runtime-ready'));
 const AlbumTopsRuntime = (() => {
   const listeners = new Set();
   const pendingListeners = new Set();
+  const artistListeners = new Set(), retiredArtistLaunches = new WeakSet();
+  let artistOrigin = null, artistSyncing = false, artistNotifying = false, artistNotifyAgain = false;
+  let artistRuntime = null, releaseArtistRuntime = null;
+  let artistHistoryDepth = 0, artistHistoryQueued = false;
   let snapshotDepth = 0, notificationQueued = false;
   let current = null, lastView = null, viewVersion = 0, confirmation = null, draftNavigation = null;
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
@@ -54262,6 +54392,7 @@ const AlbumTopsRuntime = (() => {
     }
     if (host) host.hidden = !next.visible;
     document.getElementById('shell-main-surface')?.classList.toggle('has-react-album-tops', next.visible);
+    syncArtistCreation();
     if (current && Object.keys(next).every(key => current[key] === next[key])) return current;
     current = Object.freeze(next);
     if (snapshotDepth) {
@@ -54290,7 +54421,7 @@ const AlbumTopsRuntime = (() => {
     const snapshot = sync();
     return snapshot.authenticated && snapshot.inLibrary && snapshot.scopeKey === scopeKey;
   };
-  async function navigate({top_ref = null, isCurrent = () => true, expectedViewRequestId, onStart, onSettled} = {}) {
+  async function navigateOwned({top_ref = null, isCurrent = () => true, expectedViewRequestId, onStart, onSettled} = {}, artistHandoff = null) {
     const start = sync();
     if (!acceptsPrivateScope(start.scopeKey) || top_ref !== null && !uuid(top_ref) || !isCurrent()
       || expectedViewRequestId !== undefined && start.viewRequestId !== expectedViewRequestId) return false;
@@ -54305,7 +54436,17 @@ const AlbumTopsRuntime = (() => {
         const ownsDispatch = () => isCurrent() && acceptsPrivateScope(start.scopeKey)
           && sync().viewVersion === start.viewVersion && state.view === priorView
           && sync().viewRequestId === actualRequestId;
-        if (requestId !== null || !ownsDispatch()) return false;
+        if (artistHandoff) {
+          // The native owner has advanced its request slot. The old child
+          // receipt cannot be consulted until this exact reservation transfers.
+          const exactDispatch = () => acceptsPrivateScope(start.scopeKey)
+            && sync().viewVersion === start.viewVersion && state.view === priorView
+            && state.ui.activeViewRequestId === actualRequestId;
+          if (requestId !== null || !exactDispatch() || artistHandoff.offerRequest(actualRequestId) !== true
+            || !exactDispatch() || !artistHandoff.isCurrent() || !ownsDispatch()) {
+            artistHandoff.retire(); return false;
+          }
+        } else if (requestId !== null || !ownsDispatch()) return false;
         requestId = actualRequestId;
         onStart?.();
         return ownsDispatch();
@@ -54332,6 +54473,7 @@ const AlbumTopsRuntime = (() => {
     };
     return (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(open)) || open();
   }
+  const navigate = options => navigateOwned(options, null);
   async function confirm(message, options = {}) {
     const start = sync();
     if (!start.visible || !start.authenticated || typeof showAppConfirmDialog !== 'function' || activeAppConfirmDialog) return false;
@@ -54345,9 +54487,284 @@ const AlbumTopsRuntime = (() => {
         && next.scopeKey === start.scopeKey && next.viewVersion === start.viewVersion;
     } finally {if (confirmation === owner) confirmation = null;}
   }
+
+  // Artist creation has one presentation lease. Server mutation authority stays
+  // with the existing Top controller and provider; this owns only native UI.
+  function notifyArtistCreation() {
+    if (artistNotifying) {artistNotifyAgain = true; return;}
+    artistNotifying = true;
+    try {do {
+      artistNotifyAgain = false;
+      for (const listener of [...artistListeners]) if (artistListeners.has(listener)) {
+        try {listener();} catch { /* A consumer cannot suppress retirement. */ }
+      }
+    } while (artistNotifyAgain);} finally {artistNotifying = false;}
+  }
+  const artistRequest = () => Number(state.ui?.activeViewRequestId || 0);
+  const artistRevision = () => Number(state.ui?.viewStateRevision || 0);
+  const safeArtistCheck = check => {try {return check?.() === true;} catch {return false;}};
+  function artistAdmission() {
+    if (state.busy || state.ui?.pendingViewTransition || activeAppFormDialog
+      || typeof galleryArtistLovedHeaderContext !== 'function'
+      || typeof artistListenThroughLaunchIsCurrent !== 'function') return null;
+    const view = state.view, revision = artistRevision(), requestId = artistRequest();
+    const identity = privateIdentity(), context = galleryArtistLovedHeaderContext();
+    const header = document.querySelector('[data-gallery-bar-instance="gallery"]');
+    if (!identity.authenticated || identity.shell?.hidden === true || !header || header.hidden
+      || view.private_search || !context) return null;
+    const runtime = window.AlbumHavenArtistPageRuntime, host = runtime?.snapshot();
+    let page = null, group = null, launch = null;
+    if (host?.sessionId) {
+      if (!host.mounted || !host.actionable || context.kind !== 'artist-page') return null;
+      page = view.artist_page; launch = page?.artist_listen_through_launch;
+      if (host.artistRef !== page?.artist_ref) return null;
+    } else if (context.kind === 'family' || context.kind === 'single-artist') {
+      page = view.artist_page;
+      if (page?.artist_ref !== view.selected_artist) return null;
+      launch = page?.artist_listen_through_launch;
+    } else if (context.kind === 'artist') {
+      group = context.sourceSection?.group; launch = group?.artist_listen_through_launch;
+      if (!group || group.artist !== launch?.artist_ref || group.display_artist_key && group.display_artist_key !== group.artist) return null;
+    } else return null;
+    if (!launch || retiredArtistLaunches.has(launch) || launch.context_ref !== view.artist_listen_through_context_ref
+      || launch.artist_scope?.mode !== 'artist' || !artistListenThroughLaunchIsCurrent(launch)) return null;
+    if (state.view !== view || artistRevision() !== revision || artistRequest() !== requestId
+      || privateIdentity().scopeKey !== identity.scopeKey) return null;
+    return {view, revision, requestId, scopeKey: identity.scopeKey, header, runtime,
+      sessionId: host?.sessionId ?? null, artistEntryKey: host?.entryKey, artistEntryUrl: host?.entryUrl,
+      page, group, launch, stamp: view.artist_listen_through_context_ref, kind: context.kind,
+      entryKey: window.history.state?.albumHavenNavigationPosition, entryUrl: window.location.href};
+  }
+  function createArtistOrigin(captured) {
+    let phase = 'idle', form = null, nativeForm = null, child = null, attempt = null, acknowledged = null;
+    let continuityRequest = captured.requestId, origin;
+    const fixed = () => phase !== 'retired' && artistOrigin === origin
+      && window.AlbumHavenAlbumTopsRuntime === AlbumTopsRuntime && state.view === captured.view
+      && artistRevision() === captured.revision && captured.header.isConnected !== false
+      && document.querySelector('[data-gallery-bar-instance="gallery"]') === captured.header
+      && window.AlbumHavenArtistPageRuntime === captured.runtime;
+    const base = () => {
+      if (!fixed()) return false;
+      const identity = privateIdentity(), host = captured.runtime?.snapshot();
+      const finalIdentity = privateIdentity();
+      return fixed() && finalIdentity.scopeKey === identity.scopeKey && finalIdentity.authenticated && identity.authenticated && identity.shell?.hidden !== true && identity.scopeKey === captured.scopeKey
+        && (captured.sessionId ? host?.sessionId === captured.sessionId && host.retained === true
+          && host.entryKey === captured.artistEntryKey && host.entryUrl === captured.artistEntryUrl : !host?.sessionId);
+    };
+    const parent = () => {
+      if (!base() || artistRequest() !== continuityRequest || state.busy || state.ui?.pendingViewTransition) return false;
+      if (captured.sessionId) {
+        const host = captured.runtime.snapshot();
+        return fixed() && host.sessionId === captured.sessionId && host.actionable === true && artistRequest() === continuityRequest;
+      }
+      return window.location.href === captured.entryUrl
+        && window.history.state?.albumHavenNavigationPosition === captured.entryKey;
+    };
+    const strict = () => {
+      if (phase !== 'idle' || !parent() || !artistListenThroughLaunchIsCurrent(captured.launch)) return false;
+      const now = galleryArtistLovedHeaderContext();
+      return base() && fixed() && artistRequest() === captured.requestId && captured.view.artist_listen_through_context_ref === captured.stamp
+        && now?.kind === captured.kind && (captured.group ? now.sourceSection?.group === captured.group
+          && captured.group.artist_listen_through_launch === captured.launch
+          : captured.view.artist_page === captured.page && captured.page.artist_listen_through_launch === captured.launch);
+    };
+    const ownerCurrent = () => {
+      if (!base()) return false;
+      if (phase === 'idle') return strict();
+      if (phase === 'recovery') return parent() && (!child || safeArtistCheck(child.isCurrent));
+      if (phase === 'child') return artistRequest() === continuityRequest && (!child || safeArtistCheck(child.isOwnerCurrent))
+        && (!nativeForm || activeAppFormDialog === nativeForm || nativeForm.isCurrentContext());
+      if (phase === 'opening') {
+        if (!attempt || attempt.retired) return false;
+        // A reserved origin stays observable during the native onStart midpoint;
+        // only offerRequest can make the new request actionable for response use.
+        return attempt.requestId === null || artistRequest() === attempt.requestId;
+      }
+      return false;
+    };
+    function retire(reason = 'disposed') {
+      if (phase === 'retired') return;
+      phase = 'retired';
+      // Ordinary pre-ack presentation departure does not revoke independently
+      // registered response evidence. Explicit dismissal and acknowledged
+      // retirement still require a fresh response before another Create.
+      if (acknowledged || !['cancelled', 'replaced'].includes(reason)) retiredArtistLaunches.add(captured.launch);
+      if (attempt) {attempt.retired = true; attempt.retiredReason = reason;}
+      child?.release(); child = null;
+      const ownedForm = form, ownedNative = nativeForm; form = null; nativeForm = null;
+      if (artistOrigin === origin) artistOrigin = null;
+      if (confirmation?.artistOrigin === origin) {
+        if (activeAppConfirmDialog?.promise === confirmation.promise) activeAppConfirmDialog.cancel({restoreFocus: false});
+        confirmation = null;
+      }
+      if (ownedNative && activeAppFormDialog === ownedNative) (ownedForm || ownedNative).close(null, {force: true, restoreFocus: false, returnToParent: false});
+      notifyArtistCreation();
+    }
+    function setPhase(next) {if (phase !== next && phase !== 'retired') {phase = next; notifyArtistCreation();}}
+    function openForm(options = {}) {
+      if (!strict() || activeAppFormDialog || typeof openReactFormDialog !== 'function') return false;
+      child = captured.runtime?.captureChildPresentation(() => base()) || null;
+      if (captured.sessionId && (!child || child.sessionId !== captured.sessionId || !safeArtistCheck(child.isCurrent))) {child?.release(); child = null; return false;}
+      // Reserve before any native mount callback can re-enter this facade.
+      phase = 'child';
+      try {
+        form = openReactFormDialog({...options,
+          onMount(host, close) {
+            nativeForm = activeAppFormDialog;
+            if (!ownerCurrent()) return;
+            options.onMount?.(host, close);
+          },
+          retainParentView: () => ownerCurrent() && (!nativeForm || nativeForm.isCurrentContext()),
+          onClose(host, closeOptions) {
+            if (phase !== 'opening') retire('cancelled');
+            options.onClose?.(host, closeOptions);
+          }}, () => ownerCurrent());
+        if (!ownerCurrent()) {retire(); return false;}
+        nativeForm = activeAppFormDialog;
+        const result = form; notifyArtistCreation();
+        if (!ownerCurrent()) {retire(); return false;}
+        return result;
+      } catch {retire(); return false;}
+    }
+    async function confirmArtist(message, options = {}) {
+      if (phase !== 'child' || !ownerCurrent() || !nativeForm || activeAppFormDialog !== nativeForm || activeAppConfirmDialog) return false;
+      const pending = {artistOrigin: origin, scopeKey: captured.scopeKey, viewVersion,
+        promise: showAppConfirmDialog({title: options.title || 'Discard Listen-through changes', message,
+          acceptLabel: options.acceptLabel || 'Discard', danger: options.danger !== false})};
+      confirmation = pending;
+      try {return await pending.promise === true && confirmation === pending && phase === 'child' && ownerCurrent()
+        && activeAppFormDialog === nativeForm;} finally {if (confirmation === pending) confirmation = null;}
+    }
+    const receiptCopy = value => value && value.action === 'create'
+      && typeof value.request_key === 'string' && value.request_key.length === 36 && uuid(value.request_key)
+      && typeof value.top_ref === 'string' && value.top_ref.length === 36 && uuid(value.top_ref)
+      && typeof value.revision === 'string' && value.revision.length <= 19 && /^[1-9][0-9]*$/.test(value.revision)
+      && String(BigInt(value.revision)) === value.revision && BigInt(value.revision) <= 9223372036854775807n
+      ? Object.freeze({action: 'create', request_key: value.request_key, top_ref: value.top_ref, revision: value.revision}) : null;
+    async function openCreatedTop(value, options = {}) {
+      const receipt = receiptCopy(value), startingPhase = phase;
+      if (!receipt || !['child', 'recovery'].includes(phase) || !ownerCurrent()
+        || !safeArtistCheck(options.isCurrent) || phase !== startingPhase || !ownerCurrent()) return false;
+      if (acknowledged && Object.keys(acknowledged).some(key => acknowledged[key] !== receipt[key])) return false;
+      if (!acknowledged) acknowledged = receipt;
+      const operation = {requestId: null, retired: false, offered: false}; attempt = operation;
+      const owns = () => attempt === operation && !operation.retired && phase === 'opening' && base();
+      const beforeDispatch = () => owns() && artistRequest() === continuityRequest
+        && (!child || safeArtistCheck(child.isOwnerCurrent));
+      const currentAttempt = () => owns() && (operation.requestId === null ? beforeDispatch() : artistRequest() === operation.requestId);
+      const handoff = {
+        offerRequest(requestId) {
+          if (operation.offered) {operation.retired = true; return false;}
+          operation.offered = true;
+          if (!Number.isSafeInteger(requestId) || requestId <= continuityRequest || !owns() || artistRequest() !== requestId) return false;
+          operation.requestId = requestId;
+          return currentAttempt();
+        },
+        isCurrent: currentAttempt,
+        retire() {operation.retired = true;},
+      };
+      setPhase('opening');
+      if (!beforeDispatch()) {retire(); return false;}
+      let settled = false;
+      try {
+        const opened = await navigateOwned({top_ref: acknowledged.top_ref, isCurrent: currentAttempt,
+          expectedViewRequestId: continuityRequest,
+          onSettled(result) {
+            if (settled || operation.requestId === null || artistRequest() !== operation.requestId) return;
+            // Applying the accepted Top legitimately replaces the source view
+            // before native settlement. Only that native success may complete
+            // an automatically replaced origin; explicit retirement stays inert.
+            if (result.opened && (!operation.retired || operation.retiredReason === 'replaced')
+              && privateIdentity().scopeKey === captured.scopeKey) {
+              settled = true;
+              retire();
+              try {options.onSettled?.({...result, recoverable: false});} catch { /* Observers cannot change navigation. */ }
+              return;
+            }
+            if (!owns()) return;
+            settled = true;
+            const terminal = () => !state.busy && !state.ui.activeViewRequestController && !state.ui.activeViewRequestUrl
+              && !state.ui.pendingViewRequest && !state.ui.pendingViewTransition && artistRequest() === operation.requestId;
+            let recoverable = result.error?.name !== 'AbortError' && terminal() && base();
+            if (recoverable && captured.sessionId) {
+              const host = captured.runtime.snapshot();
+              recoverable = host.sessionId === captured.sessionId && host.actionable === true && terminal() && base();
+            }
+            if (recoverable) {
+              continuityRequest = operation.requestId;
+              child?.release(); child = captured.runtime?.captureChildPresentation(() => base()) || null;
+              recoverable = (!captured.sessionId || child?.sessionId === captured.sessionId && safeArtistCheck(child.isCurrent))
+                && terminal() && base();
+            }
+            operation.retired = true; attempt = null; form = null; nativeForm = null;
+            if (recoverable) setPhase('recovery'); else retire();
+            try {options.onSettled?.({...result, recoverable: recoverable && phase === 'recovery' && ownerCurrent()});}
+            catch { /* Observers cannot change the sealed receipt. */ }
+          }}, handoff);
+        if (opened) {retire(); return true;}
+        if (!settled && phase !== 'retired' && attempt === operation) {
+          // A veto leaves the same native editor owned. A dispatched failure
+          // without genuine terminal settlement cannot expose Open recovery.
+          operation.retired = true; attempt = null;
+          if (!operation.offered && activeAppFormDialog === nativeForm && base()) setPhase('child'); else retire();
+        }
+        return false;
+      } catch {if (attempt === operation) retire(); return false;}
+    }
+    origin = Object.freeze({headerRoot: captured.header, artistLabel: captured.launch.artist_ref,
+      artistScope: Object.freeze({...captured.launch.artist_scope}), scopeKey: captured.scopeKey,
+      phase: () => phase, canCreate: () => safeArtistCheck(strict), isCurrent: () => safeArtistCheck(strict),
+      isOwnerCurrent: () => safeArtistCheck(ownerCurrent), openForm, confirm: confirmArtist, openCreatedTop, dispose: () => retire()});
+    return {origin, current: ownerCurrent, retire};
+  }
+  let artistLease = null;
+  function queueArtistHistoryObservation() {
+    if (artistHistoryQueued) return;
+    artistHistoryQueued = true;
+    Promise.resolve().then(() => {
+      artistHistoryQueued = false;
+      syncArtistCreation();
+    });
+  }
+  function observeTopHistory() {
+    // Native history has advanced before the mobile owner reconciles its live
+    // child chain. Keep Top state current, but use its existing snapshot queue
+    // so consumers cannot take a non-passive Artist snapshot at this midpoint.
+    artistHistoryDepth++;
+    try {snapshot();}
+    finally {
+      artistHistoryDepth--;
+      queueArtistHistoryObservation();
+    }
+  }
+  function syncArtistCreation() {
+    if (artistHistoryDepth) return artistOrigin;
+    if (artistSyncing) return artistOrigin;
+    artistSyncing = true;
+    try {
+      const runtime = window.AlbumHavenArtistPageRuntime;
+      if (runtime !== artistRuntime) {
+        releaseArtistRuntime?.(); artistRuntime = runtime;
+        releaseArtistRuntime = runtime?.subscribe?.(() => syncArtistCreation()) || null;
+      }
+      if (artistOrigin && !safeArtistCheck(artistLease?.current)) artistLease.retire('replaced');
+      if (!artistOrigin) {
+        const admission = artistAdmission();
+        if (admission) {
+          const lease = createArtistOrigin(admission); artistLease = lease; artistOrigin = lease.origin;
+          if (!safeArtistCheck(lease.current)) lease.origin.dispose(); else notifyArtistCreation();
+        }
+      }
+      return artistOrigin;
+    } finally {artistSyncing = false;}
+  }
+  const artistCreation = Object.freeze({snapshot: syncArtistCreation, subscribe(listener) {
+    artistListeners.add(listener); return () => artistListeners.delete(listener);
+  }});
+
   const components = window.AlbumHavenHomeRuntime;
   PrivateUITransport.subscribe(sync);
-  window.addEventListener('popstate', sync);
+  window.addEventListener('popstate', observeTopHistory);
   window.addEventListener('albumhaven:library-sidebar-change', sync);
   document.addEventListener('album-haven:preferences-sync', sync);
   const shell = document.getElementById('app-shell');
@@ -54375,6 +54792,7 @@ const AlbumTopsRuntime = (() => {
       describe: queue => TopPlaybackRuntime.describe(queue),
       dispose: queue => TopPlaybackRuntime.dispose(queue),
     }),
+    artistCreation,
     snapshot, sync, subscribe(listener) {
       listeners.add(listener);
       return () => {listeners.delete(listener); pendingListeners.delete(listener);};
@@ -54394,6 +54812,8 @@ const AlbumTopsRuntime = (() => {
       return () => window.removeEventListener('albumhaven:notifications-ready', listener);
     },
     galleryCardHtml: components.galleryCardHtml, artboxHtml: components.artboxHtml,
+    artistSeparatorHtml: options => buildFamilyArtistHeaderHtml(options),
+    galleryRatingHtml: options => buildGalleryRatingHtml(options),
     escapeHtml: components.escapeHtml,
     viewChooserHtml: components.viewChooserHtml, mountViewChooser: components.mountViewChooser, viewIconHtml: components.viewIconHtml,
     createGalleryHost: options => new ResourceGalleryHost(options),
@@ -54431,6 +54851,7 @@ const AlbumTopsRuntime = (() => {
     },
   });
 })();
+function syncAlbumTopArtistCreationContext() {return AlbumTopsRuntime.artistCreation.snapshot();}
 function syncAlbumTopsRuntime() {AlbumTopsRuntime.sync();}
 window.AlbumHavenAlbumTopsRuntime = AlbumTopsRuntime;
 window.dispatchEvent(new Event('albumhaven:album-tops-runtime-ready'));

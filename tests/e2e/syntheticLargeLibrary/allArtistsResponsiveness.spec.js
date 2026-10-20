@@ -3,9 +3,11 @@ import { expect, test } from '../support/performanceFixtures.js';
 import {
   buildBenchmarkValidationPayload,
   evaluateAllArtistsLocalBenchmark,
+  expectTimingBudget,
   evaluateSearchAllArtistsLocalBenchmark,
   expectPostgresLibraryBrowseTelemetry,
   measureActionTime,
+  performanceTimingBudget,
   samplePeakMemory,
   logBenchmarkTimingResults,
 } from '../helpers/index.js';
@@ -34,6 +36,13 @@ const SEARCH_CASE_ID = 'FTC-SEARCH-NAV-003A';
 const LONG_REAL_APP_ROOT_WARM_TIMEOUT_MS = 240000;
 const LONG_REAL_APP_TEST_TIMEOUT_MS = 420000;
 const SEARCH_QUERY = 'Ария';
+const ALBUM_DETAILS_BUDGETS = Object.freeze(Object.fromEntries([
+  'albumDetailsShellMs',
+  'albumDetailsOpenMs',
+  'albumDetailsCoverMs',
+].map((key) => [key, Object.freeze(
+  performanceTimingBudget(`all-artists-local-managed-chrome.${key}`),
+)])));
 const ARIA_VITALIY_DIRECT_URL = `/?surface=albums&artist=${encodeURIComponent('Ария')}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&related_artist=${encodeURIComponent('Виталий Дубинин')}`;
 const SEARCH_EXPECTED = Object.freeze({
   primary: 'Ария',
@@ -353,19 +362,21 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
     stepLogger.note(`Using visible album button index ${stableVisibleIndex} for the modal round-trip`, 2);
 
     const {
+      albumDetailsShellMs,
       albumDetailsOpenMs,
+      albumDetailsCoverMs,
       albumDetailsCloseMs,
       trackModalSummary,
       finalMemory,
     } = await stepLogger.step('Open one visible album details modal, verify it, and close it cleanly', async () => {
-      const openMs = await measureActionTime(
-        async () => {
-          await galleryActions.clickAlbumDetailsAt(stableVisibleIndex);
-        },
-        async () => {
-          await trackModalActions.waitForReady({ timeout: 60000 });
-        },
-      );
+      const openedAt = performance.now();
+      await galleryActions.clickAlbumDetailsAt(stableVisibleIndex);
+      await expect(trackModalActions.trackModal.dialog).toBeVisible({ timeout: 60000 });
+      const shellMs = performance.now() - openedAt;
+      await trackModalActions.waitForReady({ timeout: 60000 });
+      const openMs = performance.now() - openedAt;
+      await trackModalActions.waitForDetailedCoverImageCheckpoint({ timeout: 60000 });
+      const coverMs = performance.now() - openedAt;
       await allArtistsLocalReport.recordTimingCheckpoint({
         key: 'album-details-open',
         label: 'Album details opened',
@@ -374,6 +385,18 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
           phase: 'album_details',
           stableVisibleIndex,
         },
+      });
+      await allArtistsLocalReport.recordTimingCheckpoint({
+        key: 'album-details-shell',
+        label: 'Album details shell visible',
+        timingMs: shellMs,
+        details: { phase: 'album_details', stableVisibleIndex },
+      });
+      await allArtistsLocalReport.recordTimingCheckpoint({
+        key: 'album-details-cover',
+        label: 'Album details decoded cover visible',
+        timingMs: coverMs,
+        details: { phase: 'album_details', stableVisibleIndex },
       });
 
       const summary = await trackModalActions.readSummary();
@@ -413,12 +436,26 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       expect(summary.trackRows, 'Expected the album details modal tracklist to render.').toBeGreaterThan(0);
 
       return {
+        albumDetailsShellMs: shellMs,
         albumDetailsOpenMs: openMs,
+        albumDetailsCoverMs: coverMs,
         albumDetailsCloseMs: closeMs,
         trackModalSummary: summary,
         finalMemory: memory,
       };
     });
+
+    for (const [key, label, timingMs] of [
+      ['albumDetailsShellMs', 'Album details shell visible', albumDetailsShellMs],
+      ['albumDetailsOpenMs', 'Album details content ready', albumDetailsOpenMs],
+      ['albumDetailsCoverMs', 'Album details decoded cover visible', albumDetailsCoverMs],
+    ]) {
+      allArtistsLocalReport.recordTerminalTimingOutcome(
+        ALBUM_DETAILS_BUDGETS[key].metricId,
+        key,
+        expectTimingBudget(expect.soft, timingMs, ALBUM_DETAILS_BUDGETS[key], label),
+      );
+    }
 
     const metricsPayload = {
       startupSidebarHydration,
@@ -438,7 +475,9 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       jumpScrollMemory,
       jumpScrollCoversReadyMs,
       stableVisibleIndex,
+      albumDetailsShellMs,
       albumDetailsOpenMs,
+      albumDetailsCoverMs,
       albumDetailsCloseMs,
       trackModalSummary,
       finalMemory,

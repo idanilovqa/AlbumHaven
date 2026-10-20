@@ -55,7 +55,9 @@ const BUDGETS = Object.freeze(Object.fromEntries([
   'searchGalleryReadyMs',
   'treeHighlightMs',
   'treeGalleryReadyMs',
+  'albumDetailsShellMs',
   'albumDetailsOpenMs',
+  'albumDetailsCoverMs',
 ].map((key) => [key, Object.freeze(
   performanceTimingBudget(`edit-tags-post-edit.${key}`),
 )])));
@@ -585,9 +587,13 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       expect(treeAlbum, 'Expected the selected Artist Tree gallery to expose an album.').not.toBe('');
       const albumDetailsStartedAt = performance.now();
       await galleryActions.clickAlbumDetailsByAlbumName(treeAlbum);
+      await expect(trackModalActions.trackModal.dialog).toBeVisible({ timeout: 60000 });
+      metrics.albumDetailsShellMs = performance.now() - albumDetailsStartedAt;
       const trackSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
       metrics.albumDetailsOpenMs = performance.now() - albumDetailsStartedAt;
       expect(trackSummary.trackRows).toBeGreaterThan(0);
+      await trackModalActions.waitForDetailedCoverImageCheckpoint({ timeout: 60000 });
+      metrics.albumDetailsCoverMs = performance.now() - albumDetailsStartedAt;
       await trackModalActions.close();
     } finally {
       try {
@@ -639,6 +645,28 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       timingMs: metrics.treeCoverReadyMs,
       details: { treeArtist },
     });
+    await editTagsPostEditLocalReport.recordTimingCheckpoint({
+      key: 'post-edit-album-details-shell',
+      label: 'Post-edit Album Details shell visible',
+      timingMs: metrics.albumDetailsShellMs,
+      details: { album: treeAlbum, artist: treeArtist },
+    });
+    await editTagsPostEditLocalReport.recordTimingCheckpoint({
+      key: 'post-edit-album-details-cover',
+      label: 'Post-edit Album Details decoded cover visible',
+      timingMs: metrics.albumDetailsCoverMs,
+      details: { album: treeAlbum, artist: treeArtist },
+    });
+    for (const [key, label, timingMs] of [
+      ['albumDetailsShellMs', 'Post-edit Album Details shell visible', metrics.albumDetailsShellMs],
+      ['albumDetailsCoverMs', 'Post-edit Album Details decoded cover visible', metrics.albumDetailsCoverMs],
+    ]) {
+      editTagsPostEditLocalReport.recordTerminalTimingOutcome(
+        BUDGETS[key].metricId,
+        key,
+        expectTimingBudget(expect.soft, timingMs, BUDGETS[key], label),
+      );
+    }
     editTagsPostEditLocalReport.recordTextCheckpoint({
       key: 'post-edit-retained-renderer-state',
       label: 'Retained renderer state after repeated Edit Tags',

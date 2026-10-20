@@ -1117,14 +1117,16 @@ export const test = base.extend({
       intro: 'This synthetic performance report captures the visible selected-artist UI flow through the selected library_browse repository after choosing a concrete artist from the root sidebar. It is a focused seam checkpoint inside the broader synthetic performance suite.',
       buildSummaryCards: buildSelectedArtistFocusedLocalSummaryCards,
       expectedTimingMetricIds: [
+        'selected-artist.albumDetailsShellMs',
+        'selected-artist.albumDetailsCoverMs',
         'selected-artist.selectedArtistApiMs',
-        'selected-artist.albumDetailsOpenMs',
         'selected-artist.tagEditorFocusMs',
         'selected-artist.tagEditorTypingMs',
         'selected-artist.tagEditorCancelMs',
         'selected-artist.notificationDrawerOpenMs',
         'selected-artist.notificationDrawerCloseMs',
         'selected-artist.galleryReturnMs',
+        'selected-artist.albumDetailsOpenMs',
       ],
     });
   },
@@ -1161,6 +1163,9 @@ export const test = base.extend({
         'notification-history.treeGalleryReadyMs',
         'notification-history.coverLookupModalReadyMs',
         'notification-history.galleryScrollMs',
+        'notification-history.coverLookupShellMs',
+        'notification-history.coverLookupContentMs',
+        'notification-history.coverLookupDecodedArtMs',
       ],
     });
   },
@@ -1179,6 +1184,8 @@ export const test = base.extend({
         'edit-tags-post-edit.treeHighlightMs',
         'edit-tags-post-edit.treeGalleryReadyMs',
         'edit-tags-post-edit.albumDetailsOpenMs',
+        'edit-tags-post-edit.albumDetailsShellMs',
+        'edit-tags-post-edit.albumDetailsCoverMs',
       ],
     });
   },
@@ -1205,6 +1212,8 @@ export const test = base.extend({
       buildSummaryCards: buildTrackTitleSearchSummaryCards,
       expectedTimingMetricIds: [
         'track-title-search.albumVisibleMs',
+        'track-title-search.albumDetailsShellMs',
+        'track-title-search.albumDetailsCoverMs',
         'track-title-search.matchingTrackVisibleMs',
       ],
     });

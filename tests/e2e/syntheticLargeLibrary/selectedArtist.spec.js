@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 import { expect, test } from '../support/performanceFixtures.js';
 
 import {
@@ -22,6 +24,10 @@ const SELECTED_ARTIST_BUDGET = Object.freeze(
 const ALBUM_DETAILS_BUDGET = Object.freeze(
   performanceTimingBudget('selected-artist.albumDetailsOpenMs'),
 );
+const ALBUM_DETAILS_PHASE_BUDGETS = Object.freeze(Object.fromEntries([
+  'albumDetailsShellMs',
+  'albumDetailsCoverMs',
+].map((key) => [key, Object.freeze(performanceTimingBudget(`selected-artist.${key}`))])));
 const ALBUM_DETAILS_CLOSE_BUDGET = Object.freeze(
   performanceTimingBudget('all-artists-local-managed-chrome.albumDetailsCloseMs'),
 );
@@ -147,17 +153,20 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
 
     let trackModalSummary = null;
     let firstTrackPath = '';
-    const albumDetailsOpenMs = await stepLogger.step('Open one selected-artist album details modal and wait for playable tracks', async () => (
-      measureActionTime(
-        async () => {
-          await galleryActions.clickAlbumDetailsByAlbumName(firstAlbumName);
-        },
-        async () => {
-          trackModalSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
-          firstTrackPath = String((await trackModalActions.readTrackAt(0)).path || '');
-        },
-      )
-    ));
+    let albumDetailsShellMs = 0;
+    let albumDetailsCoverMs = 0;
+    const albumDetailsOpenMs = await stepLogger.step('Open one selected-artist album details modal and wait for playable tracks', async () => {
+      const openedAt = performance.now();
+      await galleryActions.clickAlbumDetailsByAlbumName(firstAlbumName);
+      await expect(trackModalActions.trackModal.dialog).toBeVisible({ timeout: 60000 });
+      albumDetailsShellMs = performance.now() - openedAt;
+      trackModalSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
+      firstTrackPath = String((await trackModalActions.readTrackAt(0)).path || '');
+      const contentMs = performance.now() - openedAt;
+      await trackModalActions.waitForDetailedCoverImageCheckpoint({ timeout: 60000 });
+      albumDetailsCoverMs = performance.now() - openedAt;
+      return contentMs;
+    });
 
     await stepLogger.step('Assert the selected-artist details modal loaded real playable tracks', async () => {
       expect(trackModalSummary?.title, 'Expected the selected-artist album details modal title to load.').not.toBe('');
@@ -269,10 +278,32 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
         playButtons: Number(trackModalSummary?.playButtons || 0),
       },
     });
+    await selectedArtistFocusedLocalReport.recordTimingCheckpoint({
+      key: 'selected-artist-album-details-shell',
+      label: 'Selected artist Album Details shell visible',
+      timingMs: albumDetailsShellMs,
+    });
+    await selectedArtistFocusedLocalReport.recordTimingCheckpoint({
+      key: 'selected-artist-album-details-cover',
+      label: 'Selected artist Album Details decoded cover visible',
+      timingMs: albumDetailsCoverMs,
+    });
+    for (const [key, label, timingMs] of [
+      ['albumDetailsShellMs', 'Selected artist Album Details shell visible', albumDetailsShellMs],
+      ['albumDetailsCoverMs', 'Selected artist Album Details decoded cover visible', albumDetailsCoverMs],
+    ]) {
+      selectedArtistFocusedLocalReport.recordTerminalTimingOutcome(
+        ALBUM_DETAILS_PHASE_BUDGETS[key].metricId,
+        key,
+        expectTimingBudget(expect.soft, timingMs, ALBUM_DETAILS_PHASE_BUDGETS[key], label),
+      );
+    }
 
     selectedArtistFocusedLocalReport.setMetricsPayload({
       selectedArtistApiMs,
+      albumDetailsShellMs,
       albumDetailsOpenMs,
+      albumDetailsCoverMs,
       albumDetailsCloseMs: albumDetailsClose.durationMs,
       albumDetailsCloseMaxLongTaskMs: albumDetailsClose.maxLongTaskMs,
       domMountMetrics,

@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 import { expect, test } from '../support/performanceFixtures.js';
 import {
   expectTimingBudget,
@@ -22,6 +24,11 @@ const SEARCH_BUDGET = performanceTimingBudget('notification-history.searchGaller
 const TREE_BUDGET = performanceTimingBudget('notification-history.treeGalleryReadyMs');
 const GALLERY_SCROLL_BUDGET = performanceTimingBudget('notification-history.galleryScrollMs');
 const COVER_LOOKUP_BUDGET = performanceTimingBudget('notification-history.coverLookupModalReadyMs');
+const COVER_LOOKUP_PHASE_BUDGETS = Object.freeze(Object.fromEntries([
+  'coverLookupShellMs',
+  'coverLookupContentMs',
+  'coverLookupDecodedArtMs',
+].map((key) => [key, Object.freeze(performanceTimingBudget(`notification-history.${key}`))])));
 const COVER_LOOKUP_TARGET = COVER_LOOKUP_TEST_TARGETS.performanceInteractions;
 const TREE_SELECTION_ARTIST = 'Cosmic Cathedral';
 const MAX_MOUNTED_NOTIFICATION_CARDS = 60;
@@ -253,12 +260,23 @@ test.describe(`${CASE_ID} large notification history`, () => {
           COVER_LOOKUP_TARGET,
         );
       });
+      let notificationCoverLookupStartedAt = 0;
+      let notificationCoverLookupShellMs = 0;
+      let notificationCoverLookupContentMs = 0;
+      let notificationCoverLookupDecodedArtMs = 0;
       const notificationCoverLookup = await stepLogger.step(
         'Notification opens the correct Cover Lookup task after history traversal',
         async () => measureInteractionToPaint(
           page,
-          () => coverLookupActions.openTask(COVER_LOOKUP_TARGET.album),
           async () => {
+            notificationCoverLookupStartedAt = performance.now();
+            await coverLookupActions.openTask(COVER_LOOKUP_TARGET.album);
+          },
+          async () => {
+            await expect(coverLookupActions.coverLookup.modal).toBeVisible({
+              timeout: COVER_LOOKUP_BUDGET.hardCeiling,
+            });
+            notificationCoverLookupShellMs = performance.now() - notificationCoverLookupStartedAt;
             await coverLookupActions.waitForModalReady({
               timeout: COVER_LOOKUP_BUDGET.hardCeiling,
             });
@@ -270,6 +288,17 @@ test.describe(`${CASE_ID} large notification history`, () => {
               COVER_LOOKUP_TARGET.artist,
               { timeout: COVER_LOOKUP_BUDGET.hardCeiling },
             );
+            notificationCoverLookupContentMs = performance.now() - notificationCoverLookupStartedAt;
+            const notificationArtEvidence = await coverLookupActions.readDisplayedImageEvidence(
+              coverLookupActions.coverLookup.activeLocalCoverImage,
+              'notification Cover Lookup active local cover',
+              { timeout: COVER_LOOKUP_BUDGET.hardCeiling },
+            );
+            expect(notificationArtEvidence.src).not.toBe('');
+            expect(notificationArtEvidence.sha256).not.toBe('');
+            expect(notificationArtEvidence.naturalWidth).toBeGreaterThan(0);
+            expect(notificationArtEvidence.naturalHeight).toBeGreaterThan(0);
+            notificationCoverLookupDecodedArtMs = performance.now() - notificationCoverLookupStartedAt;
             await coverLookupActions.coverLookup.waitForDrawerState(false);
           },
         ),
@@ -345,6 +374,9 @@ test.describe(`${CASE_ID} large notification history`, () => {
         searchGalleryReadyMs: search.durationMs,
         treeGalleryReadyMs: treeSelection.durationMs,
         coverLookupModalReadyMs: notificationCoverLookup.durationMs,
+      coverLookupShellMs: notificationCoverLookupShellMs,
+      coverLookupContentMs: notificationCoverLookupContentMs,
+      coverLookupDecodedArtMs: notificationCoverLookupDecodedArtMs,
         galleryScrollMs: galleryScroll.durationMs,
         retainedHeapGrowthBytes,
         retainedDomNodeGrowth,
@@ -369,6 +401,23 @@ test.describe(`${CASE_ID} large notification history`, () => {
           budget.metricId,
           key,
           expectTimingBudget(expect.soft, timingMs, budget, key),
+        );
+      }
+      for (const [key, label, timingMs] of [
+        ['coverLookupShellMs', 'Notification Cover Lookup shell visible', metrics.coverLookupShellMs],
+        ['coverLookupContentMs', 'Notification Cover Lookup content ready', metrics.coverLookupContentMs],
+        ['coverLookupDecodedArtMs', 'Notification Cover Lookup decoded art visible', metrics.coverLookupDecodedArtMs],
+      ]) {
+        await notificationHistoryLocalReport.recordTimingCheckpoint({
+          key,
+          label,
+          timingMs,
+          details: { notificationCount: NOTIFICATION_HISTORY_SIZE },
+        });
+        notificationHistoryLocalReport.recordTerminalTimingOutcome(
+          COVER_LOOKUP_PHASE_BUDGETS[key].metricId,
+          key,
+          expectTimingBudget(expect.soft, timingMs, COVER_LOOKUP_PHASE_BUDGETS[key], label),
         );
       }
       notificationHistoryLocalReport.recordTextCheckpoint({

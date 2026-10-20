@@ -842,15 +842,13 @@ function closeImageLightbox() {
   state.lightbox.activeFullSource = '';
   state.lightbox.activeAlt = '';
   state.lightbox.loadToken = Number(state.lightbox.loadToken || 0) + 1;
-  if (state.lightbox.activePreloader) {
-    state.lightbox.activePreloader.onload = null;
-    state.lightbox.activePreloader.onerror = null;
-    state.lightbox.activePreloader = null;
-  }
+  cancelActiveLightboxPreloader();
   setLightboxZoom(1);
   els.image.onload = null;
   els.image.onerror = null;
   if (els.loading) els.loading.hidden = true;
+  if (els.error) els.error.hidden = true;
+  if (els.retry) els.retry.hidden = true;
   els.image.hidden = true;
   if (els.image.classList?.remove) els.image.classList.remove('is-unavailable');
   els.image.removeAttribute('src');

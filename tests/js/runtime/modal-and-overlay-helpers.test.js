@@ -179,11 +179,15 @@ function loadHelper() {
       return rafQueue.length;
     },
     cancelBrowserAnimationFrame() {},
-    scheduleBrowserTimeout(callback) {
+    scheduleBrowserTimeout(callback, delay = 0) {
+      if (delay >= 8000) return 1;
       if (typeof callback === 'function') {
         callback();
       }
       return 1;
+    },
+    clearBrowserTimeout() {
+      return true;
     },
     escapeHtml(value) {
       return String(value ?? '');
@@ -787,6 +791,80 @@ test('lightbox exhausts broken sources without a native broken image and retries
   assert.equal(image.alt, 'Full-size album cover');
   assert.equal(image.getAttribute('aria-hidden'), '');
   assert.equal(loading.hidden, true);
+});
+
+test('lightbox bounds stalled sources and exposes an explicit retry after exhaustion', () => {
+  const { context } = loadHelper();
+  const image = new FakeElement('image-lightbox-image');
+  const loading = new FakeElement('image-lightbox-loading');
+  const error = new FakeElement('image-lightbox-error');
+  const status = new FakeElement('image-lightbox-status');
+  const retry = new FakeElement('image-lightbox-retry');
+  const timers = new Map();
+  const delays = [];
+  let nextTimerId = 0;
+
+  image.src = '';
+  const removeImageAttribute = image.removeAttribute.bind(image);
+  image.removeAttribute = (name) => {
+    if (name === 'src') image.src = '';
+    removeImageAttribute(name);
+  };
+  context.getLightboxElements = () => ({
+    image,
+    loading,
+    error,
+    status,
+    retry,
+    overlay: new FakeElement('image-lightbox'),
+  });
+  context.setLightboxZoom = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    const timerId = ++nextTimerId;
+    delays.push(delay);
+    timers.set(timerId, callback);
+    return timerId;
+  };
+  context.clearBrowserTimeout = (timerId) => timers.delete(timerId);
+  context.state.lightbox = { items: [], currentIndex: -1, loadToken: 0 };
+
+  const runNextTimer = () => {
+    const nextTimer = timers.entries().next().value;
+    assert.ok(nextTimer, 'an active source attempt should have a timeout');
+    const [timerId, callback] = nextTimer;
+    timers.delete(timerId);
+    callback();
+  };
+
+  assert.equal(context.showStandaloneLightboxItem({
+    src: '/cover?path=iliad&full=1',
+    previewSrc: '/cover?path=iliad&size=480',
+    remoteSrc: '/remote-cover?album=iliad',
+    alt: 'Album cover for A Grand Piano Extravaganza',
+  }), true);
+  assert.equal(timers.size, 1, 'the full-size source must have a bounded load attempt');
+  assert.equal(loading.hidden, false);
+  assert.equal(error.hidden, true);
+  assert.equal(retry.hidden, true);
+
+  runNextTimer();
+  assert.equal(context.__preloaders[1].src, '/cover?path=iliad&size=480');
+  runNextTimer();
+  assert.equal(context.__preloaders[2].src, '/remote-cover?album=iliad');
+  runNextTimer();
+
+  assert.equal(image.hidden, true);
+  assert.equal(loading.hidden, true, 'terminal failure must stop the loading indicator');
+  assert.equal(error.hidden, false, 'terminal failure should expose the retryable error state');
+  assert.equal(status.textContent, 'Cover could not be loaded.');
+  assert.equal(retry.hidden, false);
+  assert.ok(delays.every((delay) => delay === 8000), 'every source attempt must use the fixed bound');
+
+  assert.equal(context.retryActiveLightboxImage(), true);
+  assert.equal(context.__preloaders[3].src, '/cover?path=iliad&full=1');
+  assert.equal(error.hidden, true);
+  assert.equal(loading.hidden, false);
+  assert.equal(retry.hidden, true);
 });
 
 test('stale navigation and close-like invalidation during decode cannot reveal an old source', async () => {

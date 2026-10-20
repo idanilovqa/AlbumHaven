@@ -499,7 +499,15 @@
   place-items: center;
   pointer-events: none;
 }
+.image-lightbox-error {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  color: #f8fafc;
+  text-align: center;
+}
 .image-lightbox-loading[hidden],
+.image-lightbox-error[hidden],
 .image-lightbox-image[hidden] {
   display: none;
 }

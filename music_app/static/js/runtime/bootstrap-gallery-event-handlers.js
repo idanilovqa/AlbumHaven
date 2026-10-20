@@ -201,7 +201,13 @@ function handleGalleryBootstrapClick(event) {
     const closeButton = event.target.closest('#image-lightbox-close');
     const prevButton = event.target.closest('#image-lightbox-prev');
     const nextButton = event.target.closest('#image-lightbox-next');
+    const retryButton = event.target.closest('#image-lightbox-retry');
     const image = event.target.closest('#image-lightbox-image');
+    if (retryButton) {
+      event.preventDefault();
+      retryActiveLightboxImage();
+      return;
+    }
     if (prevButton) {
       event.preventDefault();
       stepLightbox(-1);

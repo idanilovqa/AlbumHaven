@@ -737,6 +737,9 @@ function getLightboxElements() {
     overlay: document.getElementById('image-lightbox'),
     image: document.getElementById('image-lightbox-image'),
     loading: document.getElementById('image-lightbox-loading'),
+    error: document.getElementById('image-lightbox-error'),
+    status: document.getElementById('image-lightbox-status'),
+    retry: document.getElementById('image-lightbox-retry'),
     close: document.getElementById('image-lightbox-close'),
     prev: document.getElementById('image-lightbox-prev'),
     next: document.getElementById('image-lightbox-next'),
@@ -1101,7 +1104,16 @@ function getLightboxItemSources(item) {
   return sources.filter((source, index) => sources.indexOf(source) === index);
 }
 
+const LIGHTBOX_SOURCE_TIMEOUT_MS = 8000;
+
+function clearActiveLightboxSourceTimeout() {
+  const timeoutId = state.lightbox.activeSourceTimeoutId;
+  if (timeoutId != null) clearBrowserTimeout(timeoutId);
+  state.lightbox.activeSourceTimeoutId = null;
+}
+
 function cancelActiveLightboxPreloader() {
+  clearActiveLightboxSourceTimeout();
   const activePreloader = state.lightbox.activePreloader;
   if (!activePreloader) return;
   activePreloader.onload = null;
@@ -1110,7 +1122,10 @@ function cancelActiveLightboxPreloader() {
 }
 
 function setLightboxLoadingPresentation(imageElement, loadingElement, isLoading, alt = '') {
+  const { error, retry } = getLightboxElements();
   if (loadingElement) loadingElement.hidden = !isLoading;
+  if (error) error.hidden = true;
+  if (retry) retry.hidden = true;
   if (!imageElement) return;
   if (isLoading) {
     imageElement.hidden = true;
@@ -1129,8 +1144,11 @@ function startLightboxSourcePreload(imageElement, loadToken) {
   const sourceIndex = Number(state.lightbox.activeSourceIndex || 0);
   const expectedSource = String(sources[sourceIndex] || '').trim();
   if (!expectedSource) {
-    const { loading } = getLightboxElements();
+    const { loading, error, status, retry } = getLightboxElements();
     if (loading) loading.hidden = true;
+    if (error) error.hidden = false;
+    if (status) status.textContent = 'Cover could not be loaded.';
+    if (retry) retry.hidden = false;
     if (typeof imageElement.removeAttribute === 'function') imageElement.removeAttribute('src');
     imageElement.hidden = true;
     imageElement.alt = '';
@@ -1149,6 +1167,7 @@ function startLightboxSourcePreload(imageElement, loadToken) {
   );
   const continueToNextSource = () => {
     if (!isCurrentLoad()) return;
+    clearActiveLightboxSourceTimeout();
     preloader.onload = null;
     preloader.onerror = null;
     state.lightbox.activePreloader = null;
@@ -1164,6 +1183,7 @@ function startLightboxSourcePreload(imageElement, loadToken) {
       : Promise.resolve();
     Promise.resolve(decodeResult).then(() => {
       if (!isCurrentLoad()) return;
+      clearActiveLightboxSourceTimeout();
       state.lightbox.activePreloader = null;
       imageElement.src = expectedSource;
       const { loading } = getLightboxElements();
@@ -1181,8 +1201,27 @@ function startLightboxSourcePreload(imageElement, loadToken) {
   preloader.onerror = () => {
     continueToNextSource();
   };
+  state.lightbox.activeSourceTimeoutId = scheduleBrowserTimeout(
+    continueToNextSource,
+    LIGHTBOX_SOURCE_TIMEOUT_MS,
+  );
   preloader.src = expectedSource;
   return true;
+}
+
+function retryActiveLightboxImage() {
+  const els = getLightboxElements();
+  if (!els.image || !Array.isArray(state.lightbox.activeSources) || !state.lightbox.activeSources.length) {
+    return false;
+  }
+  cancelActiveLightboxPreloader();
+  const loadToken = Number(state.lightbox.loadToken || 0) + 1;
+  state.lightbox.loadToken = loadToken;
+  state.lightbox.activeSourceIndex = 0;
+  setLightboxLoadingPresentation(els.image, els.loading, true);
+  if (typeof els.image.removeAttribute === 'function') els.image.removeAttribute('src');
+  if (els.image.classList?.remove) els.image.classList.remove('is-unavailable');
+  return startLightboxSourcePreload(els.image, loadToken);
 }
 
 function applyLightboxImageItem(item) {

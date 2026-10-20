@@ -1271,13 +1271,15 @@ function registerNotificationSource({name, label = 'Friend requests', scopeKey, 
       if (!current()) return false;
       if (!['idle', 'ready', 'empty', 'loading', 'error', 'denied', 'unavailable'].includes(status)) throw new TypeError('Unsupported notification status.');
       const next = new Map();
-      for (const row of ['ready', 'loading'].includes(status) && Array.isArray(records) ? records : []) {
+      for (const row of ['ready', 'loading', 'error'].includes(status) && Array.isArray(records) ? records : []) {
         if (typeof row?.id !== 'string' || !row.id.trim() || next.has(row.id)) continue;
         // Only same-origin paths and HTTPS avatars may enter the shared card.
         const avatarUrl = typeof row.avatarUrl === 'string' && !/[\\\u0000-\u0020\u007f]/.test(row.avatarUrl)
           && (/^\/(?!\/)/.test(row.avatarUrl) || /^https:\/\//i.test(row.avatarUrl)) ? row.avatarUrl : '';
         next.set(row.id, Object.freeze({id: row.id, title: String(row.title || 'Friend request'),
-          byline: String(row.byline || ''), typeLabel: String(row.typeLabel || 'Friend request'), read: row.read === true, avatarUrl, createdAt: row.createdAt ?? null}));
+          byline: String(row.byline || ''), typeLabel: String(row.typeLabel || 'Friend request'),
+          statusLabel: typeof row.statusLabel === 'string' ? row.statusLabel : 'Pending response',
+          read: row.read === true, avatarUrl, createdAt: row.createdAt ?? null}));
       }
       source.records = next; source.status = status; source.revision++;
       renderCoverLookupDrawer();
@@ -1306,7 +1308,7 @@ function getRequestNotificationCards() {
       const key = JSON.stringify([name, source.scopeKey, record.id]);
       cards.push({key, createdAt: record.createdAt, source, id: record.id, read: record.read,
         markup: renderNotificationCard({title: record.title, typeLabel: record.typeLabel, byline: record.byline,
-          statusLabel: 'Pending response', stateClass: 'is-pending',
+          statusLabel: record.statusLabel, stateClass: 'is-pending',
           coverHtml: record.avatarUrl ? `<img class="cover-lookup-task-cover" src="${escapeHtml(record.avatarUrl)}" alt="">` : '',
           openAttributes: {role: 'button', tabindex: '0', 'aria-label': record.typeLabel === 'Friend request' ? `Open friend request from ${record.title}` : `Open ${record.typeLabel.toLowerCase()} request: ${record.title}`,
             'data-open-request-notification': key},
@@ -1450,7 +1452,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     summary.textContent = [
       activeCount ? `${activeCount} active` : '',
       terminalCount ? `${terminalCount} finished` : '',
-      requestCount ? `${requestCount} friend ${requestCount === 1 ? 'request' : 'requests'}` : '',
+      requestCount ? `${requestCount} ${requestCount === 1 ? 'notification' : 'notifications'}` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
   }
   badge.hidden = badgeCount <= 0;

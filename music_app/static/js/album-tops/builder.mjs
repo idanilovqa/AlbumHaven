@@ -102,7 +102,7 @@ export function mountRemoteAlbumPicker(host, runtime, props) {
       const messages = {loading: 'Preparing remote album…', in_flight: 'Preparation is still in progress. Use Retry preparation to check this same attempt.',
         failed: 'Remote preparation failed. Select the album again explicitly to start another attempt.',
         unknown: 'The preparation result is unknown. Retry the same attempt before starting another.', consumed: 'This acquisition was consumed. Only the membership receipt can confirm the saved change.',
-        pending: 'Remote album selected. Save your Album Top to add it.', closed: 'Preparation closed. Remove affected selections before choosing them again.',
+        pending: value.sourceMatch ? 'Remote album selected. Confirm this match to use it for the source row.' : 'Remote album selected. Save your Album Top to add it.', closed: 'Preparation closed. Remove affected selections before choosing them again.',
         maintenance_required: 'Preparation maintenance is required. Choose a maintenance action below, then explicitly select the album again.',
         limit: 'Remote preparation capacity is full. Check preparation status and explicitly close or reclaim preparations.',
         unavailable: 'This preparation is unavailable. Reopen the editor if its private context changed.', confirmation_required: 'Confirm the preparation cleanup before continuing.',
@@ -172,7 +172,9 @@ export function mountAlbumPicker(host, runtime, {draft, providers = {}, value, d
   const pools = hasRemote ? acquire(mountTabs(poolHost, runtime, poolProps())) : null;
   const remote = hasRemote ? acquire(mountRemoteAlbumPicker(remoteHost, runtime, {draft, value, disabled, blocked})) : null;
   live.setAttribute('role', 'status'); live.setAttribute('aria-live', 'polite');
-  const capacity = element(section, 'p', 'playlists__note', 'The 5,000-album limit is reached. Remove an album before adding another.'); capacity.setAttribute('role', 'status');
+  const capacity = element(section, 'p', 'playlists__note', value.sourceMatch
+    ? 'One album can be selected for this source row. Remove it before choosing another.'
+    : 'The 5,000-album limit is reached. Remove an album before adding another.'); capacity.setAttribute('role', 'status');
   const scroll = element(section, 'div', 'album-top-builder__scroll gallery-scrollbar'); scroll.setAttribute('role', 'tabpanel');
   const cards = element(scroll, 'div', 'home-activity__cards album-top-builder__cards playlists__tracks');
   const empty = element(scroll, 'p', 'playlists__note'); empty.setAttribute('role', 'status');

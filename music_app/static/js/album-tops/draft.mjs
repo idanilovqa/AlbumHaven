@@ -23,8 +23,12 @@ export function albumTopAddAllowed(state) {
     && albumTopActionAllowed(state, 'add');
 }
 
-export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'}) {
-  const parent = controller.getSnapshot(), source = parent.selectedTopRef ? parent.detail.data : null;
+export function createAlbumTopDraft({controller, providers = {}, mode = 'edit', sourceJobRef}) {
+  const parent = controller.getSnapshot(), sourceMatch = mode === 'source-match';
+  if (sourceMatch && (parent.selectedTopRef || typeof sourceJobRef !== 'string' || sourceJobRef.length !== 36
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sourceJobRef)
+    || sourceJobRef === '00000000-0000-0000-0000-000000000000')) throw new TypeError('Source matching requires a current create scope and canonical source job.');
+  const source = parent.selectedTopRef ? parent.detail.data : null;
   const adding = mode === 'add', editing = Boolean(source), scopeKey = parent.scopeKey, topRef = source?.top_ref || null;
   const bindings = new Map();
   for (const item of source?.edit_draft?.item_selections || source?.edit_draft?.items || []) {
@@ -33,14 +37,14 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
   }
   const initialItems = source?.items?.map(row => {const binding = copy(bindings.get(row.item_ref) || {}); return {...copy(row), ...binding, ...(binding.source?.kind === 'local' ? {selected_local_album_id: binding.source.selected_local_album_id, selected_source_ref: binding.source.selected_source_ref} : {})};}) || [];
   const baseline = {title: source?.title || '', description: source?.description || '', items: initialItems.map(wire)};
-  let state = {scopeKey, topRef, revision: source?.revision || null, title: baseline.title, description: baseline.description,
+  let state = {scopeKey, topRef, sourceMatch, ...(sourceMatch ? {capacity: 1} : {}), revision: source?.revision || null, title: baseline.title, description: baseline.description,
     items: adding ? [] : copy(initialItems), ...(adding ? {capacity: Math.max(0, 5000 - initialItems.length), submittedRequestKey: null} : {}), query: '', tab: editing && !adding ? 'selected' : 'all', search: {status: 'idle', items: [], next_cursor: null},
-    busy: false, stale: false, denied: false, dirty: false, error: null, pool: 'local', formRef: null,
+    busy: false, stale: false, denied: false, dirty: false, error: null, pool: 'local', formRef: sourceMatch ? sourceJobRef : null,
     remote: {status: 'idle', title: '', artist: '', search: {status: 'idle', candidates: []}, preparation: null, operation: null, ownState: null, maintenance: null, retired: false, membershipRetired: false}};
   const listeners = new Set(), requests = new Set(), cursors = new Set();
   let disposed = false, retired = false, sequence = 0, searchAbort = null, working = false, results = [];
   let remoteActive = initialItems.some(isRemote), remoteRetired = false, remoteMembershipRetired = false, remoteOperation = null, remoteSearchVersion = 0, remoteSearchAbort = null;
-  let remoteIdentity = null, formRef = null;
+  let remoteIdentity = null, formRef = sourceMatch ? sourceJobRef : null;
   const remoteContextMethod = providers.remoteContext, ownedParents = new Set(), unavailableParents = new Set();
   try {if (typeof remoteContextMethod === 'function') remoteIdentity = remoteContextMethod.call(providers);} catch { /* Remote entry stays unavailable; local draft is unaffected. */ }
   const supported = data => !data || (!Object.hasOwn(data, 'type') || data.type === 'manual')
@@ -367,6 +371,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
       return ref ? this.closeRemotePreparation(ref) : Promise.resolve(!remoteOperation && !busyMutation(controller.getSnapshot().mutation));
     },
     async submit() {
+      if (sourceMatch) return false;
       if (!allowed() || (adding ? !state.items.length : !state.title.trim() || editing && !state.dirty)) return false;
       const items = state.items.map(localWire), membershipChanged = !equal(state.items.map(wire), baseline.items), hasRemote = state.items.some(isRemote);
       if (hasRemote && (!activateRemote(false) || state.items.some(row => row.source?.kind === 'remote_acquisition'

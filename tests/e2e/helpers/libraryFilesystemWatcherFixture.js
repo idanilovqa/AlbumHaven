@@ -13,6 +13,7 @@ const WATCHER_FIXTURE_DIRECTORIES = new Set([
   'watcher-reconciliation',
   'watcher-punctuation-identity',
   'watcher-possessive-identity',
+  'watcher-featured-ownership',
 ]);
 
 const RETAG_SCRIPT = `
@@ -126,6 +127,7 @@ async function buildWatchedAlbumFixture({
   trackArtist = artist,
   albumArtist = artist,
   album = 'Watcher Reconciliation Album',
+  albumFolderName = album,
   year = 2004,
   trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
   trackArtists = null,
@@ -134,17 +136,18 @@ async function buildWatchedAlbumFixture({
 } = {}) {
   const mediaRoot = resolveWritableFixtureMediaRoot(process.env);
   const ownedRoot = watcherOwnedRoot(mediaRoot, fixtureDirectory);
-  const albumDirectory = assertOwnedPath(mediaRoot, path.join(ownedRoot, artist, album));
   if (fs.existsSync(ownedRoot)) fs.rmSync(ownedRoot, { recursive: true });
-  fs.mkdirSync(albumDirectory, { recursive: true });
   const source = firstPlayableMp3(mediaRoot);
   const createAlbum = async ({
     album: albumName,
+    folderName = albumName,
     year: albumYear,
     trackTitles: titles,
+    trackArtist: defaultTrackArtist = trackArtist,
     trackArtists: albumTrackArtists = null,
+    albumArtist: albumOwner = albumArtist,
   }) => {
-    const directory = assertOwnedPath(mediaRoot, path.join(ownedRoot, artist, albumName));
+    const directory = assertOwnedPath(mediaRoot, path.join(ownedRoot, artist, folderName));
     fs.mkdirSync(directory, { recursive: true });
     const createdTracks = [];
     for (const [index, title] of titles.entries()) {
@@ -152,8 +155,8 @@ async function buildWatchedAlbumFixture({
       const destination = assertOwnedPath(mediaRoot, path.join(directory, filename));
       fs.copyFileSync(source, destination);
       await retag(destination, {
-        trackArtist: albumTrackArtists?.[index] ?? trackArtist,
-        albumArtist,
+        trackArtist: albumTrackArtists?.[index] ?? defaultTrackArtist,
+        albumArtist: albumOwner,
         album: albumName,
         year: albumYear,
         title,
@@ -166,10 +169,12 @@ async function buildWatchedAlbumFixture({
   };
   const target = await createAlbum({
     album,
+    folderName: albumFolderName,
     year,
     trackTitles,
     trackArtists,
   });
+  const albumDirectory = target.albumDirectory;
   const tracks = target.tracks;
   return {
     artist,

@@ -73,6 +73,34 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-featured-ownership"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-featured-ownership"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "track-artist-featured-not-owned",
+      "album-owner-credit-preserved",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-featured-ownership",
+      "filesystemCopy": "media/cases/watcher-featured-ownership"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan",
     "profile": "functional-core",
     "setupScope": "isolated",

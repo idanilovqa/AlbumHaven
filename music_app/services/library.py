@@ -297,6 +297,16 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     top_artist_count = max(track_artist_counts.values()) if track_artist_counts else 0
     top_artist_share = (top_artist_count / total_tracks) if total_tracks else 1
     significant_artist_count = sum(1 for count in track_artist_counts.values() if count >= 2)
+    normalized_album_artist_keys = {
+        _normalize_artist_key(value)
+        for value in album_artist_values
+        if value
+    }
+    unanimous_album_artist = (
+        album_artist_values[0]
+        if len(normalized_album_artist_keys) == 1 and album_artist_values
+        else ""
+    )
     explicit_various = any(_is_various_artist(value) for value in album_artist_values)
     album_artist_members = split_album_artist_members(album_artist_values[0]) if len({_normalize_artist_key(value) for value in album_artist_values if value}) <= 1 and album_artist_values else []
     matched_album_artist_members = [
@@ -311,11 +321,30 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     if not override_primary_artist or _is_various_artist(override_primary_artist):
         override_primary_artist = dominant_track_artist
 
-    if dominant_track_artist and _one_off_guest_album_override(dominant_track_artist, track_artist_counts):
+    allow_dominant_artist_override = (
+        not unanimous_album_artist
+        or len(matched_album_artist_members) >= 2
+        or (
+            not explicit_various
+            and _normalize_artist_key(unanimous_album_artist)
+            == _normalize_artist_key(dominant_track_artist)
+        )
+    )
+    if (
+        allow_dominant_artist_override
+        and dominant_track_artist
+        and _one_off_guest_album_override(dominant_track_artist, track_artist_counts)
+    ):
         return compilation_state(False), dominant_track_artist, [dominant_track_artist]
 
     if (
-        override_primary_artist
+        not explicit_various
+        and override_primary_artist
+        and (
+            not unanimous_album_artist
+            or _normalize_artist_key(override_primary_artist)
+            == _normalize_artist_key(unanimous_album_artist)
+        )
         and _feature_style_album_override(entries, override_primary_artist, distinct_track_artists)
     ):
         return compilation_state(False), override_primary_artist, [override_primary_artist]
@@ -342,15 +371,44 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
             [primary_artist or "Unknown Artist"],
         )
 
-    member_artists = matched_album_artist_members or distinct_track_artists
-    display_album_artist = "Various Artists" if explicit_various else _format_shared_album_artist(member_artists)
-    if display_album_artist == "Various Artists" and len(member_artists) <= 3 and member_artists:
-        display_album_artist = _format_shared_album_artist(member_artists)
-    normalized_members = member_artists if display_album_artist != "Various Artists" else member_artists
+    album_artist_matches_track = any(
+        _normalize_artist_key(unanimous_album_artist) == _normalize_artist_key(track_artist)
+        for track_artist in distinct_track_artists
+    )
+    honor_unanimous_album_artist = bool(unanimous_album_artist) and (
+        persisted_compilation_state is not False
+        or explicit_various
+        or (len(album_artist_members) < 2 and not album_artist_matches_track)
+    )
+    display_member_artists = matched_album_artist_members or distinct_track_artists
+    member_artists = display_member_artists
+    if honor_unanimous_album_artist:
+        if len(album_artist_members) >= 2:
+            member_artists = album_artist_members
+        elif explicit_various:
+            member_artists = []
+        else:
+            member_artists = [unanimous_album_artist]
+    display_album_artist = (
+        unanimous_album_artist
+        if (
+            honor_unanimous_album_artist
+            and not explicit_various
+        )
+        else "Various Artists"
+        if explicit_various
+        else _format_shared_album_artist(display_member_artists)
+    )
+    if (
+        display_album_artist == "Various Artists"
+        and len(display_member_artists) <= 3
+        and display_member_artists
+    ):
+        display_album_artist = _format_shared_album_artist(display_member_artists)
     return (
         compilation_state(True),
         display_album_artist or "Various Artists",
-        normalized_members,
+        member_artists,
     )
 
 

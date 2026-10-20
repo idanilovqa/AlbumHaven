@@ -24,6 +24,7 @@ from music_app.services.library import (
     album_separate_release_key,
     build_albums_from_file_cache,
     safe_int,
+    split_album_artist_members,
 )
 from music_app.services.library_inventory_postgres import local_inventory_identity_key
 from music_app.services.library_roots import build_root_provenance_payload, summarize_root_provenance_payloads
@@ -2584,11 +2585,32 @@ def _inventory_rows_from_albums(
         )
         return artist_key
 
+    def album_owner_name(album: object) -> str | None:
+        classified_owner = _text_or_none(getattr(album, "album_artist", None))
+        tagged_owner_names = _deduped_artist_names(
+            _text_or_none(file_entries_by_path.get(str(track.path), {}).get("album_artist"))
+            for track in getattr(album, "tracks", []) or []
+        )
+        if len({_key(name) for name in tagged_owner_names}) == 1:
+            tagged_owner = tagged_owner_names[0]
+            tagged_members = split_album_artist_members(tagged_owner)
+            if (
+                classified_owner is not None
+                and len(tagged_members) >= 2
+                and any(
+                    _key(classified_owner) == _key(member)
+                    for member in tagged_members
+                )
+            ):
+                return classified_owner
+            return tagged_owner
+        return classified_owner
+
     for album in albums:
-        album_artist_key = ensure_artist(getattr(album, "album_artist", None))
+        owner_name = album_owner_name(album)
+        album_artist_key = ensure_artist(owner_name)
         member_artist_names = _deduped_artist_names(getattr(album, "artists", []) or [])
         if not member_artist_names:
-            owner_name = _text_or_none(getattr(album, "album_artist", None))
             if owner_name is not None:
                 member_artist_names = [owner_name]
         for member in member_artist_names:
@@ -2633,7 +2655,6 @@ def _inventory_rows_from_albums(
             featured_kind="owner",
             source=_SOURCE,
         )
-        owner_name = _text_or_none(getattr(album, "album_artist", None))
         owner_key = _key(owner_name) if owner_name is not None else None
         for member_name in member_artist_names:
             member_key = ensure_artist(member_name)

@@ -28,6 +28,36 @@ const POSSESSIVE_PROJECT_TARGET = Object.freeze({
   album: 'Watcher Possessive Project Identity',
   year: 2008,
 });
+const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
+  Object.freeze({
+    artist: 'Belle Stars',
+    album: 'Rain Man',
+    albumArtist: 'Various Artists',
+    trackArtists: ['Belle Stars', 'Watcher Compilation Performer'],
+    year: 1988,
+  }),
+  Object.freeze({
+    artist: 'Ben Del Maestro',
+    album: 'The Lord Of The Rings: The Return Of The King',
+    albumArtist: 'Various Artists',
+    trackArtists: ['Ben Del Maestro', 'Watcher Compilation Performer'],
+    year: 2003,
+  }),
+  Object.freeze({
+    artist: 'Beny Moré',
+    album: 'Dexter: Music From The Showtime Original Series',
+    albumArtist: 'Various Artists',
+    trackArtists: ['Beny Moré', 'Watcher Compilation Performer'],
+    year: 2007,
+  }),
+  Object.freeze({
+    artist: 'Bella Ramsey',
+    album: 'Hilda: Season 2 (Original Series Soundtrack)',
+    albumArtist: 'Ryan Carlson',
+    trackArtists: ['Bella Ramsey', 'Ryan Carlson'],
+    year: 2020,
+  }),
+]);
 
 async function viewResponseHasAlbumTrackCount(response, albumName, expectedCount) {
   if (!response.ok() || new URL(response.url()).pathname !== '/view-data') return false;
@@ -47,6 +77,31 @@ async function viewResponseHasAlbumTrackCount(response, albumName, expectedCount
   if (!album) return false;
   const count = Number(album.track_count_preview ?? album.track_count ?? album.tracks?.length ?? -1);
   return count === expectedCount;
+}
+
+async function expectFeaturedAlbumOccurrence({
+  page,
+  galleryActions,
+  navigationPanelActions,
+  artist,
+  album,
+}) {
+  await expect.poll(
+    () => navigationPanelActions.readSidebarArtistLabelCount(artist),
+    { timeout: 60000, intervals: [250, 500, 1000] },
+  ).toBe(1);
+  await navigationPanelActions.selectSidebarArtistByName(artist);
+  await navigationPanelActions.waitForSidebarSelection(artist);
+  await galleryActions.waitForArtistHeadings([artist]);
+  await galleryActions.waitForAlbumVisible(album, 60000);
+
+  const subsectionTitle = await page.locator('.album-title-button', { hasText: album }).evaluate((button) => {
+    const row = button.closest('.album-row');
+    let sibling = row?.previousElementSibling || null;
+    while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
+    return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
+  });
+  expect(subsectionTitle).toBe('Featured On');
 }
 
 test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal', { tag: '@area:album-details' }, async ({
@@ -412,6 +467,102 @@ test('FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from
       expect(await navigationPanelActions.readSidebarArtistLabelCount(
         POSSESSIVE_PROJECT_TARGET.baseArtist,
       )).toBe(1);
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On', {
+  tag: '@area:gallery-search',
+}, async ({
+  appBarActions,
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  navigationPanelActions,
+  page,
+  stepLogger,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(300000);
+
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add soundtrack releases with distinct album and track artist credits', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      const [initial, ...siblings] = FEATURED_OWNERSHIP_TARGETS;
+      fixture = await createWatchedAlbumFixture({
+        artist: 'Watcher Soundtracks',
+        trackArtist: initial.artist,
+        albumArtist: initial.albumArtist,
+        album: initial.album,
+        year: initial.year,
+        trackTitles: ['Featured Signal', 'Owner Signal'],
+        trackArtists: initial.trackArtists,
+        fixtureDirectory: 'watcher-featured-ownership',
+        context,
+        managedAppLifecycle,
+      });
+      for (const target of siblings) {
+        await fixture.createSiblingAlbum({
+          album: target.album,
+          folderName: target.album.replaceAll(':', ' -'),
+          year: target.year,
+          trackTitles: ['Featured Signal', 'Owner Signal'],
+          trackArtists: target.trackArtists,
+          albumArtist: target.albumArtist,
+        });
+      }
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+      for (const target of FEATURED_OWNERSHIP_TARGETS) {
+        await expect.poll(async () => {
+          const identity = await queryPersistedAlbumIdentity({
+            artist: target.albumArtist,
+            album: target.album,
+            year: target.year,
+          });
+          return identity.track_counts;
+        }, { timeout: 60000, intervals: [250, 500, 1000] }).toEqual([2]);
+      }
+    });
+
+    await stepLogger.step('Show every track performer only under Featured On with owner credit intact', async () => {
+      for (const target of FEATURED_OWNERSHIP_TARGETS) {
+        await expectFeaturedAlbumOccurrence({
+          page,
+          galleryActions,
+          navigationPanelActions,
+          ...target,
+        });
+      }
+    });
+
+    await stepLogger.step('Keep soundtrack ownership stable after application restart', async () => {
+      await managedAppLifecycle.restart();
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      for (const target of FEATURED_OWNERSHIP_TARGETS) {
+        await expectFeaturedAlbumOccurrence({
+          page,
+          galleryActions,
+          navigationPanelActions,
+          ...target,
+        });
+      }
     });
   } catch (error) {
     originalFailure = error;

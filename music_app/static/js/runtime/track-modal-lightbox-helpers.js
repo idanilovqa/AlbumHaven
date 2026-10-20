@@ -841,6 +841,7 @@ function closeImageLightbox() {
   state.lightbox.activeSourceIndex = -1;
   state.lightbox.activeFullSource = '';
   state.lightbox.activeAlt = '';
+  state.lightbox.fullSizeRetryAttempted = false;
   state.lightbox.loadToken = Number(state.lightbox.loadToken || 0) + 1;
   cancelActiveLightboxPreloader();
   setLightboxZoom(1);

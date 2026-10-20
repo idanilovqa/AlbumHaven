@@ -506,8 +506,20 @@
   color: #f8fafc;
   text-align: center;
 }
+.image-lightbox-retry {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 3;
+  width: max-content;
+  max-width: calc(100vw - 40px);
+  white-space: normal;
+  text-align: center;
+}
 .image-lightbox-loading[hidden],
 .image-lightbox-error[hidden],
+.image-lightbox-retry[hidden],
 .image-lightbox-image[hidden] {
   display: none;
 }

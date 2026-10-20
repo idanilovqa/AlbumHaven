@@ -1105,6 +1105,31 @@ function getLightboxItemSources(item) {
 }
 
 const LIGHTBOX_SOURCE_TIMEOUT_MS = 8000;
+const LOCAL_FULL_SIZE_LIGHTBOX_RETRY_DELAY_MS = 150;
+
+function isLocalFullSizeLightboxSource(source) {
+  return String(source || '').trim().startsWith('/cover?');
+}
+
+function buildLightboxCoverRetryUrl(source) {
+  const normalizedSource = String(source || '').trim();
+  if (!normalizedSource) return '';
+  const hashIndex = normalizedSource.indexOf('#');
+  const sourceWithoutHash = hashIndex >= 0 ? normalizedSource.slice(0, hashIndex) : normalizedSource;
+  const hash = hashIndex >= 0 ? normalizedSource.slice(hashIndex) : '';
+  const separator = sourceWithoutHash.includes('?') ? '&' : '?';
+  const retryNonce = Number(state.lightbox.fullSizeRetryNonce || 0) + 1;
+  state.lightbox.fullSizeRetryNonce = retryNonce;
+  return `${sourceWithoutHash}${separator}_album_haven_retry=${encodeURIComponent(`${Date.now()}-${retryNonce}`)}${hash}`;
+}
+
+function showLightboxRetryControl(label = 'Retry cover') {
+  const { retry } = getLightboxElements();
+  if (!retry) return;
+  retry.textContent = label;
+  retry.setAttribute?.('aria-label', label);
+  retry.hidden = false;
+}
 
 function clearActiveLightboxSourceTimeout() {
   const timeoutId = state.lightbox.activeSourceTimeoutId;
@@ -1148,11 +1173,17 @@ function startLightboxSourcePreload(imageElement, loadToken) {
     if (loading) loading.hidden = true;
     if (error) error.hidden = false;
     if (status) status.textContent = 'Cover could not be loaded.';
-    if (retry) retry.hidden = false;
-    if (typeof imageElement.removeAttribute === 'function') imageElement.removeAttribute('src');
-    imageElement.hidden = true;
-    imageElement.alt = '';
-    if (typeof imageElement.setAttribute === 'function') imageElement.setAttribute('aria-hidden', 'true');
+    if (retry) showLightboxRetryControl(
+      isLocalFullSizeLightboxSource(state.lightbox.activeFullSource)
+        ? 'Retry full-size cover'
+        : 'Retry cover',
+    );
+    if (imageElement.hidden || !String(imageElement.src || '').trim()) {
+      if (typeof imageElement.removeAttribute === 'function') imageElement.removeAttribute('src');
+      imageElement.hidden = true;
+      imageElement.alt = '';
+      if (typeof imageElement.setAttribute === 'function') imageElement.setAttribute('aria-hidden', 'true');
+    }
     if (imageElement.classList?.add) imageElement.classList.add('is-unavailable');
     return false;
   }
@@ -1165,12 +1196,28 @@ function startLightboxSourcePreload(imageElement, loadToken) {
     && Number(state.lightbox.activeSourceIndex || 0) === sourceIndex
     && String(state.lightbox.activeSources?.[sourceIndex] || '').trim() === expectedSource
   );
-  const continueToNextSource = () => {
+  const continueToNextSource = (reason = 'error') => {
     if (!isCurrentLoad()) return;
     clearActiveLightboxSourceTimeout();
     preloader.onload = null;
     preloader.onerror = null;
     state.lightbox.activePreloader = null;
+    if (
+      reason === 'error'
+      && sourceIndex === 0
+      && isLocalFullSizeLightboxSource(state.lightbox.activeFullSource)
+      && !state.lightbox.fullSizeRetryAttempted
+    ) {
+      state.lightbox.fullSizeRetryAttempted = true;
+      state.lightbox.activeSourceTimeoutId = scheduleBrowserTimeout(() => {
+        if (Number(loadToken || 0) !== Number(state.lightbox.loadToken || 0)) return;
+        if (Number(state.lightbox.activeSourceIndex || 0) !== sourceIndex) return;
+        state.lightbox.activeSourceTimeoutId = null;
+        state.lightbox.activeSources[0] = buildLightboxCoverRetryUrl(state.lightbox.activeFullSource);
+        startLightboxSourcePreload(imageElement, loadToken);
+      }, LOCAL_FULL_SIZE_LIGHTBOX_RETRY_DELAY_MS);
+      return;
+    }
     state.lightbox.activeSourceIndex = sourceIndex + 1;
     startLightboxSourcePreload(imageElement, loadToken);
   };
@@ -1194,15 +1241,18 @@ function startLightboxSourcePreload(imageElement, loadToken) {
         state.lightbox.activeAlt || 'Full-size album cover',
       );
       if (imageElement.classList?.remove) imageElement.classList.remove('is-unavailable');
+      if (sourceIndex > 0 && isLocalFullSizeLightboxSource(state.lightbox.activeFullSource)) {
+        showLightboxRetryControl('Retry full-size cover');
+      }
     }).catch(() => {
       continueToNextSource();
     });
   };
   preloader.onerror = () => {
-    continueToNextSource();
+    continueToNextSource('error');
   };
   state.lightbox.activeSourceTimeoutId = scheduleBrowserTimeout(
-    continueToNextSource,
+    () => continueToNextSource('timeout'),
     LIGHTBOX_SOURCE_TIMEOUT_MS,
   );
   preloader.src = expectedSource;
@@ -1217,9 +1267,17 @@ function retryActiveLightboxImage() {
   cancelActiveLightboxPreloader();
   const loadToken = Number(state.lightbox.loadToken || 0) + 1;
   state.lightbox.loadToken = loadToken;
+  state.lightbox.fullSizeRetryAttempted = true;
   state.lightbox.activeSourceIndex = 0;
-  setLightboxLoadingPresentation(els.image, els.loading, true);
-  if (typeof els.image.removeAttribute === 'function') els.image.removeAttribute('src');
+  state.lightbox.activeSources[0] = buildLightboxCoverRetryUrl(state.lightbox.activeFullSource);
+  const preserveVisibleImage = !els.image.hidden && Boolean(String(els.image.src || '').trim());
+  if (els.error) els.error.hidden = true;
+  if (els.retry) els.retry.hidden = true;
+  if (els.loading) els.loading.hidden = preserveVisibleImage;
+  if (!preserveVisibleImage) {
+    setLightboxLoadingPresentation(els.image, els.loading, true);
+    if (typeof els.image.removeAttribute === 'function') els.image.removeAttribute('src');
+  }
   if (els.image.classList?.remove) els.image.classList.remove('is-unavailable');
   return startLightboxSourcePreload(els.image, loadToken);
 }
@@ -1231,6 +1289,7 @@ function applyLightboxImageItem(item) {
   const loadToken = Number(state.lightbox.loadToken || 0) + 1;
   state.lightbox.loadToken = loadToken;
   state.lightbox.activeFullSource = String(item?.src || '').trim();
+  state.lightbox.fullSizeRetryAttempted = false;
   state.lightbox.activeAlt = item.alt || 'Full-size album cover';
   const sources = getLightboxItemSources(item);
   state.lightbox.activeSources = sources;

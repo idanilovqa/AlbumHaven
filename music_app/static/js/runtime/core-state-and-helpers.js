@@ -32,7 +32,11 @@ const state = {
     activeSources: [],
     activeSourceIndex: -1,
     activeFullSource: '',
+      activeAlt: '',
     activePreloader: null,
+      activeSourceTimeoutId: null,
+      fullSizeRetryAttempted: false,
+      fullSizeRetryNonce: 0,
     loadToken: 0,
   },
   ui: {

@@ -745,6 +745,20 @@ export class TrackModalActions {
     return this.trackModal.readCoverLightboxSources();
   }
 
+  async expectCoverLightboxRetryAvailable(options = {}) {
+    const timeout = options.timeout || 15000;
+    await expect(this.trackModal.lightboxRetryButton).toBeVisible({ timeout });
+    await expect(this.trackModal.lightboxRetryButton).toBeEnabled({ timeout });
+  }
+
+  async retryCoverLightbox() {
+    await this.trackModal.lightboxRetryButton.click();
+  }
+
+  async expectCoverLightboxRetryHidden(options = {}) {
+    await expect(this.trackModal.lightboxRetryButton).toBeHidden({ timeout: options.timeout || 15000 });
+  }
+
   async zoomCoverLightbox(options = {}) {
     const steps = Math.max(1, Number(options.steps || 4));
     await this.trackModal.lightboxImage.hover();

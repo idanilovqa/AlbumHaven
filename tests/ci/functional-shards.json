@@ -249,6 +249,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/galleryCoverStability.spec.js",
+              "case": "FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-size art is unavailable",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/galleryCoverStability.spec.js",
               "case": "FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album",
               "area": "playback"
             },

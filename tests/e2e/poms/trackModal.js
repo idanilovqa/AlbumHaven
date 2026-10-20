@@ -44,6 +44,7 @@ export class TrackModal extends BasePage {
     this.lightbox = page.locator(this.lightboxSelector);
     this.lightboxLoading = page.locator(this.lightboxLoadingSelector);
     this.lightboxImage = page.locator(this.lightboxImageSelector);
+    this.lightboxRetryButton = page.getByRole('button', { name: /retry full-size cover/i });
     this.lightboxCloseButton = page.locator(this.lightboxCloseButtonSelector);
     this.lightboxPreviousButton = page.locator('#image-lightbox-prev');
     this.lightboxNextButton = page.locator('#image-lightbox-next');

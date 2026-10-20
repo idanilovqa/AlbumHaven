@@ -234,6 +234,94 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
   });
 });
 
+test('FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-size art is unavailable', { tag: '@area:cover-providers' }, async ({
+  galleryActions,
+  page,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  const coverTraffic = observeExactCoverTraffic(page);
+  let fullCoverUrl;
+  let unavailableCover;
+
+  await stepLogger.step('Find the exact Joseph release and capture its production full-cover URL', async () => {
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    await searchToolbarActions.search('Joseph', { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery('Joseph');
+    await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
+    const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));
+    expectJosephFixtureCheckpoint(expect, checkpoint);
+    expectAlbumCardCoverPresentationReady(expect, checkpoint);
+    fullCoverUrl = new URL(checkpoint.productionSrc || checkpoint.src, page.url());
+    fullCoverUrl.searchParams.delete('size');
+    expect(fullCoverUrl.pathname).toBe('/cover');
+  });
+
+  unavailableCover = temporarilyMakeJosephCoverUnavailable(fullCoverUrl.href, page.url());
+  try {
+    await stepLogger.step('Keep the real preview visible and expose Retry after full-size attempts fail', async () => {
+      await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+      const summary = await trackModalActions.waitForLoadedSummary();
+      expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
+      expect(summary.title).toContain(YEAR);
+      const lightboxSources = await trackModalActions.readCoverLightboxSources();
+      const previewUrl = new URL(lightboxSources.preview, page.url());
+      const expectedFullUrl = new URL(lightboxSources.full, page.url());
+      expect(previewUrl.pathname).toBe('/cover');
+      expect(previewUrl.searchParams.get('size')).toBe('480');
+      expect(expectedFullUrl.origin).toBe(fullCoverUrl.origin);
+      expect(expectedFullUrl.pathname).toBe(fullCoverUrl.pathname);
+      expect([...expectedFullUrl.searchParams]).toEqual([...fullCoverUrl.searchParams]);
+
+      await trackModalActions.openCoverLightbox();
+      const canonicalFailure = await coverTraffic.waitForResponse(expectedFullUrl.href, {
+        status: 404,
+        requireBodyHash: false,
+      });
+      expect(canonicalFailure.status).toBe(404);
+
+      const fullSizeRetryUrls = () => coverTraffic.requestUrls().filter((requestUrl) => {
+        const url = new URL(requestUrl);
+        return url.pathname === expectedFullUrl.pathname
+          && url.searchParams.get('path') === expectedFullUrl.searchParams.get('path')
+          && url.searchParams.get('size') === null
+          && url.searchParams.has('_album_haven_retry');
+      });
+      await expect.poll(() => fullSizeRetryUrls().length).toBe(1);
+      const automaticRetryUrl = fullSizeRetryUrls()[0];
+      const automaticFailure = await coverTraffic.waitForResponse(automaticRetryUrl, {
+        status: 404,
+        requireBodyHash: false,
+      });
+      expect(automaticFailure.status).toBe(404);
+
+      const fallbackCheckpoint = await readDecodedImageCheckpoint(trackModalActions.trackModal.lightboxImage);
+      expect(new URL(fallbackCheckpoint.src, page.url()).href).toBe(previewUrl.href);
+      await trackModalActions.expectCoverLightboxRetryAvailable();
+
+      unavailableCover.restore();
+      await trackModalActions.retryCoverLightbox();
+      await expect.poll(() => fullSizeRetryUrls().length).toBe(2);
+      const manualRetryUrl = fullSizeRetryUrls().at(-1);
+      await coverTraffic.waitForResponse(manualRetryUrl);
+      const recoveredCheckpoint = await readDecodedImageCheckpoint(trackModalActions.trackModal.lightboxImage);
+      const recoveredUrl = new URL(recoveredCheckpoint.src, page.url());
+      expect(recoveredUrl.pathname).toBe(expectedFullUrl.pathname);
+      expect(recoveredUrl.searchParams.get('path')).toBe(expectedFullUrl.searchParams.get('path'));
+      expect(recoveredUrl.searchParams.get('size')).toBeNull();
+      expect(recoveredUrl.searchParams.has('_album_haven_retry')).toBe(true);
+      await trackModalActions.expectCoverLightboxRetryHidden();
+      await trackModalActions.closeCoverLightbox();
+      await trackModalActions.close();
+    });
+  } finally {
+    unavailableCover?.restore();
+    coverTraffic.stop();
+  }
+});
+
 test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album', { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,

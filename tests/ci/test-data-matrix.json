@@ -1315,6 +1315,28 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/galleryCoverStability.spec.js",
+    "case": "FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-size art is unavailable",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "setupGroup": "joseph-cover-detail",
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "album:joseph-2023"
+    ],
+    "filesystemScenarios": [
+      "covers:joseph-2023-approved-copy"
+    ],
+    "expectedContracts": [
+      "bounded-full-cover-retry-preview-and-retry-control"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/galleryCoverStability.spec.js",
     "case": "FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album",
     "profile": "functional-core",
     "setupScope": "isolated",

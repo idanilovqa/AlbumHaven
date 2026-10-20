@@ -733,10 +733,12 @@ test('lightbox stays pending through decode and falls back when full-source deco
   assert.equal(loading.hidden, false);
   context.__preloaders[0].rejectDecode(new Error('full source decode failed'));
   await flushLightboxPromises();
-  assert.equal(context.__preloaders[1].src, '/cover?path=joseph&size=480', 'a failed full source should preload the proven preview source');
-  context.__preloaders[1].onload();
+  assert.match(context.__preloaders[1].src, /^\/cover\?path=joseph&full=1&_album_haven_retry=/);
+  context.__preloaders[1].onerror();
+  assert.equal(context.__preloaders[2].src, '/cover?path=joseph&size=480', 'a failed full source should preload the proven preview source');
+  context.__preloaders[2].onload();
   assert.equal(image.hidden, true, 'preview must also remain pending through decode');
-  context.__preloaders[1].resolveDecode();
+  context.__preloaders[2].resolveDecode();
   await flushLightboxPromises();
   assert.equal(image.src, '/cover?path=joseph&size=480');
   assert.equal(image.hidden, false);
@@ -766,8 +768,9 @@ test('lightbox exhausts broken sources without a native broken image and retries
   });
   context.__preloaders[0].onerror();
   context.__preloaders[1].onerror();
-  assert.equal(context.__preloaders[2].src, '/remote-cover?album=joseph', 'the remote source should remain the final image fallback');
   context.__preloaders[2].onerror();
+  assert.equal(context.__preloaders[3].src, '/remote-cover?album=joseph', 'the remote source should remain the final image fallback');
+  context.__preloaders[3].onerror();
   assert.equal(image.src, '');
   assert.equal(image.hidden, true, 'an exhausted fallback chain must not leave the browser broken-image icon visible');
   assert.equal(loading.hidden, true, 'terminal exhaustion must not leave a false loading status');
@@ -778,13 +781,13 @@ test('lightbox exhausts broken sources without a native broken image and retries
     remoteSrc: '/remote-cover?album=joseph',
   }), true);
   assert.equal(
-    context.__preloaders[3].src,
+    context.__preloaders[4].src,
     '/cover?path=joseph&full=1',
     'each explicit reopen should retry the full source after a transient failure',
   );
-  context.__preloaders[3].onload();
+  context.__preloaders[4].onload();
   assert.equal(image.hidden, true);
-  context.__preloaders[3].resolveDecode();
+  context.__preloaders[4].resolveDecode();
   await flushLightboxPromises();
   assert.equal(image.src, '/cover?path=joseph&full=1');
   assert.equal(image.hidden, false);
@@ -861,10 +864,76 @@ test('lightbox bounds stalled sources and exposes an explicit retry after exhaus
   assert.ok(delays.every((delay) => delay === 8000), 'every source attempt must use the fixed bound');
 
   assert.equal(context.retryActiveLightboxImage(), true);
-  assert.equal(context.__preloaders[3].src, '/cover?path=iliad&full=1');
+  assert.match(context.__preloaders[3].src, /^\/cover\?path=iliad&full=1&_album_haven_retry=/);
   assert.equal(error.hidden, true);
   assert.equal(loading.hidden, false);
   assert.equal(retry.hidden, true);
+});
+
+test('local full-size failure retries once then keeps the preview visible with manual recovery', async () => {
+  const { context } = loadHelper();
+  const image = new FakeElement('image-lightbox-image');
+  const loading = new FakeElement('image-lightbox-loading');
+  const error = new FakeElement('image-lightbox-error');
+  const status = new FakeElement('image-lightbox-status');
+  const retry = new FakeElement('image-lightbox-retry');
+  const timers = new Map();
+  let nextTimerId = 0;
+
+  image.src = '';
+  const removeImageAttribute = image.removeAttribute.bind(image);
+  image.removeAttribute = (name) => {
+    if (name === 'src') image.src = '';
+    removeImageAttribute(name);
+  };
+  context.getLightboxElements = () => ({
+    image,
+    loading,
+    error,
+    status,
+    retry,
+    overlay: new FakeElement('image-lightbox'),
+  });
+  context.setLightboxZoom = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    const timerId = ++nextTimerId;
+    timers.set(timerId, { callback, delay });
+    return timerId;
+  };
+  context.clearBrowserTimeout = (timerId) => timers.delete(timerId);
+  context.state.lightbox = { items: [], currentIndex: -1, loadToken: 0 };
+
+  const fullSource = '/cover?path=C%3A%2FMusic%2FIliad%2FA%20Grand%20Piano%20Extravaganza%2Fcover.jpg&v=cov-008';
+  const previewSource = `${fullSource}&size=480`;
+  context.showStandaloneLightboxItem({
+    src: fullSource,
+    previewSrc: previewSource,
+    alt: 'Album cover for A Grand Piano Extravaganza',
+  });
+
+  context.__preloaders[0].onerror();
+  assert.equal(context.__preloaders.length, 1, 'the first local failure should schedule one same-source retry');
+  assert.deepEqual([...timers.values()].map((timer) => timer.delay), [150]);
+
+  const automaticRetry = timers.values().next().value;
+  timers.clear();
+  automaticRetry.callback();
+  assert.match(context.__preloaders[1].src, /_album_haven_retry=/);
+  context.__preloaders[1].onerror();
+  assert.equal(context.__preloaders[2].src, previewSource);
+  context.__preloaders[2].onload();
+  context.__preloaders[2].resolveDecode();
+  await flushLightboxPromises();
+
+  assert.equal(image.src, previewSource);
+  assert.equal(image.hidden, false);
+  assert.equal(retry.hidden, false);
+  assert.match(retry.textContent, /retry full-size cover/i);
+
+  assert.equal(context.retryActiveLightboxImage(), true);
+  assert.equal(image.src, previewSource, 'manual retry must preserve the usable preview');
+  assert.equal(image.hidden, false);
+  assert.match(context.__preloaders[3].src, /_album_haven_retry=/);
 });
 
 test('stale navigation and close-like invalidation during decode cannot reveal an old source', async () => {

@@ -4501,6 +4501,78 @@ def test_provider_fixture_later_request_returns_candidates_before_terminal_mode_
         service.stop()
 
 
+def test_provider_fixture_later_gate_also_holds_discogs_requests(tmp_path):
+    cover_path = tmp_path / "fixture.jpg"
+    cover_path.write_bytes(b"fixture-image")
+    other_art_path = tmp_path / "fixture-other-art.jpg"
+    other_art_path.write_bytes(b"fixture-other-art-image")
+    service = isolatedLibraryApp.ProviderFixtureService(
+        0,
+        [{
+            "cover_id": "fixture-07",
+            "staged_path": str(cover_path),
+            "other_art_staged_path": str(other_art_path),
+            "artist": "Mastodon",
+            "album": "Crack The Skye Fixture 07",
+            "year": 2009,
+            "width": 1200,
+            "height": 1200,
+        }],
+        itunes_search_delay_seconds=0,
+    )
+    service.start()
+    port = service._server.server_address[1]
+    request_result: dict[str, object] = {}
+
+    def request_discogs_candidates() -> None:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        try:
+            connection.request(
+                "GET",
+                "/discogs/database/search?"
+                "artist=Mastodon&release_title=Crack%20The%20Skye%20Fixture%2007",
+            )
+            response = connection.getresponse()
+            request_result["status"] = response.status
+            request_result["payload"] = json.loads(response.read())
+        except Exception as exc:  # pragma: no cover - asserted on the owner thread
+            request_result["error"] = exc
+        finally:
+            connection.close()
+
+    request_thread = threading.Thread(target=request_discogs_candidates)
+    try:
+        service._server.set_cover_lookup_mode("normal")
+        service._server.hold_cover_lookup_later_provider()
+        request_thread.start()
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            evidence = service._server.snapshot_cover_lookup_evidence()
+            if evidence["later_provider_started"] == 1:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("Discogs fixture request never reached the held provider gate")
+
+        assert request_thread.is_alive(), "held Discogs provider returned before release"
+        assert evidence["later_provider_completed"] == 0
+
+        service._server.release_cover_lookup_later_provider()
+        request_thread.join(timeout=2)
+        assert not request_thread.is_alive(), "released Discogs response did not complete"
+        assert "error" not in request_result
+        assert request_result["status"] == 200
+        assert request_result["payload"]["pagination"]["items"] == 1
+        assert service._server.snapshot_cover_lookup_evidence()[
+            "later_provider_completed"
+        ] == 1
+    finally:
+        service._server.release_cover_lookup_later_provider()
+        request_thread.join(timeout=2)
+        service.stop()
+
+
 def test_provider_fixture_control_sets_reports_validates_and_resets_apple_search_delay(
     tmp_path,
 ):
@@ -5169,6 +5241,8 @@ def test_provider_fixture_serves_every_cover_matching_candidate_image(tmp_path):
         "metallica-kill-em-all-false-single",
         "metallica-kill-em-all-false-tribute",
         "metallica-kill-em-all-false-remix",
+        "metallica-kill-em-all-false-truncated-title",
+        "metallica-kill-em-all-false-sequence-title",
         "metallica-kill-em-all-false-featuring",
         "metallica-kill-em-all-false-other-band",
         "metallica-kill-em-all-false-featured-artist",

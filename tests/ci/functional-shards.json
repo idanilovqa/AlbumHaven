@@ -450,6 +450,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-031 a prior-generation choice survives a newer active lookup and saves unchanged",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-022 cover gallery loading starts before the task list responds",
               "area": "cover-providers"
             },

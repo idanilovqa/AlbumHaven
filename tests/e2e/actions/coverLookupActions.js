@@ -357,17 +357,15 @@ export class CoverLookupActions {
     let evidence = null;
     await expect.poll(async () => {
       evidence = await readCoverLookupProviderEvidence(this.coverLookup.testInfo);
-      return evidence;
+      return Number(evidence?.later_provider_started || 0) >= 1
+        && Number(evidence?.later_provider_completed || 0) === 0
+        && Number(evidence?.cover_art_archive_requests || 0) === 0
+        && evidence?.later_provider_released === false;
     }, {
       message: 'Expected the deterministic later cover provider to be waiting at its fixture gate.',
       timeout: options.timeout || 30000,
       intervals: [250, 500, 750, 1000],
-    }).toMatchObject({
-      musicbrainz_started: 1,
-      musicbrainz_completed: 0,
-      cover_art_archive_requests: 0,
-      later_provider_released: false,
-    });
+    }).toBe(true);
     return evidence;
   }
 
@@ -508,6 +506,11 @@ export class CoverLookupActions {
   async selectRemoteCandidateByIdAndSave(candidateId, options = {}) {
     const timeout = options.timeout || 30000;
     await this.selectRemoteCandidateById(candidateId, { timeout });
+    return (await this.saveSelectedRemoteCandidate({ timeout })).payload;
+  }
+
+  async saveSelectedRemoteCandidate(options = {}) {
+    const timeout = options.timeout || 30000;
     const responsePromise = this.coverLookup.page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/utilities/cover-lookup/save-remote'
@@ -522,7 +525,10 @@ export class CoverLookupActions {
       );
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
-    return payload;
+    return {
+      payload,
+      requestPayload: response.request().postDataJSON(),
+    };
   }
 
   async reopenUntilSavedRemoteCoverIsActive(
@@ -1074,6 +1080,29 @@ export class CoverLookupActions {
     await expect(this.coverLookup.taskStatusByTitle(taskTitle)).toHaveText(expectedStatus, {
       timeout: options.timeout || 30000,
     });
+  }
+
+  async waitForTaskStatusById(taskId, expectedStatus, options = {}) {
+    await expect(this.coverLookup.taskStatusById(taskId)).toHaveText(expectedStatus, {
+      timeout: options.timeout || 30000,
+    });
+  }
+
+  async readTaskById(taskId) {
+    const expectedTaskId = String(taskId || '').trim();
+    if (!expectedTaskId) throw new Error('A cover lookup task identity is required.');
+    const response = await authenticatedPageGet(
+      this.coverLookup.page,
+      new URL('/utilities/cover-lookup/tasks', this.coverLookup.page.url()).toString(),
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok() || !payload?.ok) {
+      throw new Error(
+        `Cover lookup tasks request failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
+      );
+    }
+    return (Array.isArray(payload.tasks) ? payload.tasks : [])
+      .find((task) => String(task?.id || '').trim() === expectedTaskId) || null;
   }
 
   async expectTaskIdentity(taskTitle, identity) {

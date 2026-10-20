@@ -5,6 +5,7 @@ from music_app.services.log_history import history_scope_for_request
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -971,6 +972,15 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
     task_payload = cover_lookup_result(task_id)
+    if not task_payload and task_id:
+        try:
+            normalized_task_id = UUID(task_id).hex
+        except ValueError:
+            normalized_task_id = ""
+        if normalized_task_id:
+            task_payload = cover_lookup_result(normalized_task_id)
+            if task_payload:
+                task_id = normalized_task_id
     selected_match = None
     if task_payload:
         repository, album_id, identity_error = _resolved_snapshot_album_context(
@@ -1074,6 +1084,20 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     response_task_payload = serialize_cover_lookup_task_payload(
         cover_lookup_result(task_id)
     )
+    def persist_authoritative_cover_selection(track_paths, cover_path, **changes):
+        def commit_cover_selection(commit_action):
+            return state_service.run_authoritative_cover_commit_for_state(
+                library_state,
+                commit_action,
+            )
+
+        return persist_cover_selection_for_tracks(
+            track_paths,
+            cover_path,
+            **changes,
+            commit_guard=commit_cover_selection,
+        )
+
     queue_cover_lookup_save_remote_task(
         task_id,
         album_context.album_root,
@@ -1086,7 +1110,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
         cover_selection_origin="user",
         apply_cover_selection_for_tracks=apply_cover_path_for_tracks,
-        persist_cover_selection_for_tracks=persist_cover_selection_for_tracks,
+        persist_cover_selection_for_tracks=persist_authoritative_cover_selection,
     )
     return JSONResponse(
         {

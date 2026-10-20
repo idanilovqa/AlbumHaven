@@ -326,13 +326,50 @@ function applyCoverLookupCandidateSource(candidateSource) {
   if (!candidateSource) return;
   const modal = state.coverLookup.modal;
   const generation = String(candidateSource.generation || '').trim();
-  if (generation !== String(modal.candidateGeneration || '').trim()) {
-    modal.candidateGeneration = generation;
-    modal.remoteSelectionOverrideGeneration = '';
-    modal.remoteSelectionOverrideCandidateId = '';
-    modal.remoteSelectionOverrideUrl = '';
+  const overrideGeneration = String(modal.remoteSelectionOverrideGeneration || '').trim();
+  const overrideCandidateId = String(
+    modal.remoteSelectionOverrideCandidateId || modal.selectedRemoteId || '',
+  );
+  const overrideUrl = normalizeCoverLookupCandidateUrl(
+    modal.remoteSelectionOverrideUrl || '',
+  ).toLowerCase();
+  const candidateMatchesOverride = (candidate) => (
+    overrideUrl
+      ? normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === overrideUrl
+      : String(candidate?.id || '') === overrideCandidateId
+  );
+  const retainedOverride = (modal.possibleMatches || []).find(candidateMatchesOverride);
+  modal.candidateGeneration = generation;
+  let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
+  const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
+  if (hasExplicitRemoteSelection) {
+    const incomingOverride = possibleMatches.find(candidateMatchesOverride);
+    const selectedOverride = overrideGeneration !== generation
+      ? (retainedOverride || incomingOverride)
+      : incomingOverride;
+    if (selectedOverride) {
+      const selectedOverrideId = String(selectedOverride.id || '');
+      const selectedOverrideUrl = normalizeCoverLookupCandidateUrl(
+        selectedOverride.url,
+      ).toLowerCase();
+      const selectedOverrideIsPresent = possibleMatches.some((candidate) => (
+        String(candidate?.id || '') === selectedOverrideId
+        && normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === selectedOverrideUrl
+      ));
+      if (!selectedOverrideIsPresent) {
+        possibleMatches = [selectedOverride, ...possibleMatches.filter((candidate) => (
+          String(candidate?.id || '') !== selectedOverrideId
+          && (
+            !selectedOverrideUrl
+            || normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() !== selectedOverrideUrl
+          )
+        ))];
+      }
+    }
+    modal.possibleMatches = possibleMatches;
+    modal.selectedRemoteId = String(selectedOverride?.id || '');
+    return;
   }
-  const possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
   modal.possibleMatches = possibleMatches;
   const hasPendingNonRemoteSelection = Boolean(
     String(modal.pendingLocalPath || '')
@@ -341,33 +378,12 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || String(modal.activeLocalSelectionPath || '')
     || String(getCoverLookupActiveLocalPath() || '')
   );
-  const userOverrodeThisGeneration = Boolean(
-    generation
-    && String(modal.remoteSelectionOverrideGeneration || '') === generation
-  );
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
   const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
     String(candidate?.id || '') === bestCandidateId
     && String(candidate?.art_kind || 'cover') === 'cover'
     && !Boolean(candidate?.display_only)
   ));
-  if (userOverrodeThisGeneration) {
-    const overrideCandidateId = String(
-      modal.remoteSelectionOverrideCandidateId || modal.selectedRemoteId || '',
-    );
-    const overrideUrl = normalizeCoverLookupCandidateUrl(
-      modal.remoteSelectionOverrideUrl || '',
-    ).toLowerCase();
-    const selectedOverride = possibleMatches.find((candidate) => (
-      String(candidate?.id || '') === overrideCandidateId
-      || (
-        overrideUrl
-        && normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === overrideUrl
-      )
-    ));
-    modal.selectedRemoteId = String(selectedOverride?.id || '');
-    return;
-  }
   if (hasPendingNonRemoteSelection) {
     modal.selectedRemoteId = '';
     return;
@@ -421,6 +437,7 @@ function applyCoverLookupGalleryPayload(gallery) {
       && terminalCandidateSource
       && hasActiveLocalCover
       && !state.coverLookup.modal.remoteCover
+      && !state.coverLookup.modal.remoteSelectionOverrideGeneration
     ) {
       state.coverLookup.modal.selectedRemoteId = '';
       state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
@@ -428,15 +445,11 @@ function applyCoverLookupGalleryPayload(gallery) {
       state.coverLookup.modal.remoteSelectionOverrideUrl = '';
     }
   }
-  const activeCandidateGeneration = String(
-    state.coverLookup.modal.candidateGeneration || '',
-  ).trim();
-  const userOverrodeActiveGeneration = Boolean(
-    activeCandidateGeneration
-    && String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
-      === activeCandidateGeneration
+  const hasExplicitRemoteSelection = Boolean(
+    String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '').trim()
+    && String(state.coverLookup.modal.remoteSelectionOverrideCandidateId || '').trim()
   );
-  if (state.coverLookup.modal.remoteCover && !userOverrodeActiveGeneration) {
+  if (state.coverLookup.modal.remoteCover && !hasExplicitRemoteSelection) {
     state.coverLookup.modal.selectedRemoteId = '';
   }
   if (task) {
@@ -1225,6 +1238,29 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
+function buildCoverLookupDrawerTerminalSignatures(tasks) {
+  return Object.fromEntries((Array.isArray(tasks) ? tasks : []).map((task) => {
+    const taskId = String(task?.id || '').trim();
+    const status = String(task?.status || '').trim();
+    const terminalSignature = isCompletedCoverLookupTask(task)
+      ? `${status}|${String(task?.result_kind || '').trim()}|${String(task?.finished_at || '').trim()}`
+      : '';
+    return [taskId, terminalSignature];
+  }).filter(([taskId]) => taskId));
+}
+
+function hasPendingCoverLookupDrawerTerminalPublication(tasks) {
+  const renderedSignatures = state.coverLookup.drawerRenderedTerminalSignatures;
+  if (!renderedSignatures || typeof renderedSignatures !== 'object') return false;
+  return (Array.isArray(tasks) ? tasks : []).some((task) => {
+    if (!isCompletedCoverLookupTask(task)) return false;
+    const taskId = String(task?.id || '').trim();
+    if (!taskId) return false;
+    const currentSignature = buildCoverLookupDrawerTerminalSignatures([task])[taskId];
+    return renderedSignatures[taskId] !== currentSignature;
+  });
+}
+
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
@@ -1267,11 +1303,27 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  const preserveSelectedNotificationText = preserveInteraction
-    && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
+  const preserveTextSelection = state.coverLookup.drawerOpen
+    && preserveInteraction
+    && hasActiveCoverLookupDrawerTextSelection(body);
+  const preservePressedAction = state.coverLookup.drawerOpen
+    && preserveInteraction
+    && Boolean(
+      body.querySelector?.('.cover-lookup-task-open:active')
+      || body.querySelector?.('.cover-lookup-task-actions :active')
+    );
+  const preserveActiveAction = state.coverLookup.drawerOpen
+    && preserveInteraction
+    && hasActiveCoverLookupDrawerAction(body)
+    && (
+      preservePressedAction
+      || !hasPendingCoverLookupDrawerTerminalPublication(tasks)
+    );
+  const preserveSelectedNotificationText = preserveTextSelection || preserveActiveAction;
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
       body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
+      state.coverLookup.drawerRenderedTerminalSignatures = {};
     }
     syncCoverLookupElapsedTimer();
     return;
@@ -1281,6 +1333,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
+    const isCoverUpdated = status === 'completed' && String(task?.result_kind || '') === 'cover-updated';
     const foundCount = Array.isArray(task?.possible_matches)
       ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
       : 0;
@@ -1290,6 +1343,8 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? 'Canceled'
       : isNoResult
       ? 'No covers found'
+      : isCoverUpdated
+      ? 'Art chosen'
       : status === 'completed'
         ? `${foundCount ? `${foundCount} ` : ''}covers found`
       : status === 'pending'
@@ -1358,6 +1413,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   }).join('');
   if (!preserveSelectedNotificationText) {
     body.innerHTML = taskMarkup;
+    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
   }
   syncCoverLookupElapsedTimer();
 }
@@ -2132,6 +2188,9 @@ function selectLocalCoverFromLookup(sourcePath) {
   state.coverLookup.modal.pendingLocalPath = String(sourcePath || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
+  state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
+  state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
+  state.coverLookup.modal.remoteSelectionOverrideUrl = '';
   syncCoverLookupSelectionUi();
 }
 
@@ -2275,8 +2334,22 @@ function selectRemoteCoverFromLookup(candidateId) {
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
   state.coverLookup.modal.activeLocalSelectionPath = '';
+  const selectionAlbumSignature = buildTrackPathSignature(state.coverLookup.modal.album);
+  const selectedCandidateUrl = normalizeCoverLookupCandidateUrl(
+    selectedCandidate?.url,
+  ).toLowerCase();
+  const selectionOwnerTaskId = String((state.coverLookup.tasks || []).find((task) => (
+    buildTrackPathSignature(task?.album_payload) === selectionAlbumSignature
+    && Array.isArray(task?.possible_matches)
+    && task.possible_matches.some((candidate) => (
+      selectedCandidateUrl
+        ? normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === selectedCandidateUrl
+        : String(candidate?.id || '') === String(candidateId || '')
+    ))
+  ))?.id || '').trim();
   state.coverLookup.modal.remoteSelectionOverrideGeneration = String(
-    state.coverLookup.modal.candidateGeneration
+    selectionOwnerTaskId
+    || state.coverLookup.modal.candidateGeneration
     || state.coverLookup.modal.candidateSnapshot?.search_generation
     || state.coverLookup.modal.taskId
     || '',
@@ -2293,14 +2366,20 @@ function selectPastedCoverFromLookup(imageId) {
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.pendingPastedImageId = String(imageId || '');
   state.coverLookup.modal.activeLocalSelectionPath = '';
+  state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
+  state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
+  state.coverLookup.modal.remoteSelectionOverrideUrl = '';
   syncCoverLookupSelectionUi();
 }
 
 async function saveRemoteCoverFromLookup() {
   const album = state.coverLookup.modal.album;
-  const taskId = state.coverLookup.modal.taskId;
   const candidateId = state.coverLookup.modal.selectedRemoteId;
-  const snapshotGeneration = String(
+  const selectionOwnerGeneration = String(
+    state.coverLookup.modal.remoteSelectionOverrideGeneration || '',
+  ).trim();
+  const taskId = selectionOwnerGeneration || state.coverLookup.modal.taskId;
+  const snapshotGeneration = selectionOwnerGeneration || String(
     state.coverLookup.modal.candidateSnapshot?.search_generation || '',
   ).trim();
   if (!album || (!taskId && !snapshotGeneration) || !candidateId) return;

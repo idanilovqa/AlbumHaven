@@ -76,6 +76,23 @@ require('node:test')('completed lookup counts covers while retaining every other
   }
 });
 
+require('node:test')('completed cover update reports that art was chosen', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  context.state.coverLookup.tasks = [{
+    id: 'cover-updated',
+    status: 'completed',
+    result_kind: 'cover-updated',
+    artist: 'Artist',
+    album: 'Album',
+    possible_matches: [{ id: 'selected-cover', art_kind: 'cover' }],
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, />Art chosen</);
+  assert.doesNotMatch(bodyElement.innerHTML, />1 covers found</);
+});
+
 require('node:test')('polling preserves a pressed task before selection exists and resumes after release', () => {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'pressed-task', status: 'running', artist: 'Artist', album: 'Album' };
@@ -101,6 +118,22 @@ require('node:test')('polling preserves a pressed task before selection exists a
     'Explicit user removal must not be blocked by interaction preservation');
 });
 
+require('node:test')('closed drawer reconciles terminal task state despite a hidden hovered action', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const task = { id: 'saved-task', status: 'running', artist: 'Artist', album: 'Album' };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, />Searching</);
+
+  context.state.coverLookup.drawerOpen = false;
+  context.hasActiveCoverLookupDrawerAction = () => true;
+  task.status = 'completed';
+  task.result_kind = 'cover-updated';
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, />Art chosen</);
+});
+
 for (const interaction of ['focus', 'hover']) {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'cancel-transition', status: 'running', artist: 'Artist', album: 'Album' };
@@ -123,6 +156,37 @@ for (const interaction of ['focus', 'hover']) {
   assert.match(bodyElement.innerHTML, />Canceled</, `${interaction}: terminal poll must retire the stale Cancel action`);
   assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/);
 }
+
+require('node:test')('a hovered running task does not hide another task terminal publication', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const savedTask = {
+    id: 'saved-task', status: 'running', artist: 'Saved Artist', album: 'Saved Album',
+  };
+  const activeTask = {
+    id: 'active-task', status: 'running', artist: 'Active Artist', album: 'Active Album',
+  };
+  context.state.coverLookup.tasks = [savedTask, activeTask];
+  context.renderCoverLookupDrawer();
+
+  const activeCancelButton = {
+    closest: (selector) => selector === '.cover-lookup-task-actions' ? {} : activeCancelButton,
+    getAttribute: () => activeTask.id,
+  };
+  bodyElement.contains = (element) => element === activeCancelButton;
+  bodyElement.querySelector = selector => (
+    selector === '.cover-lookup-task-actions :hover' ? activeCancelButton : null
+  );
+
+  savedTask.status = 'completed';
+  savedTask.result_kind = 'cover-updated';
+  context.renderCoverLookupDrawer();
+
+  assert.match(
+    bodyElement.innerHTML,
+    /Saved Album[\s\S]*>Art chosen</,
+    'an unrelated running Cancel action must not freeze a completed save notification',
+  );
+});
 
 {
   const { context, bodyElement } = createDrawerHarness();
@@ -1347,8 +1411,8 @@ function createDrawerHarness(overrides = {}) {
   await context.refreshCoverLookupGallery(false);
   assert.equal(
     context.state.coverLookup.modal.selectedRemoteId,
-    'candidate-d',
-    'a new generation resets the pending override and auto-selects its best candidate',
+    'candidate-a',
+    'a new generation preserves the explicit prior-generation choice instead of auto-selecting its best candidate',
   );
 })().catch((error) => {
   console.error(error);

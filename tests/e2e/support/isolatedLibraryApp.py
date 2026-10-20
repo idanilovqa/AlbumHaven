@@ -4008,6 +4008,22 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 1800,
             "candidate_fixture_mode": "artist-conjunction",
         })
+        self.cover_lookup_selection_concurrency_specs = [
+            prepare_provider_artwork_spec({
+                **dict(source),
+                "cover_id": f"selection-concurrency-{generation}",
+                "artist": "Mastodon",
+                "album": "Crack The Skye Fixture 07",
+                "year": 2009,
+                "width": 1800,
+                "height": 1800,
+                "candidate_fixture_mode": f"selection-concurrency-{generation}",
+            })
+            for generation, source in (
+                ("a", cover_specs[0]),
+                ("b", cover_specs[3] if len(cover_specs) > 3 else cover_specs[-1]),
+            )
+        ]
         self.cover_specs = [
             *(dict(spec) for spec in cover_specs),
             *(dict(spec) for spec in self.cover_lookup_matching_specs),
@@ -4017,6 +4033,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             self.cover_lookup_same_art_improvement_spec,
             self.cover_lookup_alternate_improvement_spec,
             self.cover_lookup_artist_conjunction_spec,
+            *self.cover_lookup_selection_concurrency_specs,
         ]
         self.itunes_search_delay_lock = threading.Lock()
         self.itunes_search_delay_seconds = 0.0
@@ -4049,6 +4066,8 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "apple_search_terms": [],
             "manual_page_requests": 0,
             "manual_image_requests": 0,
+            "later_provider_started": 0,
+            "later_provider_completed": 0,
             "musicbrainz_started": 0,
             "musicbrainz_queries": [],
             "musicbrainz_completed": 0,
@@ -4152,6 +4171,8 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
                 "apple_search_terms": [],
                 "manual_page_requests": 0,
                 "manual_image_requests": 0,
+                "later_provider_started": 0,
+                "later_provider_completed": 0,
                 "musicbrainz_started": 0,
                 "musicbrainz_queries": [],
                 "musicbrainz_completed": 0,
@@ -4178,11 +4199,22 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             self.cover_lookup_evidence["candidate_image_requests"] += 1
         self.cover_lookup_candidate_image_gate.wait()
 
-    def wait_for_cover_lookup_later_provider(self, query: str) -> None:
+    def wait_for_cover_lookup_later_provider(
+        self,
+        query: str,
+        *,
+        provider: str = "musicbrainz",
+    ) -> None:
         with self.cover_lookup_evidence_lock:
-            self.cover_lookup_evidence["musicbrainz_started"] += 1
-            self.cover_lookup_evidence["musicbrainz_queries"].append(str(query or ""))
+            self.cover_lookup_evidence["later_provider_started"] += 1
+            if provider == "musicbrainz":
+                self.cover_lookup_evidence["musicbrainz_started"] += 1
+                self.cover_lookup_evidence["musicbrainz_queries"].append(str(query or ""))
         self.cover_lookup_later_provider_gate.wait()
+
+    def record_cover_lookup_later_provider_completed(self) -> None:
+        with self.cover_lookup_evidence_lock:
+            self.cover_lookup_evidence["later_provider_completed"] += 1
 
     def set_cover_lookup_mode(self, mode: str) -> None:
         normalized_mode = str(mode or "").strip()
@@ -4198,6 +4230,8 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "same-art-improvement",
             "alternate-improvement",
             "owned-legacy-repair",
+            "selection-concurrency-a",
+            "selection-concurrency-b",
         }:
             raise ValueError(f"Unsupported cover lookup fixture mode: {normalized_mode}")
         with self.cover_lookup_mode_lock:
@@ -4251,6 +4285,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
     def record_musicbrainz_completed(self) -> None:
         with self.cover_lookup_evidence_lock:
             self.cover_lookup_evidence["musicbrainz_completed"] += 1
+            self.cover_lookup_evidence["later_provider_completed"] += 1
 
     def snapshot_cover_lookup_evidence(self) -> dict[str, Any]:
         with self.cover_lookup_evidence_lock:
@@ -4593,6 +4628,11 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             return [dict(spec) for spec in self.server.cover_lookup_matching_specs]
         if mode == "artist-conjunction":
             return [dict(self.server.cover_lookup_artist_conjunction_spec)]
+        if mode in {"selection-concurrency-a", "selection-concurrency-b"}:
+            if _normalize_provider_query("Mastodon Crack The Skye Fixture 07") in normalized_query:
+                index = 0 if mode.endswith("-a") else 1
+                return [dict(self.server.cover_lookup_selection_concurrency_specs[index])]
+            return []
         if mode == "automatic-coverless":
             if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
                 return [dict(self.server.cover_lookup_automatic_candidate_spec)]
@@ -4735,7 +4775,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         provider: str,
         include_body: bool,
     ) -> None:
-        if cover_id == "provider-storage-policy-cover" and provider == "apple":
+        if (
+            cover_id == "provider-storage-policy-cover" and provider == "apple"
+        ) or cover_id == "selection-concurrency-b":
             self.server.wait_for_cover_lookup_candidate_image()
         payload = self.server.apple_artwork_payload(cover_id)
         if payload is None:
@@ -4806,6 +4848,8 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
 
     def _serve_cover_image(self, filename: str, *, include_body: bool) -> None:
         cover_id = Path(filename).stem
+        if cover_id == "selection-concurrency-b":
+            self.server.wait_for_cover_lookup_candidate_image()
         cover_path = self.server.cover_paths.get(cover_id)
         if cover_path is None or not cover_path.is_file():
             self.send_error(404)
@@ -4818,11 +4862,15 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         *,
         include_body: bool,
     ) -> None:
-        self.server.record_cover_lookup_request("discogs_search_requests")
         query_text = " ".join(
             str(value)
             for key in ("artist", "release_title", "q", "year")
             for value in query.get(key, [])
+        )
+        self.server.record_cover_lookup_request("discogs_search_requests")
+        self.server.wait_for_cover_lookup_later_provider(
+            query_text,
+            provider="discogs",
         )
         matching_specs = self._matching_specs(query_text)
         release_id_by_cover_id = {
@@ -4850,6 +4898,7 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                 "format": ["Album"],
                 "country": "US",
             })
+        self.server.record_cover_lookup_later_provider_completed()
         self._send_json({"pagination": {"items": len(results)}, "results": results}, include_body=include_body)
 
     def _serve_discogs_release(self, release_id: str, *, include_body: bool) -> None:

@@ -54,6 +54,10 @@ from music_app.services.cover_workflow import (
 
 
 _COVER_LOOKUP_EXECUTOR = create_daemon_executor(max_workers=4, thread_name_prefix="albumhaven-cover-lookup")
+_COVER_LOOKUP_SAVE_EXECUTOR = create_daemon_executor(
+    max_workers=2,
+    thread_name_prefix="albumhaven-cover-save",
+)
 _COVER_LOOKUP_PROVIDER_EXECUTOR = create_daemon_executor(
     max_workers=4,
     thread_name_prefix="albumhaven-cover-provider",
@@ -260,7 +264,7 @@ def queue_cover_lookup_save_remote_task(
     persist_cover_selection_for_tracks=None,
 ) -> None:
     resolved_user_agent = str(user_agent or config["MUSICBRAINZ_USER_AGENT"])
-    future = _COVER_LOOKUP_EXECUTOR.submit(
+    future = _COVER_LOOKUP_SAVE_EXECUTOR.submit(
         _run_cover_lookup_save_remote_task,
         task_id,
         config,
@@ -1069,7 +1073,7 @@ def _run_cover_lookup_save_remote_task(
                 progress_label="Completed",
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 selected_candidate_id=candidate_id,
-                notification_action_taken=True,
+                notification_action_taken=False,
                 message="Selected remote cover art saved as a linked artwork source.",
                 result_kind="cover-updated",
                 updated_albums=updated_albums,
@@ -1222,7 +1226,7 @@ def _run_cover_lookup_save_remote_task(
             progress_label="Completed",
             finished_at=datetime.now(timezone.utc).isoformat(),
             selected_candidate_id=candidate_id,
-            notification_action_taken=True,
+            notification_action_taken=False,
             message="Selected cover art saved.",
             result_kind="cover-updated",
             updated_albums=updated_albums,

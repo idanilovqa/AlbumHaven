@@ -539,17 +539,27 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
     library_state: dict[str, object] = {"albums": []}
     requested_track_paths = {str(tmp_path / "song.mp3")}
 
-    class FakeExecutor:
+    class FakeSaveExecutor:
         def submit(self, fn, *args, **kwargs):
             calls["fn"] = fn
             calls["args"] = args
             calls["kwargs"] = kwargs
             return "fake-future"
 
+    class SearchExecutor:
+        def submit(self, *_args, **_kwargs):
+            raise AssertionError("A cover save must not queue behind cover searches")
+
     def fake_apply_cover_selection_for_tracks(track_paths, **changes):
         return [dict(changes)], {"track_paths": sorted(track_paths)}
 
-    monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", FakeExecutor())
+    monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", SearchExecutor())
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "_COVER_LOOKUP_SAVE_EXECUTOR",
+        FakeSaveExecutor(),
+        raising=False,
+    )
     monkeypatch.setattr(
         cover_lookup_runtime,
         "register_cover_lookup_future",
@@ -2258,6 +2268,7 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
         "changes": {
             "cover_path": None,
             "cover_selection_origin": "user",
+            "explicit_selection": True,
             "remote_cover_url": "https://images.example/cover.jpg",
             "remote_cover_thumbnail_url": "https://images.example/thumb.jpg",
             "remote_cover_source": "spotify",
@@ -2278,7 +2289,7 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
             "progress_label": "Completed",
             "finished_at": updates[0]["finished_at"],
             "selected_candidate_id": "candidate-1",
-            "notification_action_taken": True,
+            "notification_action_taken": False,
             "message": "Selected remote cover art saved as a linked artwork source.",
             "result_kind": "cover-updated",
             "updated_albums": [{"key": "album-1"}],
@@ -2588,6 +2599,7 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
         "changes": {
             "cover_path": written_cover,
             "cover_selection_origin": "user",
+            "explicit_selection": True,
             "remote_cover_url": None,
             "remote_cover_thumbnail_url": None,
             "remote_cover_source": None,
@@ -2614,7 +2626,7 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
             "progress_label": "Completed",
             "finished_at": updates[0]["finished_at"],
             "selected_candidate_id": "candidate-1",
-            "notification_action_taken": True,
+            "notification_action_taken": False,
             "message": "Selected cover art saved.",
             "result_kind": "cover-updated",
             "updated_albums": [{"key": "album-1", "cover_path": str(written_cover)}],
@@ -3126,7 +3138,7 @@ def test_run_cover_lookup_save_remote_task_accepts_non_numeric_album_subfolders(
             "progress_label": "Completed",
             "finished_at": updates[0]["finished_at"],
             "selected_candidate_id": "candidate-1",
-            "notification_action_taken": True,
+            "notification_action_taken": False,
             "message": "Selected cover art saved.",
             "result_kind": "cover-updated",
             "updated_albums": [{"key": "album-1", "cover_path": str(written_cover)}],

@@ -1311,6 +1311,131 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
   });
 });
 
+test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup and saves unchanged', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  stepLogger,
+  thirdPartyRequestEvidence,
+  trackModalActions,
+}) => {
+  let generationATaskId = '';
+  let generationBTaskId = '';
+  let generationAChoice = null;
+  let generationBCandidate = null;
+  let generationBCandidateImage = null;
+  let saved = null;
+  let savedCoverRevision = '';
+
+  await stepLogger.step('Complete generation A, reset provider evidence, then gate generation B', async () => {
+    await coverLookupActions.setProviderFixtureMode('selection-concurrency-a');
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET))
+      .toEqual(PROGRESSIVE_CANDIDATE_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+
+    const generationA = await coverLookupActions.startSearch();
+    generationATaskId = String(generationA.task?.id || '').trim();
+    expect(generationATaskId).not.toBe('');
+    await coverLookupActions.waitForModalSearchCompleted();
+    const generationACandidates = await coverLookupActions.readRemoteCandidateSummaries();
+    expect(generationACandidates.length).toBeGreaterThan(0);
+    generationAChoice = await coverLookupActions.readRemoteCandidateEvidence(
+      generationACandidates[0].id,
+    );
+    generationAChoice.id = generationACandidates[0].id;
+    expect(generationAChoice.sha256).toBeTruthy();
+
+    await coverLookupActions.resetProviderFixtureEvidence();
+    await coverLookupActions.setProviderFixtureMode('selection-concurrency-b');
+    await coverLookupActions.holdCandidateImageFixture();
+    await coverLookupActions.holdLaterProviderFixture();
+    const generationB = await coverLookupActions.startSearch();
+    generationBTaskId = String(generationB.task?.id || '').trim();
+    expect(generationBTaskId).not.toBe('');
+    expect(generationBTaskId).not.toBe(generationATaskId);
+    await coverLookupActions.waitForCandidateImageFixtureBlocked();
+    await coverLookupActions.waitForLaterProviderFixtureBlocked();
+  });
+
+  await stepLogger.step('Select and save A while B remains active after publishing its distinct candidate', async () => {
+    await coverLookupActions.selectRemoteCandidateById(generationAChoice.id);
+    await coverLookupActions.waitForSelectedRemoteCandidateId(generationAChoice.id);
+
+    await coverLookupActions.releaseCandidateImageFixture();
+    await expect.poll(async () => {
+      const runningCandidates = await coverLookupActions.readRemoteCandidateSummaries();
+      generationBCandidate = runningCandidates.find(
+        (candidate) => candidate.imageSrc.includes('selection-concurrency-b'),
+      ) || null;
+      return generationBCandidate?.id || '';
+    }, {
+      message: 'Expected generation B to publish its distinct candidate while its later provider remained held.',
+      timeout: 30000,
+    }).not.toBe('');
+    generationBCandidateImage = await coverLookupActions.readRemoteCandidateEvidence(
+      generationBCandidate.id,
+    );
+    expect(generationBCandidateImage.sha256).toBeTruthy();
+    expect(generationBCandidateImage.sha256).not.toBe(generationAChoice.sha256);
+    expect(await coverLookupActions.readSelectedRemoteCandidateId()).toBe(generationAChoice.id);
+    await expect(coverLookupActions.coverLookup.remoteCoverCardById(generationAChoice.id)).toBeVisible();
+    await expect(coverLookupActions.coverLookup.saveRemoteButton).toBeEnabled();
+
+    saved = await coverLookupActions.saveSelectedRemoteCandidate();
+    expect(saved.requestPayload).toMatchObject({
+      task_id: generationATaskId,
+      candidate_id: generationAChoice.id,
+      snapshot_generation: generationATaskId,
+    });
+    expect(saved.requestPayload.task_id).not.toBe(generationBTaskId);
+    expect(saved.payload.optimistic_cover_path).toMatch(/[\\/]cover\.jpg$/i);
+    await coverLookupActions.waitForTaskStatusById(generationATaskId, 'Art chosen', {
+      timeout: 120000,
+    });
+    const savedTask = await coverLookupActions.readTaskById(generationATaskId);
+    expect(savedTask?.selected_candidate_id).toBe(generationAChoice.id);
+    const persistedGenerationA = await coverLookupActions.readFullSizeCoverEvidence({
+      coverPath: saved.payload.optimistic_cover_path,
+      label: 'persisted generation-A cover before generation-B completion',
+    });
+    savedCoverRevision = persistedGenerationA.sha256.toLowerCase();
+  });
+
+  await stepLogger.step('Release B afterward and prove its terminal publication cannot replace persisted A', async () => {
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    await coverLookupActions.releaseLaterProviderFixture();
+    await coverLookupActions.waitForModalSearchCompleted();
+    await coverLookupActions.closeModal();
+
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    const reopened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(
+      PROGRESSIVE_CANDIDATE_TARGET,
+    );
+    expect(reopened.album.cover_path).toBe(saved.payload.optimistic_cover_path);
+    expect(reopened.album.cover_selection_origin).toBe('user');
+    expect(reopened.album.cover_revision).toBe(savedCoverRevision);
+    await trackModalActions.waitForLoadedSummary();
+    const persisted = await coverLookupActions.readFullSizeCoverEvidence({
+      coverPath: reopened.album.cover_path,
+      coverRevision: reopened.album.cover_revision,
+      label: 'persisted generation-A cover after generation-B completion',
+    });
+    expect(persisted.sha256).toBe(savedCoverRevision.toUpperCase());
+
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    const active = await coverLookupActions.readActiveLocalCoverEvidence();
+    expect(active.sourcePath).toBe(reopened.album.cover_path);
+    expect(active.image.coverRevision).toBe(savedCoverRevision);
+    expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
+  });
+});
+
 test('FTC-COVERS-020 provider deadline keeps candidates found by earlier services', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,

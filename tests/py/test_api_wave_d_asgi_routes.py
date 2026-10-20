@@ -11,6 +11,7 @@ import importlib
 from pathlib import Path
 from threading import Event, Timer
 from types import SimpleNamespace
+from uuid import UUID
 
 from fastapi import FastAPI
 import pytest
@@ -2456,6 +2457,121 @@ def test_asgi_cover_lookup_save_remote_rejects_obsolete_snapshot_generation_befo
     }
     assert repository_reads == [41]
     assert list_cover_lookup_tasks(config=app.config) == []
+
+
+def test_asgi_cover_lookup_save_remote_accepts_canonical_snapshot_uuid_for_live_task(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
+    queued_calls: list[dict[str, object]] = []
+    commit_guard_states: list[dict[str, object]] = []
+    persisted_calls: list[dict[str, object]] = []
+    reset_cover_lookup_runtime_state()
+    task_id, _ = cover_lookup_tasks.create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+    )
+    canonical_generation = str(UUID(task_id))
+    cover_lookup_tasks.update_cover_lookup_task(
+        task_id,
+        status="completed",
+        possible_matches=[{
+            "id": "generation-a-candidate",
+            "art_kind": "cover",
+            "url": "https://images.example/generation-a.jpg",
+            "source": "apple",
+        }],
+    )
+
+    class CurrentSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            assert album_id == 41
+            return {
+                "album_id": album_id,
+                "search_generation": str(UUID(int=2)),
+                "status": "running",
+                "candidates": [{
+                    "id": "generation-b-candidate",
+                    "art_kind": "cover",
+                    "url": "https://images.example/generation-b.jpg",
+                }],
+            }
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", CurrentSnapshotRepository)
+    monkeypatch.setattr(
+        asgi_routes.state_service,
+        "run_authoritative_cover_commit_for_state",
+        lambda state, commit_action: (
+            commit_guard_states.append(state),
+            commit_action(),
+        )[1],
+    )
+
+    def fake_persist_cover_selection(track_paths, cover_path, **kwargs):
+        commit_guard = kwargs.get("commit_guard")
+        assert callable(commit_guard)
+        commit_result = commit_guard(lambda: "committed")
+        persisted_calls.append({
+            "track_paths": track_paths,
+            "cover_path": cover_path,
+            "kwargs": kwargs,
+            "commit_result": commit_result,
+        })
+        return {"album_rows_updated": 1, "track_file_rows_updated": 1}
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "persist_cover_selection_for_tracks",
+        fake_persist_cover_selection,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *args, **kwargs: queued_calls.append({"args": args, "kwargs": kwargs}),
+    )
+    asgi_app = _make_wave_d_app(app)
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": {**_album_payload(track_path), "album_id": 41},
+            "task_id": canonical_generation,
+            "snapshot_generation": canonical_generation,
+            "candidate_id": "generation-a-candidate",
+        },
+    )
+
+    assert status == 200
+    assert _decode_json(body)["task"]["selected_candidate_id"] == "generation-a-candidate"
+    assert len(queued_calls) == 1
+    assert queued_calls[0]["args"][0] == task_id
+    assert queued_calls[0]["args"][4]["url"] == "https://images.example/generation-a.jpg"
+    persist_callback = queued_calls[0]["kwargs"]["persist_cover_selection_for_tracks"]
+    persisted_cover = track_path.parent / "cover.jpg"
+    assert persist_callback(
+        {str(track_path)},
+        persisted_cover,
+        cover_selection_origin="user",
+        explicit_selection=True,
+    ) == {"album_rows_updated": 1, "track_file_rows_updated": 1}
+    assert commit_guard_states == [app.library_state]
+    assert persisted_calls[0]["commit_result"] == "committed"
 
 
 def test_asgi_cover_lookup_save_remote_queues_candidate_from_persisted_snapshot(

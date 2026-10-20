@@ -423,6 +423,12 @@ export class CoverLookup extends BasePage {
     }).first();
   }
 
+  taskCardById(taskId) {
+    return this.page.locator(
+      `[data-open-cover-lookup-task="${String(taskId || '').replaceAll('"', '\\"')}"]`,
+    ).locator('..');
+  }
+
   taskInfoByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-open');
   }
@@ -448,6 +454,10 @@ export class CoverLookup extends BasePage {
 
   taskStatusByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator(this.taskStatusWithinCardSelector).first();
+  }
+
+  taskStatusById(taskId) {
+    return this.taskCardById(taskId).locator(this.taskStatusWithinCardSelector).first();
   }
 
   taskBylineByTitle(taskTitle) {

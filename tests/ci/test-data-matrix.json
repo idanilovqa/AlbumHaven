@@ -239,6 +239,34 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
+    "case": "FTC-ALBUM-DETAILS-026 rebuild drops track subtitle and part frames from album editions",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "track-subtitle-projection",
+    "databaseScenarios": [
+      "album-identity:track-subtitle-edition-boundary"
+    ],
+    "filesystemScenarios": [
+      "media-copy:track-subtitle-edition-boundary"
+    ],
+    "expectedContracts": [
+      "track-subtitle-frames-do-not-create-album-editions",
+      "collapsed-release-persists-after-reload"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:track-subtitle-edition-boundary",
+      "filesystemCopy": "media/cases/track-subtitle-edition-boundary"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
     "case": "FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks",
     "profile": "functional-core",

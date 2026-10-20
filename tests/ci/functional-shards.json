@@ -95,6 +95,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
+              "case": "FTC-ALBUM-DETAILS-026 rebuild drops track subtitle and part frames from album editions",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
               "case": "FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks",
               "area": "problematic-files"

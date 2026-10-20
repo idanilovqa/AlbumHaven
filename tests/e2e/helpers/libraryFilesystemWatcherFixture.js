@@ -14,6 +14,7 @@ const WATCHER_FIXTURE_DIRECTORIES = new Set([
   'watcher-punctuation-identity',
   'watcher-possessive-identity',
   'watcher-featured-ownership',
+  'watcher-numeric-discs',
 ]);
 
 const RETAG_SCRIPT = `
@@ -36,7 +37,7 @@ tags.add(TALB(encoding=3, text=[sys.argv[4]]))
 tags.add(TDRC(encoding=3, text=[sys.argv[5]]))
 tags.add(TIT2(encoding=3, text=[sys.argv[6]]))
 tags.add(TRCK(encoding=3, text=[sys.argv[7]]))
-tags.add(TPOS(encoding=3, text=["1/1"]))
+tags.add(TPOS(encoding=3, text=[sys.argv[9]]))
 tags.save(track)
 if sys.argv[8] == "1" and ID3(track).getall("APIC"):
     raise RuntimeError("Watcher cover fixture still contains embedded artwork")
@@ -100,12 +101,14 @@ function firstPlayableMp3(mediaRoot) {
 }
 
 async function retag(trackPath, {
-  trackArtist, albumArtist, album, year, title, trackNumber, removeEmbeddedArtwork = false,
+  trackArtist, albumArtist, album, year, title, trackNumber, discTag = '1/1',
+  removeEmbeddedArtwork = false,
 }) {
   await execFileAsync(resolvePlaywrightPython(process.env), [
     '-c', RETAG_SCRIPT, trackPath, trackArtist, albumArtist, album, String(year), title,
     String(trackNumber),
     removeEmbeddedArtwork ? '1' : '0',
+    discTag,
   ], { encoding: 'utf8', windowsHide: true });
 }
 
@@ -131,6 +134,7 @@ async function buildWatchedAlbumFixture({
   year = 2004,
   trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
   trackArtists = null,
+  discNumbers = null,
   removeEmbeddedArtwork = false,
   fixtureDirectory = 'watcher-reconciliation',
 } = {}) {
@@ -146,13 +150,20 @@ async function buildWatchedAlbumFixture({
     trackArtist: defaultTrackArtist = trackArtist,
     trackArtists: albumTrackArtists = null,
     albumArtist: albumOwner = albumArtist,
+    discNumbers: albumDiscNumbers = discNumbers,
   }) => {
     const directory = assertOwnedPath(mediaRoot, path.join(ownedRoot, artist, folderName));
     fs.mkdirSync(directory, { recursive: true });
     const createdTracks = [];
+    const discTotal = albumDiscNumbers ? Math.max(...albumDiscNumbers) : 1;
     for (const [index, title] of titles.entries()) {
       const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;
-      const destination = assertOwnedPath(mediaRoot, path.join(directory, filename));
+      const discNumber = albumDiscNumbers?.[index] ?? 1;
+      const trackDirectory = albumDiscNumbers
+        ? assertOwnedPath(mediaRoot, path.join(directory, String(discNumber)))
+        : directory;
+      fs.mkdirSync(trackDirectory, { recursive: true });
+      const destination = assertOwnedPath(mediaRoot, path.join(trackDirectory, filename));
       fs.copyFileSync(source, destination);
       await retag(destination, {
         trackArtist: albumTrackArtists?.[index] ?? defaultTrackArtist,
@@ -161,9 +172,10 @@ async function buildWatchedAlbumFixture({
         year: albumYear,
         title,
         trackNumber: index + 1,
+        discTag: `${discNumber}/${discTotal}`,
         removeEmbeddedArtwork,
       });
-      createdTracks.push({ filename, title, path: destination });
+      createdTracks.push({ filename, title, path: destination, discNumber, discTotal });
     }
     return { album: albumName, year: albumYear, albumDirectory: directory, tracks: createdTracks };
   };
@@ -173,6 +185,7 @@ async function buildWatchedAlbumFixture({
     year,
     trackTitles,
     trackArtists,
+    discNumbers,
   });
   const albumDirectory = target.albumDirectory;
   const tracks = target.tracks;
@@ -186,6 +199,7 @@ async function buildWatchedAlbumFixture({
       const track = tracks[index];
       await retag(track.path, {
         trackArtist, albumArtist, album, year, title, trackNumber: index + 1,
+        discTag: `${track.discNumber}/${track.discTotal}`,
         removeEmbeddedArtwork,
       });
       track.title = title;

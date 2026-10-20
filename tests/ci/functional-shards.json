@@ -102,6 +102,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/numericDiscFolderProjection.spec.js",
+              "case": "FTC-ALBUM-DETAILS-027 numeric disc folders remain one release without duplicate versions",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
               "case": "FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks",
               "area": "problematic-files"

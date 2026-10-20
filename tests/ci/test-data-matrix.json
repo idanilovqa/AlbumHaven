@@ -376,6 +376,35 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/numericDiscFolderProjection.spec.js",
+    "case": "FTC-ALBUM-DETAILS-027 numeric disc folders remain one release without duplicate versions",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "numeric-disc-folder-projection",
+    "databaseScenarios": [
+      "album-identity:numeric-disc-folder-projection"
+    ],
+    "filesystemScenarios": [
+      "media-copy:numeric-disc-folder-projection"
+    ],
+    "expectedContracts": [
+      "numeric-disc-folders-form-one-release",
+      "numeric-disc-folders-do-not-create-duplicate-sources",
+      "numeric-disc-folder-release-persists-after-restart"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:numeric-disc-folder-projection",
+      "filesystemCopy": "media/cases/numeric-disc-folder-projection"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
     "case": "FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks",
     "profile": "functional-core",

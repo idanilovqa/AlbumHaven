@@ -112,6 +112,78 @@ def test_multidisc_album_is_one_physical_source():
     ) == []
 
 
+def test_numeric_disc_folders_matching_disc_tags_are_one_physical_source():
+    assert _sources(
+        _track("main/original/1", disc_number=1, title="Disc One Track"),
+        _track("main/original/2", disc_number=2, title="Disc Two Track"),
+        _track("main/original/3", disc_number=3, title="Disc Three Track"),
+        _track("main/original/4", disc_number=4, title="Disc Four Track"),
+    ) == []
+
+
+def test_single_numeric_album_folders_do_not_collapse_from_matching_disc_tags():
+    sources = _sources(
+        _track("main/1", disc_number=1),
+        _track("hoard/1", disc_number=1),
+    )
+
+    assert len(sources) == 2
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/1")),
+        str(Path("hoard/1")),
+    }
+
+
+def test_numeric_disc_folders_do_not_collapse_with_mixed_disc_tags():
+    sources = _sources(
+        _track("main/original/1", 1, disc_number=1),
+        _track("main/original/1", 2, disc_number=2),
+        _track("main/original/2", 1, disc_number=2),
+    )
+
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/original/1")),
+        str(Path("main/original/2")),
+    }
+
+
+def test_numeric_disc_folders_build_one_album_with_all_discs():
+    tracks = [
+        _track(f"main/original/{disc_number}", disc_number=disc_number)
+        for disc_number in range(1, 5)
+    ]
+
+    albums = build_albums_from_file_cache(
+        {str(track.path): asdict(track) for track in tracks}
+    )
+
+    assert len(albums) == 1
+    assert [track.disc_number for track in albums[0].tracks] == [1, 2, 3, 4]
+
+
+def test_postgres_projection_keeps_numeric_disc_folders_out_of_duplicates():
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    tracks = [
+        _track(f"main/original/{disc_number}", disc_number=disc_number)
+        for disc_number in range(1, 5)
+    ]
+    rows = [
+        {
+            "album_key": "album",
+            "file_private_path": str(track.path),
+            "file_entry": asdict(track),
+            "duration_seconds": track.duration_seconds,
+        }
+        for track in tracks
+    ]
+
+    projection = _duplicate_sources_from_rows(rows)["album"]
+
+    assert projection["has_duplicate_files"] is False
+    assert projection["duplicate_sources"] == []
+
+
 def test_separate_tagged_releases_in_sibling_disc_folders_are_not_mixed_metadata():
     entries = [
         {**asdict(_track("main/release/CD1", album="Main Album")), "library_root_id": 1},

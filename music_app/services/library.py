@@ -426,16 +426,6 @@ def album_separate_release_key(album_artist: str, album_name: str, edition: str 
     return _album_key(album_artist, album_name, edition)
 
 
-def _entry_album_container(entry: dict[str, object]) -> str:
-    raw_path = str(entry.get("path") or "").strip()
-    if not raw_path:
-        return ""
-    parent = Path(os.path.normpath(raw_path)).parent
-    if _DISC_FOLDER_RE.search(parent.name) and parent.parent != parent:
-        parent = parent.parent
-    return str(parent).strip().lower()
-
-
 def _track_album_container(path_value: object) -> str:
     raw_path = str(path_value or "").strip()
     if not raw_path:
@@ -446,6 +436,77 @@ def _track_album_container(path_value: object) -> str:
     if _DISC_FOLDER_RE.search(parent.name) and parent.parent != parent:
         parent = parent.parent
     return str(parent).strip()
+
+
+def _album_bucket_metadata(album_name: object, edition: object) -> tuple[str, str]:
+    raw_album_name = str(album_name or "")
+    display_album_name = repair_display_text(raw_album_name) or raw_album_name
+    raw_edition = str(edition or "").strip()
+    display_edition = (repair_display_text(raw_edition) or raw_edition) if raw_edition else ""
+    return display_album_name.strip().casefold(), display_edition.strip().casefold()
+
+
+def _contextual_album_containers(
+    rows: list[tuple[object, object, object, object]],
+) -> list[str]:
+    containers: list[str] = []
+    containers_by_literal_parent: dict[tuple[bool, str], str] = {}
+    for path, _disc, _album, _edition in rows:
+        raw_path = str(path)
+        separator_index = max(raw_path.rfind("/"), raw_path.rfind("\\"))
+        literal_parent = (
+            separator_index >= 0,
+            raw_path[:separator_index] if separator_index >= 0 else raw_path,
+        )
+        if literal_parent not in containers_by_literal_parent:
+            containers_by_literal_parent[literal_parent] = _track_album_container(path)
+        containers.append(containers_by_literal_parent[literal_parent])
+    numeric_groups: dict[
+        tuple[str, str, str],
+        dict[str, list[tuple[int, int, bool]]],
+    ] = {}
+    parent_paths: dict[tuple[str, str, str], str] = {}
+
+    for index, (path_value, disc_number, album_name, edition) in enumerate(rows):
+        raw_path = str(path_value or "").strip()
+        if not raw_path:
+            continue
+        normalized_path = os.path.normpath(raw_path)
+        path = path_value if isinstance(path_value, Path) and str(path_value) == normalized_path else Path(normalized_path)
+        folder = path.parent
+        folder_name = folder.name.strip()
+        if not folder_name.isdigit() or folder.parent == folder:
+            continue
+
+        ordinal = int(folder_name)
+        parent_path = str(folder.parent).strip()
+        album_key, edition_key = _album_bucket_metadata(album_name, edition)
+        group_key = (os.path.normcase(parent_path), album_key, edition_key)
+        folder_key = os.path.normcase(str(folder))
+        numeric_groups.setdefault(group_key, {}).setdefault(folder_key, []).append(
+            (index, ordinal, safe_int(disc_number) == ordinal)
+        )
+        parent_paths.setdefault(group_key, parent_path)
+
+    for group_key, folders in numeric_groups.items():
+        ordinals = {
+            ordinal
+            for folder_rows in folders.values()
+            for _index, ordinal, _matches in folder_rows
+        }
+        if len(folders) < 2 or len(ordinals) < 2:
+            continue
+        if not all(
+            matches
+            for folder_rows in folders.values()
+            for _index, _ordinal, matches in folder_rows
+        ):
+            continue
+        for folder_rows in folders.values():
+            for index, _ordinal, _matches in folder_rows:
+                containers[index] = parent_paths[group_key]
+
+    return containers
 
 
 
@@ -498,9 +559,17 @@ def _build_album_detail_track_payloads(
     tracks = album.tracks
     sources = get_album_duplicate_sources(album)
     if sources:
-        own_folders = {os.path.normcase(_track_album_container(track.path)) for track in tracks}
+        track_containers = _contextual_album_containers([
+            (track.path, track.disc_number, track.album, track.edition)
+            for track in tracks
+        ])
+        own_folders = {os.path.normcase(container) for container in track_containers}
         folder = next(os.path.normcase(source["folder_path"]) for source in sources if os.path.normcase(source["folder_path"]) in own_folders)
-        tracks = [track for track in tracks if os.path.normcase(_track_album_container(track.path)) == folder]
+        tracks = [
+            track
+            for track, container in zip(tracks, track_containers)
+            if os.path.normcase(container) == folder
+        ]
     track_payloads = [_track_to_dict(track) for track in tracks]
     track_rows = build_track_rows(
         tracks,
@@ -643,8 +712,12 @@ def _preview_open_directory_paths(album: Album) -> list[str]:
 
     paths: list[str] = []
     seen: set[str] = set()
-    for track in getattr(album, "tracks", []) or []:
-        directory = _track_album_container(getattr(track, "path", ""))
+    tracks = list(getattr(album, "tracks", []) or [])
+    directories = _contextual_album_containers([
+        (track.path, track.disc_number, track.album, track.edition)
+        for track in tracks
+    ])
+    for directory in directories:
         directory_key = directory.casefold()
         if not directory or directory_key in seen:
             continue
@@ -1135,8 +1208,11 @@ def _ordered_album_duplicate_track_groups(
 ) -> list[tuple[str, list[Track]]]:
     grouped_tracks: dict[str, list[Track]] = {}
     folder_paths: dict[str, str] = {}
-    for track in tracks:
-        container = _track_album_container(getattr(track, "path", ""))
+    containers = _contextual_album_containers([
+        (track.path, track.disc_number, track.album, track.edition)
+        for track in tracks
+    ])
+    for track, container in zip(tracks, containers):
         if not container:
             return []
         key = os.path.normcase(container)
@@ -1213,20 +1289,14 @@ def _link_duplicate_album_sources(
     """Link physical copies across edition records without changing their queues."""
     containers: dict[str, dict[str, Track]] = {}
     folder_paths: dict[str, str] = {}
-    containers_by_literal_parent: dict[tuple[bool, str], str] = {}
     album_folder_keys: list[list[str]] = []
     for album in albums:
         folder_keys: list[str] = []
-        for track in album.tracks:
-            raw_path = str(track.path)
-            separator_index = max(raw_path.rfind("/"), raw_path.rfind("\\"))
-            literal_parent = (
-                separator_index >= 0,
-                raw_path[:separator_index] if separator_index >= 0 else raw_path,
-            )
-            if literal_parent not in containers_by_literal_parent:
-                containers_by_literal_parent[literal_parent] = _track_album_container(track.path)
-            folder = containers_by_literal_parent[literal_parent]
+        album_containers = _contextual_album_containers([
+            (track.path, track.disc_number, track.album, track.edition)
+            for track in album.tracks
+        ])
+        for track, folder in zip(album.tracks, album_containers):
             key = os.path.normcase(folder)
             folder_keys.append(key)
             folder_paths.setdefault(key, folder)
@@ -1334,11 +1404,12 @@ def _build_album_duplicate_source_payload(
     }
 
 
-def _shared_album_bucket_key(entry: dict[str, object]) -> tuple[str, str, str]:
-    album_name = repair_display_text(str(entry.get("album") or "")) or str(entry.get("album") or "")
-    raw_edition = str(entry.get("edition") or "").strip()
-    edition = (repair_display_text(raw_edition) or raw_edition) if raw_edition else ""
-    return (_entry_album_container(entry), album_name.strip().casefold(), edition.strip().casefold())
+def _shared_album_bucket_key(
+    entry: dict[str, object],
+    album_container: str,
+) -> tuple[str, str, str]:
+    album_name, edition = _album_bucket_metadata(entry.get("album"), entry.get("edition"))
+    return (album_container.strip().lower(), album_name, edition)
 
 
 def _normalized_release_date(value: object) -> str:
@@ -1414,6 +1485,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             root_provenance_cache[cache_key] = cached
         return cached
 
+    groupable_entries: list[dict[str, object]] = []
     for grouping_count, entry in enumerate(file_cache.values(), start=1):
         _cooperative_album_build_yield(grouping_count, enabled=cooperative_yields_enabled)
         if str(entry.get("path") or "") in rejected_paths:
@@ -1423,7 +1495,17 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
         album_name = cached_display_text(entry["album"])
         if _is_loose_track_album_value(album_name):
             continue
-        grouped_entries.setdefault(_shared_album_bucket_key(entry), []).append(entry)
+        groupable_entries.append(entry)
+
+    album_containers = _contextual_album_containers([
+        (entry.get("path"), entry.get("disc_number"), entry.get("album"), entry.get("edition"))
+        for entry in groupable_entries
+    ])
+    for entry, album_container in zip(groupable_entries, album_containers):
+        grouped_entries.setdefault(
+            _shared_album_bucket_key(entry, album_container),
+            [],
+        ).append(entry)
 
     construction_count = 0
     for bucket_entries in grouped_entries.values():

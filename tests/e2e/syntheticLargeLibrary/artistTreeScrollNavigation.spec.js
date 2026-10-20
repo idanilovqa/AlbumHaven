@@ -14,6 +14,9 @@ import {
 
 const ROOT_HTML_BUDGET = performanceTimingBudget('artist-tree-scroll-navigation.rootHtmlResponseMs');
 const JUMP_ALIGNED_BUDGET = performanceTimingBudget('artist-tree-scroll-navigation.jumpAlignedMs');
+const CONTINUATION_COMMITTED_BUDGET = performanceTimingBudget(
+  'artist-tree-scroll-navigation.continuationCommittedMs',
+);
 
 async function openContextMenuForArtist(ui, artist) {
   await ui.openArtistTreeContextMenu(artist);
@@ -299,7 +302,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       if (!url.searchParams.has('gallery_cursor') || continuationRequest) return;
       continuationRequest = request;
       continuationPending = true;
-      continuationStartedAt = Date.now();
+      continuationStartedAt = performance.now();
       if (!requestGeometry) requestGeometry = ui.readContinuationGeometry();
     });
     page.on('response', response => {
@@ -316,7 +319,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
         await expect.poll(() => page.evaluate(key => (
           (state.view.artist_groups || []).some(group => (group.albums || []).some(album => album.key === key))
         ), appendedAlbumKey), { timeout: 3000 }).toBe(true);
-        continuationDuration = Date.now() - continuationStartedAt;
+        continuationDuration = performance.now() - continuationStartedAt;
       })().catch(error => { continuationError = error; }).finally(() => { continuationPending = false; });
     });
     for (let step = 0; step < 30; step += 1) {
@@ -338,7 +341,16 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     expect(geometry.remaining).toBeGreaterThanOrEqual(geometry.viewport * 6);
     if (Number.isFinite(minimumRemaining)) expect(minimumRemaining).toBeGreaterThan(0);
     expect(continuationDuration).not.toBeNull();
-    expect(continuationDuration).toBeLessThan(3000);
+    const continuationTiming = evaluateTimingBudget(
+      continuationDuration,
+      CONTINUATION_COMMITTED_BUDGET,
+    );
+    await test.info().attach('root-gallery-continuation-timing', {
+      body: JSON.stringify({ requestGeometry: geometry, ...continuationTiming }, null, 2),
+      contentType: 'application/json',
+    });
+    console.log(formatTimingBudgetOutcome('Root gallery continuation commit', continuationTiming));
+    expectTimingBudgetOutcome(expect, continuationTiming, 'Root gallery continuation commit');
     const appendedCard = ui.albumCardByKey(appendedAlbumKey);
     let crossedBoundary = false;
     for (let step = 0; step < 100; step += 1) {

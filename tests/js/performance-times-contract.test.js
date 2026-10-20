@@ -91,6 +91,10 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       local: [800, 400, 1200],
       ci: [800, 400, 1200],
     },
+    'artist-tree-scroll-navigation.continuationCommittedMs': {
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
+    },
     'utility-problematic-files-isolated-postgres.coldProblematicApiMs': {
       local: [1000, 200, 1200],
       ci: [1000, 200, 1200],

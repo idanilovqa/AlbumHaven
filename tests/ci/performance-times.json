@@ -4,6 +4,7 @@
     "ci": { "targetMs": 1000, "graceMs": 400, "hardCeilingMs": 1400 }
   },
   "artist-tree-scroll-navigation.jumpAlignedMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },
+  "artist-tree-scroll-navigation.continuationCommittedMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },
   "playback-start.maximumStartMs": { "local": { "targetMs": 900, "graceMs": 200, "hardCeilingMs": 1100 }, "ci": { "targetMs": 1800, "graceMs": 200, "hardCeilingMs": 2000 } },
   "gapless-playback.playbackBoundaryMs": { "local": { "targetMs": 4600, "graceMs": 400, "hardCeilingMs": 5000 }, "ci": { "targetMs": 4600, "graceMs": 400, "hardCeilingMs": 5000 } },
   "search-browse.searchBrowseReadyMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },

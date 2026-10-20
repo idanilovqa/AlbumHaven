@@ -10,6 +10,23 @@ function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+test('root gallery continuation uses the approved 800/1200 timing contract', () => {
+  const spec = readRepoFile(
+    'tests/e2e/syntheticLargeLibrary/artistTreeScrollNavigation.spec.js',
+  );
+
+  assert.match(
+    spec,
+    /performanceTimingBudget\(\s*'artist-tree-scroll-navigation\.continuationCommittedMs',?\s*\)/,
+  );
+  assert.match(
+    spec,
+    /evaluateTimingBudget\(\s*continuationDuration,\s*CONTINUATION_COMMITTED_BUDGET,?\s*\)/,
+  );
+  assert.match(spec, /expectTimingBudgetOutcome\(expect, continuationTiming,/);
+  assert.doesNotMatch(spec, /continuationDuration\)\.toBeLessThan\(3000\)/);
+});
+
 function readExportedFunction(source, signature, nextSignature) {
   const start = source.indexOf(signature);
   const end = source.indexOf(nextSignature, start + signature.length);

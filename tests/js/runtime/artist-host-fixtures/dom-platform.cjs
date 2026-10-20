@@ -1,16 +1,20 @@
 'use strict';
 // New additive platform support only. The protected DOM harness stays intact.
 // Supports selector-list/descendant compounds with standards-consistent :not()
-// and :scope/:hover; unsupported combinators/pseudo-classes still fail explicitly.
+// and :scope/:hover/:active; unsupported combinators/pseudo-classes still fail explicitly.
 function withDomPlatform(env) {
   const {context: c, document} = env, proto = c.Element.prototype;
   const basicMatches = proto.matches, rectangles = new WeakMap();
   // Synthetic DOM events do not change browser hit-testing state. Tests may
   // explicitly place the pointer over one element; its connected ancestors hover.
-  let hoveredElement = null;
+  let hoveredElement = null, activeElement = null;
   const setHoveredElement = node => {
     if (node !== null && (!(node instanceof c.Element) || node.nodeType !== 1)) throw new TypeError('Hover target must be an element in this fixture or null');
     hoveredElement = node;
+  };
+  const setActiveElement = node => {
+    if (node !== null && (!(node instanceof c.Element) || node.nodeType !== 1)) throw new TypeError("Active target must be an element in this fixture or null");
+    activeElement = node;
   };
   function split(value, whitespace = false) {
     const result = []; let start = 0, quote = '', square = 0, round = 0;
@@ -33,7 +37,7 @@ function withDomPlatform(env) {
     return result;
   }
   function compound(value) {
-    let basic = '', scoped = false, hovered = false, square = 0, quote = ''; const excluded = [];
+    let basic = '', scoped = false, hovered = false, active = false, square = 0, quote = ''; const excluded = [];
     for (let i = 0; i < value.length;) {
       const ch = value[i];
       if (quote) {basic += ch; if (ch === quote && value[i - 1] !== '\\') quote = ''; i++; continue;}
@@ -41,6 +45,7 @@ function withDomPlatform(env) {
       if (ch === '[') square++; if (ch === ']') square--;
       if (square) {basic += ch; i++; continue;}
       if (value.startsWith(':hover', i) && !/[\w-]/.test(value[i + 6] || '')) {hovered = true; i += 6; continue;}
+      if (value.startsWith(':active', i) && !/[\w-]/.test(value[i + 7] || '')) {active = true; i += 7; continue;}
       if (value.startsWith(':scope', i)) {scoped = true; i += 6; continue;}
       if (!value.startsWith(':not(', i)) {basic += value[i++]; continue;}
       let depth = 1, end = i + 5, negationQuote = '';
@@ -57,6 +62,7 @@ function withDomPlatform(env) {
     basicMatches.call(document, basic); // Validate even an empty result set.
     return (node, scope) => (!scoped || node === scope) && basicMatches.call(node, basic)
       && (!hovered || Boolean(node.nodeType === 1 && hoveredElement?.isConnected && node.contains(hoveredElement)))
+      && (!active || Boolean(node.nodeType === 1 && activeElement?.isConnected && node.contains(activeElement)))
       && excluded.every(predicate => !predicate(node, scope));
   }
   function compile(selector) {
@@ -86,6 +92,6 @@ function withDomPlatform(env) {
   };
   proto.getClientRects = function () {const rect = this.getBoundingClientRect(); return this.isConnected && !this.closest('[hidden]') && (rect.width || rect.height) ? [rect] : [];};
   const setRect = (node, rect) => rectangles.set(node, {x: 0, y: 0, width: 0, height: 0, ...rect});
-  return {...env, setRect, setHoveredElement};
+  return {...env, setRect, setHoveredElement, setActiveElement};
 }
 module.exports = {withDomPlatform};

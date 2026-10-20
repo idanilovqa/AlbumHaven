@@ -5,6 +5,7 @@ const {nativeFixture} = require('./library-mix-native-fixture.cjs');
 const {withPlaylistDomPlatform} = require('./playlist-dom-platform.cjs');
 const {installAttributeObservers} = require('./library-mix-observers.cjs');
 const {id} = require('./library-mix-fixtures.cjs');
+const {nativeModuleSpecifiers} = require('./native-module-specifiers.cjs');
 const root = path.resolve(__dirname, '../../..');
 let entrySequence = 0;
 // Traverse the delivered native owners without freezing their implementation
@@ -23,10 +24,7 @@ function verifyNativeClosure() {
     visited.add(relative);
     assert.ok(relative.startsWith('music_app/static/js/') && relative.endsWith('.mjs'), 'native module stays in the delivery root');
     const source = fs.readFileSync(path.join(root, relative), 'utf8');
-    assert.doesNotMatch(source, /(?:from\s*|import\s*\(?\s*|require\s*\(\s*)['"](?:react(?:-dom)?(?:\/|['"])|esbuild(?:\/|['"]))/);
-    assert.doesNotMatch(source, /\b(?:import|require)\s*\(/, 'native closure uses statically traversable ES module imports');
-    for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*)(['"])([^'"\n]+)\1/g)) {
-      const specifier = match[2];
+    for (const specifier of nativeModuleSpecifiers(source)) {
       assert.ok(specifier.startsWith('.'), `SETUP_FAILURE: bare dependency ${specifier}`);
       visit(path.posix.normalize(path.posix.join(path.posix.dirname(relative), specifier)));
     }

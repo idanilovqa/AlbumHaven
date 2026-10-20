@@ -50,7 +50,7 @@ test('hover parsing preserves quoted attributes and rejects unknown or malformed
   assert.equal(h.child.matches('[data-label=":hover"]:hover'), false);
   h.setHoveredElement(h.child);
   assert.equal(h.child.matches('[data-label=":hover"]:hover'), true);
-  for (const selector of [':hovering', ':hover-extra', ':hover()', ':focus', ':active', ':not(:focus)', ':hover > button']) {
+  for (const selector of [':hovering', ':hover-extra', ':hover()', ':focus', ':active-extra', ':not(:focus)', ':hover > button']) {
     assert.throws(() => h.child.matches(selector), /Unsupported fixture selector/);
     assert.throws(() => empty.querySelectorAll(selector), /Unsupported fixture selector/);
   }

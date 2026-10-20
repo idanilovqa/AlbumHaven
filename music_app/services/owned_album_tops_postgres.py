@@ -19,6 +19,8 @@ from music_app.services import album_top_publication as publication
 from music_app.services import album_top_publication_evidence as publication_evidence
 from music_app.services import album_top_remote_membership as remote_membership
 from music_app.services import album_top_source_finalization as source_import
+from music_app.services import album_top_artist_scope_postgres as artist_scopes
+from music_app.services.album_top_artist_scope import artist_scope, scope_projection
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.social_cursors import encode_social_cursor
 from music_app.services.private_library_authority import (
@@ -156,7 +158,7 @@ class PostgresOwnedAlbumTopsService:
                 if actions["can_read"]:
                     tops.append({"top_ref": str(top["ref"]), "title": top["title"],
                         "description": top["description"], "revision": str(top["revision"]),
-                        "visibility": top["visibility"], "allowed_actions": actions,
+                        "visibility": top["visibility"], "allowed_actions": actions, **scope_projection(top),
                         **({'source_locked': top['source_locked'], 'source_derived': True}
                            if top.get('source_derived', False) else {}),
                         "top_viewer_overlay": {"activity": state}})
@@ -165,7 +167,7 @@ class PostgresOwnedAlbumTopsService:
                                                      secret=cursor_secret, scope=scope)}
 
     def search_inventory_albums(self, context, *, query='', cursor=None, limit=50,
-                                cursor_secret, top_ref=None, constraints=None):
+                                cursor_secret, top_ref=None, constraints=None, artist_scope=None):
         """Bounded current-library album metadata; never a track inventory read."""
         if (type(query) is not str or len(query) > 100 or '\0' in query
                 or any('\ud800' <= char <= '\udfff' for char in query)
@@ -176,6 +178,13 @@ class PostgresOwnedAlbumTopsService:
         with self._authorized(context, constraints) as (connection, live, _):
             top = self._top(connection, live, ref) if ref else None
             self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+            declared = artist_scopes.requested_scope(top, artist_scope)
+            if declared is not None:
+                value = artist_scopes.search(connection, live, declared, query=query,
+                    cursor=cursor, limit=limit, cursor_secret=cursor_secret, top_ref=ref,
+                    constraints=constraints)
+                self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+                return value
             scope = ['album-top-picker-v1', live.actor.account_id, live.actor.session_id,
                      live.library_id, query, ref]
             after = viewers.page_position(cursor, cursor_secret, scope)
@@ -205,7 +214,7 @@ class PostgresOwnedAlbumTopsService:
             return {'albums': albums, 'next_cursor': encode_social_cursor(
                 rows[limit - 1]['id'] if len(rows) > limit else None, secret=cursor_secret, scope=scope)}
 
-    def admit_inventory_album(self, context, *, album_id, top_ref=None, constraints=None):
+    def admit_inventory_album(self, context, *, album_id, top_ref=None, constraints=None, artist_scope=None):
         """Admit current inventory evidence without deduping display names or editions."""
         if type(album_id) is not int or album_id <= 0 or album_id > 9223372036854775807:
             raise AlbumTopError("invalid_command")
@@ -215,6 +224,8 @@ class PostgresOwnedAlbumTopsService:
             self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
             from music_app.services.private_library_authority import require_private_action
             require_private_action(live, BROWSE, resource=ResourceScope("album", str(album_id)), constraints=constraints)
+            declared = artist_scopes.requested_scope(top, artist_scope)
+            scope_witness = artist_scopes.local_admission(connection, live, declared, album_id, constraints)
             row = connection.execute("""select a.title,a.release_year,ar.name as artist_display
                 from library.local_albums a join library.local_artists ar
                   on ar.id=a.artist_id and ar.library_id=a.library_id
@@ -222,11 +233,13 @@ class PostgresOwnedAlbumTopsService:
                 (album_id, live.library_id)).fetchone()
             if row is None:
                 raise AlbumTopError("album_unavailable", 404)
+            artist_scopes.confirm_local_admission(connection, live, scope_witness, album_id, constraints)
             self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
             require_private_action(live, BROWSE, resource=ResourceScope("album", str(album_id)), constraints=constraints)
             existing = connection.execute("""select catalog_ref from library.catalog_album_links
                 where library_id=%s and local_album_id=%s""", (live.library_id, album_id)).fetchone()
             if existing:
+                artist_scopes.finish(connection, live, scope_witness, constraints)
                 return {"album_ref": str(existing["catalog_ref"])}
             title, artist = row["title"], row["artist_display"]
             if any(not isinstance(value, str) or not value.strip() or len(value) > 1000 for value in (title, artist)):
@@ -237,6 +250,7 @@ class PostgresOwnedAlbumTopsService:
                 values(%s,%s,%s,%s)""", (ref, title, artist, year if type(year) is int and 1 <= year <= 9999 else None))
             connection.execute("""insert into library.catalog_album_links(library_id,local_album_id,catalog_ref)
                 values(%s,%s,%s)""", (live.library_id, album_id, ref))
+            artist_scopes.finish(connection, live, scope_witness, constraints)
             return {"album_ref": ref}
 
     @staticmethod
@@ -304,7 +318,7 @@ class PostgresOwnedAlbumTopsService:
                 "revision": str(top["revision"]), "visibility": top["visibility"],
                 **({'source_locked': top['source_locked'], 'source_derived': True}
                    if top.get('source_derived', False) else {}),
-                "allowed_actions": actions, **edit,
+                "allowed_actions": actions, **edit, **scope_projection(top),
                 "top_viewer_overlay": overlay, "items": items}
 
     def resolve_public_link(self, context, *, share_ref, constraints=None):
@@ -496,6 +510,11 @@ class PostgresOwnedAlbumTopsService:
                 connection.execute("""insert into app.album_lists(ref,owner_account_id,library_id,title,description)
                     values(%s,%s,%s,%s,%s)""", (ref, live.actor.account_id, live.library_id,
                     command.data["title"], command.data["description"]))
+                if 'artist_scope' in command.data:
+                    scope = command.data['artist_scope']
+                    connection.execute('''update app.album_lists set listen_through_artist_id=%s,
+                        listen_through_scope_mode=%s where ref=%s and library_id=%s''',
+                        (int(scope['root_artist_id']), scope['mode'], ref, live.library_id))
                 top = self._top(connection, live, ref, write=True)
             else:
                 # Private activity/progress share the parent lock with other viewers while
@@ -516,6 +535,11 @@ class PostgresOwnedAlbumTopsService:
                     raise AlbumTopError("revision_conflict", 409)
                 if top.get('source_locked', False) and command.action in {'add', 'remove', 'reorder'}:
                     raise AlbumTopError('source_locked', 409)
+            scope_witness = artist_scopes.start(connection, live, command, top, constraints)
+            def validate_remote_facts(candidates):
+                nonlocal scope_witness
+                scope_witness = artist_scopes.validate_remote_facts(scope_witness, candidates)
+            scope_validation = validate_remote_facts if artist_scope(top) is not None else None
             required_actions = command_actions(command)
             consumption = []
             remote = remote_membership.bindings(connection, top) if command.action in {
@@ -545,10 +569,11 @@ class PostgresOwnedAlbumTopsService:
                                source_locked=True, source_derived=True, source_report=report)
             elif command.action in {'create', 'add'} and typed:
                 receipt, consumption = remote_membership.add(self, connection, live, command, top, now,
-                    constraints, context_ref, discovered_sources)
+                    constraints, context_ref, discovered_sources, validate_remote_facts=scope_validation)
             elif command.action in {'save', 'enable_external'} and (typed or remote):
                 receipt, required_actions, consumption = remote_membership.save(
-                    self, connection, live, command, top, now, constraints, context_ref, remote, discovered_sources)
+                    self, connection, live, command, top, now, constraints, context_ref, remote, discovered_sources,
+                    validate_remote_facts=scope_validation)
             elif command.action in {"save", "enable_external", "revoke_external"}:
                 receipt, required_actions = publication.save(self, connection, live, command, top, now, constraints)
             elif command.action == "set_activity":
@@ -559,6 +584,7 @@ class PostgresOwnedAlbumTopsService:
                 receipt = viewers.copy_top(connection, live, command, top, service=self,
                     constraints=constraints, context_ref=context_ref, remote_sources=remote)
                 source_import.copy_flags(connection, top, receipt['top_ref'])
+                artist_scopes.copy_scope(connection, top, receipt['top_ref'])
             else:
                 mutation = command
                 if command.action == 'create' and 'playlist_preview_ref' in command.data:
@@ -589,6 +615,7 @@ class PostgresOwnedAlbumTopsService:
                 self._require(live, required_actions, constraints,
                     top if command.action not in {'create', 'copy'} else None,
                     owner_only=receipt.get('publication', {}).get('publication_ref') is not None)
+            artist_scopes.finish(connection, live, scope_witness, constraints)
             return receipt
 
     def _mutate(self, connection, live, command, top, now, constraints, *, locked_target=None):
@@ -665,9 +692,11 @@ class PostgresOwnedAlbumTopsService:
             if str(top["revision"]) != preview["revision"]:
                 raise AlbumTopError("revision_conflict", 409)
             current = publication.working_items(connection, top)
+            scope_witness = artist_scopes.proposed_items(connection, live, top, preview['items'], current, constraints)
             publication.validate_draft(self, connection, live, top, preview["items"], current, constraints)
             captured = publication_evidence.capture(connection, live, top=top, items=preview["items"], constraints=constraints)
             self._require(live, (BROWSE, ACCESS), constraints, top, owner_only=True)
+            artist_scopes.finish(connection, live, scope_witness, constraints)
             return {"top_ref": ref, "revision": preview["revision"],
                 "evidence_revision": captured["evidence_revision"],
                 "items": [{**row["item"], "title": row["metadata"]["title"],

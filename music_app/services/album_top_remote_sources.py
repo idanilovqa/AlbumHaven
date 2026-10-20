@@ -126,9 +126,16 @@ def evidence_from_row(row):
     try:
         if row['provider'] != 'musicbrainz' or row['entity_kind'] != 'release-group':
             raise RemoteAlbumEvidenceError('invalid_provider_metadata')
+        credits = row.get('credited_artist_ids')
+        if credits is not None:
+            # PostgreSQL uuid[] is decoded as a list of UUID values. Normalize
+            # only this storage boundary; evidence objects remain immutable.
+            if type(credits) not in (list, tuple) or not 1 <= len(credits) <= 100:
+                raise RemoteAlbumEvidenceError('invalid_provider_metadata')
+            credits = tuple(str(identity) for identity in credits)
         return validate_release_group_evidence(ReleaseGroupEvidence(
             row['external_id'], row['title'], row['artist_display'],
-            row['first_release_date'], row['primary_type'], row['evidence_version']))
+            row['first_release_date'], row['primary_type'], row['evidence_version'], credits))
     except (KeyError, TypeError, RemoteAlbumEvidenceError):
         raise AlbumTopError('remote_evidence_unavailable', 409) from None
 

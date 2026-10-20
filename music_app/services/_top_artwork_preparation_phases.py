@@ -228,13 +228,15 @@ def _read(service, identity, *, kind, purpose, request, after=0, limit=100, cons
 
 
 def _publication_commit(service, connection, live, command, top, link, snapshot, prepared,
-                        observations, now, constraints):
+                        observations, now, constraints, scope_witness):
+    from music_app.services import album_top_artist_scope_postgres as artist_scopes
     receipt, final_top = publication_owner.save(service, connection, live, command, top, link,
         snapshot, prepared, now, constraints)
     # The existing execute owner remains the sole operation receipt writer.
     service.owner._insert_operation(connection, live, command, receipt, publication_owner.ACTIONS)
     publication_owner.consume(connection, receipt)
     publication_owner.finish(service, connection, live, final_top, snapshot, observations, receipt, constraints)
+    artist_scopes.finish(connection, live, scope_witness, constraints)
     return receipt
 
 
@@ -245,6 +247,7 @@ def publish(owner, context, command, *, cursor_secret, constraints=None):
     dependencies read-only; their invalidation clock coalesces per transaction.
     No caller supplies a preflight record, adapter, callback or SQL mode.
     """
+    from music_app.services import album_top_artist_scope_postgres as artist_scopes
     service = snapshot = current = prepared = observations = receipt = None
     try:
         with owner._authorized(context, constraints) as (connection, live, now):
@@ -263,6 +266,7 @@ def publish(owner, context, command, *, cursor_secret, constraints=None):
                 preparation_revision=descriptor['preparation_revision'], context_ref=descriptor['context_ref'],
                 draft_ref=descriptor.get('draft_ref'), draft_revision=descriptor.get('draft_revision'))
             top = service._top(connection, live, command.top_ref, command.data['revision'], constraints, write=True)
+            scope_witness = artist_scopes.start(connection, live, command, top, constraints)
             link = publication.lock_link(connection, top, write=True)
             snapshot, prepared = _load(service, connection, live, top, identity, kind, constraints, mode='read')
             publication_owner.validate_command(service, connection, live, command, top, link,
@@ -270,9 +274,10 @@ def publish(owner, context, command, *, cursor_secret, constraints=None):
             if not snapshot['observe_count']:
                 # Excluded images still require metadata-source/root Browse.
                 receipt = _publication_commit(service, connection, live, command, top, link,
-                    snapshot, prepared, {}, now, constraints)
+                    snapshot, prepared, {}, now, constraints, scope_witness)
                 return receipt
             service._draft_finish(connection, live, top, snapshot, {}, constraints)
+            artist_scopes.finish(connection, live, scope_witness, constraints)
             prepared = None
         observations = service._draft_probe(snapshot)
         observed_roots = _saved_root_ids(kind, observations)
@@ -283,6 +288,7 @@ def publish(owner, context, command, *, cursor_secret, constraints=None):
             if replayed is not None:
                 return replayed
             top = service._top(connection, live, command.top_ref, command.data['revision'], constraints, write=True)
+            scope_witness = artist_scopes.start(connection, live, command, top, constraints)
             link = publication.lock_link(connection, top, write=True)
             if kind == 'saved':
                 saved.require_observed_roots(live, observed_roots, constraints)
@@ -293,7 +299,7 @@ def publish(owner, context, command, *, cursor_secret, constraints=None):
             publication_owner.validate_command(service, connection, live, command, top, link,
                 current, cursor_secret, constraints)
             receipt = _publication_commit(service, connection, live, command, top, link,
-                current, prepared, observations, now, constraints)
+                current, prepared, observations, now, constraints, scope_witness)
             return receipt
     except BaseException as error:
         # No retained metadata/proof vector or response escapes in traceback on

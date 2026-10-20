@@ -230,13 +230,14 @@ class TopArtworkPreparationService:
         facts bind identity only; removing/replacing them needs no new remote
         source admission. Every proposed local source is authorized afresh.
         """
+        from music_app.services import album_top_artist_scope_postgres as artist_scopes
         ref, context_ref = top_uuid(top_ref), _context(context_ref)
         command = artwork_draft.normalize(payload)
         draft = command['draft']
         with self._authorized(context, constraints) as (connection, live, _):
             top = self._start_top(connection, live, ref, draft['revision'], command['request_key'], constraints)
             current = publication.working_items(connection, top)
-            publication.validate_draft_membership(draft['items'], current)
+            scope_witness = artist_scopes.proposed_items(connection, live, top, draft['items'], current, constraints)
             # Every selected album, including excluded rows, is locked before
             # the metadata barrier. Do not discover alternate catalog links:
             # selection_source below proves the exact selected catalog/source
@@ -274,6 +275,7 @@ class TopArtworkPreparationService:
             if connection.execute('select clock_timestamp()>=%s as expired',
                     (row['expires_at'],)).fetchone()['expired']:
                 raise AlbumTopError('artwork_request_expired', 409)
+            artist_scopes.finish(connection, live, scope_witness, constraints)
             return {'preparation_kind': 'draft', 'preparation_ref': str(row['ref']),
                     'preparation_revision': str(row['revision']), 'draft_ref': str(row['draft_ref']),
                     'draft_revision': str(row['draft_revision']), 'saved_top_revision': str(row['top_revision']),

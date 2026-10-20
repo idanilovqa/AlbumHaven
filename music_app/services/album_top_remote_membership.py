@@ -152,10 +152,13 @@ def _sql(connection, statement, params):
         raise
 
 
-def resolve_sources(connection, live, top, selectors, destination, context_ref, discovered, *, identity_only=False):
+def resolve_sources(connection, live, top, selectors, destination, context_ref, discovered, *,
+                    identity_only=False, validate_remote_facts=None):
     """Batch prelocks and canonical work order, separate from curator order."""
     from psycopg.types.json import Jsonb
     remote = [item for item in selectors if item['kind'] in {'remote_acquisition', 'remote_retained'}]
+    if remote and top.get('listen_through_artist_id') is not None and validate_remote_facts is None:
+        raise AlbumTopError('artist_scope_unavailable', 409)
     pending = [item for item in remote if item['kind'] == 'remote_acquisition']
     descriptors = {}
     if pending:
@@ -182,6 +185,25 @@ def resolve_sources(connection, live, top, selectors, destination, context_ref, 
             owner_account_id=top['owner_account_id'], context_ref=context_ref,
             prelocked_source=descriptors[selector['acquisition_ref']])
         facts[selector['acquisition_ref']] = row
+    if validate_remote_facts is not None:
+        # Provisional exact reads only: preserve the later catalog -> admission
+        # lock order. Existing retained lock/revalidation still runs after waits.
+        candidates = []
+        for selector in remote:
+            if selector['kind'] == 'remote_acquisition':
+                row = facts[selector['acquisition_ref']]
+                ref = selector['acquisition_ref']
+            else:
+                ref = selector['admission_ref']
+                row = connection.execute('''select * from app.album_top_remote_admissions
+                    where ref=%s and top_ref=%s and library_id=%s and owner_account_id=%s
+                      and evidence_version=%s and retired_at is null''',
+                    (ref, top['ref'], live.library_id, top['owner_account_id'],
+                     selector['evidence_version'])).fetchone()
+                if row is None:
+                    raise AlbumTopError('remote_evidence_unavailable', 409)
+            candidates.append(((selector['kind'], ref, selector['evidence_version']), evidence_from_row(row)))
+        validate_remote_facts(tuple(candidates))
     identities = {}
     for ref, row in sorted(facts.items()):
         identities.setdefault((row['provider'], row['entity_kind'], row['external_id']), row)
@@ -283,7 +305,8 @@ def clear_artwork_local_replacements(connection, top, items):
             _clear_for_local(connection, top, item, remote[item['item_ref']])
 
 
-def add(service, connection, live, command, top, now, constraints, context_ref, discovered):
+def add(service, connection, live, command, top, now, constraints, context_ref, discovered, *,
+        validate_remote_facts=None):
     context_ref = require_context(context_ref)
     creating = command.action == 'create'
     actions = (BROWSE, CREATE) if creating else (BROWSE, ITEMS)
@@ -292,7 +315,8 @@ def add(service, connection, live, command, top, now, constraints, context_ref, 
     current = publication.working_items(connection, top)
     if len(current) + len(command.data['selections']) > MAX_TOP_ITEMS:
         raise AlbumTopError('top_too_large', 413)
-    resolved = resolve_sources(connection, live, top, command.data['selections'], destination, context_ref, discovered)
+    resolved = resolve_sources(connection, live, top, command.data['selections'], destination, context_ref, discovered,
+                               validate_remote_facts=validate_remote_facts)
     items, sources, local_refs = [], [], []
     for selection in command.data['selections']:
         if selection['kind'] == 'local_catalog':
@@ -326,7 +350,8 @@ def add(service, connection, live, command, top, now, constraints, context_ref, 
             _consumption_map(items, sources))
 
 
-def _resolve_draft(service, connection, live, command, top, current, remote, constraints, context_ref, discovered):
+def _resolve_draft(service, connection, live, command, top, current, remote, constraints, context_ref, discovered, *,
+                   validate_remote_facts=None):
     typed = command.data.get('item_selections')
     if typed is None:
         if 'items' not in command.data:
@@ -343,7 +368,7 @@ def _resolve_draft(service, connection, live, command, top, current, remote, con
     items, sources, local_new = [], [], []
     destination = _destination(command, top)
     resolved = resolve_sources(connection, live, top, [item['source'] for item in typed],
-                               destination, context_ref, discovered)
+                               destination, context_ref, discovered, validate_remote_facts=validate_remote_facts)
     for selection in typed:
         item_ref = selection.get('item_ref') if selection['kind'] == 'existing' else None
         source = selection['source']
@@ -375,7 +400,8 @@ def _resolve_draft(service, connection, live, command, top, current, remote, con
     return items, sources
 
 
-def save(service, connection, live, command, top, now, constraints, context_ref, remote, discovered):
+def save(service, connection, live, command, top, now, constraints, context_ref, remote, discovered, *,
+         validate_remote_facts=None):
     if 'artwork_publication' in command.data:
         # Only the fixed full-S phase may dispatch this contract, before any
         # remote bridge is cleared or old-state baseline is changed.
@@ -403,7 +429,7 @@ def save(service, connection, live, command, top, now, constraints, context_ref,
         if has_remote:
             raise AlbumTopError('remote_publication_unavailable', 409)
     items, sources = _resolve_draft(service, connection, live, command, top, current, remote,
-                                    constraints, context_ref, discovered)
+                                    constraints, context_ref, discovered, validate_remote_facts=validate_remote_facts)
     if any('selected_source_ref' in item for item in items):
         evidence.source_barrier(connection, live.library_id)
         for item in items:

@@ -538,8 +538,19 @@ async def admit_album_top_edit_inventory(request: Request, top_ref: str):
 def search_album_top_inventory(request: Request):
     try:
         params = request.query_params
-        if set(params) - {'q', 'cursor', 'limit', 'top_ref'} or len(params.multi_items()) != len(params):
+        if set(params) - {'q', 'cursor', 'limit', 'top_ref', 'root_artist_id', 'scope_mode'} or len(params.multi_items()) != len(params):
             raise AlbumTopError('invalid_query')
+        scoped = 'root_artist_id' in params or 'scope_mode' in params
+        options = {}
+        if scoped:
+            if 'top_ref' in params or not {'root_artist_id', 'scope_mode'} <= set(params):
+                raise AlbumTopError('invalid_query')
+            from music_app.services.album_top_artist_scope import normalize_artist_scope
+            try:
+                options['artist_scope'] = normalize_artist_scope({
+                    'root_artist_id': params['root_artist_id'], 'mode': params['scope_mode']})
+            except AlbumTopError:
+                raise AlbumTopError('invalid_query') from None
         query, limit = params.get('q', ''), params.get('limit', '50')
         if (len(query) > 100 or '\0' in query or any('\ud800' <= char <= '\udfff' for char in query)
                 or not limit.isascii() or not limit.isdecimal() or len(limit) > 3 or not 1 <= int(limit) <= 100):
@@ -549,7 +560,7 @@ def search_album_top_inventory(request: Request):
         _context_ref(request)
         return _response(request, _service(request).search_inventory_albums(context,
             query=query.strip(), cursor=params.get('cursor'), limit=int(limit), top_ref=ref,
-            cursor_secret=request.app.state.auth_policy_config['hmac']['secret'], constraints=constraints))
+            cursor_secret=request.app.state.auth_policy_config['hmac']['secret'], constraints=constraints, **options))
     except AlbumTopError as error:
         return _error(error)
 
@@ -579,8 +590,17 @@ async def _remote_lookup(request, *, search):
         context, constraints = _context(request, BROWSE)
         context_ref = _require_context(request)
         payload = await read_bounded_json_object(request, max_bytes=4096)
+        acquisition_scope = None
+        if not search and type(payload) is dict and 'artist_scope' in payload:
+            from music_app.services.album_top_artist_scope import normalize_artist_scope
+            from music_app.services.album_top_remote_sources import normalize_remote_destination
+            if (type(payload.get('version')) is not int or payload['version'] != 2
+                    or normalize_remote_destination(payload.get('destination')).kind != 'create'):
+                raise AlbumTopError('invalid_command')
+            acquisition_scope = normalize_artist_scope(payload['artist_scope'])
+            payload = {key: value for key, value in payload.items() if key != 'artist_scope'}
         if search:
-            valid = type(payload) is dict and {'destination', 'title'} <= set(payload) <= {'destination', 'title', 'artist'}
+            valid = type(payload) is dict and {'destination', 'title'} <= set(payload) <= {'destination', 'title', 'artist', 'artist_scope'}
         else:
             valid = type(payload) is dict and (set(payload) == {'request_key', 'destination', 'release_group_id'}
                 or (set(payload) == {'version', 'preparation_ref', 'request_key', 'destination', 'release_group_id'}
@@ -591,9 +611,17 @@ async def _remote_lookup(request, *, search):
         watcher = asyncio.create_task(_watch_remote_disconnect(request, cancelled))
         options = {'context_ref': context_ref, 'constraints': constraints, 'should_cancel': cancelled.is_set}
         if search:
+            if 'artist_scope' in payload:
+                from music_app.services.album_top_artist_scope import normalize_artist_scope
+                from music_app.services.album_top_remote_sources import normalize_remote_destination
+                if normalize_remote_destination(payload['destination']).kind != 'create':
+                    raise AlbumTopError('invalid_command')
+                options['artist_scope'] = normalize_artist_scope(payload['artist_scope'])
             value = await run_in_threadpool(service.search_candidates, context,
                 destination=payload['destination'], title=payload['title'], artist=payload.get('artist', ''), **options)
         else:
+            if acquisition_scope is not None:
+                options['artist_scope'] = acquisition_scope
             value = await run_in_threadpool(service.acquire, context, payload=payload, **options)
         if cancelled.is_set():
             raise AlbumTopError('provider_cancelled', 503)
@@ -716,10 +744,14 @@ async def admit_album_top_inventory(request: Request):
         context, constraints = _context(request, CREATE)
         _require_context(request)
         payload = await read_bounded_json_object(request, max_bytes=1024)
-        if type(payload) is not dict or set(payload) != {"album_id"}:
+        if type(payload) is not dict or 'album_id' not in payload or set(payload) - {'album_id', 'artist_scope'}:
             raise AlbumTopError("invalid_command")
+        options = {}
+        if 'artist_scope' in payload:
+            from music_app.services.album_top_artist_scope import normalize_artist_scope
+            options['artist_scope'] = normalize_artist_scope(payload['artist_scope'])
         value = await run_in_threadpool(_service(request).admit_inventory_album,
-            context, album_id=payload["album_id"], constraints=constraints)
+            context, album_id=payload["album_id"], constraints=constraints, **options)
         return _response(request, value)
     except JSONBodyTooLarge:
         return _error(AlbumTopError("command_too_large", 413))

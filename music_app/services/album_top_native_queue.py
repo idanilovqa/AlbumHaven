@@ -3,6 +3,7 @@ import re
 
 from music_app.services import album_top_remote_membership as remote_membership
 from music_app.services.album_top_native_binding import lock_binding, eligible_editions
+from music_app.services.album_top_queue_popularity import capture_popularity
 from music_app.services.owned_album_tops import AlbumTopError, BROWSE, top_uuid, top_revision
 from music_app.services.policy import ResourceScope
 from music_app.services.private_native_targets import PrivateNativeTargets, NativeTargetError, allows
@@ -95,6 +96,8 @@ class AlbumTopNativeQueue:
                 raise AlbumTopError('queue_too_large', 422)
             targets = self.native.resolve_play_queue(connection, live,
                 [row['id'] for row in tracks if row['track_key']], constraints=constraints)
+            popularity = capture_popularity(connection, live.library_id,
+                [row for row in tracks if row['id'] in targets])
             albums = []
             for member in members:
                 item, catalog = str(member['ref']), str(member['catalog_ref'])
@@ -119,7 +122,8 @@ class AlbumTopNativeQueue:
                         'inventory_track_ref': f"inventory-track:{live.library_id}:{row['id']}",
                         'canonical_track_ref': row['track_key']}
                     output.append({'queue_item_ref': f"{item}:{row['id']}",
-                                   'source': source, 'native_target': targets[row['id']]})
+                                   'source': source, 'native_target': targets[row['id']],
+                                   'popularity': popularity[row['id']]})
                 if len(output) != len(rows) or not output:
                     unavailable[item] = 'tracks_unavailable'
                 if output:

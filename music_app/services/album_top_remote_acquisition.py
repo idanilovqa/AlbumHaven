@@ -147,7 +147,8 @@ class TopRemoteAcquisitionService:
 
     @contextmanager
     def _authorized(self, context, destination, constraints, should_cancel, *, write=False,
-                    discovered_owner=None, budget_lock=False, check_revision=True):
+                    discovered_owner=None, budget_lock=False, check_revision=True,
+                    artist_search_witness=None, acquired_artist_preview=None):
         _cancel(should_cancel)
         if destination.kind == 'top' and discovered_owner is None:
             # Preserve the direct database-only helper seam. Public search and
@@ -169,6 +170,11 @@ class TopRemoteAcquisitionService:
                 # A cancellation observer may itself update current policy
                 # constraints. Do not let that callback follow the last check.
                 self.owner._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+                if artist_search_witness is not None:
+                    from music_app.services.album_top_remote_artist_scope import finish_search
+                    finish_search(connection, live, artist_search_witness, constraints)
+                if acquired_artist_preview is not None:
+                    acquired_artist_preview.finish(connection, live, top, self.owner, constraints, should_cancel)
                 # The actual owner's context exit checks the current live session
                 # again after all work, rolling back writes on expiry/revocation.
         except AlbumTopError:
@@ -185,12 +191,13 @@ class TopRemoteAcquisitionService:
 
     @contextmanager
     def _authorized_prepared_attempt(self, context, command, context_ref, constraints, should_cancel, *,
-                                     discovered_owner):
-        """Fixed reserve/replay owner; no caller deadline or finalizer seam.
+                                     discovered_owner, acquired_artist_preview=None):
+        """Fixed reserve/replay owner; no caller deadline or arbitrary callback.
 
         Normal search/v1/direct _authorized semantics stay unchanged. This
         owner obtains the actual reserve snapshot under the same lock prefix,
-        then fences consumed replies after its final cancellation/policy calls.
+        then fences consumed replies and the fixed private Artist display record
+        after its final cancellation/policy calls.
         """
         from music_app.services.album_top_remote_preparations import _sql, _timestamp, _require_snapshot
         if not isinstance(command, PreparedRemoteTopAcquisitionCommand):
@@ -220,6 +227,8 @@ class TopRemoteAcquisitionService:
                 yield connection, live, top, args, snapshot
                 _cancel(should_cancel)
                 self.owner._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+                if acquired_artist_preview is not None:
+                    acquired_artist_preview.finish(connection, live, top, self.owner, constraints, should_cancel)
                 if consumed:
                     final = connection.execute('select clock_timestamp()::text as checked_at').fetchone()
                     _require_snapshot(final is not None)
@@ -286,8 +295,16 @@ class TopRemoteAcquisitionService:
             'album': project_remote_summary(facts)}
 
     def search_candidates(self, context, *, destination, title, artist='', context_ref,
-                          constraints=None, should_cancel=None):
+                          constraints=None, should_cancel=None, artist_scope=None):
+        from music_app.services.album_top_artist_scope import (
+            artist_scope as saved_artist_scope, normalize_artist_scope,
+        )
+        from music_app.services import album_top_remote_artist_scope as scoped_search
         destination = normalize_remote_destination(destination)
+        if artist_scope is not None:
+            if destination.kind != 'create':
+                raise AlbumTopError('invalid_command')
+            artist_scope = normalize_artist_scope(artist_scope)
         context_ref = remote_context_ref(context_ref)
         try:
             title, artist = normalize_album_search(title, artist)
@@ -295,8 +312,9 @@ class TopRemoteAcquisitionService:
             raise AlbumTopError(error.code) from None
         discovered_owner = self._discover_owner(context, destination, constraints, should_cancel)
         with self._authorized(context, destination, constraints, should_cancel,
-                discovered_owner=discovered_owner):
-            pass
+                discovered_owner=discovered_owner) as (connection, live, top):
+            scope = saved_artist_scope(top) if top is not None else artist_scope
+            witness = scoped_search.capture_search(connection, live, scope, constraints)
         failure = None
         try:
             candidates = self.searcher(title, artist, user_agent=self.user_agent, should_cancel=should_cancel)
@@ -308,20 +326,35 @@ class TopRemoteAcquisitionService:
         except RemoteAlbumEvidenceError as error:
             failure = error
         with self._authorized(context, destination, constraints, should_cancel,
-                discovered_owner=discovered_owner):
+                discovered_owner=discovered_owner,
+                artist_search_witness=witness) as (connection, live, top):
+            current_scope = saved_artist_scope(top) if top is not None else artist_scope
+            try:
+                current = scoped_search.capture_search(connection, live, current_scope, constraints)
+            except AlbumTopError:
+                if witness is not None:
+                    raise AlbumTopError('artist_scope_changed', 409) from None
+                raise
+            if current != witness:
+                raise AlbumTopError('artist_scope_changed', 409)
             if failure is not None:
                 raise AlbumTopError(failure.code, 503) from None
+            if witness is not None:
+                candidates = tuple(value for value in candidates
+                    if scoped_search.matches_credits(witness.identities, value))
             # Deliberately no acquisition selector or digest in candidate DTOs.
             return {'context_ref': context_ref, 'destination': destination.payload(), 'limit': SEARCH_LIMIT,
                     'candidates': [project_remote_summary(value) for value in candidates]}
 
-    def acquire(self, context, *, payload, context_ref, constraints=None, should_cancel=None):
+    def acquire(self, context, *, payload, context_ref, constraints=None, should_cancel=None, artist_scope=None):
         command = normalize_remote_acquisition(payload)
         context_ref = remote_context_ref(context_ref)
         if isinstance(command, PreparedRemoteTopAcquisitionCommand):
             from music_app.services.album_top_remote_preparations import RemoteTopPreparationService
             return RemoteTopPreparationService(self).acquire(context, command=command,
-                context_ref=context_ref, constraints=constraints, should_cancel=should_cancel)
+                context_ref=context_ref, constraints=constraints, should_cancel=should_cancel, artist_scope=artist_scope)
+        if artist_scope is not None:
+            raise AlbumTopError('invalid_command')
         discovered_owner = self._discover_owner(context, command.destination, constraints, should_cancel)
         with self._authorized(context, command.destination, constraints, should_cancel,
                 discovered_owner=discovered_owner) as (connection, live, top):

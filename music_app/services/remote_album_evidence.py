@@ -58,6 +58,7 @@ class ReleaseGroupEvidence:
     first_release_date: str | None
     primary_type: str | None
     digest: str
+    credited_artist_ids: tuple[str, ...] | None = None
 
     @property
     def release_year(self):
@@ -65,11 +66,11 @@ class ReleaseGroupEvidence:
 
 
 def release_group_facts_digest(*, release_group_id, title, artist_display,
-                               first_release_date, primary_type):
-    """Validate normalized fields and reproduce the original v1 fact digest.
+                               first_release_date, primary_type, credited_artist_ids=None):
+    """Validate normalized v1/v2 facts, preserving the original v1 digest.
 
     This checks bounded facts, never provider provenance or account authority.
-    Stored summaries already have credited display text, not raw artist credits.
+    Legacy summaries lack credits; they cannot acquire identity by display text.
     """
     ref = canonical_release_group_id(release_group_id)
     title = _text(title)
@@ -78,8 +79,15 @@ def release_group_facts_digest(*, release_group_id, title, artist_display,
     # Persisted normalized facts use None, not the provider's empty date string.
     if released != first_release_date or primary_type not in (None, "Album", "Single", "EP", "Broadcast", "Other"):
         raise RemoteAlbumEvidenceError("invalid_provider_metadata")
-    encoded = json.dumps([1, "musicbrainz", "release-group", ref, title, artist,
-                          released, primary_type], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    values = [1, "musicbrainz", "release-group", ref, title, artist, released, primary_type]
+    if credited_artist_ids is not None:
+        if type(credited_artist_ids) is not tuple or not 1 <= len(credited_artist_ids) <= 100:
+            raise RemoteAlbumEvidenceError("invalid_provider_metadata")
+        for identity in credited_artist_ids:
+            canonical_release_group_id(identity)
+        values[0] = 2
+        values.append(credited_artist_ids)
+    encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -89,7 +97,8 @@ def validate_release_group_evidence(value):
         raise RemoteAlbumEvidenceError("invalid_provider_metadata")
     digest = release_group_facts_digest(release_group_id=value.release_group_id,
         title=value.title, artist_display=value.artist_display,
-        first_release_date=value.first_release_date, primary_type=value.primary_type)
+        first_release_date=value.first_release_date, primary_type=value.primary_type,
+        credited_artist_ids=value.credited_artist_ids)
     if type(value.digest) is not str or value.digest != digest:
         raise RemoteAlbumEvidenceError("invalid_provider_metadata")
     return value
@@ -116,16 +125,18 @@ def project_release_group_evidence(payload, *, requested_id):
     if type(credits) is not list or not 1 <= len(credits) <= 100:
         raise RemoteAlbumEvidenceError("invalid_provider_metadata")
     names = []
+    identities = []
     for credit in credits:
         if type(credit) is not dict or type(credit.get("artist")) is not dict:
             raise RemoteAlbumEvidenceError("invalid_provider_metadata")
         # The same canonical UUID syntax applies to artist MBIDs; this does not
         # infer that the artist and release-group namespaces are interchangeable.
-        canonical_release_group_id(credit["artist"].get("id"))
+        identities.append(canonical_release_group_id(credit["artist"].get("id")))
         names.append(_text(credit.get("name")) + _text(credit.get("joinphrase", ""), blank=True))
     artist = _text("".join(names))
     released = _release_date(payload.get("first-release-date"))
     digest = release_group_facts_digest(release_group_id=actual, title=title,
-        artist_display=artist, first_release_date=released, primary_type=primary)
+        artist_display=artist, first_release_date=released, primary_type=primary,
+        credited_artist_ids=tuple(identities))
     return ReleaseGroupEvidence(actual, title, artist, released, primary,
-                                digest)
+                                digest, tuple(identities))

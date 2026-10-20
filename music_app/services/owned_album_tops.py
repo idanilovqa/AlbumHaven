@@ -146,7 +146,7 @@ def _remote_selection_key(value):
     return value["kind"], value[field]
 
 
-def _top_selections(value, *, allow_retained):
+def _top_selections(value, *, allow_retained, allow_local_only=False):
     if type(value) is not list or not 1 <= len(value) <= MAX_TOP_ITEMS:
         raise AlbumTopError("invalid_command")
     selections, seen, remote = [], set(), False
@@ -166,7 +166,7 @@ def _top_selections(value, *, allow_retained):
             raise AlbumTopError("invalid_command")
         seen.add(identity)
         selections.append(selection)
-    if not remote:
+    if not remote and not allow_local_only:
         raise AlbumTopError("invalid_command")
     return selections
 
@@ -233,7 +233,7 @@ def normalize_top_publication_preview(payload):
 
 def normalize_top_command(action: str, payload: object, *, top_ref: object = None) -> AlbumTopCommand:
     fields = {
-        "create": {"request_key", "title", "description", "album_refs", "draft_ref", "selections", "playlist_preview_ref", "source_review"},
+        "create": {"request_key", "title", "description", "album_refs", "draft_ref", "selections", "playlist_preview_ref", "source_review", "artist_scope"},
         "unlock_source": {"request_key", "revision"},
         "save": {"request_key", "revision", "title", "description", "items", "item_selections", "evidence_revision", "artwork_publication"},
         "enable_external": {"request_key", "revision", "title", "description", "items", "evidence_revision", "artwork_publication"},
@@ -260,6 +260,10 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
     if action == "create":
         if top_ref is not None:
             raise AlbumTopError("invalid_command")
+        scope = {}
+        if 'artist_scope' in payload:
+            from music_app.services.album_top_artist_scope import normalize_artist_scope
+            scope = {'artist_scope': normalize_artist_scope(payload['artist_scope'])}
         if 'source_review' in payload:
             if set(payload) - {'request_key', 'title', 'description', 'source_review'}:
                 raise AlbumTopError('invalid_command')
@@ -289,14 +293,15 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
             data = {"title": _text(payload.get("title"), 100, title=True),
                     "description": _text(payload.get("description", ""), 1000),
                     "draft_ref": _remote_top_ref(payload.get("draft_ref")),
-                    "selections": _top_selections(payload["selections"], allow_retained=False)}
-            return AlbumTopCommand(action, None, key, data)
+                    "selections": _top_selections(payload["selections"], allow_retained=False,
+                                                  allow_local_only=bool(scope))}
+            return AlbumTopCommand(action, None, key, {**data, **scope})
         if "draft_ref" in payload:
             raise AlbumTopError("invalid_command")
         data = {"title": _text(payload.get("title"), 100, title=True),
                 "description": _text(payload.get("description", ""), 1000),
                 "album_refs": _refs(payload.get("album_refs", []), empty=True)}
-        return AlbumTopCommand(action, None, key, data)
+        return AlbumTopCommand(action, None, key, {**data, **scope})
     target = top_uuid(top_ref)
     if action == "set_activity":
         revision = payload.get("activity_revision")

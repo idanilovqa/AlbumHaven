@@ -7,6 +7,7 @@ transport owns pacing/retries; no attempt takes an expired reservation over.
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import math
+from uuid import UUID
 
 from music_app.services.album_top_remote_acquisition import remote_storage_error
 from music_app.services.album_top_remote_sources import (
@@ -314,9 +315,16 @@ class RemoteTopPreparationService:
             value = dict(value, sql_now=checked.isoformat())
             return self._public_attempt(command, context_ref, value, args[1:9])
 
-    def acquire(self, context, *, command, context_ref, constraints=None, should_cancel=None):
+    def acquire(self, context, *, command, context_ref, constraints=None, should_cancel=None, artist_scope=None):
         if not isinstance(command, PreparedRemoteTopAcquisitionCommand):
             raise AlbumTopError('invalid_command')
+        from music_app.services.album_top_artist_scope import normalize_artist_scope
+        from music_app.services.album_top_acquired_artist_preview import AcquiredArtistPreview
+        if artist_scope is not None:
+            if command.destination.kind != 'create':
+                raise AlbumTopError('invalid_command')
+            artist_scope = normalize_artist_scope(artist_scope)
+        preview = AcquiredArtistPreview(artist_scope)
         context_ref = remote_context_ref(context_ref)
         _cancel(should_cancel)
         # Anchor BEFORE discovery and all reservation/commit waits. A later
@@ -327,11 +335,12 @@ class RemoteTopPreparationService:
             return self._read_consumed_create(context, command, context_ref, consumed_top, constraints, should_cancel)
         owner = self.acquisition._discover_owner(context, command.destination, constraints, should_cancel)
         with self.acquisition._authorized_prepared_attempt(context, command, context_ref, constraints,
-                should_cancel, discovered_owner=owner) as (connection, live, top, args, reserved):
+                should_cancel, discovered_owner=owner, acquired_artist_preview=preview) as (connection, live, top, args, reserved):
             scope = args[1:9]
             # Validate every returned binding before either dispatch or replay.
             replay = self._public_attempt(command, context_ref, reserved, scope)
             if reserved.get('dispatch') is not True:
+                preview.stage(top, reserved, replay)
                 return replay
             _require_snapshot(reserved.get('state') == 'reserved')
             attempt_ref, acquisition_ref = _ref(reserved.get('attempt_ref')), _ref(reserved.get('acquisition_ref'))
@@ -339,6 +348,7 @@ class RemoteTopPreparationService:
             if type(remaining) not in (int, float) or not math.isfinite(remaining) or not 0 < remaining <= 120:
                 raise AlbumTopError('provider_cancelled', 503)
             sql_now, lease_until = _timestamp(reserved.get('sql_now')), _timestamp(reserved.get('lease_until'))
+            preview.fresh_deadlines = (lease_until, _timestamp(reserved.get('accepts_until')))
             # Use the smaller representation to avoid ever extending SQL's
             # duration through JSON floating-point/microsecond conversion.
             remaining = math.nextafter(float(min(remaining, (lease_until - sql_now).total_seconds())), 0.0)
@@ -384,11 +394,15 @@ class RemoteTopPreparationService:
             failure = error.code if error.code in _FAILURE_CODES else 'provider_unavailable'
         _cancel(cancelled)
         with self.acquisition._authorized(context, command.destination, constraints, cancelled,
-                write=True, discovered_owner=owner, budget_lock=True) as (connection, live, top):
+                write=True, discovered_owner=owner, budget_lock=True, acquired_artist_preview=preview) as (connection, live, top):
             args = (*self._attempt_args(live, top, command, context_ref), attempt_ref, acquisition_ref)
             if failure is None:
                 value = _sql(connection, 'finish_top_remote_attempt', (*args, facts.digest,
-                    facts.title, facts.artist_display, facts.first_release_date, facts.primary_type))
+                    facts.title, facts.artist_display, facts.first_release_date, facts.primary_type,
+                    [UUID(identity) for identity in facts.credited_artist_ids]
+                    if facts.credited_artist_ids is not None else None))
             else:
                 value = _sql(connection, 'fail_top_remote_attempt', (*args, failure))
-            return self._public_attempt(command, context_ref, value, args[1:9])
+            reply = self._public_attempt(command, context_ref, value, args[1:9])
+            preview.stage(top, value, reply)
+            return reply

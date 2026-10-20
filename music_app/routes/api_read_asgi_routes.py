@@ -42,6 +42,7 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.library_browse_postgres import (
     PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
     ArtistLovedBrowseRootReceipt, project_artist_loved_browse_launches,
+    project_artist_listen_through_browse_launches,
 )
 from music_app.services.library_inventory_postgres import (
     MAX_NON_ALBUM_CANDIDATE_LIMIT,
@@ -558,6 +559,79 @@ def _clear_artist_loved_browse_launches(payload: dict[str, object]) -> None:
         page["artist_loved_launches"] = {"artist": None, "family": None}
 
 
+def _clear_artist_listen_through_browse_launches(payload: dict[str, object]) -> None:
+    """Cached or transient dictionaries cannot retain Top launch authority."""
+    def strip(value):
+        if isinstance(value, dict):
+            value.pop("artist_listen_through_launch", None)
+            value.pop("artist_listen_through_context_ref", None)
+            for nested in value.values():
+                strip(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                strip(nested)
+    strip(payload)
+    payload["artist_listen_through_context_ref"] = None
+    for key in _ARTIST_LOVED_BROWSE_GROUP_FIELDS:
+        groups = payload.get(key)
+        if isinstance(groups, list):
+            for group in groups:
+                if isinstance(group, dict):
+                    group["artist_listen_through_launch"] = None
+    page = payload.get("artist_page")
+    if isinstance(page, dict):
+        page["artist_listen_through_launch"] = None
+
+
+def _project_artist_listen_through_launches_for_request(
+    request: Request, payload: dict[str, object], *, artist_loved_roots, copy_memo,
+) -> None:
+    """Admit server-only receipts at the final ordinary private response seam."""
+    if not artist_loved_roots:
+        return
+    from psycopg import OperationalError
+    from music_app.services.client_surfaces import client_surface_from_request
+    from music_app.services.policy import PolicyContext
+    from music_app.services.policy_asgi import _deployment_mode, _request_origin
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+    from music_app.services.private_library_authority import (
+        PrivateLibraryAuthorityError, current_library_transaction,
+    )
+
+    actor = getattr(request.state, "current_actor", None)
+    if actor is None:
+        return
+    context = PolicyContext.build(
+        actor=actor, action="library.browse.read", library_id=actor.current_library_id,
+        deployment_mode=_deployment_mode(request), request_origin=_request_origin(request),
+        client_surface_class=client_surface_from_request(request),
+    )
+    resolver = getattr(request.app.state, "policy_constraint_resolver", None)
+    constraints = resolver if callable(resolver) else PolicyEvaluationConstraints()
+    try:
+        reference = private_ui_context_ref(request)
+        if reference is None:
+            return
+        with current_library_transaction(
+            _app_config(request).get("ALBUM_HAVEN_APP_DATABASE_URL"), context,
+            constraints=constraints, read_only=True,
+        ) as (connection, live, _now):
+            projected = project_artist_listen_through_browse_launches(
+                connection, context=live, constraints=constraints, context_ref=reference,
+                receipts=artist_loved_roots, payload=payload, copy_memo=copy_memo,
+            )
+        # A request-local identity replacement cannot publish the prior actor's
+        # launch. No field is installed until the transaction has also exited.
+        if private_ui_context_ref(request) != reference:
+            return
+    except (PrivateLibraryAuthorityError, PrivateUIContextError, OperationalError):
+        return
+    if projected:
+        payload["artist_listen_through_context_ref"] = reference
+        for target, field_name, value in projected:
+            target[field_name] = value
+
+
 def _project_artist_loved_launches_for_request(
     request: Request, payload: dict[str, object], *, artist_loved_roots, copy_memo,
 ) -> None:
@@ -997,6 +1071,7 @@ def _private_browse_response(
     copy_memo: dict[int, object] = {}
     payload = deepcopy(payload, copy_memo)
     _clear_artist_loved_browse_launches(payload)
+    _clear_artist_listen_through_browse_launches(payload)
     try:
         # The private middleware authenticates and caches this typed actor before
         # the synchronous handler runs. No owner or subject fallback is valid.
@@ -1086,13 +1161,31 @@ def _private_browse_response(
         _apply_transient_scan_album_rating_overlays(request, _transient_view_album_payloads(payload))
     _project_missing_album_actions_for_request(request, payload)
     if not transient:
+        roots = tuple(artist_loved_roots)
         _project_artist_loved_launches_for_request(
-            request, payload, artist_loved_roots=tuple(artist_loved_roots), copy_memo=copy_memo,
+            request, payload, artist_loved_roots=roots, copy_memo=copy_memo,
+        )
+        _project_artist_listen_through_launches_for_request(
+            request, payload, artist_loved_roots=roots, copy_memo=copy_memo,
         )
     try:
         _project_own_album_preferences(request, payload)
     except Exception as error:
         return _album_preference_error_response(error)
+    # Optional launch owners authorize independently, but all exposed launches
+    # must still belong to this final response's current actor/session/library.
+    # Later projection owners may wait or replace request-local identity.
+    stamps = [payload.get(key) for key in (
+        "artist_loved_context_ref", "artist_listen_through_context_ref")]
+    if any(stamp is not None for stamp in stamps):
+        try:
+            final_reference = private_ui_context_ref(request)
+        except PrivateUIContextError:
+            final_reference = None
+        if final_reference is None or any(
+                stamp is not None and stamp != final_reference for stamp in stamps):
+            _clear_artist_loved_browse_launches(payload)
+            _clear_artist_listen_through_browse_launches(payload)
     return JSONResponse(payload, headers=headers)
 
 

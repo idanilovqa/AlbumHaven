@@ -289,6 +289,26 @@ def _capture_artist_loved_browse_roots(
 
 
 def project_artist_loved_browse_launches(
+    connection: Any, *, context: Any, constraints: Any, context_ref: str,
+    receipts: Iterable[ArtistLovedBrowseRootReceipt], payload: dict[str, object],
+    copy_memo: Mapping[int, object], clock: Callable | None = None,
+) -> list[tuple[dict[str, object], str, dict[str, object]]]:
+    return _project_artist_browse_launches(connection, context=context, constraints=constraints,
+        context_ref=context_ref, receipts=receipts, payload=payload, copy_memo=copy_memo, clock=clock)
+
+
+def project_artist_listen_through_browse_launches(
+    connection: Any, *, context: Any, constraints: Any, context_ref: str,
+    receipts: Iterable[ArtistLovedBrowseRootReceipt], payload: dict[str, object],
+    copy_memo: Mapping[int, object], clock: Callable | None = None,
+) -> list[tuple[dict[str, object], str, dict[str, object]]]:
+    """Fixed Top Create authority over the existing exact producer receipts."""
+    return _project_artist_browse_launches(connection, context=context, constraints=constraints,
+        context_ref=context_ref, receipts=receipts, payload=payload, copy_memo=copy_memo,
+        clock=clock, listen_through=True)
+
+
+def _project_artist_browse_launches(
     connection: Any,
     *,
     context: Any,
@@ -298,6 +318,7 @@ def project_artist_loved_browse_launches(
     payload: dict[str, object],
     copy_memo: Mapping[int, object],
     clock: Callable | None = None,
+    listen_through: bool = False,
 ) -> list[tuple[dict[str, object], str, dict[str, object]]]:
     """Prepare launch fields on a live current-library transaction, without mutation.
 
@@ -321,8 +342,12 @@ def project_artist_loved_browse_launches(
         raise PrivateLibraryAuthorityError("Private library access is unavailable.")
     if not isinstance(context_ref, str) or re.fullmatch(r"[0-9a-f]{64}", context_ref) is None:
         return []
+    create_action = "library.playlists.create"
+    if listen_through:
+        from music_app.services.owned_album_tops import CREATE as TOP_CREATE
+        create_action = TOP_CREATE
     require_private_action(context, "library.browse.read", constraints=constraints)
-    require_private_action(context, "library.playlists.create", constraints=constraints)
+    require_private_action(context, create_action, constraints=constraints)
     group_targets = {id(group) for key in _ARTIST_LOVED_GROUP_FIELDS
                      if isinstance(payload.get(key), list)
                      for group in payload[key] if isinstance(group, dict)}
@@ -376,7 +401,7 @@ def project_artist_loved_browse_launches(
     # Policy callbacks and database lock acquisition can wait. Publish nothing
     # until global authority, each root and the original session remain current.
     require_private_action(context, "library.browse.read", constraints=constraints)
-    require_private_action(context, "library.playlists.create", constraints=constraints)
+    require_private_action(context, create_action, constraints=constraints)
     allowed = []
     for receipt, target in pending:
         try:
@@ -390,6 +415,12 @@ def project_artist_loved_browse_launches(
         clock=clock or (lambda: datetime.now(timezone.utc)))
     result = []
     for receipt, target in allowed:
+        if listen_through:
+            result.append((target, "artist_listen_through_launch", {
+                "context_ref": context_ref, "artist_ref": receipt.artist_ref,
+                "artist_scope": {"root_artist_id": str(receipt.root_artist_id), "mode": "artist"},
+            }))
+            continue
         def launch(mode):
             return {"context_ref": context_ref, "artist_ref": receipt.artist_ref,
                     "descriptor": {"version": 1, "root_artist_id": str(receipt.root_artist_id),

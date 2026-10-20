@@ -2,5 +2,13 @@
   {
     "nodeIdPattern": "^tests\\.py\\.test_cover_lookup_live_provider_smoke::test_live_music_service_cover_lookup_smoke_logs_duration_and_returns_candidates\\[(?:apple-Apple Music|deezer-Deezer|youtube_music-YouTube Music|spotify-Spotify)\\]$",
     "reasonPattern": "^Set ALBUM_HAVEN_RUN_LIVE_PROVIDER_TESTS=1 to run live provider smoke tests\\.$"
+  },
+  {
+    "nodeIdPattern": "^tests\\.py\\.test_album_top_artist_scope_artwork_postgres::test_artwork_a2_rechecks_scope_after_the_actual_outside_observation_gap$(?![\\s\\S])",
+    "reasonPattern": "^Requires genuine existing POSIX artwork acquisition$(?![\\s\\S])"
+  },
+  {
+    "nodeIdPattern": "^tests\\.py\\.test_album_top_artist_scope_artwork_postgres::test_artwork_finishes_each_actual_transaction_and_preserves_exact_explicit_members$(?![\\s\\S])",
+    "reasonPattern": "^Requires genuine existing POSIX artwork acquisition$(?![\\s\\S])"
   }
 ]

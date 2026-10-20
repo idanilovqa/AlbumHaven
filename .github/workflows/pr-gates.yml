@@ -2384,6 +2384,12 @@ jobs:
             timeout_minutes: 30
           - batch: new_url_html
             timeout_minutes: 30
+          - batch: artist_scope_commands
+            timeout_minutes: 45
+          - batch: artist_remote_evidence
+            timeout_minutes: 45
+          - batch: artist_scoped_reads
+            timeout_minutes: 30
           # Each exact-node diagnostic has a fresh runner/service and the same
           # owned initializer. Never reuse a quarantined full-batch database.
           - batch: popularity_bootstrap
@@ -2549,7 +2555,124 @@ jobs:
               printf '%s\n' \
                 'tests/py/test_album_preferences_postgres.py' \
                 'tests/py/test_album_preferences_asgi.py' \
-                'tests/py/test_album_preference_subject_projection.py' > "$evidence/tests.txt"
+                'tests/py/test_album_preference_subject_projection.py' \
+                'tests/py/test_album_top_native_queue.py' \
+                'tests/py/test_album_top_native_queue_postgres.py' \
+                'tests/py/test_album_top_native_queue_routes.py' \
+                'tests/py/test_album_top_native_remote_queue_postgres.py' \
+                'tests/py/test_album_top_native_remote_targets_postgres.py' \
+                'tests/py/test_album_top_native_target_routes.py' \
+                'tests/py/test_album_top_native_targets.py' \
+                'tests/py/test_album_top_native_targets_postgres.py' \
+                'tests/py/test_album_top_queue_popularity.py' \
+                'tests/py/test_album_top_queue_popularity_postgres.py' \
+                'tests/py/test_album_top_scoped_creation_metadata_boundaries.py' \
+                'tests/py/test_album_top_scoped_creation_metadata_postgres.py' \
+                'tests/py/test_artist_listen_launch_final_context.py' \
+                'tests/py/test_artist_listen_launch_finalizer.py' \
+                'tests/py/test_artist_listen_launch_postgres.py' \
+                'tests/py/test_artist_listen_launch_projection.py' \
+                'tests/py/test_artist_loved_browse_projection.py' \
+                'tests/py/test_artist_loved_persistence_live.py' \
+                'tests/py/test_artist_loved_recipe.py' \
+                'tests/py/test_artist_loved_routes.py' \
+                'tests/py/test_initialize_loved_browse_postgres.py' > "$evidence/tests.txt"
+              ;;
+            artist_scope_commands)
+              printf '%s\n' \
+                'tests/py/test_album_top_artist_scope_artwork_postgres.py' \
+                'tests/py/test_album_top_artist_scope_commands.py' \
+                'tests/py/test_album_top_artist_scope_postgres.py' \
+                'tests/py/test_album_top_artist_scope_preview_postgres.py' \
+                'tests/py/test_album_top_artist_scope_routes.py' \
+                'tests/py/test_album_top_artwork_preparation_postgres.py' \
+                'tests/py/test_album_top_browse.py' \
+                'tests/py/test_album_top_browse_postgres.py' \
+                'tests/py/test_album_top_catalog.py' \
+                'tests/py/test_album_top_catalog_versions.py' \
+                'tests/py/test_album_top_collaboration_commands.py' \
+                'tests/py/test_album_top_collaboration_postgres.py' \
+                'tests/py/test_album_top_collaboration_routes.py' \
+                'tests/py/test_album_top_copy_postgres.py' \
+                'tests/py/test_album_top_membership.py' \
+                'tests/py/test_album_top_membership_evidence_postgres.py' \
+                'tests/py/test_album_top_membership_postgres.py' \
+                'tests/py/test_album_top_membership_routes.py' \
+                'tests/py/test_album_top_owner_publication_postgres.py' \
+                'tests/py/test_album_top_owner_publication_routes.py' \
+                'tests/py/test_album_top_publication_sources.py' \
+                'tests/py/test_album_top_publication_sources_postgres.py' \
+                'tests/py/test_album_top_requests_postgres.py' \
+                'tests/py/test_album_top_source_finalization.py' \
+                'tests/py/test_album_top_source_finalization_postgres.py' \
+                'tests/py/test_album_top_source_finalization_remote_postgres.py' \
+                'tests/py/test_album_top_source_finalization_routes.py' \
+                'tests/py/test_album_top_source_lock_publication_postgres.py' \
+                'tests/py/test_isolated_postgres_migration_ledger.py' \
+                'tests/py/test_owned_album_top_route_boundary.py' \
+                'tests/py/test_owned_album_tops.py' \
+                'tests/py/test_owned_album_tops_postgres.py' \
+                'tests/py/test_top_artwork_draft_preparation_postgres.py' \
+                'tests/py/test_top_artwork_owner_http.py' \
+                'tests/py/test_top_artwork_owner_publication_postgres.py' \
+                'tests/py/test_top_artwork_owner_sources_postgres.py' \
+                'tests/py/test_top_artwork_publication.py' \
+                'tests/py/test_top_artwork_publication_closure_postgres.py' \
+                'tests/py/test_top_artwork_publication_postgres.py' \
+                'tests/py/test_top_artwork_publication_retention_postgres.py' \
+                'tests/py/test_top_artwork_publication_seals_postgres.py' \
+                'tests/py/test_top_artwork_saved_phases_postgres.py' \
+                'tests/py/test_artist_backend_ci_selection_contract.py' > "$evidence/tests.txt"
+              ;;
+            artist_remote_evidence)
+              printf '%s\n' \
+                'tests/py/test_album_top_private_remote_context_routes.py' \
+                'tests/py/test_album_top_remote_acquisition_lock_order.py' \
+                'tests/py/test_album_top_remote_acquisition_postgres.py' \
+                'tests/py/test_album_top_remote_acquisition_routes.py' \
+                'tests/py/test_album_top_remote_artist_scope_authority_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_bounds_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_fences_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_hook.py' \
+                'tests/py/test_album_top_remote_artist_scope_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_publication_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_retained_postgres.py' \
+                'tests/py/test_album_top_remote_consumption_postgres.py' \
+                'tests/py/test_album_top_remote_identity_lock_postgres.py' \
+                'tests/py/test_album_top_remote_membership_digest_vectors.py' \
+                'tests/py/test_album_top_remote_membership_postgres.py' \
+                'tests/py/test_album_top_remote_membership_wire.py' \
+                'tests/py/test_album_top_remote_preparation_routes.py' \
+                'tests/py/test_album_top_remote_preparation_sources.py' \
+                'tests/py/test_album_top_remote_preparations_postgres.py' \
+                'tests/py/test_album_top_remote_retention_postgres.py' \
+                'tests/py/test_album_top_remote_sources.py' \
+                'tests/py/test_album_top_remote_storage_postgres.py' \
+                'tests/py/test_remote_album_catalog_mapper.py' \
+                'tests/py/test_remote_album_credited_admission_shape_postgres.py' \
+                'tests/py/test_remote_album_credited_consumption_postgres.py' \
+                'tests/py/test_remote_album_credited_evidence.py' \
+                'tests/py/test_remote_album_credited_limits_postgres.py' \
+                'tests/py/test_remote_album_credited_parameter_postgres.py' \
+                'tests/py/test_remote_album_credited_retention_postgres.py' \
+                'tests/py/test_remote_album_credited_rows.py' \
+                'tests/py/test_remote_album_credited_storage_postgres.py' \
+                'tests/py/test_remote_album_provider_evidence.py' \
+                'tests/py/test_remote_album_search.py' \
+                'tests/py/test_remote_preparation_cutoff_postgres.py' \
+                'tests/py/test_remote_preparation_storage_postgres.py' > "$evidence/tests.txt"
+              ;;
+            artist_scoped_reads)
+              printf '%s\n' \
+                'tests/py/test_album_top_acquired_artist_preview_display_replay.py' \
+                'tests/py/test_album_top_acquired_artist_preview_fallback.py' \
+                'tests/py/test_album_top_acquired_artist_preview_fences.py' \
+                'tests/py/test_album_top_acquired_artist_preview_postgres.py' \
+                'tests/py/test_album_top_acquired_artist_preview_routes.py' \
+                'tests/py/test_album_top_scoped_remote_search_fences_postgres.py' \
+                'tests/py/test_album_top_scoped_remote_search_final_boundaries_postgres.py' \
+                'tests/py/test_album_top_scoped_remote_search_postgres.py' \
+                'tests/py/test_album_top_scoped_remote_search_routes.py' > "$evidence/tests.txt"
               ;;
             retained_ownership)
               printf '%s\n' \
@@ -2712,7 +2835,7 @@ jobs:
           PY_CAPTURE_EVIDENCE
 
       - name: Require complete new-feature execution evidence
-        if: ${{ !cancelled() && contains(fromJSON('["new_top_targets","new_playlist_preview","new_top_queue","new_playlist_preferences","new_source_import","new_url_html"]'), matrix.batch) && steps.feature_runtime.outcome != 'skipped' }}
+        if: ${{ !cancelled() && contains(fromJSON('["new_top_targets","new_playlist_preview","new_top_queue","new_playlist_preferences","new_source_import","new_url_html","artist_scope_commands","artist_remote_evidence","artist_scoped_reads","favorites_backend"]'), matrix.batch) && steps.feature_runtime.outcome != 'skipped' }}
         run: |
           python - <<'PY_NEW_FEATURE_EVIDENCE'
           import os

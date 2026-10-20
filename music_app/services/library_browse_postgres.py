@@ -3212,6 +3212,13 @@ class PostgresLibraryBrowseRepository:
         include_missing: bool = True,
         connection: Any | None = None,
     ) -> _SearchPreviewRows:
+        query_utf8_prefilter = (
+            query
+            if "%" not in query
+            and "_" not in query
+            and len(query.encode("utf-8").hex()) >= 3
+            else None
+        )
         params = {
             "query_like": f"%{query}%",
             "include_missing": include_missing,
@@ -3226,10 +3233,13 @@ class PostgresLibraryBrowseRepository:
             ),
             **_root_sidebar_params(view_state),
         }
+        if query_utf8_prefilter is not None:
+            params["query_utf8_prefilter"] = query_utf8_prefilter
         if connection is not None:
             cursor = connection.execute(
                 _search_preview_sql(
-                    _SEARCH_PREVIEW_ALBUM_LIMIT if not include_missing else None
+                    _SEARCH_PREVIEW_ALBUM_LIMIT if not include_missing else None,
+                    use_utf8_prefilter=query_utf8_prefilter is not None,
                 ),
                 params,
             )
@@ -3237,7 +3247,8 @@ class PostgresLibraryBrowseRepository:
         with self._connect_to_database() as owned_connection:
             cursor = owned_connection.execute(
                 _search_preview_sql(
-                    _SEARCH_PREVIEW_ALBUM_LIMIT if not include_missing else None
+                    _SEARCH_PREVIEW_ALBUM_LIMIT if not include_missing else None,
+                    use_utf8_prefilter=query_utf8_prefilter is not None,
                 ),
                 params,
             )
@@ -9162,11 +9173,32 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
     """
 
 
-def _search_preview_sql(album_limit: int | None = None) -> str:
+def _search_preview_sql(
+    album_limit: int | None = None,
+    *,
+    use_utf8_prefilter: bool = False,
+) -> str:
     normalized_limit = max(int(album_limit or 0), 0)
     candidate_limit_sql = (
         f"limit {normalized_limit}"
         if normalized_limit
+        else ""
+    )
+
+    track_title_prefilter_sql = (
+        "library.search_utf8_hex("
+        "lower(btrim(coalesce(library.local_tracks.title, '')))"
+        ") like '%%' || "
+        "library.search_utf8_hex(lower(%(query_utf8_prefilter)s)) || '%%' and "
+        if use_utf8_prefilter
+        else ""
+    )
+    file_path_prefilter_sql = (
+        "library.search_utf8_hex("
+        "lower(coalesce(library.local_track_files.private_path, ''))"
+        ") like '%%' || "
+        "library.search_utf8_hex(lower(%(query_utf8_prefilter)s)) || '%%' and "
+        if use_utf8_prefilter
         else ""
     )
     preview_eligibility_sql = (
@@ -9292,7 +9324,7 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
             library.local_tracks.album_id,
             library.local_tracks.id as track_id
           from library.local_tracks
-          where lower(btrim(coalesce(library.local_tracks.title, '')))
+          where {track_title_prefilter_sql}lower(btrim(coalesce(library.local_tracks.title, '')))
             like lower(%(query_like)s) escape ''
         ),
         file_name_matches as materialized (
@@ -9300,7 +9332,7 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
               library.local_track_files.track_id,
               library.local_track_files.scan_cache_stale
             from library.local_track_files
-            where (
+            where {file_path_prefilter_sql}(
                 lower(btrim(regexp_replace(coalesce(library.local_track_files.private_path, ''), '^.*[\\\\/]', ''))) like lower(%(query_like)s)
                   escape ''
                 or lower(btrim(

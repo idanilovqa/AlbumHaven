@@ -5166,6 +5166,7 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     }
     assert executed[5] == {
         "query_like": "%tender%",
+        "query_utf8_prefilter": "tender",
         "include_missing": True,
         "search_artist_keys": [],
         "category_count": 1,
@@ -8109,6 +8110,7 @@ def test_postgres_search_rows_query_authoritative_database_on_every_request():
     assert [executed[0], executed[2]] == [
         {
             "query_like": "%Ария%",
+            "query_utf8_prefilter": "Ария",
             "include_missing": True,
             "search_artist_keys": [],
             "category_count": 0,
@@ -8116,6 +8118,7 @@ def test_postgres_search_rows_query_authoritative_database_on_every_request():
         },
         {
             "query_like": "%Ария%",
+            "query_utf8_prefilter": "Ария",
             "include_missing": True,
             "search_artist_keys": [],
             "category_count": 1,
@@ -16330,6 +16333,56 @@ def test_active_only_search_preview_skips_missing_artist_key_expansion(monkeypat
     )
 
     assert connection.params["search_artist_keys"] == []
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_prefilter_query", "expects_prefilter"),
+    [
+        ("Студийные записи", "Студийные записи", True),
+        ("a", None, False),
+        ("Signal%Lead", None, False),
+        ("Signal_Lead", None, False),
+    ],
+)
+def test_search_preview_uses_locale_independent_prefilter_only_for_literal_queries(
+    query, expected_prefilter_query, expects_prefilter
+):
+    from music_app.services import library_browse_postgres as browse_module
+
+    class Cursor:
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def execute(self, sql, params):
+            self.sql = str(sql)
+            self.params = dict(params)
+            return Cursor()
+
+    connection = Connection()
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+    )
+
+    repository._load_search_rows(
+        query,
+        browse_module._root_sidebar_view_state(
+            {"category": ["main_library", "new_arrivals", "hoard"]}
+        ),
+        include_missing=False,
+        connection=connection,
+    )
+
+    normalized_sql = " ".join(connection.sql.casefold().split())
+    assert connection.params.get("query_utf8_prefilter") == expected_prefilter_query
+    assert (
+        "library.search_utf8_hex(lower(btrim(coalesce(library.local_tracks.title, ''))))"
+        in normalized_sql
+    ) is expects_prefilter
+    assert (
+        "library.search_utf8_hex(lower(coalesce(library.local_track_files.private_path, '')))"
+        in normalized_sql
+    ) is expects_prefilter
 
 
 def test_search_preview_loader_partitions_active_and_missing_rows_from_one_execute():

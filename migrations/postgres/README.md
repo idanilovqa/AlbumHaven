@@ -243,6 +243,14 @@ Apply `0091` transactionally during a controlled migration window because its
 ordinary index builds can briefly block projection writes; reads remain
 available.
 
+`0092_add_locale_independent_search_prefilter.sql` adds an immutable UTF-8 hex
+normalizer and two ordinary GIN trigram indexes for track-title and private-path
+search. Apply it transactionally during a controlled migration window: reads
+remain available, but the index builds briefly block writes to
+`library.local_tracks` and `library.local_track_files`. Roll back the matching
+application query first, then drop the two indexes and finally drop
+`library.search_utf8_hex(text)`.
+
 Rollback is migration-specific. Revoke the `0081` delete grant only after the
 root-setting writer is rolled back. Restore the `0063` missing-album function to
 undo `0082`; confirmed deletions are not reversible, and restoring `0063`

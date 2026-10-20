@@ -42,6 +42,9 @@ GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION = (
 GALLERY_PROJECTION_ARTIST_LOOKUP_MIGRATION = (
     MIGRATIONS_DIR / "0091_add_gallery_projection_artist_lookup_indexes.sql"
 )
+LOCALE_INDEPENDENT_SEARCH_PREFILTER_MIGRATION = (
+    MIGRATIONS_DIR / "0092_add_locale_independent_search_prefilter.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -447,7 +450,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-51:] == [
+    assert migration_names[-52:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -499,6 +502,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0089_allow_gallery_projection_featured_kind.sql",
         "0090_patch_local_artist_search_projection.sql",
         "0091_add_gallery_projection_artist_lookup_indexes.sql",
+        "0092_add_locale_independent_search_prefilter.sql",
     ]
 
 
@@ -515,6 +519,21 @@ def test_gallery_projection_artist_lookup_migration_indexes_anchor_and_boundary_
         "on library.gallery_projection_occurrences "
         "(library_id, scope_key, (payload ->> 'artist_id'), ordinal)"
     ) in sql
+
+
+def test_locale_independent_search_prefilter_migration_adds_fixed_utf8_indexes():
+    sql = _normalized_sql(
+        LOCALE_INDEPENDENT_SEARCH_PREFILTER_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create or replace function library.search_utf8_hex(value text)" in sql
+    assert "immutable parallel safe strict" in sql
+    assert "convert_to(value, 'utf8')" in sql
+    assert "encode(" in sql
+    assert "local_tracks_search_utf8_hex_trgm_idx" in sql
+    assert "local_track_files_search_utf8_hex_trgm_idx" in sql
+    assert "library.search_utf8_hex(lower(btrim(coalesce(title, ''))))" in sql
+    assert "library.search_utf8_hex(lower(coalesce(private_path, '')))" in sql
 
 
 def test_album_raw_artist_search_index_matches_search_preview_expression():

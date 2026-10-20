@@ -153,52 +153,45 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
     });
 
     let selectedArtistRequestLifecycle = null;
-    const { selectedArtistSelectionMs, selectedArtistGalleryMs } = await stepLogger.step('Measure the selected artist tree selection and gallery readiness', async () => {
-      let selectionMs = 0;
-      let galleryMs = 0;
+  const { selectedArtistSelectionMs, selectedArtistGalleryMs, selectedArtistCoversMs } = await stepLogger.step('Measure the selected artist tree selection and gallery readiness', async () => {
+    let selectedArtistSelectionMs = 0;
+    let selectedArtistGalleryMs = 0;
+    let selectedArtistCoversMs = 0;
       const lifecycle = await runWithSelectedArtistRequestLifecycle(
         page,
         galleryActions,
         navigationPanelActions,
         selectedArtistName,
         async () => {
-          selectionMs = await measureActionTime(
-            async () => {
-              await selectSidebarArtistAtAndVerify(
-                navigationPanelActions,
-                selectedArtistIndex,
-                selectedArtistName,
-              );
-            },
-            async () => {
-              await navigationPanelActions.waitForSidebarSelection(selectedArtistName, { timeout: 60000 });
-            },
+        const selectedArtistStartedAt = performance.now();
+        await selectSidebarArtistAtAndVerify(
+          navigationPanelActions,
+          selectedArtistIndex,
+          selectedArtistName,
           );
-
-          galleryMs = await measureActionTime(
-            async () => {},
-            async () => {
-              await galleryActions.waitForSelectedArtistGallery(selectedArtistName, { timeout: 60000 });
-              await galleryActions.waitForVisibleGalleryCoversLoaded({
-                minimumCount: 1,
-                timeout: 60000,
-              });
-            },
-          );
+        await navigationPanelActions.waitForSidebarSelection(selectedArtistName, { timeout: 60000 });
+        selectedArtistSelectionMs = performance.now() - selectedArtistStartedAt;
+        await galleryActions.waitForSelectedArtistGallery(selectedArtistName, { timeout: 60000 });
+        selectedArtistGalleryMs = performance.now() - selectedArtistStartedAt;
+        await galleryActions.waitForVisibleGalleryCoversLoaded({
+          minimumCount: 1,
+          timeout: 60000,
+        });
+        selectedArtistCoversMs = performance.now() - selectedArtistStartedAt;
         },
       );
       selectedArtistRequestLifecycle = lifecycle;
       testArtifacts.queueJsonAttachment('selected-artist-request-lifecycle', lifecycle);
       allArtistsLocalReport.recordTextCheckpoint({
         key: 'selected-artist-request-lifecycle',
-        label: `Artist[10] "${selectedArtistName}" request lifecycle`,
+      label: `Artist[${selectedArtistIndex + 1}] "${selectedArtistName}" request lifecycle`,
         valueText: summarizeSelectedArtistRequestLifecycle(lifecycle),
         details: lifecycle,
       });
       await allArtistsLocalReport.recordTimingCheckpoint({
         key: 'selected-artist-selection-visible',
-        label: `Artist[10] "${selectedArtistName}" tree selection visible`,
-        timingMs: selectionMs,
+      label: `Artist[${selectedArtistIndex + 1}] "${selectedArtistName}" tree selection visible`,
+      timingMs: selectedArtistSelectionMs,
         details: {
           phase: 'selected_artist',
           selectedArtistIndex: selectedArtistIndex + 1,
@@ -207,18 +200,29 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       });
       await allArtistsLocalReport.recordTimingCheckpoint({
         key: 'selected-artist-gallery-ready',
-        label: `Artist[10] "${selectedArtistName}" gallery ready`,
-        timingMs: galleryMs,
+      label: `Artist[${selectedArtistIndex + 1}] "${selectedArtistName}" gallery ready`,
+      timingMs: selectedArtistGalleryMs,
         details: {
           phase: 'selected_artist',
           selectedArtistIndex: selectedArtistIndex + 1,
           selectedArtistName,
         },
       });
-      return {
-        selectedArtistSelectionMs: selectionMs,
-        selectedArtistGalleryMs: galleryMs,
-      };
+    await allArtistsLocalReport.recordTimingCheckpoint({
+      key: 'selected-artist-visible-covers',
+      label: `Artist[${selectedArtistIndex + 1}] "${selectedArtistName}" visible covers decoded`,
+      timingMs: selectedArtistCoversMs,
+      details: {
+        phase: 'selected_artist',
+        selectedArtistIndex: selectedArtistIndex + 1,
+        selectedArtistName,
+      },
+    });
+    return {
+      selectedArtistSelectionMs,
+      selectedArtistGalleryMs,
+      selectedArtistCoversMs,
+    };
     });
     const selectedArtistBrowseTelemetry = await readBrowseTelemetry(page);
     await stepLogger.step('Assert the selected-artist round-trip stayed on the Postgres browse seam', async () => {
@@ -424,6 +428,7 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       selectedArtistName,
       selectedArtistSelectionMs,
       selectedArtistGalleryMs,
+      selectedArtistCoversMs,
       allArtistsSelectionMs,
       allArtistsFirstAlbumsMs,
       allArtistsCoversMs,

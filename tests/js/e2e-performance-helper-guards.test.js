@@ -622,6 +622,27 @@ test('focused search browse resolves its timing budget from the central authorit
   assert.doesNotMatch(spec, /benchmarkValidation\s*:/);
 });
 
+test('direct Artist Tree timing anchors highlight and gallery readiness to the click and measures covers separately', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js');
+  const measurementStart = spec.indexOf('const selectedArtistStartedAt = performance.now();');
+  const click = spec.indexOf('await selectSidebarArtistAtAndVerify(', measurementStart);
+  const highlightWait = spec.indexOf('await navigationPanelActions.waitForSidebarSelection(', click);
+  const highlightTiming = spec.indexOf('selectedArtistSelectionMs = performance.now() - selectedArtistStartedAt;', highlightWait);
+  const galleryWait = spec.indexOf('await galleryActions.waitForSelectedArtistGallery(', highlightTiming);
+  const galleryTiming = spec.indexOf('selectedArtistGalleryMs = performance.now() - selectedArtistStartedAt;', galleryWait);
+  const coversWait = spec.indexOf('await galleryActions.waitForVisibleGalleryCoversLoaded(', galleryTiming);
+  const coversTiming = spec.indexOf('selectedArtistCoversMs = performance.now() - selectedArtistStartedAt;', coversWait);
+
+  assert.ok(measurementStart >= 0, 'the click must own one shared timing origin');
+  assert.ok(click > measurementStart, 'the click must follow the shared timing origin');
+  assert.ok(highlightWait > click && highlightTiming > highlightWait, 'highlight timing must end at visible selection');
+  assert.ok(galleryWait > highlightTiming && galleryTiming > galleryWait, 'gallery timing must end at structural readiness');
+  assert.ok(coversWait > galleryTiming && coversTiming > coversWait, 'decoded-cover timing must remain separate');
+  assert.match(spec, /key: 'selected-artist-visible-covers'/);
+  assert.match(spec, /selectedArtistCoversMs,/);
+  assert.doesNotMatch(spec, /Artist\[10\]/);
+});
+
 test('focused selected-artist and root browse reports own complete terminal timing evidence', () => {
   const selectedArtist = readRepoFile('tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js');
   const rootBrowse = readRepoFile('tests/e2e/syntheticLargeLibrary/rootAlbumBrowse.spec.js');

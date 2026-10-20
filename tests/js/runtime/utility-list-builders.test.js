@@ -16,6 +16,18 @@ const helperPath = path.join(
   'utility-list-builders.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const albumIdentityHelperPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'virtual-artist-grid.js',
+);
+const albumIdentityHelperSource = fs.readFileSync(albumIdentityHelperPath, 'utf8');
 const statusUiHelperPath = path.join(
   __dirname,
   '..',
@@ -228,6 +240,92 @@ function loadPlayerAlbumResolutionHelpers() {
   ].flatMap((group) => group.albums || []);
   return context;
 }
+
+test('player queue retains the canonical album ref for a hydrated path-bearing snapshot', () => {
+  const context = loadPlayerAlbumResolutionHelpers();
+  const identityHelperStart = albumIdentityHelperSource.indexOf('function getAlbumRequestKey(album)');
+  const identityHelperEnd = albumIdentityHelperSource.indexOf('function rebuildAlbumIndex(groupsList)');
+  vm.runInContext(
+    albumIdentityHelperSource.slice(identityHelperStart, identityHelperEnd),
+    context,
+    { filename: albumIdentityHelperPath },
+  );
+
+  const canonicalAlbumRef = 'various-artists::featured-signal-collection';
+  const playingTrackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
+  const queueSnapshot = {
+    key: 'featured-on-relationship-42',
+    album_ref: canonicalAlbumRef,
+    name: 'Featured Signal Collection',
+    album_artist: 'Various Artists',
+    tracks: [{ path: playingTrackPath }],
+  };
+  const playingTrack = {
+    path: playingTrackPath,
+    artist: 'Solo Voice',
+    albumArtist: 'Various Artists',
+    album: 'Featured Signal Collection',
+  };
+  const sameNameFallback = {
+    key: 'wrong-same-name-release',
+    album_ref: 'wrong-same-name-release',
+    name: queueSnapshot.name,
+    album_artist: queueSnapshot.album_artist,
+    tracks: [{ path: 'C:\\Music\\Other Root\\Featured Signal Collection\\01 Other.flac' }],
+  };
+  context.state.view.artist_groups = [{ artist: 'Various Artists', albums: [sameNameFallback] }];
+  context.state.player.playbackQueue = {
+    albumRef: canonicalAlbumRef,
+    albumSnapshot: queueSnapshot,
+    currentIndex: 0,
+    tracks: [{ ...playingTrack }],
+  };
+
+  assert.equal(context.getAlbumRequestKey(queueSnapshot), canonicalAlbumRef);
+  assert.strictEqual(context.resolveAlbumForPlayerTrack(playingTrack), queueSnapshot);
+});
+
+test('player queue accepts a legacy path-signature album ref before same-name fallback', () => {
+  const context = loadPlayerAlbumResolutionHelpers();
+  const identityHelperStart = albumIdentityHelperSource.indexOf('function getAlbumRequestKey(album)');
+  const identityHelperEnd = albumIdentityHelperSource.indexOf('function rebuildAlbumIndex(groupsList)');
+  vm.runInContext(
+    albumIdentityHelperSource.slice(identityHelperStart, identityHelperEnd),
+    context,
+    { filename: albumIdentityHelperPath },
+  );
+
+  const playingTrackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
+  const queueSnapshot = {
+    key: 'featured-on-relationship-42',
+    album_ref: 'various-artists::featured-signal-collection',
+    name: 'Featured Signal Collection',
+    album_artist: 'Various Artists',
+    tracks: [{ path: playingTrackPath }],
+  };
+  const playingTrack = {
+    path: playingTrackPath,
+    artist: 'Solo Voice',
+    albumArtist: 'Various Artists',
+    album: 'Featured Signal Collection',
+  };
+  const sameNameFallback = {
+    key: 'wrong-same-name-release',
+    album_ref: 'wrong-same-name-release',
+    name: queueSnapshot.name,
+    album_artist: queueSnapshot.album_artist,
+    tracks: [{ path: 'C:\\Music\\Other Root\\Featured Signal Collection\\01 Other.flac' }],
+  };
+  context.state.view.artist_groups = [{ artist: 'Various Artists', albums: [sameNameFallback] }];
+  context.state.player.playbackQueue = {
+    albumRef: context.getAlbumIdentity(queueSnapshot),
+    albumSnapshot: queueSnapshot,
+    currentIndex: 0,
+    tracks: [{ ...playingTrack }],
+  };
+
+  assert.strictEqual(context.resolveAlbumForPlayerTrack(playingTrack), queueSnapshot);
+});
 
 test('player album resolution uses the active queue album after the visible search context changes', () => {
   const context = loadPlayerAlbumResolutionHelpers();

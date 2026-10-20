@@ -648,10 +648,16 @@ function resolveActiveQueueAlbumSnapshot(trackPath) {
   if (!targetPath || !albumSnapshot || typeof albumSnapshot !== 'object') return null;
 
   const queueAlbumRef = String(queue.albumRef || '').trim();
-  const snapshotAlbumRef = typeof getAlbumIdentity === 'function'
+  const snapshotRequestKey = typeof getAlbumRequestKey === 'function'
+    ? String(getAlbumRequestKey(albumSnapshot) || '').trim()
+    : '';
+  const snapshotLegacyIdentity = typeof getAlbumIdentity === 'function'
     ? String(getAlbumIdentity(albumSnapshot) || '').trim()
     : '';
-  if (!queueAlbumRef || snapshotAlbumRef !== queueAlbumRef) return null;
+  if (
+    !queueAlbumRef
+    || (queueAlbumRef !== snapshotRequestKey && queueAlbumRef !== snapshotLegacyIdentity)
+  ) return null;
 
   const queueHasTrack = Array.isArray(queue.tracks)
     && queue.tracks.some((track) => String(track?.path || '') === targetPath);

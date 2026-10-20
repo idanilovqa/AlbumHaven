@@ -402,7 +402,7 @@ function resolveGalleryPlaybackContext(playbackContext) {
 function resolveAlbumPlaybackContextFromView(album) {
   const playbackContext = state?.view?.playback_context;
   if (!playbackContext || typeof playbackContext !== 'object') return null;
-  const albumRef = String(getAlbumIdentity(album) || album?.key || '').trim();
+  const albumRef = String(getAlbumRequestKey(album) || album?.key || '').trim();
   if (!albumRef) return null;
   const orderedAlbumRefs = Array.isArray(playbackContext.ordered_album_refs)
     ? playbackContext.ordered_album_refs.map((value) => String(value || '').trim()).filter(Boolean)

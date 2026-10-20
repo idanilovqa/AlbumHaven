@@ -3683,6 +3683,26 @@ test('track modal shows the existing problem link from server-owned track state 
   assert.match(elements.list.innerHTML, /data-track-path="C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem\.flac"/);
 });
 
+test('album playback queue stores the canonical request key instead of the path identity', () => {
+  const trackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
+  const album = {
+    key: 'featured-on-relationship-42',
+    album_ref: 'various-artists::featured-signal-collection',
+    name: 'Featured Signal Collection',
+    album_artist: 'Various Artists',
+    tracks: [{ path: trackPath, title: 'Signal', artist: 'Solo Voice' }],
+  };
+  const context = loadHelper([album], {
+    getAlbumRequestKey: (item) => String(item?.album_ref || item?.key || ''),
+    getAlbumIdentity: () => trackPath,
+  });
+  context.state.player = { current: null, playbackQueue: null };
+
+  context.setAlbumPlaybackQueue(album, trackPath);
+
+  assert.equal(context.state.player.playbackQueue.albumRef, album.album_ref);
+});
+
 test('cross-album continuity peek is side-effect free until the exact boundary consumes it', () => {
   const firstPath = 'C:\\Music\\Artist\\First\\01.flac';
   const secondPath = 'C:\\Music\\Artist\\Second\\01.flac';

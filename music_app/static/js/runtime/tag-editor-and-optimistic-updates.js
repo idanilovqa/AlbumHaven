@@ -2314,10 +2314,10 @@ function buildPlayerTrackPayload(track, album = null) {
 }
 
 function getAlbumPlaybackQueueRef(album) {
-  if (typeof getAlbumIdentity === 'function') {
-    return String(getAlbumIdentity(album) || album?.key || '').trim();
+  if (typeof getAlbumRequestKey === 'function') {
+    return String(getAlbumRequestKey(album) || album?.key || '').trim();
   }
-  return String(album?.key || '').trim();
+  return String(album?.album_ref || album?.key || '').trim();
 }
 
 function getAlbumPlaybackContext(album) {

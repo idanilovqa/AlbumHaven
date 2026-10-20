@@ -227,7 +227,7 @@ function refreshRenderedAlbumCoverOnly(updatedAlbum) {
 }
 
 function getAlbumRequestKey(album) {
-  return String(album?.key || album?.album_ref || '').trim() || getAlbumPathSignature(album);
+  return String(album?.album_ref || album?.key || '').trim() || getAlbumPathSignature(album);
 }
 
 function getAlbumIdentity(album) {

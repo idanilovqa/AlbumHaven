@@ -417,11 +417,13 @@ def test_frozen_dataclass_construction_does_not_bypass_exact_digest_validation(d
 def test_projected_evidence_is_detached_frozen_and_drops_unknown_provider_fields():
     payload = _provider(private_path="/not-retained", tracks=[], release_id=OTHER,
                         cover_art_archive={"artwork": True})
+    expected = _facts(credited_artist_ids=(ARTIST,),
+        digest="a4a41986414dd4e0a8f20d459fa07bd86e8aa473fa3f6c07e056e12ee4cdfd34")
     result = project_release_group_evidence(payload, requested_id=GROUP)
-    assert result == _facts()
+    assert result == expected
     payload["title"] = "Changed"
     payload["artist-credit"][0]["name"] = "Changed"
-    assert result == _facts()
+    assert result == expected
     with pytest.raises(FrozenInstanceError):
         result.title = "Changed"
 

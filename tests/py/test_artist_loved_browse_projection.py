@@ -287,6 +287,9 @@ def mounted(monkeypatch):
     app.state.current_actor_resolver = resolver
     app.state.policy_constraint_resolver = lambda c: PolicyEvaluationConstraints()
     state = SimpleNamespace(payload=stale_payload(), receipts=(), transient=False)
+    # This fixture owns Loved finalization only. The independent Top suite
+    # explicitly restores its actual optional finalizer in listen_mount.
+    monkeypatch.setattr(routes, "_project_artist_listen_through_launches_for_request", lambda *a, **kw: None)
     monkeypatch.setattr(routes, "_project_missing_album_actions_for_request", lambda *a: None)
     monkeypatch.setattr(routes, "_apply_transient_scan_album_rating_overlays", lambda *a: None)
     def no_album_preference_receipts(request, payload):

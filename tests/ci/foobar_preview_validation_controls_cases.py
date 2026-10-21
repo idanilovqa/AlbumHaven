@@ -388,6 +388,9 @@ def test_validator_complete_raw_pair_is_read_only_and_not_final_completion(valid
     root, expected, ids = controls_proof(tmp_path)
     before = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     snapshot = copy.deepcopy(expected)
+    assert len(NODE_IDS) == 68
+    assert {name for name in before if name.startswith("node/ledgers/")} == {
+        "node/ledgers/%03d.json" % i for i in range(1, 69)}
     result = validator(root, expected=expected)
     assert_result(result, "passed")
     assert result["expected_ids"] == ids + list(NODE_IDS) == result["observed_ids"]
@@ -483,6 +486,28 @@ def test_validator_complete_inventory_is_not_a_success_claim(validator, tmp_path
     result = validator(root, expected=expected)
     assert result["status"] != "passed" and result["errors"]
     assert result["observed_ids"] == []
+    if mutation == "extra":
+        # A self-consistent inventory must not authorize a 69th or unknown ledger.
+        for name in ("node/ledgers/069.json", "node/ledgers/unknown.json"):
+            extra_parent = tmp_path / Path(name).stem; extra_parent.mkdir()
+            extra_root, extra_expected, _ = controls_proof(extra_parent)
+            put(extra_root, name, get(extra_root, "node/ledgers/068.json")); seal(extra_root)
+            extra_result = validator(extra_root, expected=extra_expected)
+            assert_result(extra_result, "invalid", code="inventory")
+            assert not extra_result["observed_ids"]
+    elif mutation == "duplicate":
+        duplicate_parent = tmp_path / "duplicate-ledger"; duplicate_parent.mkdir()
+        duplicate_root, duplicate_expected, _ = controls_proof(duplicate_parent)
+        duplicate_inventory = get(duplicate_root, "inventory.json")
+        entry = next(item for item in duplicate_inventory["files"] if item["path"] == "node/ledgers/068.json")
+        duplicate_inventory["files"].append(copy.deepcopy(entry))
+        duplicate_inventory["files"].sort(key=lambda item: item["path"])
+        put(duplicate_root, "inventory.json", duplicate_inventory)
+        marker = get(duplicate_root, "complete.json")
+        marker["inventory_sha256"] = digest(encode(duplicate_inventory)); put(duplicate_root, "complete.json", marker)
+        duplicate_result = validator(duplicate_root, expected=duplicate_expected)
+        assert_result(duplicate_result, "invalid", code="inventory")
+        assert not duplicate_result["observed_ids"]
 
 
 @pytest.mark.parametrize("pid", PROCESS_IDS)
@@ -1442,8 +1467,11 @@ def test_g16_metadata_capacity_boundaries_before_local_payload_read(subject, tmp
     archive, _ = independent_zip([{"name": "f%d" % i, "data": b""} for i in range(len(sizes))])
     path = put(tmp_path, "metadata.zip", archive)
     infos = []
+    header_offset = 0
     for i, size in enumerate(sizes):
         info = zipfile.ZipInfo("f%d" % i)
+        info.header_offset = header_offset
+        header_offset += 30 + len(info.filename.encode("utf-8"))  # Empty stored fixture entry.
         info.external_attr = (stat.S_IFREG | 0o600) << 16
         info.file_size = size; info.compress_size = size; info.compress_type = 0; info.flag_bits = 0
         infos.append(info)
@@ -1589,10 +1617,14 @@ def test_g20_producer_inventory_marker_requires_actual_sidecar(subject, tmp_path
     directories, _, _, expected = preview_graph(tmp_path); expected["producer_job"] = "helper"
     root = directories["helper"]
     put(root, "transfer-context.json", {"synthetic": "production inventory marker"})
+    seal(root, "foobar-preview")
+    baseline = subject.validate_artifact(root, plan=PLAN, expected=expected, inputs={"admission": directories["admission"]})
+    assert baseline["status"] == "passed", baseline["errors"]
     (root / "preview/runtime.process.json").unlink(); seal(root, "foobar-preview")
     result = subject.validate_artifact(root, plan=PLAN, expected=expected, inputs={"admission": directories["admission"]})
     assert result["status"] != "passed" and result["observed_ids"] == []
     assert any("process.json" in error["location"] for error in result["errors"])
+    assert any(error["code"] == "process" and error["location"] == "/preview/runtime.process.json" for error in result["errors"]), result["errors"]
 
 
 def test_g20_real_wrapper_without_actual_sidecar_is_not_synthetic_direct_mode(subject, tmp_path):
@@ -1615,10 +1647,17 @@ def test_g20_real_wrapper_without_actual_sidecar_is_not_synthetic_direct_mode(su
                "selection": invocation["selected_nodeids"], "collection_path": receipt["collection"]["path"],
                "reports_path": invocation["reports_json"], "junit_path": invocation["junit_xml"]}
     put(root, base + ".request.json", request)
+    actual = get(root, base + ".process.json")
+    actual["argv"] = copy.deepcopy(invocation["argv"])
+    put(root, base + ".process.json", actual)
+    put(root, "receipt.json", receipt); seal(root, "foobar-preview")
+    baseline = subject.validate_artifact(root, plan=PLAN, expected=expected, inputs={p: directories[p] for p in ("admission", "helper")})
+    assert baseline["status"] == "passed", baseline["errors"]
     (root / (base + ".process.json")).unlink(); put(root, "receipt.json", receipt); seal(root, "foobar-preview")
     result = subject.validate_artifact(root, plan=PLAN, expected=expected, inputs={p: directories[p] for p in ("admission", "helper")})
     assert result["status"] != "passed" and result["observed_ids"] == []
     assert any("process.json" in error["location"] for error in result["errors"])
+    assert any(error["code"] == "process" and error["location"] == "/" + base + ".process.json" for error in result["errors"]), result["errors"]
 
 
 @pytest.mark.parametrize("raw", [b'{"x":1e999}', b'{"x":-1e999}', b'{"x":NaN}', b'{"x":Infinity}', b'{"x":-Infinity}', b'{"x":1,"x":2}', b'{"x":"\xff"}'])
@@ -1786,6 +1825,9 @@ def test_source_four_new_paths_do_not_expand_native_selection_or_permissions():
     assert any("setup-python@" in step and "3.11" in step for step in steps)
     assert any("setup-node@" in step and "20" in step for step in steps)
     assert not any("npm " in step for step in steps)
+    guards = [step for step in steps if "id: upload_guard" in step]
+    assert len(guards) == 1
+    assert "fixed.update('node/ledgers/%03d.json' % i for i in range(1, 69))" in guards[0]
 
 
 def test_source_independent_context_admission_and_checkout_precede_install_and_cases():
@@ -1829,6 +1871,7 @@ def test_source_adapter_owns_raw_validation_and_reuses_only_five_primitives():
     assert all(path in source for path in SOURCE_PATHS)
     assert PY_FILE in strings and NODE_FILE in strings
     assert "python_collection" in strings and "node_inventory" in strings
+    assert "allowed.update('node/ledgers/%03d.json' % i for i in range(1, 69))" in source
 
 
 def test_source_node_whole_file_registry_and_literal_binding_are_fixed():
@@ -1877,6 +1920,13 @@ def test_validator_attempted_but_missing_proof_is_not_unrun_success(validator, t
     (root / missing).unlink(); seal(root)
     result = validator(root, expected=expected)
     assert_result(result, "incomplete", code="missing")
+    if missing == "node/ledgers/001.json":
+        last_parent = tmp_path / "missing-last-ledger"; last_parent.mkdir()
+        last_root, last_expected, _ = controls_proof(last_parent)
+        (last_root / "node/ledgers/068.json").unlink(); seal(last_root)
+        last_result = validator(last_root, expected=last_expected)
+        assert_result(last_result, "incomplete", code="missing")
+        assert not any(node in last_result["observed_ids"] for node in NODE_IDS)
 
 
 def test_validator_complete_node_harness_and_assertion_failure_mix_uses_exit_two_precedence(validator, tmp_path):

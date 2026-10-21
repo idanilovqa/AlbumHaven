@@ -1946,6 +1946,7 @@ def _v_process(reader, record, seconds, selected=None, collecting=False, git=Fal
         except FileNotFoundError:
             present_proof = False
         if real_wrapper or producer_inventory or present_proof:
+            _v_need(present_proof, 'process', '/' + proof, 'Required actual supervisor result is missing.')
             actual = reader.json(proof)
             _v_closed(actual, _v_PROCESS_KEYS, '/' + proof, 'process')
             _v_need(_v_same(actual, {key: record[key] for key in _v_PROCESS_KEYS}), 'process', '/' + proof, 'Retained actual supervisor result contradicts its receipt envelope.')

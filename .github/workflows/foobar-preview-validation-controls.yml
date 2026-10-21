@@ -198,7 +198,7 @@ jobs:
                    'node/list.json', 'node/runtime.json'}
           for name in ('git', 'python_collection', 'python_runtime', 'node_inventory', 'node_runtime'):
               fixed.update(('processes/' + name + '.json', 'logs/' + name + '.log'))
-          fixed.update('node/ledgers/%03d.json' % i for i in range(1, 59))
+          fixed.update('node/ledgers/%03d.json' % i for i in range(1, 69))
           directories = {'processes', 'logs', 'python', 'node', 'node/ledgers'}
           current = pathlib.Path(root.anchor)
           for part in root.parts[1:]:

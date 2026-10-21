@@ -133,14 +133,14 @@ _SOURCE_PINS = {'.github/workflows/foobar-preview-backend-evidence.yml': '738769
  '.github/workflows/new-feature-backend-evidence.yml': 'f4b10af233a2544a28eae486d22435e66a19fdbce0f56648a09bd308484885f9',
  'scripts/ci/admit-new-feature-evidence.py': '90641268ec59f81ff185389e881db6d1305aee89e9c25a95a0c3f64297bbe2d6',
  'scripts/ci/new_feature_evidence.py': '8f45a3c1c3ada77a817928463527fb4add58f57f70a2d3f24cc9187cf5fb3673',
- 'scripts/ci/foobar_preview_evidence.py': '4749e4884526e68299548e48eabd8e5780ba3722f921134df06b922b80bbac3d',
+ 'scripts/ci/foobar_preview_evidence.py': 'acb74fb4e1c89e7d981fd81d66346a2d2576d2e12dda771d13a3d2d63d874689',
  'scripts/ci/foobar_preview_plan.json': '268da6db28d96ca0174998259b15cba2dd10ec80bb3c20b176b8c4a55a831d72',
  'tests/py/test_new_feature_ci_contract.py': '9bb543abfb0b3c2940607be73f517d93107bf757c37929a651091b3c7c410da3',
  'tests/py/test_new_feature_evidence.py': '5611972c0fc88fae2433f974bf283e5be6f21a6a3ebac4754fa8449ac6aad847',
  'tests/py/test_foobar_preview_ci_contract.py': '7241c03e61eefe8c925f47d354515c1901592f3c8b5c7d6ec9611d8c616de01b',
  'tests/py/test_foobar_preview_evidence.py': 'e0772fef33850f4cdbd3f2d5661c2351f4e881a0ef5b1c85ac39a17502aa9002',
  'music_app/services/foobar_snapshot_parser.py': '3348d8c4980125daa82036deb90117dd35ff443f7950ada382d59a449e7728e3',
- 'tests/ci/foobar_preview_validation_controls_cases.py': '6ddc54c4bedb083b6ae38fc8b1fabd32ad1f3138b403b7854472b0de5e9d496b',
+ 'tests/ci/foobar_preview_validation_controls_cases.py': 'a5e357263ff69ba38aa5f5007faa17f151cd92d5a2e078b981adab2897381e15',
  'tests/ci/foobar_preview_transfer_literal_cases.cjs': 'c8b0b629d36167eaca1d3c5666f8dee74255752c6d68c05e743c6fd860f1fff1',
  'requirements.txt': '018d1e446b65f3730ef877e68b23ecbe62b22273fb2bc3cc6a637458a37dbee7'}
 
@@ -753,7 +753,7 @@ def validate_controls_evidence(evidence_dir: Path, *, expected: dict) -> dict:
         if len(attempted) >= 4: allowed.add('node/list.json')
         if len(attempted) >= 5:
             allowed.add('node/runtime.json')
-            allowed.update('node/ledgers/%03d.json' % i for i in range(1, 59))
+            allowed.update('node/ledgers/%03d.json' % i for i in range(1, 69))
         _need(set(files) <= allowed, 'inventory', '/inventory.json/files')
     except _Problem as problem:
         error(problem); invalidate()

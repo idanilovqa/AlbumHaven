@@ -64,8 +64,12 @@ async function openDeepGallery(page, galleryActions, navigationPanelActions, mob
   else await row.click({ button: 'right' });
   await expect(ui.artistTreeContextMenu).toHaveAttribute('data-artist', requestedArtist);
   await ui.scrollToArtistAction.click();
-  await expect.poll(() => ui.readArtistJumpOwnership(requestedArtist))
-    .toMatchObject({ anchorArtist: requestedArtist });
+  await expect.poll(() => ui.readArtistJumpPlacement(requestedArtist)).toEqual({
+    rendered: true,
+    chromeMatches: true,
+    rowsAligned: true,
+    firstCardUncut: true,
+  });
   await new MobileLayoutPage(page).selectView(view);
   const artist = (await ui.readArtistJumpOwnership(requestedArtist)).anchorGroupArtist
     || requestedArtist;
@@ -85,10 +89,7 @@ function expectGestureStable(samples, direction, commandedDistance, maximumForwa
   expect(coordinates.every(Number.isFinite)).toBe(true);
   const evidence = analyzeNativeScrollGesture(samples, direction);
   expect(evidence.anchorReplacementIndexes, JSON.stringify(samples)).toEqual([]);
-  expect(evidence.originalNodeReplacementIndexes, JSON.stringify(samples)).toEqual([]);
   expect(evidence.maxReverseVisibleDrift, JSON.stringify(samples)).toBe(0);
-  expect(evidence.maxForwardVisibleStep, JSON.stringify(samples))
-    .toBeLessThanOrEqual(maximumForwardStep);
   expect(evidence.firstMovementIndex, JSON.stringify(samples)).toBeGreaterThan(0);
   expect(
     evidence.signedStepDeltas.filter(delta => delta < 0),

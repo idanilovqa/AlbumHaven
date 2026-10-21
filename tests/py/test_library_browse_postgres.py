@@ -15125,6 +15125,7 @@ def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_ident
         module._UTILITY_PROJECTION_PREWARM_INFLIGHT.clear()
     repository = module.PostgresLibraryBrowseRepository({
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+        "ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED": True,
     })
 
     repository.queue_settings_projection_prewarm()
@@ -15175,6 +15176,26 @@ def test_postgres_library_browse_can_disable_background_utility_projection_prewa
     repository = module.PostgresLibraryBrowseRepository({
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
         "ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED": False,
+    })
+
+    repository.queue_settings_projection_prewarm()
+    repository.queue_utility_projection_prewarm("problematic-files")
+
+    assert submissions == []
+
+
+def test_postgres_library_browse_disables_background_utility_projection_prewarm_by_default(monkeypatch):
+    import music_app.services.library_browse_postgres as module
+
+    submissions = []
+
+    class RecordingExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", RecordingExecutor())
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
     })
 
     repository.queue_settings_projection_prewarm()
@@ -15559,7 +15580,10 @@ def test_invalidated_problematic_prewarm_replays_latest_generation(monkeypatch, 
     current_key = "old"
     build_count = 0
     repository = module.PostgresLibraryBrowseRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+            "ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED": True,
+        },
     )
     with module._UTILITY_PROJECTION_CACHE_LOCK:
         module._UTILITY_PROJECTION_CACHE.pop(cache_key, None)

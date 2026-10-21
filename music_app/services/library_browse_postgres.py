@@ -272,7 +272,7 @@ class PostgresLibraryBrowseRepository:
         self._config = config
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         prewarm_enabled = str(
-            config.get(_UTILITY_PROJECTION_PREWARM_CONFIG_KEY, "1")
+            config.get(_UTILITY_PROJECTION_PREWARM_CONFIG_KEY, "0")
         ).strip().casefold() not in {"0", "false", "no"}
         self._allow_background_prewarm = connect is None and prewarm_enabled
         self._use_shared_connection_pool = connect is None

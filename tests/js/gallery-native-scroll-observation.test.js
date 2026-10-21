@@ -456,10 +456,12 @@ test('native scroll activation settling waits for consecutive stable animation f
   assert.equal(frameCount, 4);
 });
 
-test('native scroll displacement requires the exact commanded distance', async () => {
+test('native scroll displacement permits one CSS pixel of browser rounding', async () => {
   const { nativeScrollDisplacementMatchesCommand } = await import('../e2e/poms/galleryRegressions.js');
 
   assert.equal(nativeScrollDisplacementMatchesCommand(128, 128), true);
+  assert.equal(nativeScrollDisplacementMatchesCommand(127, 128), true);
+  assert.equal(nativeScrollDisplacementMatchesCommand(129, 128), true);
   assert.equal(nativeScrollDisplacementMatchesCommand(126, 128), false);
   assert.equal(nativeScrollDisplacementMatchesCommand(130, 128), false);
   assert.equal(nativeScrollDisplacementMatchesCommand(135, 139), false);
@@ -473,10 +475,12 @@ test('native scroll displacement rejects same-direction jumps beyond the command
   assert.equal(nativeScrollDisplacementMatchesCommand(178, 128), false);
 });
 
-test('native scroll step ceiling rejects extra same-direction application movement', async () => {
+test('native scroll step ceiling permits one CSS pixel of browser rounding', async () => {
   const { nativeScrollStepsMatchCommand } = await import('../e2e/poms/galleryRegressions.js');
 
   assert.equal(nativeScrollStepsMatchCommand([8, 9, 8], 9), true);
+  assert.equal(nativeScrollStepsMatchCommand([8, 10, 8], 9), true);
+  assert.equal(nativeScrollStepsMatchCommand([8, 11, 8], 9), false);
   assert.equal(nativeScrollStepsMatchCommand([8, 19, 8], 9), false);
   assert.equal(nativeScrollStepsMatchCommand([8, -1, 8], 9), false);
 });

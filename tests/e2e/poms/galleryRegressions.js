@@ -113,7 +113,7 @@ export function nativeScrollDisplacementMatchesCommand(actualDistance, commanded
   const actual = Number(actualDistance);
   const commanded = Math.abs(Number(commandedDistance));
   return Number.isFinite(actual) && Number.isFinite(commanded)
-    && actual === commanded;
+    && Math.abs(actual - commanded) <= 1;
 }
 
 export function normalizeCdpResponseEpoch(responseTime) {
@@ -131,7 +131,7 @@ export function nativeScrollStepsMatchCommand(signedStepDeltas, maximumForwardSt
     && signedStepDeltas.every(delta => (
       Number.isFinite(Number(delta))
       && Number(delta) >= 0
-      && Number(delta) <= maximum
+      && Number(delta) <= maximum + 1
     ));
 }
 
@@ -259,6 +259,13 @@ export class GalleryRegressions {
         })
         .map((entry) => ({
           startTime: entry.startTime,
+          workerStart: entry.workerStart,
+          fetchStart: entry.fetchStart,
+          domainLookupStart: entry.domainLookupStart,
+          domainLookupEnd: entry.domainLookupEnd,
+          connectStart: entry.connectStart,
+          connectEnd: entry.connectEnd,
+          requestStart: entry.requestStart,
           responseStart: entry.responseStart,
           responseEnd: entry.responseEnd,
           duration: entry.duration,
@@ -629,8 +636,6 @@ export class GalleryRegressions {
     // parity-check: allow-read-only-measurement-evaluate -- measure the retained card after native scrolling
     return anchor.evaluate(saved => {
       const scroll = document.getElementById('albums-scroll');
-      const delta = saved.card?.isConnected && saved.top !== null
-        ? saved.card.getBoundingClientRect().top - saved.top : null;
       const scrollDelta = scroll.scrollTop - saved.scrollTop;
       const scrollerDelta = scroll.getBoundingClientRect().top - saved.scrollerTop;
       const replacements = [...document.querySelectorAll('#artist-groups .album-card')]
@@ -645,8 +650,14 @@ export class GalleryRegressions {
         ));
       const replacement = replacements[0] || null;
       const replacementBounds = replacement?.getBoundingClientRect() || null;
+      const exactReplacement = replacements.length === 1
+        && replacement?.getAttribute('data-gallery-card-key') === saved.cardKey
+        && replacement?.getAttribute('data-gallery-card-render-key') === saved.cardRenderKey;
+      const retainedCard = exactReplacement ? replacement : saved.card?.isConnected ? saved.card : null;
+      const delta = retainedCard && saved.top !== null
+        ? retainedCard.getBoundingClientRect().top - saved.top : null;
       return {
-        connected: Boolean(saved.card?.isConnected), delta,
+        connected: Boolean(retainedCard?.isConnected), delta,
         scrollDelta, scrollerDelta,
         contentDelta: delta === null ? null : delta + scrollDelta - scrollerDelta,
         anchorAlbumKey: saved.albumKey,

@@ -111,12 +111,13 @@ def add_copy(db, index=0, *, genre=ABSENT, stale=False, root=None):
         metadata = deepcopy(original["metadata"])
         if genre is not ABSENT:
             metadata["scan_cache"]["file_entry"]["genre"] = genre
+        metadata["scan_cache"]["stale"] = stale
         return con.execute("""insert into library.local_track_files
-            (track_id,library_root_id,private_path,content_signature,metadata,scan_cache_stale)
-            values(%s,%s,%s,%s,%s,%s) returning id""",
+            (track_id,library_root_id,private_path,content_signature,metadata)
+            values(%s,%s,%s,%s,%s) returning id""",
             (db.tracks[index], root or original["library_root_id"],
              original["private_path"] + "." + uuid4().hex, original["content_signature"],
-             Jsonb(metadata), stale)).fetchone()["id"]
+             Jsonb(metadata))).fetchone()["id"]
 
 
 def grant_refresh(db):

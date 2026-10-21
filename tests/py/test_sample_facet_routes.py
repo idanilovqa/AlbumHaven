@@ -35,6 +35,8 @@ def instrument(monkeypatch, boundary, path):
         field = "facets" if path == FACETS else "targets"
         values = kwargs.pop(field, values)
         assert kwargs == {}
+        if path == COUNTRY:
+            assert callable(should_cancel) and should_cancel() is False
         calls.append((context, deepcopy(selector), selection_method, deepcopy(values), constraints, should_cancel))
         data = {"selection_method": selection_method}
         if path == FACETS:
@@ -74,7 +76,7 @@ def test_exact_request_selector_and_method_dispatch_without_capture_keys(boundar
     assert calls[0][1] == ({"origin": origin} if origin else {"playlist_ref": PLAYLIST, "revision": "1"})
     assert calls[0][3] == payload["facets" if path == FACETS else "targets"]
     if path == COUNTRY:
-        assert callable(calls[0][5]) and calls[0][5]() is False
+        assert callable(calls[0][5]) and calls[0][5]() is True
 
 
 @pytest.mark.parametrize("path", [FACETS, COUNTRY])
@@ -240,8 +242,9 @@ def test_each_new_route_resolves_one_final_context_after_its_service_result(boun
     assert set(result) == {"status", "data", "context_ref"}
 
 
-# R4 / B6: loss is committed externally during provider I/O, never while the
-# service already owns the authority locks. The real ASGI/service/error owners
+# R4 / B6: durable losses commit externally during provider I/O; Create uses
+# the existing action-specific policy seam because Browse also grants Create.
+# Loss occurs outside the authority locks. The real ASGI/service/error owners
 # must hide all results even though the first target was truthfully committed.
 @pytest.mark.parametrize("loss", ["browse", "create", "refresh", "membership", "session"])
 @pytest.mark.parametrize("failure", ["failed", "malformed", "mismatched"])
@@ -253,6 +256,13 @@ def test_failed_last_provider_response_after_live_authority_loss_is_exact_403(bo
     db = mix_db; parent = manual_source(db, (0, 3)); grant_refresh(db)
     old = envelope(db, "DE", index=3); set_country(db, old, index=3)
     boundary.app.state.owned_playlists_service = db.service; boundary.resolver.actor = db.owner
+    denied_actions = set(); policy_checks = []
+    if loss == "create":
+        def constraints(context):
+            current = boundary.constraints(context)
+            policy_checks.append((context.action, bool(denied_actions)))
+            return replace(current, deployment_allowed=current.deployment_allowed and context.action not in denied_actions)
+        boundary.app.state.policy_constraint_resolver = constraints
     committed = []
     with transaction_spy(monkeypatch, db) as (active, transactions):
         def network(mbid, count, cancel):
@@ -261,16 +271,19 @@ def test_failed_last_provider_response_after_live_authority_loss_is_exact_403(bo
                 return strict_result(mbid, "GB")
             assert count == 2
             committed.append(country(db)); assert committed[0]["country_token"] == "GB"
-            with db.connect() as con:
-                if loss in ("browse", "create", "refresh"):
-                    con.execute("delete from app.capabilities where account_id=%s and capability_key=%s",
-                        (db.owner.account_id, {"browse": BROWSE, "create": CREATE, "refresh": REFRESH}[loss]))
-                elif loss == "membership":
-                    con.execute("delete from library.library_memberships where account_id=%s and library_id=%s",
-                        (db.owner.account_id, db.library))
-                else:
-                    con.execute("update app.account_sessions set revoked_at=%s where id=%s",
-                        (db.clock_time, db.owner.session_id))
+            if loss == "create":
+                denied_actions.add(CREATE)
+            else:
+                with db.connect() as con:
+                    if loss in ("browse", "refresh"):
+                        con.execute("delete from app.capabilities where account_id=%s and capability_key=%s",
+                            (db.owner.account_id, {"browse": BROWSE, "refresh": REFRESH}[loss]))
+                    elif loss == "membership":
+                        con.execute("delete from library.library_memberships where account_id=%s and library_id=%s",
+                            (db.owner.account_id, db.library))
+                    else:
+                        con.execute("update app.account_sessions set revoked_at=%s where id=%s",
+                            (db.clock_time, db.owner.session_id))
             return _failed_artist_response(failure, mbid)
         calls = acquisition(monkeypatch, network)
         with sql_probe(monkeypatch, db) as events:
@@ -278,6 +291,8 @@ def test_failed_last_provider_response_after_live_authority_loss_is_exact_403(bo
                 "playlist_ref": parent["playlist_id"], "revision": parent["revision"],
                 "selection_method": "most_listened", "targets": [target(db), target(db, 3)]})
     assert_error(response, "forbidden", 403)
+    if loss == "create":
+        assert (CREATE, False) in policy_checks and (CREATE, True) in policy_checks
     assert response[2] == {"ok": False, "error": "forbidden"}, "No result list, target identity or partial-success detail"
     assert [call[0] for call in calls] == db.artist_mbids
     assert country(db) == committed[0] and country(db, 3) == old

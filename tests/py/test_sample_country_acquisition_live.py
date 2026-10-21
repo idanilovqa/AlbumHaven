@@ -52,12 +52,17 @@ def test_explicit_exact_artist_acquisition_writes_only_independent_structured_ev
 @pytest.mark.parametrize("missing", [REFRESH, BROWSE, CREATE])
 def test_each_of_three_live_permissions_is_required_before_any_acquisition(mix_db, monkeypatch, missing):
     db = mix_db; parent = manual_source(db, (0,)); grant_refresh(db)
-    with db.connect() as con:
-        con.execute("delete from app.capabilities where account_id=%s and capability_key=%s",
-            (db.owner.account_id, missing))
+    constraints = None
+    if missing == CREATE:
+        # Browse also grants personal Create; isolate the effective action.
+        constraints = lambda ctx: PolicyEvaluationConstraints(deployment_allowed=ctx.action != CREATE)
+    else:
+        with db.connect() as con:
+            con.execute("delete from app.capabilities where account_id=%s and capability_key=%s",
+                (db.owner.account_id, missing))
     calls = acquisition(monkeypatch)
     with pytest.raises(PlaylistError, match="forbidden"):
-        enrich(db, parent)
+        enrich(db, parent, constraints=constraints)
     assert calls == [] and KEY not in primary_row(db)["metadata"]
 
 

@@ -48,11 +48,11 @@ def copies(db, index, count, *, stale=False):
     """One bounded SQL fixture insert per track, not a production acquisition."""
     with db.connect() as con:
         con.execute("""insert into library.local_track_files
-            (track_id,library_root_id,private_path,content_signature,metadata,scan_cache_stale)
+            (track_id,library_root_id,private_path,content_signature,metadata)
             select f.track_id,f.library_root_id,f.private_path||'.copy-'||g::text,
-                f.content_signature,f.metadata,%s
+                f.content_signature,jsonb_set(f.metadata,'{scan_cache,stale}',%s)
             from (select * from library.local_track_files where track_id=%s order by id limit 1) f,
-                 generate_series(1,%s) g""", (stale, db.tracks[index], count - 1))
+                 generate_series(1,%s) g""", (Jsonb(stale), db.tracks[index], count - 1))
 
 
 def bounded_page(event, maximum):

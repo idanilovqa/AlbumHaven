@@ -18,8 +18,10 @@ const PlaybackCaptureTelemetry = (() => {
   let successor = null;
   let nextOwner = 1;
   let networkAttempt = null;
+  // Disposal cannot settle WebCrypto or release its retained input graph.
+  let digestAttempt = null;
   function wakeSuccessor() {
-    if (!pageOwner && !networkAttempt && successor) {
+    if (!pageOwner && !networkAttempt && !digestAttempt && successor) {
       const resume = successor.resume; successor = null; resume();
     }
   }
@@ -61,7 +63,7 @@ const PlaybackCaptureTelemetry = (() => {
       if (timer !== null) clock.clearTimeout(timer);
       timer = null;
       if (frozen?.controller) frozen.controller.abort();
-      // The original attempt owns the global promise slot until it settles.
+      // Fetch and digest retain their global ownership until actual settlement.
       held.length = 0;
       parents.fill(null); slots.fill(null); frozen = null; probe = null;
       try { sendCommand({ type: 'capture-disable', ownerSerial: serial, generation: generation() }); } catch (_) {}
@@ -92,7 +94,7 @@ const PlaybackCaptureTelemetry = (() => {
     }
     async function enableWhenAvailable() {
       if (dead || !integer(serial, 1)) return false;
-      if (pageOwner && pageOwner !== api || networkAttempt) {
+      if (pageOwner && pageOwner !== api || networkAttempt || digestAttempt) {
         if (successor) { diagnostic('capture_owner_capacity'); return false; }
         return new Promise(resolve => {
           successor = { owner: api, cancel: () => resolve(false),
@@ -310,7 +312,7 @@ const PlaybackCaptureTelemetry = (() => {
       return { evidence, body: JSON.stringify(envelope) };
     }
     async function freeze(parent) {
-      if (freezing || frozen || dead) return;
+      if (freezing || frozen || dead || digestAttempt) return;
       const first = parent.firstPositive;
       if (first && !parent.runs.length) {
         if (parent.terminal && !slots.some(slot => slot?.parent === parent)) {
@@ -318,40 +320,60 @@ const PlaybackCaptureTelemetry = (() => {
         }
         return;
       }
-      let count = Math.min(256, parent.runs.length), anchorCount = Math.min(8, parent.anchors.length);
-      const gaps = parent.gaps.map(item => item.value);
-      let prepared;
-      while (true) {
-        const terminal = Boolean(parent.terminal && count === parent.runs.length
-          && !slots.some(slot => slot?.parent === parent) && !held.length);
-        prepared = buildBody(parent, parent.runs.slice(0, count), parent.anchors.slice(0, anchorCount), gaps, terminal);
-        if (new TextEncoder().encode(prepared.body).byteLength <= 32768) break;
-        if (count > 1) count = Math.floor(count / 2);
-        else if (anchorCount) anchorCount--;
-        else { parent.failed = true; diagnostic('capture_too_large'); releaseParent(parent); return; }
-      }
-      if (!count && !anchorCount && !gaps.length && !prepared.evidence.terminal) return;
-      // Frozen bytes exist before hashing or fetch; close/retries cannot change them.
-      const batch = { parent, body: prepared.body, sequence: parent.sequence, evidence: prepared.evidence,
-        terminal: prepared.evidence.terminal, anchorCount,
-        known: prepared.evidence.runs.reduce((sum, run) => sum + run.frames, 0),
-        lost: gaps.reduce((sum, gap) => sum + gap.positive_frames, 0),
-        digest: null, firstAttempt: null, retryAt: 0, attempts: 0, pending: false, controller: null };
-      frozen = batch; freezing = true;
-      parent.runs.splice(0, count); parent.anchors.splice(0, anchorCount); parent.gaps.length = 0;
-      parent.firstPending = parent.runs.length || parent.anchors.length ? now() : null;
-      parent.flushRequested = false;
-      parent.firstPositive = false;
+      // Reserve before serialization/encoding or invoking external crypto. The
+      // exact job, not pageOwner or a cancellation flag, owns settlement.
+      const job = { owner: api, batch: null };
+      digestAttempt = job; freezing = true;
+      let prepared = null, gaps = null, batch = null;
+      let input = null, encoded = null, digest = null, evidenceCharge = 0;
       try {
-        const input = `${PROTOCOL}\n${batch.sequence}\n${canonical(batch.evidence)}`;
-        const digest = await cryptoApi.subtle.digest('SHA-256', new TextEncoder().encode(input));
-        if (dead || frozen !== batch) return;
+        let count = Math.min(256, parent.runs.length), anchorCount = Math.min(8, parent.anchors.length);
+        gaps = parent.gaps.map(item => item.value);
+        while (true) {
+          const terminal = Boolean(parent.terminal && count === parent.runs.length
+            && !slots.some(slot => slot?.parent === parent) && !held.length);
+          prepared = buildBody(parent, parent.runs.slice(0, count), parent.anchors.slice(0, anchorCount), gaps, terminal);
+          if (new TextEncoder().encode(prepared.body).byteLength <= 32768) break;
+          if (count > 1) count = Math.floor(count / 2);
+          else if (anchorCount) anchorCount--;
+          else { parent.failed = true; diagnostic('capture_too_large'); releaseParent(parent); return; }
+        }
+        if (!count && !anchorCount && !gaps.length && !prepared.evidence.terminal) return;
+        if (dead) return;
+        // Frozen bytes exist before hashing or fetch; close/retries cannot change them.
+        batch = { parent, body: prepared.body, sequence: parent.sequence, evidence: prepared.evidence,
+          terminal: prepared.evidence.terminal, anchorCount,
+          known: prepared.evidence.runs.reduce((sum, run) => sum + run.frames, 0),
+          lost: gaps.reduce((sum, gap) => sum + gap.positive_frames, 0),
+          digest: null, firstAttempt: null, retryAt: 0, attempts: 0, pending: false, controller: null };
+        frozen = batch; job.batch = batch;
+        parent.runs.splice(0, count); parent.anchors.splice(0, anchorCount); parent.gaps.length = 0;
+        evidenceCharge = (count + anchorCount) * 512;
+        parent.firstPending = parent.runs.length || parent.anchors.length ? now() : null;
+        parent.flushRequested = false;
+        parent.firstPositive = false;
+        prepared = null; gaps = null;
+        input = `${PROTOCOL}\n${batch.sequence}\n${canonical(batch.evidence)}`;
+        encoded = new TextEncoder().encode(input);
+        digest = await cryptoApi.subtle.digest('SHA-256', encoded);
+        if (dead || frozen !== batch || digestAttempt !== job
+            || job.owner !== api || job.batch !== batch) return;
         batch.digest = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-        batch.evidence = null;
-        bytes -= (count + anchorCount) * 512;
       } catch (_) { abandon('capture_digest_failed'); }
-      finally { freezing = false; }
-      if (!dead) { drain(); tick(); }
+      finally {
+        const resume = batch !== null && !dead && frozen === batch && digestAttempt === job;
+        // Async locals retain evidence even after abandon() clears frozen.
+        // Release these aliases and their transferred charge before admission.
+        if (batch) batch.evidence = null;
+        prepared = null; gaps = null; input = null; encoded = null; digest = null;
+        bytes -= evidenceCharge; evidenceCharge = 0;
+        batch = null; parent = null;
+        job.batch = null; job.owner = null;
+        freezing = false;
+        if (digestAttempt === job) digestAttempt = null;
+        wakeSuccessor();
+        if (resume && !dead && !digestAttempt) { drain(); tick(); }
+      }
     }
     async function attempt(batch, keepalive = false) {
       if (dead || batch !== frozen || batch.pending || networkAttempt || !batch.digest) return;

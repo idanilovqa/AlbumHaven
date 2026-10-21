@@ -1644,6 +1644,8 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "height": 800,
         },
     ]
+
+
     persisted_user_cover_path = isolatedLibraryApp.materialize_user_owned_cover(
         temp_root / "media" / "Mastodon" / "Crack The Skye Fixture 09",
         staged_user_cover_source_path,
@@ -1832,6 +1834,45 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "provider.stop",
             "lock.release",
         ]
+
+
+def test_provider_storage_policy_candidates_use_spec_album_identity(monkeypatch):
+    recorded_calls = []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params):
+            recorded_calls.append((str(sql), params))
+            return SimpleNamespace(rowcount=1)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _url: FakeConnection()),
+    )
+
+    isolatedLibraryApp.persist_provider_storage_policy_candidates(
+        "postgresql://fixture",
+        4175,
+        {
+            "cover_id": "provider-storage-policy-cover",
+            "artist": "Profile Artist",
+            "album": "Profile Album",
+            "year": 2026,
+        },
+    )
+
+    _sql, params = recorded_calls[0]
+    assert params[-3:] == ("Profile Artist", "Profile Album", 2026)
+    assert {
+        (candidate["artist"], candidate["album"], candidate["year"])
+        for candidate in json.loads(params[0])
+    } == {("Profile Artist", "Profile Album", 2026)}
 
 
 def test_real_cover_pool_reuses_staged_metadata_without_copying_sources(
@@ -2889,24 +2930,24 @@ def test_artist_family_fixture_separates_owner_and_members_and_overrides_control
     rows = [
         (
             isolatedLibraryApp.COMPILATION_FAMILY_ALBUM,
-            " / ".join(isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS),
+            isolatedLibraryApp.COMPILATION_FAMILY_SOURCE_ARTIST,
             True,
-            [" / ".join(isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS)],
-            sorted(isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS),
+            [isolatedLibraryApp.COMPILATION_FAMILY_SOURCE_ARTIST],
+            sorted(isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS[1:]),
         ),
         (
             isolatedLibraryApp.CONTROL_FAMILY_ALBUM,
-            " / ".join(isolatedLibraryApp.CONTROL_FAMILY_MEMBERS),
+            isolatedLibraryApp.CONTROL_FAMILY_SOURCE_ARTIST,
             False,
-            [" / ".join(isolatedLibraryApp.CONTROL_FAMILY_MEMBERS)],
-            sorted(isolatedLibraryApp.CONTROL_FAMILY_MEMBERS),
+            [isolatedLibraryApp.CONTROL_FAMILY_SOURCE_ARTIST],
+            sorted(isolatedLibraryApp.CONTROL_FAMILY_MEMBERS[1:]),
         ),
         (
             isolatedLibraryApp.SOUNDTRACK_FAMILY_ALBUM,
-            " / ".join(isolatedLibraryApp.SOUNDTRACK_FAMILY_MEMBERS),
+            isolatedLibraryApp.SOUNDTRACK_FAMILY_SOURCE_ARTIST,
             False,
-            [" / ".join(isolatedLibraryApp.SOUNDTRACK_FAMILY_MEMBERS)],
-            sorted(isolatedLibraryApp.SOUNDTRACK_FAMILY_MEMBERS),
+            [isolatedLibraryApp.SOUNDTRACK_FAMILY_SOURCE_ARTIST],
+            sorted(isolatedLibraryApp.SOUNDTRACK_FAMILY_MEMBERS[1:]),
         ),
     ]
 

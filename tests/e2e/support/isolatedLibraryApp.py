@@ -2979,6 +2979,9 @@ def persist_provider_storage_policy_candidates(
     )
 
     cover_id = str(provider_spec["cover_id"])
+    matched_artist = str(provider_spec["artist"]).strip()
+    matched_album = str(provider_spec["album"]).strip()
+    matched_year = int(provider_spec["year"])
     image_url = (
         f"http://{_PUBLIC_COVER_FIXTURE_HOST}:{provider_port}"
         f"/apple/artwork/{cover_id}/100x100bb.jpg"
@@ -2997,9 +3000,9 @@ def persist_provider_storage_policy_candidates(
                 width=900,
                 height=900,
                 score=0.99 - (index * 0.01),
-                matched_artist="Mastodon",
-                matched_album="Crack The Skye",
-                matched_year=2009,
+                matched_artist=matched_artist,
+                matched_album=matched_album,
+                matched_year=matched_year,
                 debug_payload={
                     "source_label": source_label,
                     "thumbnail_url": f"{image_url}?provider={source}",
@@ -3063,9 +3066,9 @@ def persist_provider_storage_policy_candidates(
             from library.local_albums
             join library.local_artists
               on library.local_artists.id = library.local_albums.artist_id
-            where library.local_artists.name = 'Mastodon'
-              and library.local_albums.title = 'Crack The Skye'
-              and library.local_albums.release_year = 2009
+            where library.local_artists.name = %s
+              and library.local_albums.title = %s
+              and library.local_albums.release_year = %s
             on conflict (album_id) do update
             set candidates = excluded.candidates,
                 best_candidate_id = excluded.best_candidate_id,
@@ -3074,7 +3077,13 @@ def persist_provider_storage_policy_candidates(
                 updated_at = excluded.updated_at,
                 finished_at = excluded.finished_at;
             """,
-            (json.dumps(candidates), candidates[0]["id"]),
+            (
+                json.dumps(candidates),
+                candidates[0]["id"],
+                matched_artist,
+                matched_album,
+                matched_year,
+            ),
         )
         if result.rowcount != 1:
             raise RuntimeError(
@@ -3381,22 +3390,22 @@ def persist_fixture_artist_family_compilation_contract(setup_database_url: str) 
         }
         expected_contract = {
             COMPILATION_FAMILY_ALBUM: {
-                "album_artist": " / ".join(COMPILATION_FAMILY_MEMBERS),
+                "album_artist": COMPILATION_FAMILY_SOURCE_ARTIST,
                 "is_compilation": True,
-                "owner_artists": (" / ".join(COMPILATION_FAMILY_MEMBERS),),
-                "member_artists": tuple(sorted(COMPILATION_FAMILY_MEMBERS)),
+                "owner_artists": (COMPILATION_FAMILY_SOURCE_ARTIST,),
+                "member_artists": tuple(sorted(COMPILATION_FAMILY_MEMBERS[1:])),
             },
             CONTROL_FAMILY_ALBUM: {
-                "album_artist": " / ".join(CONTROL_FAMILY_MEMBERS),
+                "album_artist": CONTROL_FAMILY_SOURCE_ARTIST,
                 "is_compilation": False,
-                "owner_artists": (" / ".join(CONTROL_FAMILY_MEMBERS),),
-                "member_artists": tuple(sorted(CONTROL_FAMILY_MEMBERS)),
+                "owner_artists": (CONTROL_FAMILY_SOURCE_ARTIST,),
+                "member_artists": tuple(sorted(CONTROL_FAMILY_MEMBERS[1:])),
             },
             SOUNDTRACK_FAMILY_ALBUM: {
-                "album_artist": " / ".join(SOUNDTRACK_FAMILY_MEMBERS),
+                "album_artist": SOUNDTRACK_FAMILY_SOURCE_ARTIST,
                 "is_compilation": False,
-                "owner_artists": (" / ".join(SOUNDTRACK_FAMILY_MEMBERS),),
-                "member_artists": tuple(sorted(SOUNDTRACK_FAMILY_MEMBERS)),
+                "owner_artists": (SOUNDTRACK_FAMILY_SOURCE_ARTIST,),
+                "member_artists": tuple(sorted(SOUNDTRACK_FAMILY_MEMBERS[1:])),
             },
         }
         if actual_contract != expected_contract:

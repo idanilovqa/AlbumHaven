@@ -11805,7 +11805,16 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
     return false;
   }
   imageElement.setAttribute('data-cover-visual-state', 'ready');
+  imageElement.removeAttribute('data-gallery-cover-object-retry');
   imageElement.removeAttribute('aria-hidden');
+  const releaseObjectUrl = () => {
+    if (
+      typeof galleryCoverPreviewCache !== 'undefined'
+      && typeof galleryCoverPreviewCache.releaseImageObjectUrl === 'function'
+    ) {
+      galleryCoverPreviewCache.releaseImageObjectUrl(imageElement);
+    }
+  };
   if (typeof imageElement.decode === 'function') {
     const decodedSource = String(imageElement.currentSrc || imageElement.src || '');
     Promise.resolve(imageElement.decode()).then(() => {
@@ -11821,7 +11830,9 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
       imageElement.setAttribute('data-cover-decoded-at-ms', String(performance.now()));
     }).catch(() => {
       // The existing image error path remains authoritative for failed cover decoding.
-    });
+    }).finally(releaseObjectUrl);
+  } else {
+    releaseObjectUrl();
   }
   return true;
 }
@@ -11830,6 +11841,33 @@ function handleAlbumDisplayCoverImageError(imageElement) {
   if (!imageElement) return false;
   if (imageElement instanceof HTMLImageElement) {
     markAlbumDisplayCoverImagePending(imageElement);
+  }
+  const currentSource = imageElement instanceof HTMLImageElement
+    ? String(imageElement.currentSrc || imageElement.src || '').trim()
+    : '';
+  const productionUrl = imageElement instanceof HTMLImageElement && typeof imageElement.getAttribute === 'function'
+    ? String(imageElement.getAttribute('data-production-cover-src') || '').trim()
+    : '';
+  if (
+    imageElement instanceof HTMLImageElement
+    && typeof galleryCoverPreviewCache !== 'undefined'
+    && typeof galleryCoverPreviewCache.releaseImageObjectUrl === 'function'
+  ) {
+    galleryCoverPreviewCache.releaseImageObjectUrl(imageElement);
+  }
+  if (
+    currentSource.startsWith('blob:')
+    && productionUrl
+    && imageElement.getAttribute('data-gallery-cover-object-retry') !== '1'
+    && typeof galleryCoverLoadScheduler !== 'undefined'
+    && typeof galleryCoverLoadScheduler.enqueue === 'function'
+  ) {
+    imageElement.setAttribute('data-gallery-cover-object-retry', '1');
+    galleryCoverLoadScheduler.enqueue(productionUrl, {
+      image: imageElement,
+      priority: String(imageElement.getAttribute('data-gallery-cover-priority') || 'near'),
+    });
+    return false;
   }
   if (typeof imageElement.getAttribute === 'function') {
     rememberFailedLocalDisplayCoverPath(imageElement.getAttribute('data-cover-path') || '');
@@ -34081,12 +34119,13 @@ function flushListenSessionOnUnload(reason = 'unload') {
 // BEGIN js/runtime/gallery-cover-preview-cache.js
 
 const GALLERY_COVER_PREVIEW_CACHE_PREFIX = 'album-haven-gallery-previews-';
-const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v1';
+const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v2';
 const GALLERY_COVER_PREVIEW_CACHE_NAME = `${GALLERY_COVER_PREVIEW_CACHE_PREFIX}${GALLERY_COVER_PREVIEW_CACHE_VERSION}`;
 const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
+const GALLERY_COVER_PRODUCTION_URL_HEADER = 'X-Album-Haven-Cover-Production-Url';
 
 class GalleryCoverPreviewCache {
   constructor(options = {}) {
@@ -34097,6 +34136,9 @@ class GalleryCoverPreviewCache {
     this.cacheName = String(options.cacheName || GALLERY_COVER_PREVIEW_CACHE_NAME);
     this.maxActiveObjectUrls = Math.max(1, Number(options.maxActiveObjectUrls || MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS));
     this.activeObjectUrls = new Map();
+    this.imageObjectUrls = new WeakMap();
+    this.objectUrlConsumerCounts = new Map();
+    this.retiredObjectUrls = new Set();
     this.inFlight = new Map();
     this.writeChains = new Map();
     this.liveFetches = new Map();
@@ -34248,13 +34290,16 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  createCacheableResponse(response, blob) {
+  createCacheableResponse(response, blob, productionUrl) {
     if (typeof globalThis.Response !== 'function') return null;
     const contentType = String(blob?.type || this.responseContentType(response) || '').trim();
     return new globalThis.Response(blob, {
       status: Number(response?.status || 200),
       statusText: String(response?.statusText || ''),
-      headers: contentType ? { 'Content-Type': contentType } : undefined,
+      headers: {
+        ...(contentType ? { 'Content-Type': contentType } : {}),
+        [GALLERY_COVER_PRODUCTION_URL_HEADER]: productionUrl,
+      },
     });
   }
 
@@ -34286,37 +34331,49 @@ class GalleryCoverPreviewCache {
     return this.latestRequestedProductionUrls.get(this.baseCacheKey(productionUrl)) === productionUrl;
   }
 
-  async purgeSupersededEntries(cache, productionUrl, shouldContinue = () => true) {
-    const baseKey = this.baseCacheKey(productionUrl);
-    if (typeof cache?.keys !== 'function') return;
-    const requests = await cache.keys();
-    if (!shouldContinue()) return;
-    for (const request of requests) {
-      if (!shouldContinue()) return;
-      const cachedUrl = String(request?.url || request || '');
-      if (
-        cachedUrl !== productionUrl
-        && this.normalizeProductionUrl(cachedUrl)
-        && this.baseCacheKey(cachedUrl) === baseKey
-      ) {
-        await cache.delete(request);
-        if (!shouldContinue()) return;
-      }
-    }
-  }
-
   rememberObjectUrl(productionUrl, objectUrl) {
     const previous = this.activeObjectUrls.get(productionUrl);
-    if (previous && previous !== objectUrl) this.urlApi?.revokeObjectURL?.(previous);
+    if (previous && previous !== objectUrl) this.retireObjectUrl(previous);
     this.activeObjectUrls.delete(productionUrl);
     this.activeObjectUrls.set(productionUrl, objectUrl);
     while (this.activeObjectUrls.size > this.maxActiveObjectUrls) {
       const oldest = this.activeObjectUrls.entries().next().value;
       if (!oldest) break;
       this.activeObjectUrls.delete(oldest[0]);
-      this.urlApi?.revokeObjectURL?.(oldest[1]);
+      this.retireObjectUrl(oldest[1]);
     }
     this.syncActiveDiagnostics();
+  }
+
+  retireObjectUrl(objectUrl) {
+    if (this.objectUrlConsumerCounts.has(objectUrl)) {
+      this.retiredObjectUrls.add(objectUrl);
+      return;
+    }
+    this.urlApi?.revokeObjectURL?.(objectUrl);
+  }
+
+  retainImageObjectUrl(image, objectUrl) {
+    const previous = this.imageObjectUrls.get(image);
+    if (previous === objectUrl) return;
+    this.releaseImageObjectUrl(image);
+    if (!String(objectUrl || '').startsWith('blob:')) return;
+    this.imageObjectUrls.set(image, objectUrl);
+    this.objectUrlConsumerCounts.set(objectUrl, Number(this.objectUrlConsumerCounts.get(objectUrl) || 0) + 1);
+  }
+
+  releaseImageObjectUrl(image) {
+    const objectUrl = this.imageObjectUrls.get(image);
+    if (!objectUrl) return;
+    this.imageObjectUrls.delete(image);
+    const remaining = Number(this.objectUrlConsumerCounts.get(objectUrl) || 0) - 1;
+    if (remaining > 0) {
+      this.objectUrlConsumerCounts.set(objectUrl, remaining);
+      return;
+    }
+    this.objectUrlConsumerCounts.delete(objectUrl);
+    if (!this.retiredObjectUrls.delete(objectUrl)) return;
+    this.urlApi?.revokeObjectURL?.(objectUrl);
   }
 
   syncActiveDiagnostics() {
@@ -34368,18 +34425,12 @@ class GalleryCoverPreviewCache {
         );
         await this.deferCacheWrite(async () => {
           if (!shouldContinue()) return;
-          try {
-            await this.purgeSupersededEntries(cache, productionUrl, shouldContinue);
-          } catch (error) {
-            this.recordDiagnostic('superseded-entry-purge-failure', productionUrl, error);
-          }
-          if (!shouldContinue()) return;
-          await cache.put(productionUrl, cacheCandidate);
+          await cache.put(baseKey, cacheCandidate);
           wroteCacheEntry = true;
         });
         if (!shouldContinue()) {
           if (wroteCacheEntry || !this.isLatestRequestedProductionUrl(productionUrl)) {
-            await cache.delete(productionUrl);
+            await cache.delete(baseKey);
           }
           return {
             blob,
@@ -34407,9 +34458,10 @@ class GalleryCoverPreviewCache {
   async loadBlob(productionUrl, snapshot, signal = null, abortController = null, priorityOwner = null) {
     this.throwIfAborted(signal);
     const cache = await this.openCache();
-    const cachedResponse = await cache.match(productionUrl);
+    const cacheKey = this.baseCacheKey(productionUrl);
+    const cachedResponse = await cache.match(cacheKey);
     this.throwIfAborted(signal);
-    if (cachedResponse) {
+    if (cachedResponse?.headers?.get?.(GALLERY_COVER_PRODUCTION_URL_HEADER) === productionUrl) {
       try {
         const blob = await this.validatedBlob(cachedResponse);
         this.throwIfAborted(signal);
@@ -34418,7 +34470,7 @@ class GalleryCoverPreviewCache {
         if (signal?.aborted) this.throwIfAborted(signal);
         if (error?.name === 'AbortError') throw error;
         try {
-          await cache.delete(productionUrl);
+          await cache.delete(cacheKey);
         } catch (deleteError) {
           this.recordDiagnostic('invalid-cache-delete-failure', productionUrl, deleteError);
         }
@@ -34463,7 +34515,7 @@ class GalleryCoverPreviewCache {
         });
         this.throwIfAborted(signal);
         blob = await this.validatedBlob(response);
-        cacheCandidate = this.createCacheableResponse(response, blob);
+        cacheCandidate = this.createCacheableResponse(response, blob, productionUrl);
         this.throwIfAborted(signal);
       } catch (error) {
         promotionRetry = Boolean(
@@ -34742,12 +34794,12 @@ class GalleryCoverPreviewCache {
     const objectUrl = this.activeObjectUrls.get(normalizedUrl);
     if (objectUrl) {
       this.activeObjectUrls.delete(normalizedUrl);
-      this.urlApi?.revokeObjectURL?.(objectUrl);
+      this.retireObjectUrl(objectUrl);
       this.syncActiveDiagnostics();
     }
     try {
       const cache = await this.openCache();
-      return Boolean(await cache.delete(normalizedUrl));
+      return Boolean(await cache.delete(this.baseCacheKey(normalizedUrl)));
     } catch (error) {
       this.recordDiagnostic('fallback', normalizedUrl, error);
       return false;
@@ -34757,8 +34809,12 @@ class GalleryCoverPreviewCache {
   destroy() {
     this.generation += 1;
     this.abortInFlight('cache-destroyed');
-    this.activeObjectUrls.forEach((objectUrl) => this.urlApi?.revokeObjectURL?.(objectUrl));
+    new Set([...this.activeObjectUrls.values(), ...this.retiredObjectUrls])
+      .forEach((objectUrl) => this.urlApi?.revokeObjectURL?.(objectUrl));
     this.activeObjectUrls.clear();
+    this.imageObjectUrls = new WeakMap();
+    this.objectUrlConsumerCounts.clear();
+    this.retiredObjectUrls.clear();
     this.syncActiveDiagnostics();
     this.liveFetches.clear();
     this.inFlight.clear();
@@ -34784,6 +34840,7 @@ function beginGalleryCoverImageRequest(image, productionUrl) {
 function commitGalleryCoverImageRequest(request, result) {
   if (!request || galleryCoverImageRequestTokens.get(request.image) !== request.requestToken) return false;
   request.image.setAttribute('data-production-cover-src', result.productionUrl);
+  galleryCoverPreviewCache.retainImageObjectUrl(request.image, result.displayUrl);
   request.image.src = result.displayUrl;
   return true;
 }
@@ -37438,12 +37495,7 @@ class VirtualArtistGrid {
       const retainedImageDecoded = retainedImage instanceof HTMLImageElement
         && Boolean(retainedImage.complete)
         && Number(retainedImage.naturalWidth || 0) > 0;
-      const decodedObjectUrlEvicted = Boolean(productionUrl)
-        && retainedImageDecoded
-        && typeof galleryCoverPreviewCache !== 'undefined'
-        && typeof galleryCoverPreviewCache.hasActive === 'function'
-        && !galleryCoverPreviewCache.hasActive(productionUrl);
-      if (productionUrl && (!retainedImageDecoded || decodedObjectUrlEvicted)) {
+      if (productionUrl && !retainedImageDecoded) {
         retainedImage.setAttribute('data-gallery-cover-src', productionUrl);
         retainedImage.removeAttribute('data-gallery-cover-loading');
       }

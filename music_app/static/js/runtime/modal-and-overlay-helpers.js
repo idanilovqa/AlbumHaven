@@ -846,7 +846,16 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
     return false;
   }
   imageElement.setAttribute('data-cover-visual-state', 'ready');
+  imageElement.removeAttribute('data-gallery-cover-object-retry');
   imageElement.removeAttribute('aria-hidden');
+  const releaseObjectUrl = () => {
+    if (
+      typeof galleryCoverPreviewCache !== 'undefined'
+      && typeof galleryCoverPreviewCache.releaseImageObjectUrl === 'function'
+    ) {
+      galleryCoverPreviewCache.releaseImageObjectUrl(imageElement);
+    }
+  };
   if (typeof imageElement.decode === 'function') {
     const decodedSource = String(imageElement.currentSrc || imageElement.src || '');
     Promise.resolve(imageElement.decode()).then(() => {
@@ -862,7 +871,9 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
       imageElement.setAttribute('data-cover-decoded-at-ms', String(performance.now()));
     }).catch(() => {
       // The existing image error path remains authoritative for failed cover decoding.
-    });
+    }).finally(releaseObjectUrl);
+  } else {
+    releaseObjectUrl();
   }
   return true;
 }
@@ -871,6 +882,33 @@ function handleAlbumDisplayCoverImageError(imageElement) {
   if (!imageElement) return false;
   if (imageElement instanceof HTMLImageElement) {
     markAlbumDisplayCoverImagePending(imageElement);
+  }
+  const currentSource = imageElement instanceof HTMLImageElement
+    ? String(imageElement.currentSrc || imageElement.src || '').trim()
+    : '';
+  const productionUrl = imageElement instanceof HTMLImageElement && typeof imageElement.getAttribute === 'function'
+    ? String(imageElement.getAttribute('data-production-cover-src') || '').trim()
+    : '';
+  if (
+    imageElement instanceof HTMLImageElement
+    && typeof galleryCoverPreviewCache !== 'undefined'
+    && typeof galleryCoverPreviewCache.releaseImageObjectUrl === 'function'
+  ) {
+    galleryCoverPreviewCache.releaseImageObjectUrl(imageElement);
+  }
+  if (
+    currentSource.startsWith('blob:')
+    && productionUrl
+    && imageElement.getAttribute('data-gallery-cover-object-retry') !== '1'
+    && typeof galleryCoverLoadScheduler !== 'undefined'
+    && typeof galleryCoverLoadScheduler.enqueue === 'function'
+  ) {
+    imageElement.setAttribute('data-gallery-cover-object-retry', '1');
+    galleryCoverLoadScheduler.enqueue(productionUrl, {
+      image: imageElement,
+      priority: String(imageElement.getAttribute('data-gallery-cover-priority') || 'near'),
+    });
+    return false;
   }
   if (typeof imageElement.getAttribute === 'function') {
     rememberFailedLocalDisplayCoverPath(imageElement.getAttribute('data-cover-path') || '');

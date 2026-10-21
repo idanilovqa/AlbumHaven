@@ -27,6 +27,53 @@ test('root gallery continuation uses the approved 800/1200 timing contract', () 
   assert.doesNotMatch(spec, /continuationDuration\)\.toBeLessThan\(3000\)/);
 });
 
+test('sustained gallery traversal gates decoded cover recovery at 800/1200', () => {
+  const spec = readRepoFile(
+    'tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js',
+  );
+
+  for (const metric of ['firstVisibleDecodedMs', 'windowRecoveryMs']) {
+    assert.match(
+      spec,
+      new RegExp(`performanceTimingBudget\\(\\s*'gallery-artwork-diversity\\.${metric}'`),
+    );
+  }
+  assert.match(spec, /expectTimingBudgetOutcome\(expect, firstVisibleDecodedTiming,/);
+  assert.match(spec, /expectTimingBudgetOutcome\(expect, slowestWindowRecoveryTiming,/);
+  assert.match(spec, /coverReadinessGated: true/);
+  assert.doesNotMatch(spec, /diagnosticOnly: true/);
+
+  const firstStart = spec.indexOf('const firstVisibleDecodedStartedAt = performance.now();');
+  const navigation = spec.indexOf("await galleryActions.goto('/?surface=albums');");
+  const firstElapsed = spec.indexOf('performance.now() - firstVisibleDecodedStartedAt');
+  const baselineCheckpoint = spec.indexOf("checkpoint('baseline'");
+  assert.ok(firstStart < navigation, 'first decoded artwork timing must begin before navigation');
+  assert.ok(navigation < firstElapsed, 'first decoded artwork timing must include navigation');
+  assert.ok(firstElapsed < baselineCheckpoint,
+    'first decoded artwork timing must stop before diagnostic sampling');
+
+  const traversalStart = spec.indexOf('const traverse = async');
+  const traversalEnd = spec.indexOf('\n  try {', traversalStart);
+  const traversal = spec.slice(traversalStart, traversalEnd);
+  assert.match(
+    traversal,
+    /const windowState = await waitForDecodedWindow\(\s*phase,\s*step,\s*coverStartedAt,?\s*\);/,
+    'every traversal step must await and time a decoded visible window',
+  );
+  assert.match(spec, /allowIntentionalNoCoverWindow: true/);
+  assert.match(spec, /requireEveryExpectedCoverDecoded: true/);
+  assert.match(spec, /retiredObjectUrls: previewCache\?\.retiredObjectUrls\?\.size/);
+  assert.match(
+    spec,
+    /expect\(result\.gallery\.cachePersistence\.retiredObjectUrls\)\.toBeLessThanOrEqual\(/,
+    'deferred blob revocation must remain bounded by live gallery image consumers',
+  );
+  assert.match(traversal, /checkpoint\(phase, step, windowState\)/,
+    'sparse memory checkpoints must reuse the already timed decoded window');
+  assert.doesNotMatch(traversal, /page\.evaluate\(readDecodedProductionCardWindow/,
+    'snapshot-only windows cannot prove decoded recovery');
+});
+
 function readExportedFunction(source, signature, nextSignature) {
   const start = source.indexOf(signature);
   const end = source.indexOf(nextSignature, start + signature.length);

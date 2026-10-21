@@ -1944,12 +1944,7 @@ class VirtualArtistGrid {
       const retainedImageDecoded = retainedImage instanceof HTMLImageElement
         && Boolean(retainedImage.complete)
         && Number(retainedImage.naturalWidth || 0) > 0;
-      const decodedObjectUrlEvicted = Boolean(productionUrl)
-        && retainedImageDecoded
-        && typeof galleryCoverPreviewCache !== 'undefined'
-        && typeof galleryCoverPreviewCache.hasActive === 'function'
-        && !galleryCoverPreviewCache.hasActive(productionUrl);
-      if (productionUrl && (!retainedImageDecoded || decodedObjectUrlEvicted)) {
+      if (productionUrl && !retainedImageDecoded) {
         retainedImage.setAttribute('data-gallery-cover-src', productionUrl);
         retainedImage.removeAttribute('data-gallery-cover-loading');
       }

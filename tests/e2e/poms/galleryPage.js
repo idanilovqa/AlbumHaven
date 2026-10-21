@@ -161,10 +161,31 @@ function readDecodedProductionCardWindow(args = {}) {
     const productionSrc = image instanceof HTMLImageElement
       ? String(image.getAttribute('data-production-cover-src') || '').trim()
       : '';
+    const artboxState = String(
+      card.querySelector('[data-album-artbox-state]')
+        ?.getAttribute('data-album-artbox-state') || '',
+    ).trim().toLowerCase();
+    let album = {};
+    try {
+      album = JSON.parse(String(
+        card.querySelector('[data-open-tracklist="1"][data-album]')?.getAttribute('data-album') || '{}',
+      ));
+    } catch (_error) {
+      album = {};
+    }
+    const expectedCover = Boolean(
+      productionSrc
+      || String(album?.cover_path || '').trim()
+      || String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim()
+    );
     return {
       key,
       occurrenceKey: sectionKey && key ? `${sectionKey}\u0000${key}` : '',
       productionSrc,
+      expectedCover,
+      intentionalNoCover: !expectedCover
+        && !(image instanceof HTMLImageElement)
+        && artboxState === 'empty',
       intersects,
       decoded: image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
       terminal: intersects
@@ -175,11 +196,12 @@ function readDecodedProductionCardWindow(args = {}) {
     };
   }).filter((entry) => entry.key && entry.intersects);
   const visibleCardKeys = entries.map(({ key }) => key);
-  const coveredEntries = entries.filter((entry) => entry.productionSrc);
+  const expectedCoverEntries = entries.filter((entry) => entry.expectedCover);
+  const coveredEntries = expectedCoverEntries.filter((entry) => entry.productionSrc);
   const windowState = {
     visibleCardKeys,
     visibleCardOccurrenceKeys: entries.map(({ occurrenceKey }) => occurrenceKey).filter(Boolean),
-    candidateCount: coveredEntries.length,
+    candidateCount: expectedCoverEntries.length,
     decodedCards: coveredEntries.filter((entry) => entry.decoded).map(({ key, productionSrc }) => ({
       key,
       productionSrc,
@@ -188,9 +210,18 @@ function readDecodedProductionCardWindow(args = {}) {
     terminalCount: coveredEntries.filter((entry) => entry.terminal).length,
   };
   if (args.snapshot) return windowState;
-  return windowState.candidateCount > 0
-    && windowState.decodedCards.length >= minimumDecodedCount
-    && windowState.decodedCards.length + windowState.terminalCount === windowState.candidateCount;
+  if (windowState.candidateCount === 0) {
+    return Boolean(
+      args.allowIntentionalNoCoverWindow
+      && entries.length > 0
+      && entries.every((entry) => entry.intentionalNoCover)
+    );
+  }
+  return coveredEntries.length === expectedCoverEntries.length
+    && (args.requireEveryExpectedCoverDecoded
+      ? windowState.decodedCards.length === windowState.candidateCount
+      : windowState.decodedCards.length >= minimumDecodedCount
+        && windowState.decodedCards.length + windowState.terminalCount === windowState.candidateCount);
 }
 
 export { readDecodedProductionCardWindow };
@@ -1021,6 +1052,8 @@ export class GalleryPage extends BasePage {
       coverImageSelector: this.albumCard.coverImageWithinCardSelector,
       galleryScrollSelector: this.galleryScrollSelector,
       minimumDecodedCount: options.minimumDecodedCount,
+      allowIntentionalNoCoverWindow: options.allowIntentionalNoCoverWindow === true,
+      requireEveryExpectedCoverDecoded: options.requireEveryExpectedCoverDecoded === true,
     };
     try {
       await this.waitForPageCondition(
@@ -1067,6 +1100,9 @@ export class GalleryPage extends BasePage {
           cards: [...document.querySelectorAll(args.cardSelector)].map((card) => {
             const image = card.querySelector(args.coverImageSelector);
             const bounds = rect(card);
+            const productionSrc = image instanceof HTMLImageElement
+              ? String(image.getAttribute('data-production-cover-src') || '').trim()
+              : '';
             return {
               title: String(card.querySelector('.album-title-button')?.textContent || '').trim(),
               bounds,
@@ -1078,8 +1114,21 @@ export class GalleryPage extends BasePage {
               loading: image instanceof HTMLImageElement
                 ? String(image.getAttribute('data-gallery-cover-loading') || '')
                 : '',
+              productionSrc,
+              gallerySrc: image instanceof HTMLImageElement
+                ? String(image.getAttribute('data-gallery-cover-src') || '').trim()
+                : '',
+              currentSrc: image instanceof HTMLImageElement ? image.currentSrc : '',
+              imageHtml: image instanceof HTMLImageElement ? image.outerHTML : '',
+              renderKey: String(card.getAttribute('data-gallery-card-render-key') || ''),
+              sectionKey: String(card.closest?.('[data-virtual-section-key]')
+                ?.getAttribute('data-virtual-section-key') || ''),
+              cacheActive: productionSrc && typeof galleryCoverPreviewCache !== 'undefined'
+                ? galleryCoverPreviewCache.hasActive(productionSrc)
+                : null,
             };
           }),
+          coverCache: { ...(globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__ || {}) },
           scheduler: { ...(globalThis.__ALBUM_HAVEN_GALLERY_COVER_SCHEDULER__ || {}) },
           virtualGrid: { ...(globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ || {}) },
         };

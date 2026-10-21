@@ -4539,6 +4539,7 @@ test('deferred pointer render retains the scroll frame owner across a render gen
     'data-production-cover-src',
     'http://127.0.0.1:4173/cover?path=joseph&size=480&v=initial',
   );
+  retainedImage.setAttribute('src', 'blob:http://127.0.0.1/revoked-joseph');
   context.galleryCoverPreviewCache = {
     hasActive(productionUrl) {
       assert.match(productionUrl, /\/cover\?path=joseph/);
@@ -4579,10 +4580,15 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   });
 
   assert.equal(replacement, retainedCard, 'the decoded card node should survive regrouping and virtual-row reconciliation');
-  assert.match(
+  assert.equal(
     retainedImage.getAttribute('data-gallery-cover-src'),
-    /\/cover\?path=joseph/,
-    'a retained node whose blob was evicted must rehydrate from the production cache key',
+    '',
+    'a retained decoded node must not queue redundant browser decoding',
+  );
+  assert.equal(
+    retainedImage.getAttribute('src'),
+    'blob:http://127.0.0.1/revoked-joseph',
+    'revoking an already decoded blob must not discard the retained image pixels',
   );
 }
 

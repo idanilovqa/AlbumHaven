@@ -3359,8 +3359,8 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
 
   const pom = read('tests/e2e/poms/galleryPage.js');
   const traversal = read('tests/e2e/actions/galleryActions.js');
-  assert.match(pom, /cardBounds\.width > 0[\s\S]*entry\.key && entry\.intersects[\s\S]*entries\.filter\(\(entry\) => entry\.productionSrc\)/);
-  assert.match(pom, /windowState\.candidateCount > 0/);
+  assert.match(pom, /cardBounds\.width > 0[\s\S]*entry\.key && entry\.intersects[\s\S]*const expectedCoverEntries = entries\.filter\(\(entry\) => entry\.expectedCover\)[\s\S]*const coveredEntries = expectedCoverEntries\.filter\(\(entry\) => entry\.productionSrc\)/);
+  assert.match(pom, /if \(windowState\.candidateCount === 0\)[\s\S]*coveredEntries\.length === expectedCoverEntries\.length/);
   assert.match(traversal, /scrollGalleryBy\(deltaY\)[\s\S]*waitForGalleryScrollMovement/);
   assert.match(traversal, /page\.mouse\.wheel\(0, deltaY\)/);
 });
@@ -3395,10 +3395,21 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
     width: 200,
     height: 300,
   };
-  const card = (key, image = null) => ({
+  const card = (key, image = null, album = {}) => ({
     getBoundingClientRect() { return visibleBounds; },
     getAttribute(name) { return name === 'data-gallery-card-key' ? key : ''; },
-    querySelector() { return image; },
+    querySelector(selector) {
+      if (selector === '.cover img') return image;
+      if (selector === '[data-open-tracklist="1"][data-album]') {
+        return { getAttribute: name => name === 'data-album' ? JSON.stringify(album) : '' };
+      }
+      if (selector === '[data-album-artbox-state]') {
+        return image ? null : {
+          getAttribute: name => name === 'data-album-artbox-state' ? 'empty' : '',
+        };
+      }
+      return null;
+    },
   });
   const gallery = new FakeElement({
     left: 0,
@@ -3451,11 +3462,27 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
       true,
       'a legitimate no-art card must not block two decoded production covers',
     );
+    cards.push(card('covered-without-image', null, { cover_path: 'C:/covers/expected.jpg' }));
+    assert.equal(
+      readDecodedProductionCardWindow(args),
+      false,
+      'an album with a production cover must not be mistaken for an intentional no-art placeholder',
+    );
+    cards.pop();
     secondDecodedCover.naturalWidth = 0;
     assert.equal(
       readDecodedProductionCardWindow(args),
       false,
       'a terminal production-cover failure must not satisfy the required decoded-cover count',
+    );
+    cards.splice(0, cards.length,
+      card('no-art-one'),
+      card('no-art-two'));
+    assert.equal(readDecodedProductionCardWindow(args), false);
+    assert.equal(
+      readDecodedProductionCardWindow({ ...args, allowIntentionalNoCoverWindow: true }),
+      true,
+      'an explicit no-cover window may settle only when every visible card is an intentional placeholder',
     );
   } finally {
     if (originals.document === undefined) delete globalThis.document;

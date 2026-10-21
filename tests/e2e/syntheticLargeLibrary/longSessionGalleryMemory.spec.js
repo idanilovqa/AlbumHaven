@@ -1,20 +1,35 @@
 import { expect, test } from '../support/baseFixtures.js';
-import { readDecodedProductionCardWindow } from '../poms/galleryPage.js';
 import { requirePostgresRuntimeEnv, waitForPostgresBrowseWarmRoot } from '../helpers/realAppBenchmarkHelpers.js';
+import {
+  evaluateTimingBudget,
+  expectTimingBudgetOutcome,
+  formatTimingBudgetOutcome,
+  performanceTimingBudget,
+} from '../helpers/timingBudget.js';
 
-// Diagnostic only: no new memory budget and no forced garbage collection.
+const FIRST_VISIBLE_DECODED_BUDGET = performanceTimingBudget(
+  'gallery-artwork-diversity.firstVisibleDecodedMs',
+);
+const WINDOW_RECOVERY_BUDGET = performanceTimingBudget(
+  'gallery-artwork-diversity.windowRecoveryMs',
+);
+
+// Cover readiness is gated; memory remains diagnostic and never forces garbage collection.
 test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounded cover objects', async ({
   galleryActions, navigationPanelActions, page, stepLogger,
 }, testInfo) => {
   test.setTimeout(600000);
   requirePostgresRuntimeEnv('the sustained gallery memory diagnostic');
   const samples = [];
+  const coverRecoveryTimings = [];
   const decodedSources = new Set();
   const encounteredCardKeys = new Set();
   const encounteredAlbumKeys = new Set();
   const pending = new WeakSet();
   const completedPageCursors = new Set();
   const traffic = { pending: 0, started: 0, finished: 0, failed: 0, galleryPages: 0 };
+  let firstVisibleDecodedTiming = null;
+  let slowestWindowRecoveryTiming = null;
   let origin = null;
   const onRequest = request => {
     if (!origin) return;
@@ -103,6 +118,8 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
             inFlightEntries: previewCache?.inFlight?.size ?? null,
             liveFetches: previewCache?.liveFetches?.size ?? null,
             trackedProductionUrlKeys: previewCache?.latestRequestedProductionUrls?.size ?? null,
+            retainedObjectUrlConsumers: previewCache?.objectUrlConsumerCounts?.size ?? null,
+            retiredObjectUrls: previewCache?.retiredObjectUrls?.size ?? null,
           },
           scheduler: scheduler ? {
             active: scheduler.active, queuedVisible: scheduler.queuedVisible,
@@ -120,16 +137,47 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
     samples.push(result);
     return result;
   };
-  const checkpoint = async (phase, step = 0) => {
-    const window = await galleryActions.galleryPage.waitForDecodedProductionCardWindow();
+  const recordWindowEvidence = window => {
     for (const key of window.visibleCardOccurrenceKeys) encounteredCardKeys.add(key);
     for (const key of window.visibleCardKeys) encounteredAlbumKeys.add(key);
     for (const card of window.decodedCards) decodedSources.add(card.productionSrc);
+  };
+  const waitForDecodedWindow = async (
+    phase,
+    step = 0,
+    coverStartedAt = null,
+  ) => {
+    const window = await galleryActions.galleryPage.waitForDecodedProductionCardWindow({
+      allowIntentionalNoCoverWindow: true,
+      requireEveryExpectedCoverDecoded: true,
+    });
+    const coverRecoveryMs = Number.isFinite(coverStartedAt)
+      ? performance.now() - coverStartedAt
+      : null;
+    if (coverRecoveryMs !== null && window.candidateCount > 0) {
+      coverRecoveryTimings.push({
+        phase,
+        step,
+        timingMs: coverRecoveryMs,
+        candidateCount: window.candidateCount,
+        decodedCount: window.decodedCards.length,
+      });
+    }
+    recordWindowEvidence(window);
+    return window;
+  };
+  const checkpoint = async (phase, step = 0, decodedWindow = null) => {
+    const window = decodedWindow || await waitForDecodedWindow(phase, step);
     const result = await sample(phase, step);
     stepLogger.note(`${phase} step ${step}: heap ${result.heap.usedSize} bytes, ${result.gallery.mountedCards} mounted cards, ${result.gallery.loadedAlbumOccurrences} loaded album occurrences`, 2);
     // Existing application cache contract, also exercised by FTC-COVERS-014.
     expect(result.gallery.activeCoverObjects).not.toBeNull();
     expect(result.gallery.activeCoverObjects).toBeLessThanOrEqual(48);
+    expect(result.gallery.cachePersistence.retiredObjectUrls).not.toBeNull();
+    expect(result.gallery.cachePersistence.retiredObjectUrls).toBeLessThanOrEqual(
+      result.gallery.mountedImages + Number(result.gallery.retainedCardAncestry?.reachableImages || 0),
+    );
+    return { window };
   };
   const traverse = async (phase, direction) => {
     await stepLogger.step(phase, async () => {
@@ -142,6 +190,7 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
           before = await galleryActions.readGalleryScrollState();
         }
         const deadline = Date.now() + 5000;
+        const coverStartedAt = performance.now();
         const wheel = () => galleryActions.scrollGalleryBy(
           direction * Math.max(240, Math.round(before.clientHeight * 0.75)),
           { timeout: Math.max(1, deadline - Date.now()) },
@@ -150,26 +199,33 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
         await galleryActions.galleryPage.waitForGalleryScrollMovement(before.scrollTop, direction, {
           deadline, previousMaxScrollTop: before.maxScrollTop, onExtentExpanded: wheel,
         });
-        // parity-check: allow-read-only-measurement-evaluate -- observe decoded sources between settled checkpoints
-        const windowState = await page.evaluate(readDecodedProductionCardWindow, {
-          cardSelector: galleryActions.galleryPage.albumCard.cardSelector,
-          coverImageSelector: galleryActions.galleryPage.albumCard.coverImageWithinCardSelector,
-          galleryScrollSelector: galleryActions.galleryPage.galleryScrollSelector,
-          snapshot: true,
-        });
-        for (const key of windowState.visibleCardOccurrenceKeys) encounteredCardKeys.add(key);
-        for (const key of windowState.visibleCardKeys) encounteredAlbumKeys.add(key);
-        for (const card of windowState.decodedCards) decodedSources.add(card.productionSrc);
-        if (step % 8 === 0) await checkpoint(phase, step);
+        const windowState = await waitForDecodedWindow(
+          phase,
+          step,
+          coverStartedAt,
+        );
+        if (step % 8 === 0) await checkpoint(phase, step, windowState);
       }
       await checkpoint(`${phase}-end`);
     });
   };
   try {
+    const firstVisibleDecodedStartedAt = performance.now();
     await galleryActions.goto('/?surface=albums');
     origin = new URL(page.url()).origin;
+    const baselineWindow = await galleryActions.galleryPage.waitForDecodedProductionCardWindow({
+      allowIntentionalNoCoverWindow: true,
+      requireEveryExpectedCoverDecoded: true,
+    });
+    firstVisibleDecodedTiming = evaluateTimingBudget(
+      performance.now() - firstVisibleDecodedStartedAt,
+      FIRST_VISIBLE_DECODED_BUDGET,
+    );
+    recordWindowEvidence(baselineWindow);
+    await navigationPanelActions.waitForSidebarFullyHydrated({ timeout: 120000 });
+    await galleryActions.waitForInitialAllArtistsSections({ timeout: 120000 });
+    const baseline = await checkpoint('baseline', 0, baselineWindow);
     await waitForPostgresBrowseWarmRoot(page, galleryActions, navigationPanelActions);
-    await checkpoint('baseline');
     for (let cycle = 1; cycle <= 2; cycle += 1) {
       await traverse(`forward-${cycle}`, 1);
       await traverse(`reverse-${cycle}`, -1);
@@ -184,6 +240,25 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
     expect(decodedSources.size, 'Long traversal must observe over 100 distinct decoded covers.').toBeGreaterThan(100);
     expect(encounteredCardKeys.size,
       'Long traversal must encounter over 1000 distinct visible card occurrences, including no-art cards.').toBeGreaterThan(1000);
+    expect(coverRecoveryTimings.length, 'Traversal must time many decoded cover windows.').toBeGreaterThan(20);
+    const slowestWindowRecovery = coverRecoveryTimings.reduce(
+      (slowest, timing) => timing.timingMs > slowest.timingMs ? timing : slowest,
+    );
+    slowestWindowRecoveryTiming = evaluateTimingBudget(
+      slowestWindowRecovery.timingMs,
+      WINDOW_RECOVERY_BUDGET,
+    );
+    console.log(formatTimingBudgetOutcome(
+      'First visible decoded gallery artwork',
+      firstVisibleDecodedTiming,
+    ));
+    console.log(formatTimingBudgetOutcome(
+      `Slowest decoded gallery window (${slowestWindowRecovery.phase} ${slowestWindowRecovery.step})`,
+      slowestWindowRecoveryTiming,
+    ));
+    expect(baseline.window.decodedCards.length).toBeGreaterThan(0);
+    expectTimingBudgetOutcome(expect, firstVisibleDecodedTiming, 'First visible decoded gallery artwork');
+    expectTimingBudgetOutcome(expect, slowestWindowRecoveryTiming, 'Slowest decoded gallery window');
   } finally {
     page.off('request', onRequest);
     page.off('response', onResponse);
@@ -197,7 +272,8 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
     try {
       await testInfo.attach('gallery-memory-diagnostic', {
         body: Buffer.from(JSON.stringify({
-          diagnosticOnly: true, forcedGarbageCollection: false,
+          coverReadinessGated: true, memoryDiagnosticOnly: true, forcedGarbageCollection: false,
+          firstVisibleDecodedTiming, slowestWindowRecoveryTiming, coverRecoveryTimings,
           unavailableMetrics: ['renderer-private-bytes: no reliable page PID mapping',
             'decoded-image-bytes', 'detached-DOM-node-count', 'observer-count'],
           cardCoverageScope: 'cumulative visible section-key plus card-key occurrences, including no-art; repeat visits count once; distinct album keys and retained occurrences are separate telemetry',

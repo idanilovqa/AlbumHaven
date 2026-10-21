@@ -1,0 +1,281 @@
+name: Foobar Preview Validation Controls (supplemental)
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foobar-preview-validation-controls-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONUNBUFFERED: '1'
+  CONTROLS_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+
+jobs:
+  validation_controls:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'idanilovqa/AlbumHaven' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == '2026-10-03-album-tops'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact controls pull-request head
+        uses: actions/checkout@v5
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Observe unchanged local admission and retain exact event
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CONTROLS_OUTPUT="$RUNNER_TEMP/foobar-preview-validation-controls-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$CONTROLS_EXPECTED_HEAD"
+          printf 'CONTROLS_OUTPUT=%s\n' "$CONTROLS_OUTPUT" >> "$GITHUB_ENV"
+          mkdir -m 700 "$CONTROLS_OUTPUT"
+          python -I -B - <<'PY'
+          import hashlib, os, pathlib, stat
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          def bounded(path, limit):
+              current = pathlib.Path(path.anchor)
+              for part in path.parts[1:-1]:
+                  current /= part
+                  if not stat.S_ISDIR(os.lstat(current).st_mode): raise ValueError('Linked parent')
+              before = os.lstat(path)
+              if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 <= before.st_size <= limit:
+                  raise ValueError('Unbounded source')
+              def identity(s): return (s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+              parent = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+              try:
+                  for part in path.parts[1:-1]:
+                      child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                      os.close(parent); parent = child
+                  fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+              finally: os.close(parent)
+              try:
+                  if identity(os.fstat(fd)) != identity(before): raise ValueError('Changed source')
+                  chunks = []; remaining = before.st_size
+                  while remaining:
+                      chunk = os.read(fd, min(65536, remaining))
+                      if not chunk: raise ValueError('Short source')
+                      chunks.append(chunk); remaining -= len(chunk)
+                  if os.read(fd, 1) or identity(os.fstat(fd)) != identity(before) or identity(os.lstat(path)) != identity(before):
+                      raise ValueError('Changed source')
+                  return b''.join(chunks)
+              finally: os.close(fd)
+          admission = bounded(root / 'scripts/ci/admit-new-feature-evidence.py', 33554432)
+          if hashlib.sha256(admission).hexdigest() != '90641268ec59f81ff185389e881db6d1305aee89e9c25a95a0c3f64297bbe2d6':
+              raise ValueError('Admission source mismatch')
+          event = bounded(pathlib.Path(os.environ['GITHUB_EVENT_PATH']), 1048576)
+          target = pathlib.Path(os.environ['CONTROLS_OUTPUT']) / 'event.json'
+          fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+          try:
+              offset = 0
+              while offset < len(event):
+                  count = os.write(fd, event[offset:offset + 65536])
+                  if count <= 0: raise OSError('Incomplete event retention')
+                  offset += count
+              os.fsync(fd)
+          finally: os.close(fd)
+          PY
+          python -I -B scripts/ci/admit-new-feature-evidence.py --event "$CONTROLS_OUTPUT/event.json" --attempt "$GITHUB_RUN_ATTEMPT" --output "$CONTROLS_OUTPUT/admission.json"
+
+      - name: Set up controls Python without cache or post-cache work
+        id: python
+        uses: actions/setup-python@v5
+        timeout-minutes: 5
+        with:
+          python-version: '3.11'
+
+      - name: Set up controls Node without cache or post-cache work
+        id: node
+        uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: '20'
+
+      - name: Verify independent admission source and detached checkout before install
+        timeout-minutes: 2
+        shell: bash
+        env:
+          CONTROLS_NODE_VERSION: ${{ steps.node.outputs.node-version }}
+        run: |
+          set -euo pipefail
+          # This bounded private preparation writes context.json and
+          # admission-context.json before install. It hashes all 19 sources and
+          # checks event/run/attempt plus bounded detached .git/HEAD metadata.
+          python -I -B - <<'PY'
+          import hashlib, importlib.machinery, importlib.util, os, pathlib, stat
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+          path = root / 'scripts/ci/foobar_preview_controls_evidence.py'
+          current = pathlib.Path(path.anchor)
+          for part in path.parts[1:-1]:
+              current /= part
+              if not stat.S_ISDIR(os.lstat(current).st_mode): raise ValueError('Linked parent')
+          before = os.lstat(path)
+          if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 <= before.st_size <= 33554432:
+              raise ValueError('Unbounded adapter')
+          def identity(s): return (s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+          parent = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+          try:
+              for part in path.parts[1:-1]:
+                  child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                  os.close(parent); parent = child
+              fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+          finally: os.close(parent)
+          try:
+              if identity(os.fstat(fd)) != identity(before): raise ValueError('Changed adapter')
+              chunks = []; remaining = before.st_size
+              while remaining:
+                  chunk = os.read(fd, min(65536, remaining))
+                  if not chunk: raise ValueError('Short adapter')
+                  chunks.append(chunk); remaining -= len(chunk)
+              if os.read(fd, 1) or identity(os.fstat(fd)) != identity(before) or identity(os.lstat(path)) != identity(before):
+                  raise ValueError('Changed adapter')
+              source = b''.join(chunks)
+          finally: os.close(fd)
+          # Exact checkout + retained actual SHA256, not an artifact assertion,
+          # bind the two new files. Root separately checks publication hashes.
+          source_sha256 = hashlib.sha256(source).hexdigest()
+          class Bound(importlib.machinery.SourceFileLoader):
+              def get_data(self, location):
+                  if location != str(path): raise OSError('Only verified adapter source')
+                  return source
+              def set_data(self, location, data, *, _mode=0o666): return None
+          spec = importlib.util.spec_from_file_location('controls_prepare', path, loader=Bound('controls_prepare', str(path)))
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          output = pathlib.Path(os.environ['CONTROLS_OUTPUT'])
+          module._prepare(root, output / 'event.json', output / 'admission.json', output, source_sha256)
+          PY
+
+      - name: Install only existing controls Python requirements
+        timeout-minutes: 5
+        shell: bash
+        run: python -m pip install -r requirements.txt
+
+      - name: Execute five direct owned controls commands and finalize raw proof
+        timeout-minutes: 16
+        shell: bash
+        env:
+          CONTROLS_NODE_VERSION: ${{ steps.node.outputs.node-version }}
+        run: >-
+          python -I -B scripts/ci/foobar_preview_controls_evidence.py run --root "$GITHUB_WORKSPACE"
+          --event "$CONTROLS_OUTPUT/event.json"
+          --admission "$CONTROLS_OUTPUT/admission.json"
+          --output "$CONTROLS_OUTPUT"
+
+      - name: Check bounded partial artifact eligibility without certifying completion
+        id: upload_guard
+        if: always()
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          python -I -B - <<'PYGUARD'
+          import hashlib, os, pathlib, stat
+          root = pathlib.Path(os.environ['CONTROLS_OUTPUT'])
+          cap, maximum, file_limit = 268435456, 33554432, 4096
+          # Only the finite owner paths may be retained, including truthful
+          # partial files. A .writing/foreign/link/special/oversized file holds
+          # upload without truncation, deletion or a replacement success record.
+          fixed = {'context.json', 'receipt.json', 'inventory.json', 'complete.json',
+                   'event.json', 'admission.json', 'admission-context.json', 'empty-pytest.ini',
+                   'python/collection.json', 'python/reports.json', 'python/junit.xml',
+                   'node/list.json', 'node/runtime.json'}
+          for name in ('git', 'python_collection', 'python_runtime', 'node_inventory', 'node_runtime'):
+              fixed.update(('processes/' + name + '.json', 'logs/' + name + '.log'))
+          fixed.update('node/ledgers/%03d.json' % i for i in range(1, 59))
+          directories = {'processes', 'logs', 'python', 'node', 'node/ledgers'}
+          current = pathlib.Path(root.anchor)
+          for part in root.parts[1:]:
+              current /= part
+              if not stat.S_ISDIR(os.lstat(current).st_mode): raise ValueError('Linked artifact parent')
+          def identity(s): return (s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+          def open_directory(path):
+              fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+              try:
+                  for part in path.parts[1:]:
+                      child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                      os.close(fd); fd = child
+                  return fd
+              except BaseException:
+                  os.close(fd); raise
+          snapshot = {}; directory_snapshot = {}; stack = [(root, '')]; count = total = 0
+          while stack:
+              directory, prefix = stack.pop()
+              directory_snapshot[str(directory)] = identity(os.lstat(directory))
+              directory_fd = open_directory(directory)
+              try:
+                with os.scandir(directory_fd) as entries:
+                  for entry in entries:
+                      relative = prefix + entry.name
+                      info = entry.stat(follow_symlinks=False)
+                      if stat.S_ISDIR(info.st_mode):
+                          if relative not in directories: raise ValueError('Foreign artifact directory')
+                          stack.append((directory / entry.name, relative + '/')); continue
+                      if relative not in fixed or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                          raise ValueError('Foreign or linked partial evidence')
+                      count += 1; total += info.st_size
+                      if not 0 <= info.st_size <= maximum or count > file_limit or total > cap:
+                          raise ValueError('Partial evidence exceeds unchanged bounds')
+                      fd = os.open(entry.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+                      try:
+                          if identity(os.fstat(fd)) != identity(info): raise ValueError('Changed evidence')
+                          remaining = info.st_size; digest = hashlib.sha256()
+                          while remaining:
+                              chunk = os.read(fd, min(65536, remaining))
+                              if not chunk: raise ValueError('Short evidence')
+                              digest.update(chunk); remaining -= len(chunk)
+                          if os.read(fd, 1) or identity(os.fstat(fd)) != identity(info) or identity(os.stat(entry.name, dir_fd=directory_fd, follow_symlinks=False)) != identity(info):
+                              raise ValueError('Changed evidence')
+                          snapshot[str(directory / entry.name)] = identity(info)
+                      finally: os.close(fd)
+              finally: os.close(directory_fd)
+          if not count: raise ValueError('No partial evidence')
+          # With compression-level 0, reserve a conservative per-file ZIP
+          # envelope rather than spend the entire decoded cap before upload.
+          # Actual encoded bytes remain independently checked externally.
+          if total + count * 4096 + 1048576 > cap: raise ValueError('Insufficient encoded envelope capacity')
+          for path, before in {**snapshot, **directory_snapshot}.items():
+              if identity(os.lstat(path)) != before: raise ValueError('Changed partial evidence')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+              stream.write('ready=true\n')
+          PYGUARD
+
+      - name: Retain truthful controls prefix without promoting completion
+        id: upload
+        if: always() && steps.upload_guard.outputs.ready == 'true'
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: foobar-preview-validation-controls-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ env.CONTROLS_OUTPUT }}
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 7
+          compression-level: 0
+          overwrite: false
+
+# Independent external acceptance must inspect the completed job and upload,
+# exact immutable artifact identity/encoded bytes, every named step including
+# checkout/Python/Node posts, and owned-interval containment/nonoverlap.
+# Caps in seconds: checkout120, admission120, setup-Python300, setup-Node300,
+# install300, verify120, finalize120, upload180; owned70+120+240+120+240;
+# runner setup/completion/gaps slack350; independent total2700. Mixed-step
+# non-owned residual is charged in full against BOTH verify and finalize.
+# GitHub timeout settings are guards, not proof of physical teardown completion.
+# This artifact and its local validator always leave completion unproven.

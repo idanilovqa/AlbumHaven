@@ -28,7 +28,7 @@ def test_capture_dispatches_exact_typed_origin_without_parent_alias(boundary, mo
     owner, context, positional, arguments = calls[0]
     assert owner is boundary.owner and positional == ()
     assert arguments == {"origin": value, "options": options(), "request_key": KEY,
-                         "random_order": None, "constraints": boundary.constraints}
+                         "random_order": None, "constraints": boundary.constraints, "native": True}
 
 
 @pytest.mark.parametrize("value", ORIGINS)

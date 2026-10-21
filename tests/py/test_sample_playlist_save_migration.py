@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 import psycopg
+from psycopg.types.json import Jsonb
 import pytest
 from library_mix_postgres_support import mix_db, mix_urls
 from test_sample_playlist_sources_live import manual_source
@@ -19,10 +20,24 @@ SAMPLE = "sample_playlist_selection_v1"
 def test_normal_migrated_constraint_preserves_every_pair_and_null(mix_db, kind, protocol):
     db = mix_db
     parent = manual_source(db, (0,))
+    if protocol == "playlist_copy_v1":
+        original = parent; original_state = db.state(original["playlist_id"])
+        lineage = {"playlist_ref": original["playlist_id"],
+            "playlist_item_ref": str(original_state[1][0]["ref"]), "playlist_revision": original["revision"]}
+        parent = manual_source(db, (0,))
     with db.connect() as con:
-        con.execute("update app.playlist_items set source_kind=%s,source_protocol=%s where playlist_ref=%s", (kind, protocol, parent["playlist_id"]))
+        if protocol == "playlist_copy_v1":
+            con.execute("""update app.playlist_items set source_kind=%s,source_protocol=%s,
+                source_ref=null,source_entry_ref=null,source_revision=null,source_label=null,source_lineage=%s
+                where playlist_ref=%s""", (kind, protocol, Jsonb(lineage), parent["playlist_id"]))
+        else:
+            con.execute("update app.playlist_items set source_kind=%s,source_protocol=%s where playlist_ref=%s", (kind, protocol, parent["playlist_id"]))
     row = db.state(parent["playlist_id"])[1][0]
     assert (row["source_kind"], row["source_protocol"]) == (kind, protocol)
+    if protocol == "playlist_copy_v1":
+        assert row["source_lineage"] == lineage
+        assert all(row[field] is None for field in ("source_ref", "source_entry_ref", "source_revision", "source_label"))
+        assert db.state(original["playlist_id"]) == original_state
 
 
 @pytest.mark.parametrize("kind", ["activity"])

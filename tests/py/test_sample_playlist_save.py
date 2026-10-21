@@ -117,6 +117,8 @@ def test_currentness_and_authority_failures_are_not_laundered_by_save(mix_db, ch
     body = payload(source)
     constraints = None
     if change == "expired": db.clock_time += sources.SOURCE_LIFETIME
+    elif change == "create":
+        constraints = lambda ctx: PolicyEvaluationConstraints(deployment_allowed=ctx.action != CREATE)
     elif change in ("track", "album"):
         constraints = lambda ctx: PolicyEvaluationConstraints(deployment_allowed=not (ctx.resource and ctx.resource.resource_kind == change))
     else:
@@ -127,7 +129,6 @@ def test_currentness_and_authority_failures_are_not_laundered_by_save(mix_db, ch
             elif change == "identity": con.execute("update library.track_popularity_mapping_slots set current_revision=null where track_id=%s", (db.tracks[0],))
             elif change == "entry_evidence": con.execute("update app.playlist_creation_entries set evidence_digest=%s where source_ref=%s", ("0"*64, source["source"]["ref"]))
             elif change == "descriptor": con.execute("update app.playlist_creation_sources set origin_descriptor=jsonb_set(origin_descriptor,'{result_digest}',to_jsonb(%s::text)) where ref=%s", ("0"*64, source["source"]["ref"]))
-            else: con.execute("delete from app.capabilities where account_id=%s and capability_key=%s", (db.owner.account_id, CREATE))
     before = destinations(db)
     with pytest.raises(PlaylistError): save(db, body, constraints=constraints)
     assert destinations(db) == before and ledger(db, body["request_key"]) == []

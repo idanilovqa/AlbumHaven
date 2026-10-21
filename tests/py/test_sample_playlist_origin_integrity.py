@@ -120,22 +120,40 @@ def test_stored_v2_cardinality_fails_413_before_deep_validation(mix_db, field, m
 @pytest.mark.parametrize("representation", ["json", "jsonb_text"])
 def test_two_mib_preflight_uses_utf8_and_actual_jsonb_text(mix_db, representation):
     db = mix_db; before = destinations(db)
-    # Keep an otherwise structurally valid real descriptor. Padding is one
-    # existing diagnostic text scalar, not an unknown key that fails first.
+    # Keep all closed diagnostics and typed-origin proof associations intact.
+    # A mapping evidence scalar is unrestricted, but its three mirrors must
+    # agree and the facts/ranking digests must be recomputed after padding.
     source = capture_origin(db, origin(db))
-    value = deepcopy(retained(db, source["source"]["ref"])[0]["origin_descriptor"])
-    value["source_diagnostics"] = [[value["facts"][0]["track_id"], "x"]]
-    count = 2097152 - len(json_bytes(value)) - 100
-    value["source_diagnostics"][0][1] = "é" * 1048576 if representation == "json" else "x" * count
-    if representation == "jsonb_text":
-        import json
-        assert len(json_bytes(value)) < 2097152
-        assert len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 2097152
+    original = retained(db, source["source"]["ref"])
+    value = deepcopy(original[0]["origin_descriptor"])
+    fact, rank = value["facts"][0], value["ranking"][0]
+    assert fact["identity_evidence"]["mapping"] == rank["mapping"]
+    def set_evidence(evidence):
+        fact["recording_evidence"] = evidence
+        fact["identity_evidence"]["mapping"]["recording_evidence"] = evidence
+        rank["mapping"]["recording_evidence"] = evidence
+        rehash(value)
+    set_evidence("probe")
+    room = 2097152 - len(json_bytes(value))
+    assert room > 0
+    # Three copies contribute six bytes per é, versus three per ASCII x.
+    padding = "é" * (room // 6 + 1) if representation == "json" else "x" * (room // 3)
+    set_evidence("probe" + padding)
+    assert receipts._validate_descriptor_shape(value) is None
+    canonical = json_bytes(value)
+    assert value["source_diagnostics"] == original[0]["origin_descriptor"]["source_diagnostics"]
     with db.service._authorized(db.context(), None) as (con, live, now):
+        jsonb_size = con.execute("select octet_length(%s::jsonb::text) as n", (Jsonb(value),)).fetchone()["n"]
+        if representation == "json":
+            assert len(canonical.decode("utf-8")) <= 2097152 < len(canonical)
+            assert jsonb_size > 2097152
+        else:
+            assert len(canonical) <= 2097152 < jsonb_size
         with pytest.raises(PlaylistError, match="source_too_large") as error:
             receipts._preflight(con, value)
         assert error.value.status_code == 413
     assert destinations(db) == before
+    assert retained(db, source["source"]["ref"]) == original
 
 
 def json_bytes(value):

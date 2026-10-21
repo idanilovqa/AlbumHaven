@@ -69,7 +69,8 @@ def test_sql_rejects_crossed_incomplete_or_unknown_version_origin_pair(mix_db, k
         with db.connect() as con:
             con.execute("update app.playlist_creation_sources set source_kind=%s,origin_descriptor=%s where ref=%s",
                         (kind, Jsonb(descriptor) if descriptor is not None else None, key))
-    assert error.value.diag.constraint_name == "playlist_sample_source_origin_v1"
+    expected = "playlist_creation_source_origin_shape" if isinstance(descriptor, list) else "playlist_sample_source_origin_v1"
+    assert error.value.diag.constraint_name == expected
     assert retained(db, key) == before
 
 

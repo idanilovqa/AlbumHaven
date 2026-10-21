@@ -15,6 +15,20 @@ export async function readStartupDiagnostics(page, selectors) {
         && !url.searchParams.has('artist')
         && !url.searchParams.has('q');
     });
+    const slowSameOriginResources = resourceEntries
+      .filter((entry) => new URL(entry.name, window.location.href).origin === window.location.origin)
+      .sort((left, right) => right.duration - left.duration)
+      .slice(0, 12)
+      .map((entry) => ({
+        pathname: new URL(entry.name, window.location.href).pathname,
+        initiatorType: entry.initiatorType,
+        startTime: Math.round(entry.startTime),
+        requestStart: Math.round(entry.requestStart),
+        responseStart: Math.round(entry.responseStart),
+        responseEnd: Math.round(entry.responseEnd),
+        duration: Math.round(entry.duration),
+        transferSize: entry.transferSize,
+      }));
     const decodedArtworkTimes = [...document.querySelectorAll(selectors.coverImageSelector)]
       .filter((element) => element.hasAttribute('data-cover-decoded-at-ms'))
       .map((element) => Number(element.getAttribute('data-cover-decoded-at-ms')))
@@ -26,6 +40,7 @@ export async function readStartupDiagnostics(page, selectors) {
     );
     return {
       metrics,
+      resourceCount: resourceEntries.length,
       navigation: navigationEntry
         ? {
             domContentLoadedEventEnd: Math.round(navigationEntry.domContentLoadedEventEnd),
@@ -44,6 +59,7 @@ export async function readStartupDiagnostics(page, selectors) {
         responseStart: Math.round(entry.responseStart),
         responseEnd: Math.round(entry.responseEnd),
       })),
+      slowSameOriginResources,
       phases: {
         navigationRequestStartMs: Number.isFinite(navigationEntry?.requestStart)
           ? Math.round(navigationEntry.requestStart)

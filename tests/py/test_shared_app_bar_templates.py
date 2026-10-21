@@ -209,6 +209,9 @@ def test_library_actions_retain_handlers_and_server_filtered_admin_entry(render,
         assert "ui-button--icon" in classes
         assert "ui-button--medium" in classes
     assert notifications.attrs["data-toggle-cover-lookup-drawer"] == "1"
+    hover_icon = notifications.one("img", **{"class": "cover-lookup-drawer-glyph-hover"})
+    assert "src" not in hover_icon.attrs
+    assert hover_icon.attrs["data-src"].endswith("/static/images/cover-lookup-notification-icon.png")
     assert status.attrs["aria-label"] == "Library status"
     assert "data-account-menu-trigger" in settings.attrs
     assert controls.index(notifications) < controls.index(status) < controls.index(settings)

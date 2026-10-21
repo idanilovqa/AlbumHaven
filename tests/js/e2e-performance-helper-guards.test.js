@@ -97,6 +97,8 @@ test('app-open diagnostics retain every true-cold startup phase', () => {
   }
   assert.match(helper, /performance\.getEntriesByType\('paint'\)/);
   assert.match(helper, /performance\.getEntriesByType\('resource'\)/);
+  assert.match(helper, /slowSameOriginResources/);
+  assert.match(helper, /transferSize/);
   assert.match(helper, /data-cover-decoded-at-ms/);
   assert.match(helper, /querySelectorAll\(selectors\.coverImageSelector\)/);
   assert.match(helper, /filter\(\(element\) => element\.hasAttribute\('data-cover-decoded-at-ms'\)\)/);

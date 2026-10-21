@@ -92,6 +92,22 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
   );
 });
 
+require('node:test')('cover lookup hover icon loads only when requested', () => {
+  const hoverIcon = { dataset: { src: '/static/images/cover-lookup-notification-icon.png' }, src: '' };
+  const listeners = {};
+  const button = {
+    addEventListener: (name, callback) => { listeners[name] = callback; },
+    querySelector: () => hoverIcon,
+  };
+  loadHelper({ document: { getElementById: () => button } });
+
+  assert.deepEqual(Object.keys(listeners).sort(), ['focus', 'mouseenter']);
+  listeners.mouseenter();
+
+  assert.equal(hoverIcon.src, '/static/images/cover-lookup-notification-icon.png');
+  assert.equal('src' in hoverIcon.dataset, false);
+});
+
 require('node:test')('interrupted notification stops looking active and remains retryable', () => {
   const { context, bodyElement } = createDrawerHarness();
   context.state.coverLookup.tasks = [{

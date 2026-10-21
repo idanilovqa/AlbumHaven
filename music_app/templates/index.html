@@ -84,7 +84,7 @@
           {% call action_button('Cover art lookups', class_name='cover-lookup-drawer-button', id='cover-lookup-drawer-button', title='Cover art lookups', attributes={'data-toggle-cover-lookup-drawer': '1'}) %}
             <span class="cover-lookup-drawer-glyph" aria-hidden="true">
               <img class="cover-lookup-drawer-glyph-default" src="{{ url_for('static', filename='images/cover-lookup-notification-icon-offwhite.png') }}" alt="">
-              <img class="cover-lookup-drawer-glyph-hover" src="{{ url_for('static', filename='images/cover-lookup-notification-icon.png') }}" alt="">
+              <img class="cover-lookup-drawer-glyph-hover" data-src="{{ url_for('static', filename='images/cover-lookup-notification-icon.png') }}" alt="">
             </span>
             <span class="cover-lookup-drawer-badge" id="cover-lookup-drawer-badge" hidden></span>
           {% endcall %}

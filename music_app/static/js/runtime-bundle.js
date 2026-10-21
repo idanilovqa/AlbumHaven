@@ -27983,6 +27983,23 @@ function getCoverLookupModalElements() {
   };
 }
 
+function loadCoverLookupDrawerHoverIcon(button) {
+  const icon = button?.querySelector?.('.cover-lookup-drawer-glyph-hover[data-src]');
+  const src = String(icon?.dataset?.src || '').trim();
+  if (!src) return false;
+  icon.src = src;
+  delete icon.dataset.src;
+  return true;
+}
+
+const coverLookupDrawerButton = document.getElementById?.('cover-lookup-drawer-button');
+coverLookupDrawerButton?.addEventListener?.('mouseenter', () => {
+  loadCoverLookupDrawerHoverIcon(coverLookupDrawerButton);
+});
+coverLookupDrawerButton?.addEventListener?.('focus', () => {
+  loadCoverLookupDrawerHoverIcon(coverLookupDrawerButton);
+});
+
 const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -29253,6 +29270,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   }
   badge.hidden = badgeCount <= 0;
   badge.textContent = String(badgeCount || '');
+  if (badgeCount > 0) loadCoverLookupDrawerHoverIcon(button);
   button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
     clearButton.hidden = false;

@@ -1,0 +1,58 @@
+name: Foobar History Backend Evidence (supplemental)
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foobar-history-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Attempt one holds. A later attempt needs terminal exact-head native admission.
+# This supplement never replaces native coverage, review or release gates.
+jobs:
+  history:
+    name: Foobar History Evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@v5
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up isolated standard-library Python
+        uses: actions/setup-python@v5
+        timeout-minutes: 5
+        with:
+          python-version: "3.11"
+      - name: Run one bounded history evidence invocation
+        timeout-minutes: 9
+        shell: bash
+        run: >-
+          python -I -S -B scripts/ci/foobar_history_evidence.py driver
+          --root "$GITHUB_WORKSPACE"
+          --output "$RUNNER_TEMP/foobar-history-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          --event "$GITHUB_EVENT_PATH"
+          --run-id "$GITHUB_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Retain actual bounded evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 3
+        with:
+          name: foobar-history-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/foobar-history-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14

@@ -318,9 +318,15 @@ def _allowed(owner, live, action, kind, identity, constraints):
     return owner._resource_allowed(live, action, ResourceScope(kind, str(identity)), constraints) is True
 
 
+def _require_country_action(owner, live, constraints):
+    owner._require(live, (BROWSE, CREATE), constraints)
+    if owner._resource_allowed(live, REFRESH, None, constraints) is not True:
+        raise PlaylistError("forbidden", 403)
+
+
 def _hint(owner, live, constraints):
     try:
-        owner._require(live, (BROWSE, CREATE, REFRESH), constraints)
+        _require_country_action(owner, live, constraints)
         return True
     except PlaylistError:
         return False
@@ -500,7 +506,7 @@ class _TargetOutcome(Exception):
 
 
 def _action_fences(owner, live, row, constraints, finish, should_cancel):
-    owner._require(live, (BROWSE, CREATE, REFRESH), constraints)
+    _require_country_action(owner, live, constraints)
     if any(not _allowed(owner, live, action, "artist", row["id"], constraints) for action in (BROWSE, REFRESH)):
         raise PlaylistError("source_unavailable", 404)
     finish()
@@ -521,7 +527,7 @@ def enrich_sample_country_metadata(owner, context, selector, selection_method, t
     # Batch admission is complete before the first provider call. JSON null is
     # present malformed evidence, not absence and not a refresh grant.
     with owner._authorized(context, constraints) as (connection, live, _now):
-        owner._require(live, (BROWSE, CREATE, REFRESH), constraints)
+        _require_country_action(owner, live, constraints)
         snapshot, state, finish = _prepare(owner, connection, live, selector, selection_method,
             ("countries",), constraints, discovery=True, target_tracks=target_tracks)
         proof = association_digest(snapshot, state, selector, selection_method)
@@ -549,7 +555,7 @@ def enrich_sample_country_metadata(owner, context, selector, selection_method, t
         current_target_tracks = {sample_inventory_ref(target["track_ref"], "track", context.library_id)[1]}
         try:
             with owner._authorized(context, constraints) as (connection, live, _now):
-                owner._require(live, (BROWSE, CREATE, REFRESH), constraints)
+                _require_country_action(owner, live, constraints)
                 snapshot, state, finish = _prepare(owner, connection, live, selector, selection_method,
                     ("countries",), constraints, discovery=True, target_tracks=current_target_tracks)
                 if association_digest(snapshot, state, selector, selection_method) != proof:
@@ -571,7 +577,7 @@ def enrich_sample_country_metadata(owner, context, selector, selection_method, t
                 raise _TargetOutcome("cancelled")
             proposed = normalize_artist_country_response(payload, metadata, identity, owner._clock())
             with owner._authorized(context, constraints) as (connection, live, _now):
-                owner._require(live, (BROWSE, CREATE, REFRESH), constraints)
+                _require_country_action(owner, live, constraints)
                 if proposed is None:
                     raise _TargetOutcome("unresolved")
                 connection.execute("select pg_advisory_xact_lock(hashtext('album-haven:sample-country-v1'),hashtext(%s))",

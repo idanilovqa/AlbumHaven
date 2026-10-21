@@ -671,6 +671,10 @@ def capture(owner, context, *, playlist_ref=None, revision=None, origin=None, op
         with _snapshot(owner, connection, live, **arguments,
                 selection_method=options.selection_method, constraints=constraints,
                 facet_fields=facets.active(options)) as (snapshot, identities):
+            if (options.selection_method == "random" and random_order is not None
+                    and len(set(random_order)) == len(random_order)):
+                current_ids = evaluator.random_representative_ids(snapshot.candidates, options)
+                _require(len(random_order) == len(current_ids) and set(random_order) == set(current_ids))
             selection = evaluator.evaluate_sample_playlist(snapshot.candidates, options, random_order=random_order)
             descriptor = _descriptor(request, snapshot, identities, selection)
             rows = sources.inventory_rows(connection, live.library_id, selection.track_ids,

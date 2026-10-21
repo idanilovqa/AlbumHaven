@@ -711,6 +711,75 @@ def test_resolve_album_root_keeps_multitrack_same_album_folder(config, tmp_path:
     assert resolve_album_root_from_track_paths(config, {str(first_track), str(second_track)}) == album_root
 
 
+def test_resolve_album_context_keeps_missing_copy_when_same_album_copy_survives(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Artist" / "Album").resolve()
+    deleted_track = album_root / "deleted.flac"
+    surviving_track = album_root / "surviving.mp3"
+    surviving_track.parent.mkdir(parents=True, exist_ok=True)
+    surviving_track.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    context = resolve_album_context(config, {
+        "tracks": [{"path": str(deleted_track)}, {"path": str(surviving_track)}],
+    })
+
+    assert context is not None
+    assert context.album_root == album_root
+    assert context.track_paths == {str(deleted_track), str(surviving_track)}
+
+
+def test_resolve_album_context_rejects_album_when_no_track_copy_survives(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    deleted_track = library_root / "Artist" / "Album" / "deleted.flac"
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    assert resolve_album_context(config, {
+        "tracks": [{"path": str(deleted_track)}],
+    }) is None
+
+
+def test_resolve_album_context_rejects_existing_directory_as_missing_track(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Artist" / "Album").resolve()
+    directory_path = album_root / "not-a-track"
+    surviving_track = album_root / "surviving.mp3"
+    directory_path.mkdir(parents=True)
+    surviving_track.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    assert resolve_album_context(config, {
+        "tracks": [{"path": str(directory_path)}, {"path": str(surviving_track)}],
+    }) is None
+
+
 def test_resolve_album_root_loads_library_roots_once_for_all_tracks(config, tmp_path: Path):
     library_root = (tmp_path / "Library").resolve()
     album_root = (library_root / "Artist" / "Album").resolve()

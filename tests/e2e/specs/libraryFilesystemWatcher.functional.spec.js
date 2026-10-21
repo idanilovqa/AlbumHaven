@@ -140,6 +140,7 @@ async function expectOwnedAlbumOccurrence({
 
 test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal', { tag: '@area:album-details' }, async ({
   appBarActions,
+  coverLookupActions,
   galleryActions,
   libraryFilesystemWatcherActions,
   context,
@@ -217,6 +218,8 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
 
     await stepLogger.step('Delete one track and reconcile only that file', async () => {
       const startedAt = Date.now();
+      await galleryActions.clickAlbumDetailsByAlbumName(TARGET_ALBUM);
+      await expect(trackModalActions.trackModal.trackRows).toHaveCount(2);
       const previousRevision = (await libraryFilesystemWatcherActions.readStatus()).inventory_mutation_revision;
       const refreshedView = page.waitForResponse(
         (response) => viewResponseHasAlbumTrackCount(response, TARGET_ALBUM, 1),
@@ -236,6 +239,17 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
         message: 'Expected targeted reconciliation to stale the deleted PostgreSQL track file',
       }).toBe(1);
       latencySamples.push({ mutation: 'delete-track', visibleRevisionMs: Date.now() - startedAt });
+      const galleryResponse = page.waitForResponse((response) => (
+        response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/utilities/cover-lookup/gallery'
+      ));
+      await trackModalActions.openCoverLookup();
+      const response = await galleryResponse;
+      expect(response.status()).toBe(200);
+      await coverLookupActions.waitForModalResultsReady();
+      expect(await coverLookupActions.readModalSubtitle()).toContain(TARGET_ALBUM);
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
       await galleryActions.clickAlbumDetailsByAlbumName(TARGET_ALBUM);
       await expect(trackModalActions.trackModal.trackRows).toHaveCount(1, { timeout: 15000 });
       await trackModalActions.close();

@@ -147,6 +147,20 @@ def test_resolve_album_id_for_track_paths_uses_complete_active_library_inventory
     assert "cardinality(%(track_paths)s::text[])" in normalized_sql
 
 
+def test_resolve_album_id_for_track_paths_allows_stale_copy_when_active_copy_remains():
+    connection = FakeConnection([FakeCursor(row={"album_id": 41})])
+
+    album_id = repository_for(connection).resolve_album_id_for_track_paths(
+        track_paths={"C:/Music/A/deleted.flac", "C:/Music/A/surviving.mp3"}
+    )
+
+    assert album_id == 41
+    normalized_sql = " ".join(connection.calls[0][0].lower().split())
+    assert "library.local_track_files.scan_cache_stale as scan_cache_stale" in normalized_sql
+    assert "and library.local_track_files.scan_cache_stale is false" not in normalized_sql
+    assert "bool_or(resolved_tracks.scan_cache_stale is false)" in normalized_sql
+
+
 def test_snapshot_read_qualifies_every_returned_column():
     connection = FakeConnection([FakeCursor(row=snapshot_row())])
 

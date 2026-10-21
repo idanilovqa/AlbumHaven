@@ -92,6 +92,7 @@ def resolve_album_root_from_track_paths(
         if isinstance(root, dict) and str(root.get("path") or "").strip()
     ]
     resolved_dirs: list[Path] = []
+    has_existing_track = False
     for raw_path in track_paths:
         raw_text = str(raw_path or "")
         if not raw_text:
@@ -102,12 +103,22 @@ def resolve_album_root_from_track_paths(
             configured_root_paths=configured_root_paths,
         )
         if resolved is None:
-            return None
+            resolved = resolve_configured_media_path(
+                config,
+                raw_text,
+                require_file=False,
+                require_exists=False,
+                configured_root_paths=configured_root_paths,
+            )
+            if resolved is None or resolved.exists():
+                return None
+        else:
+            has_existing_track = True
         parent = resolved.parent
         if is_disc_like_folder(parent) and parent.parent != parent:
             parent = parent.parent
         resolved_dirs.append(parent)
-    if not resolved_dirs:
+    if not resolved_dirs or not has_existing_track:
         return None
     resolved_album_roots = [path.resolve(strict=False) for path in resolved_dirs]
     if len(resolved_album_roots) == 1:

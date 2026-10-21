@@ -266,11 +266,11 @@ def _resolve_album_id_for_track_paths_sql() -> str:
         resolved_tracks as (
           select
             requested_paths.private_path,
-            library.local_tracks.album_id
+            library.local_tracks.album_id,
+            library.local_track_files.scan_cache_stale as scan_cache_stale
           from requested_paths
           join library.local_track_files
             on library.local_track_files.private_path = requested_paths.private_path
-           and library.local_track_files.scan_cache_stale is false
           join library.local_tracks
             on library.local_tracks.id = library.local_track_files.track_id
           join active_library
@@ -281,6 +281,7 @@ def _resolve_album_id_for_track_paths_sql() -> str:
           when count(distinct resolved_tracks.album_id) = 1
            and count(distinct resolved_tracks.private_path)
                = cardinality(%(track_paths)s::text[])
+           and bool_or(resolved_tracks.scan_cache_stale is false)
             then min(resolved_tracks.album_id)
           else null
         end as album_id

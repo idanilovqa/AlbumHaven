@@ -358,22 +358,56 @@ def test_capture_uses_exact_normalized_request_byte_guard(mix_db, monkeypatch):
 
 def test_final_jsonb_growth_is_rejected_before_write_despite_canonical_bytes_fitting(mix_db, monkeypatch):
     db = mix_db
-    parent = manual_source(db, (0,))
-    track = db.tracks[0]
+    # Aggregate legal evidence over real rows. No indexed evidence_source is
+    # allowed to become a megabyte-sized scalar, even if it compresses well.
+    seeds = [(uuid4().hex, str(uuid4())) for _ in range(1024)]
     with db.connect() as con:
-        con.execute("update library.track_popularity_mapping_slots set current_revision=null where track_id=%s", (track,))
-        con.execute("update library.local_tracks set mbid=%s,mbid_assertion_state='asserted',evidence_source='probe' where id=%s", (db.recordings[track], track))
-    baseline = capture(db, parent, method="random", order=(track,))
+        added = con.execute("""insert into library.local_tracks
+            (library_id,artist_id,album_id,track_key,title,disc_number,track_number,
+             duration_seconds,mbid,mbid_assertion_state,evidence_source)
+            select a.library_id,a.artist_id,a.id,seed.track_key,'Receipt byte fixture',
+                1,1,180,seed.mbid,'asserted','probe'
+            from library.local_albums a
+            cross join unnest(%s::text[],%s::uuid[]) as seed(track_key,mbid)
+            where a.library_id=%s and a.id=%s returning id""",
+            ([seed[0] for seed in seeds], [seed[1] for seed in seeds], db.library, db.albums[0])).fetchall()
+        tracks = tuple(sorted(row["id"] for row in added))
+        assert len(tracks) == 1024 < 5001
+        con.execute("""insert into library.local_track_files
+            (track_id,library_root_id,private_path,content_signature,metadata)
+            select t.id,%s,%s||t.id::text||'.wav','receipt-byte-fixture',
+                jsonb_build_object('scan_cache',jsonb_build_object('file_entry',
+                    jsonb_build_object('musicbrainz_recording_id',t.mbid::text,
+                        'musicbrainz_artist_ids',jsonb_build_array(%s::text),
+                        'musicbrainz_album_artist_ids',jsonb_build_array(%s::text))))
+            from library.local_tracks t where t.library_id=%s and t.id=any(%s::bigint[])""",
+            (db.root_id, str(db.root_path / 'receipt-byte-'), db.artist_mbids[0],
+             db.artist_mbids[0], db.library, list(tracks)))
+    start = len(db.tracks)
+    db.tracks.extend(tracks)
+    parent = manual_source(db, range(start, len(db.tracks)))
+    baseline = capture(db, parent, method="random", order=tracks)
     descriptor = deepcopy(retained(db, baseline["source"]["ref"])[0]["origin_descriptor"])
+    assert [fact["track_id"] for fact in descriptor["facts"]] == list(tracks)
+    assert descriptor["result"]["track_ids"] == [tracks[0]]
+    assert len(descriptor["result"]["entry_order"]) == 1
     with db.connect() as con:
         old_size = con.execute("select octet_length(%s::jsonb::text) as n", (Jsonb(descriptor),)).fetchone()["n"]
-    # This fixture's used asserted source appears exactly twice: candidate
-    # recording_evidence and its asserted_recording identity provenance.
-    padding = (2097152 - old_size) // 2 + 1
-    evidence = "probe" + "x" * padding
-    descriptor["facts"][0]["recording_evidence"] = evidence
-    descriptor["facts"][0]["identity_evidence"]["asserted_recording"]["source"] = evidence
+    assert old_size < 2097152
+    # Every asserted source appears exactly twice. Distribute the exact total
+    # increment so final JSONB crosses by 1 or 2 bytes, not by a whole row.
+    per_row, remainder = divmod((2097152 - old_size) // 2 + 1, len(tracks))
+    evidence_by_track = {}
+    for index, fact in enumerate(descriptor["facts"]):
+        identity = fact["identity_evidence"]
+        assert identity["mapping"] is None and identity["asserted_track_artist"] is None
+        assert fact["recording_evidence"] == identity["asserted_recording"]["source"] == "probe"
+        evidence = "probe" + "x" * (per_row + (index < remainder))
+        assert len(evidence.encode("utf-8")) <= 2048
+        fact["recording_evidence"] = identity["asserted_recording"]["source"] = evidence
+        evidence_by_track[fact["track_id"]] = evidence
     rehash(descriptor)
+    assert receipts._validate_descriptor_shape(descriptor) is None
     initial = deepcopy(descriptor)
     initial["result"]["entry_order"] = []
     rehash(initial)
@@ -381,10 +415,14 @@ def test_final_jsonb_growth_is_rejected_before_write_despite_canonical_bytes_fit
     with db.connect() as con:
         final_size = con.execute("select octet_length(%s::jsonb::text) as n", (Jsonb(descriptor),)).fetchone()["n"]
         initial_size = con.execute("select octet_length(%s::jsonb::text) as n", (Jsonb(initial),)).fetchone()["n"]
-        assert initial_size <= 2097152 < final_size
-        con.execute("update library.local_tracks set evidence_source=%s where id=%s", (evidence, track))
+        assert initial_size <= 2097152 < final_size <= 2097154
+        changed = con.execute("""update library.local_tracks t set evidence_source=padding.evidence
+            from unnest(%s::bigint[],%s::text[]) as padding(track_id,evidence)
+            where t.library_id=%s and t.id=padding.track_id returning t.id""",
+            (list(evidence_by_track), list(evidence_by_track.values()), db.library)).fetchall()
+        assert {row["id"] for row in changed} == set(tracks)
     connect = db.service._connect
-    oversized_probes, writes = [], []
+    oversized_probes, writes, measured_sizes = [], [], []
     class Trace:
         def __init__(self, con): self.con = con
         def __getattr__(self, name): return getattr(self.con, name)
@@ -399,7 +437,9 @@ def test_final_jsonb_growth_is_rejected_before_write_despite_canonical_bytes_fit
                     def fetchone(inner):
                         row = cursor.fetchone()
                         assert len(row) == 1
-                        if next(iter(row.values())) > 2097152:
+                        size = next(iter(row.values()))
+                        measured_sizes.append(size)
+                        if size > 2097152:
                             oversized_probes.append(row)
                         return row
                     def __getattr__(inner, name): return getattr(cursor, name)
@@ -411,8 +451,11 @@ def test_final_jsonb_growth_is_rejected_before_write_despite_canonical_bytes_fit
         def __exit__(self, *args): return self.con.__exit__(*args)
     monkeypatch.setattr(db.service, "_connect", Scope)
     key = str(uuid4())
+    before = destinations(db)
     with pytest.raises(PlaylistError, match="source_too_large") as error:
-        capture(db, parent, key=key, method="random", order=(track,))
+        capture(db, parent, key=key, method="random", order=tracks)
     assert error.value.status_code == 413
     assert len(writes) == 1 and len(oversized_probes) == 1
+    assert measured_sizes == [initial_size, final_size]
     assert retained(db, key) == (None, [])
+    assert destinations(db) == before

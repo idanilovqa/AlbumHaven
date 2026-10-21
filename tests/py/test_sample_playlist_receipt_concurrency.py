@@ -209,7 +209,7 @@ def test_disjoint_actor_and_inventory_race_waits_on_actual_header_insert(mix_db,
 
 
 def test_waiting_read_rechecks_actual_committed_create_revocation(mix_db, monkeypatch):
-    from music_app.services.owned_playlists import CREATE
+    from music_app.services.owned_playlists import BROWSE, CREATE
     from test_sample_playlist_receipts_live import read
     db = mix_db
     source = capture(db, manual_source(db))
@@ -225,7 +225,12 @@ def test_waiting_read_rechecks_actual_committed_create_revocation(mix_db, monkey
     blocker = db.connect()
     try:
         blocker.execute("select id from app.accounts where id=%s for update", (db.owner.account_id,)).fetchall()
-        blocker.execute("delete from app.capabilities where account_id=%s and capability_key=%s", (db.owner.account_id, CREATE))
+        # Revoke both direct Create and its durable Browse alternative. This
+        # case proves committed grant loss, not isolated action narrowing.
+        revoked = blocker.execute("""delete from app.capabilities where account_id=%s
+            and scope_kind='library' and scope_id=%s and capability_key=any(%s)
+            returning capability_key""", (db.owner.account_id, db.library, [BROWSE, CREATE])).fetchall()
+        assert {row["capability_key"] for row in revoked} == {BROWSE, CREATE}
         future = pool.submit(read, db, source)
         assert entered.wait(10)
         assert_pg_wait(db, waiter_pid[0], blocker.info.backend_pid)

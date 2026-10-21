@@ -456,7 +456,7 @@ def test_unavailable_persisted_track_is_not_a_candidate_or_group_poison(mix_db, 
     db = mix_db
     receipt = manual_source(db, (0, 1))
     with db.connect() as con:
-        con.execute("update library.local_track_files set scan_cache_stale=true where track_id=%s", (db.tracks[1],))
+        con.execute("update library.local_track_files set metadata=jsonb_set(metadata,'{scan_cache,stale}','true'::jsonb) where track_id=%s", (db.tracks[1],))
     with snapshot(db, receipt, selection_method=method) as captured:
         assert [item.track_id for item in captured.candidates] == [db.tracks[0]]
         assert captured.candidates[0].primary_artist_ref == "musicbrainz-artist:" + db.artist_mbids[0]
@@ -567,7 +567,7 @@ def test_random_does_not_bypass_parent_command_or_complete_membership_admission(
     from music_app.services.owned_playlists import CREATE
     db = mix_db
     receipt = manual_source(db)
-    context = db.context()
+    context = db.context(); constraints = None
     if change == "revision":
         receipt = receipt | {"revision": "999"}
     elif change == "private":
@@ -575,8 +575,7 @@ def test_random_does_not_bypass_parent_command_or_complete_membership_admission(
             other = db.member(con)
         context = db.context(other)
     elif change == "create":
-        with db.connect() as con:
-            con.execute("delete from app.capabilities where account_id=%s and capability_key=%s", (db.owner.account_id, CREATE))
+        constraints = lambda ctx: PolicyEvaluationConstraints(deployment_allowed=ctx.action != CREATE)
     elif change == "empty":
         receipt = db.mutate(receipt, "remove", item_refs=[str(item["ref"]) for item in db.state(receipt["playlist_id"])[1]])
     else:
@@ -585,7 +584,7 @@ def test_random_does_not_bypass_parent_command_or_complete_membership_admission(
         pytest.fail("Invalid source reached inventory read")
     monkeypatch.setattr(samples.inventory, "read_inventory", forbidden)
     with pytest.raises(PlaylistError):
-        with snapshot(db, receipt, context=context, selection_method="random"):
+        with snapshot(db, receipt, context=context, selection_method="random", constraints=constraints):
             pytest.fail("Invalid source yielded")
 
 

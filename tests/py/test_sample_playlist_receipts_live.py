@@ -275,7 +275,7 @@ def test_dependency_change_rejects_without_reranking(mix_db, monkeypatch, change
             con.execute("update library.local_track_files set content_signature='replaced' where track_id=%s", (db.tracks[0],))
             db.rebind_mappings(con, [db.tracks[0]])
         elif change == "candidate_local":
-            con.execute("update library.local_track_files set scan_cache_stale=true where track_id=%s", (db.tracks[1],))
+            con.execute("update library.local_track_files set metadata=jsonb_set(metadata,'{scan_cache,stale}','true'::jsonb) where track_id=%s", (db.tracks[1],))
         else:
             con.execute("update library.local_tracks set duration_seconds=181 where id=%s", (db.tracks[1],))
             db.rebind_mappings(con, [db.tracks[1]])
@@ -292,14 +292,14 @@ def test_current_authority_required_on_every_retained_access(mix_db, change, ope
     key = str(uuid4())
     source = capture(db, parent, key=key)
     constraint = None
-    if change in ("track", "album"):
+    if change == "create":
+        constraint = lambda context: PolicyEvaluationConstraints(deployment_allowed=context.action != CREATE)
+    elif change in ("track", "album"):
         constraint = lambda context: PolicyEvaluationConstraints(deployment_allowed=not (
             context.resource and context.resource.resource_kind == change))
     else:
         with db.connect() as con:
-            if change == "create":
-                con.execute("delete from app.capabilities where account_id=%s and capability_key=%s", (db.owner.account_id, CREATE))
-            elif change == "actor":
+            if change == "actor":
                 con.execute("update app.accounts set is_active=false where id=%s", (db.owner.account_id,))
             elif change == "membership":
                 con.execute("delete from library.library_memberships where account_id=%s and library_id=%s", (db.owner.account_id, db.library))

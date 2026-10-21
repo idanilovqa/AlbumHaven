@@ -182,17 +182,67 @@ def test_sample_jsonb_byte_limit_is_defense_in_depth(mix_db, size):
 
 
 def test_runtime_oversized_exact_evidence_fails_413_before_header_insert(mix_db, monkeypatch):
+    import json
+    from test_sample_playlist_receipts_live import receipts
     db = mix_db
-    parent = manual_source(db, (0,))
-    key = str(uuid4())
+    evidence = "evidence:" + "é" * 700
+    assert len(evidence.encode("utf-8")) <= 2048
+    # Legal indexed scalars, matching asserted/tag identities and ordinary
+    # active-root file rows make the aggregate descriptor, not setup, too large.
+    seeds = [(uuid4().hex, str(uuid4())) for _ in range(1024)]
     with db.connect() as con:
-        con.execute("update library.track_popularity_mapping_slots set current_revision=null where track_id=%s", (db.tracks[0],))
-        con.execute("update library.local_tracks set mbid=%s,mbid_assertion_state='asserted',evidence_source=%s where id=%s",
-                    (db.recordings[db.tracks[0]], "evidence:" + "é" * 1100000, db.tracks[0]))
+        added = con.execute("""insert into library.local_tracks
+            (library_id,artist_id,album_id,track_key,title,disc_number,track_number,
+             duration_seconds,mbid,mbid_assertion_state,evidence_source)
+            select a.library_id,a.artist_id,a.id,seed.track_key,'Receipt byte fixture',
+                1,1,180,seed.mbid,'asserted',%s
+            from library.local_albums a
+            cross join unnest(%s::text[],%s::uuid[]) as seed(track_key,mbid)
+            where a.library_id=%s and a.id=%s returning id""",
+            (evidence, [seed[0] for seed in seeds], [seed[1] for seed in seeds], db.library, db.albums[0])).fetchall()
+        tracks = tuple(sorted(row["id"] for row in added))
+        assert len(tracks) == 1024 < 5001
+        con.execute("""insert into library.local_track_files
+            (track_id,library_root_id,private_path,content_signature,metadata)
+            select t.id,%s,%s||t.id::text||'.wav','receipt-byte-fixture',
+                jsonb_build_object('scan_cache',jsonb_build_object('file_entry',
+                    jsonb_build_object('musicbrainz_recording_id',t.mbid::text,
+                        'musicbrainz_artist_ids',jsonb_build_array(%s::text),
+                        'musicbrainz_album_artist_ids',jsonb_build_array(%s::text))))
+            from library.local_tracks t where t.library_id=%s and t.id=any(%s::bigint[])""",
+            (db.root_id, str(db.root_path / 'receipt-byte-'), db.artist_mbids[0],
+             db.artist_mbids[0], db.library, list(tracks)))
+    start = len(db.tracks)
+    db.tracks.extend(tracks)
+    parent = manual_source(db, range(start, len(db.tracks)))
+    key = str(uuid4())
+    before = destinations(db)
+    original_preflight = receipts._preflight
+    probes = []
+    def preflight(connection, value):
+        # A forwarding observation of the real live-capture descriptor proves
+        # it is coherent and over the byte cap before the header boundary.
+        receipts._descriptor_parts(value)
+        assert [fact["track_id"] for fact in value["facts"]] == list(tracks)
+        assert value["result"]["track_ids"] == [tracks[0]]
+        assert value["result"]["entry_order"] == []
+        for fact in value["facts"]:
+            identity = fact["identity_evidence"]
+            assert identity["mapping"] is None
+            assert fact["recording_evidence"] == identity["asserted_recording"]["source"] == evidence
+        canonical_size = len(json.dumps(value, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False).encode("utf-8"))
+        jsonb_size = connection.execute("select octet_length(%s::jsonb::text) as n", (Jsonb(value),)).fetchone()["n"]
+        assert canonical_size > 2097152 and jsonb_size > 2097152
+        probes.append((canonical_size, jsonb_size))
+        return original_preflight(connection, value)
+    monkeypatch.setattr(receipts, "_preflight", preflight)
     monkeypatch.setattr(complete, "_header", forbidden)
-    with pytest.raises(PlaylistError, match="source_too_large"):
-        capture(db, parent, key=key, method="random", order=(db.tracks[0],))
+    with pytest.raises(PlaylistError, match="source_too_large") as error:
+        capture(db, parent, key=key, method="random", order=tracks)
+    assert error.value.status_code == 413 and len(probes) == 1
     assert retained(db, key) == (None, [])
+    assert destinations(db) == before
 
 # Imported autouse fixture also protects this independently scheduled module.
 from test_sample_playlist_receipts_live import no_provider

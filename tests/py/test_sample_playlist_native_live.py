@@ -174,7 +174,7 @@ def test_native_target_owner_rechecks_current_media_files_and_roots(mix_db, chan
         if change == "media":
             con.execute("update app.capabilities set revoked_at=now() where account_id=%s and capability_key=%s", (db.owner.account_id, MEDIA))
         elif change == "root": con.execute("update library.library_roots set is_active=false where id=%s", (db.root_id,))
-        else: con.execute("update library.local_track_files set scan_cache_stale=true where library_root_id=%s", (db.root_id,))
+        else: con.execute("update library.local_track_files set metadata=jsonb_set(metadata,'{scan_cache,stale}','true'::jsonb) where library_root_id=%s", (db.root_id,))
     with pytest.raises(PlaylistError): queue(db, source)
 
 

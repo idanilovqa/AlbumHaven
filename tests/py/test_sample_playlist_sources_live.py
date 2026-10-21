@@ -108,7 +108,7 @@ def test_no_admitted_tracks_never_falls_back_to_library_inventory(mix_db, monkey
 def test_source_and_current_authority_are_required(mix_db, change):
     db = mix_db
     receipt = manual_source(db)
-    context = db.context()
+    context = db.context(); constraints = None
     if change == "revision":
         receipt = {**receipt, "revision": "999"}
     elif change == "private":
@@ -116,13 +116,11 @@ def test_source_and_current_authority_are_required(mix_db, change):
             other = db.member(con)
         context = db.context(other)
     elif change == "create":
-        with db.connect() as con:
-            con.execute("delete from app.capabilities where account_id=%s and capability_key=%s",
-                        (db.owner.account_id, CREATE))
+        constraints = lambda ctx: PolicyEvaluationConstraints(deployment_allowed=ctx.action != CREATE)
     else:
         db.clock_time += timedelta(days=2)
     with pytest.raises(PlaylistError):
-        with snapshot(db, receipt, context=context):
+        with snapshot(db, receipt, context=context, constraints=constraints):
             pytest.fail("Unauthorized source yielded")
 
 

@@ -4,6 +4,7 @@ const PLAYBACK_CAPTURE_ENABLED = false;
 const PlaybackCaptureTelemetry = (() => {
   'use strict';
   const PROTOCOL = 'app-rendered-position-v1';
+  const POSITION_PROTOCOL = 'app-rendered-position-v2';
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const REASONS = ['buffer_credit', 'queue_capacity', 'binding_capacity',
     'timing_discontinuity', 'owner_reset', 'numeric_limit'];
@@ -45,6 +46,7 @@ const PlaybackCaptureTelemetry = (() => {
     let producerDisposed = false, creditsIssued = false, enablePromise = null;
     let lastPacket = 0, bindingSerial = 0, epoch = 1, roundRobin = 0;
     let bytes = FIXED_BYTES, frozen = null, freezing = false;
+    let protocol = PROTOCOL, packetVersion = 1, ownerUuid = null, runCharge = 512;
     let timer = null, probe = null, nextProbe = 1, lastProbeAt = -Infinity;
     let contextState = 'suspended', runningSince = Infinity;
     let barrierVersion = 0;
@@ -83,7 +85,7 @@ const PlaybackCaptureTelemetry = (() => {
       if (slots.some(slot => slot?.parent === parent) || frozen?.parent === parent) return;
       if (!parent.failed && parent.status !== 'terminal-acknowledged') return;
       const index = parents.indexOf(parent);
-      if (index >= 0) { bytes -= parent.charge + parent.runs.length * 512 + parent.anchors.length * 512; parents[index] = null; }
+      if (index >= 0) { bytes -= parent.charge + parent.runs.length * runCharge + parent.anchors.length * 512; parents[index] = null; }
     }
     function enable() {
       if (dead) return Promise.resolve(false);
@@ -110,11 +112,21 @@ const PlaybackCaptureTelemetry = (() => {
             || typeof value.expected_scope !== 'string' || value.expected_scope.length > 256) {
           abandon('unsupported_capture_context'); return false;
         }
+        if (Array.isArray(value.supported_protocols) && value.supported_protocols.includes(POSITION_PROTOCOL)) {
+          ownerUuid = cryptoApi.randomUUID();
+          if (typeof ownerUuid !== 'string' || !UUID.test(ownerUuid)
+              || ownerUuid === '00000000-0000-0000-0000-000000000000') {
+            abandon('unsupported_capture_owner'); return false;
+          }
+          protocol = POSITION_PROTOCOL; packetVersion = 2; runCharge = 1024;
+          bytes += 256;
+        }
         scope = value.expected_scope;
         const buffers = Array.from({ length: 4 }, () => new ArrayBuffer(16384));
         enabled = true;
         creditsIssued = true;
-        command('capture-enable', { sourceRate: 48000, outputRate: 48000, buffers }, buffers);
+        command('capture-enable', { sourceRate: 48000, outputRate: 48000, buffers,
+          ...(packetVersion === 2 ? { packetVersion } : {}) }, buffers);
         arm();
         return !dead;
       } catch (_) { abandon('capture_context_unavailable'); return false; }
@@ -124,7 +136,7 @@ const PlaybackCaptureTelemetry = (() => {
           || trackPath.length > 32768 || !UUID.test(deviceId || '')
           || v1SessionId !== null && !UUID.test(v1SessionId)) return null;
       const index = parents.indexOf(null), charge = 2048 + trackPath.length * 2;
-      if (index < 0 || bytes + charge + 512 > LIMIT) { diagnostic('capture_binding_capacity'); return null; }
+      if (index < 0 || bytes + charge + runCharge > LIMIT) { diagnostic('capture_binding_capacity'); return null; }
       const captureId = cryptoApi.randomUUID();
       if (!UUID.test(captureId)) return null;
       const parent = { handle: Object.freeze({}), path: trackPath, deviceId, captureId,
@@ -157,7 +169,7 @@ const PlaybackCaptureTelemetry = (() => {
     function validatePacket(buffer) {
       if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== 16384) return null;
       const data = new Float64Array(buffer);
-      if (data.some(value => !integer(value)) || data[0] !== 1094927184 || data[1] !== 1
+      if (data.some(value => !integer(value)) || data[0] !== 1094927184 || data[1] !== packetVersion
           || data[2] !== serial || data[3] !== lastPacket + 1 || data[4] > 256
           || data[5] !== 48000 || data[6] !== 48000 || data[7] < 1
           || data[8] > 8 || data[9] > 8 || data[10] > 1 || data[11] < 1
@@ -171,7 +183,9 @@ const PlaybackCaptureTelemetry = (() => {
       for (let i = 0; i < data[4]; i++) {
         const p = 256 + i * 7;
         const slot = slots.find(item => item?.bindingSerial === data[p]);
-        if (!slot || slot.ackPacket || data[p + 1] < 1 || data[p + 6] !== 0
+        if (!slot || slot.ackPacket || data[p + 1] < 1
+            || (packetVersion === 1 ? data[p + 6] !== 0
+              : !integer(data[p + 6], 1) || data[p + 2] < slot.sourceBase48)
             || !range(data[p + 2], data[p + 3]) || !range(data[p + 4], data[p + 3])
             || !range(data[p + 5], data[p + 3])) return null;
       }
@@ -255,14 +269,17 @@ const PlaybackCaptureTelemetry = (() => {
           packet.control = true;
         }
         while (packet.index < data[4]) {
-          const p = 256 + packet.index * 7, parent = parentFor(data[p]);
+          const p = 256 + packet.index * 7;
+          const slot = slots.find(item => item?.bindingSerial === data[p]), parent = slot.parent;
           if (parent.failed) { packet.index++; continue; }
-          if (bytes + 512 > LIMIT || parent.runs.length === 256) return;
+          if (bytes + runCharge > LIMIT || parent.runs.length === 256) return;
           if (data[p + 5] < (parent.lastOrdinalEnd || 0)) { abandon('invalid_capture_order'); return; }
           parent.runs.push({ source_start48: data[p + 2], frames: data[p + 3], output_start: data[p + 4],
             ordinal_start: data[p + 5], epoch: data[p + 1], anchor_before: null,
-            anchor_after: null, quality: 'unknown' });
-          bytes += 512; packet.index++;
+            anchor_after: null, quality: 'unknown',
+            ...(packetVersion === 2 ? { binding_serial: slot.bindingSerial, generation: slot.generation,
+              stream_id: slot.streamId, source_base48: slot.sourceBase48, continuity_serial: data[p + 6] } : {}) });
+          bytes += runCharge; packet.index++;
           parent.lastOrdinalEnd = data[p + 5] + data[p + 3];
           if (contextState !== 'running') parent.flushRequested = true;
           if (parent.firstPending === null) parent.firstPending = now();
@@ -305,7 +322,8 @@ const PlaybackCaptureTelemetry = (() => {
     }
     function buildBody(parent, runs, anchors, gaps, terminal) {
       const evidence = { runs, anchors, gaps, terminal, terminal_reason: terminal ? parent.terminal : null };
-      const envelope = { protocol: PROTOCOL, device_uuid: parent.deviceId,
+      if (packetVersion === 2) evidence.owner_uuid = ownerUuid;
+      const envelope = { protocol, device_uuid: parent.deviceId,
         capture_uuid: parent.captureId, sequence: parent.sequence, evidence };
       if (parent.v1SessionId) envelope.v1_session_uuid = parent.v1SessionId;
       if (parent.firstPositive) envelope.initial_path = parent.path;
@@ -348,12 +366,12 @@ const PlaybackCaptureTelemetry = (() => {
           digest: null, firstAttempt: null, retryAt: 0, attempts: 0, pending: false, controller: null };
         frozen = batch; job.batch = batch;
         parent.runs.splice(0, count); parent.anchors.splice(0, anchorCount); parent.gaps.length = 0;
-        evidenceCharge = (count + anchorCount) * 512;
+        evidenceCharge = count * runCharge + anchorCount * 512;
         parent.firstPending = parent.runs.length || parent.anchors.length ? now() : null;
         parent.flushRequested = false;
         parent.firstPositive = false;
         prepared = null; gaps = null;
-        input = `${PROTOCOL}\n${batch.sequence}\n${canonical(batch.evidence)}`;
+        input = `${protocol}\n${batch.sequence}\n${canonical(batch.evidence)}`;
         encoded = new TextEncoder().encode(input);
         digest = await cryptoApi.subtle.digest('SHA-256', encoded);
         if (dead || frozen !== batch || digestAttempt !== job

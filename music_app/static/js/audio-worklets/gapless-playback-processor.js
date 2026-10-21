@@ -68,6 +68,11 @@
       this.processor = processor;
       this.owner = 0;
       this.enabled = false;
+      this.packetVersion = 1;
+      this.continuitySerial = 1;
+      this.lastOutputEnd = null;
+      this.lastOrdinalEnd = null;
+      this.pendingBreak = false;
       this.epoch = 1;
       this.ordinal = 0;
       this.packet = 0;
@@ -97,13 +102,15 @@
       if (message.type === 'capture-enable') {
         // One-time port-local credit admission may precede the first PCM configure.
         // Source-sensitive commands below still require the current generation.
-        if (this.owner || !this.safe(message.ownerSerial, 1)
+        const packetVersion = message.packetVersion === undefined ? 1 : message.packetVersion;
+        if (![1, 2].includes(packetVersion) || this.owner || !this.safe(message.ownerSerial, 1)
             || message.sourceRate !== 48000 || message.outputRate !== 48000
             || sampleRate !== 48000 || !Array.isArray(message.buffers)
             || message.buffers.length !== 4
             || new Set(message.buffers).size !== 4
             || message.buffers.some(buffer => !(buffer instanceof ArrayBuffer) || buffer.byteLength !== 16384)) return;
         this.owner = message.ownerSerial;
+        this.packetVersion = packetVersion;
         this.enabled = true;
         this.credits = message.buffers.map((buffer, index) => ({ buffer, id: index + 1 }));
         return;
@@ -153,8 +160,11 @@
         && slot.generation === this.processor.generation) || null;
     }
 
-    barrier() {
+    barrier(reason = 'discontinuity') {
       if (!this.owner) return;
+      if (this.packetVersion === 2 && reason !== 'seamless-track' && reason !== 'seamless-loop') {
+        this.pendingBreak = true;
+      }
       if (!this.safe(this.epoch + 1, 1)) { this.enabled = false; return; }
       this.epoch += 1;
     }
@@ -190,6 +200,7 @@
         if (this.slots[index].serial === serial) { slot = this.slots[index]; break; }
       }
       if (!slot) {
+        if (this.packetVersion === 2) this.pendingBreak = true;
         if (!this.unboundLoss.frames) {
           this.unboundLoss.first = ordinal; this.unboundLoss.outputFirst = output;
           this.unboundLoss.epoch = this.epoch;
@@ -202,6 +213,7 @@
       }
       slot.final = ordinal + 1;
       if (!this.acquire()) {
+        if (this.packetVersion === 2) this.pendingBreak = true;
         if (!slot.lost) { slot.first = ordinal; slot.outputFirst = output; slot.epoch = this.epoch; }
         if (slot.epoch !== this.epoch) { slot.reasons |= 8; slot.epoch = 0; }
         slot.last = ordinal + 1;
@@ -210,19 +222,32 @@
         slot.reasons |= 1;
         return;
       }
+      // A first successful capture has no predecessor to break from.
+      if (this.packetVersion === 2 && this.lastOutputEnd !== null
+          && (this.pendingBreak || output !== this.lastOutputEnd || ordinal !== this.lastOrdinalEnd)) {
+        if (!this.safe(this.continuitySerial + 1, 1)) { this.enabled = false; return; }
+        this.continuitySerial += 1;
+      }
+      const continuity = this.packetVersion === 2 ? this.continuitySerial : 0;
       const data = this.view;
       let offset = 256 + (this.count - 1) * 7;
       if (this.count && data[offset] === serial && data[offset + 1] === this.epoch
           && data[offset + 2] + data[offset + 3] === source
           && data[offset + 4] + data[offset + 3] === output
-          && data[offset + 5] + data[offset + 3] === ordinal) {
+          && data[offset + 5] + data[offset + 3] === ordinal
+          && data[offset + 6] === continuity) {
         data[offset + 3] += 1;
       } else {
         offset = 256 + this.count * 7;
         data[offset] = serial; data[offset + 1] = this.epoch;
         data[offset + 2] = source; data[offset + 3] = 1;
         data[offset + 4] = output; data[offset + 5] = ordinal;
+        data[offset + 6] = continuity;
         this.count += 1;
+      }
+      if (this.packetVersion === 2) {
+        this.lastOutputEnd = output + 1; this.lastOrdinalEnd = ordinal + 1;
+        this.pendingBreak = false;
       }
       if (this.count === 256) this.flush();
     }
@@ -237,7 +262,7 @@
       }
       if (!this.count && !hasControl || !this.acquire()) return;
       const data = this.view;
-      data[0] = 1094927184; data[1] = 1; data[2] = this.owner;
+      data[0] = 1094927184; data[1] = this.packetVersion; data[2] = this.owner;
       data[3] = ++this.packet; data[4] = this.count;
       data[5] = 48000; data[6] = 48000; data[7] = this.epoch;
       data[11] = this.maxQuantum; data[12] = this.bufferId;
@@ -668,8 +693,8 @@
       };
     }
 
-    promoteContinuity() {
-      this.positionCapture.barrier();
+    promoteContinuity(reason = 'discontinuity') {
+      this.positionCapture.barrier(reason);
       const oldCurrent = this.current;
       this.current = this.continuity;
       this.continuity = oldCurrent;
@@ -719,7 +744,7 @@
     }
 
     emitShortLoopBoundary(outgoingStreamId, renderedFrame) {
-      this.positionCapture.barrier();
+      this.positionCapture.barrier('seamless-loop');
       const outgoingFrames = this.copyOutgoingCapture();
       this.boundaryIncomingLeft.fill(0);
       this.boundaryIncomingRight.fill(0);
@@ -859,7 +884,7 @@
             boundaryRenderedFrame = this.renderedFrames + outputFrame;
             boundaryOutgoingFrames = this.copyOutgoingCapture();
             boundaryPending = true;
-            this.promoteContinuity();
+            this.promoteContinuity('seamless-loop');
             this.timelineFrame = this.loopStartFrame;
             continue;
           }
@@ -917,7 +942,7 @@
             boundaryRenderedFrame = this.renderedFrames + outputFrame;
             boundaryOutgoingFrames = this.copyOutgoingCapture();
             boundaryPending = true;
-            this.promoteContinuity();
+            this.promoteContinuity('seamless-track');
             this.expectContinuity = false;
             this.timelineFrame = 0;
             continue;

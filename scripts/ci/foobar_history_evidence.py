@@ -42,7 +42,7 @@ PINNED_BLOBS = {
     ADMISSION: "1c2fafe96e46f0bc044b124afb18a962b04303a6",
 }
 MANIFEST_HASH = "2975f3e7e21bc7e6252a695c41636259bc1c93fc4e81f72607e4a78a901c684d"
-CONTROL_HASH = "c91127a92e4659147b62889b8dc3a6b1df2e2f5dbba98aa72f50515959689a88"
+CONTROL_HASH = "953667359049ba039212b107025806564d047efbfe1ea9d3ccefd2c9028c2ac9"
 CONTROL_IDS = tuple("test_foobar_history_evidence.HistoryEvidenceTests." + name for name in (
     "test_canonical_loading_boundaries", "test_collection_identity_and_multiplicity",
     "test_evidence_limits_and_fresh_paths", "test_exact_selection_and_source_guards",
@@ -401,13 +401,13 @@ def _event_context(event):
     head = pr["head"]
     _require(event.get("action") in EVENTS and event["repository"]["full_name"] == REPOSITORY
              and head["repo"]["full_name"] == REPOSITORY and head["ref"] == BRANCH
-             and pr["state"] == "open" and pr["draft"] is False and _positive(pr["number"])
+             and pr["state"] == "open" and type(pr.get("draft")) is bool and _positive(pr["number"])
              and event["number"] == pr["number"] and re.fullmatch(r"[0-9a-f]{40}", head["sha"]),
              "Invalid pull-request identity")
     names = sorted({item["name"].strip() for item in pr["labels"] if item["name"].strip()})
     controls = [name for name in names if name in LABELS or name.startswith(("ci:e2e:", "ci:e2e-performance:"))]
     return {"repository": REPOSITORY, "number": pr["number"], "branch": BRANCH,
-            "head_sha": head["sha"], "draft": False, "control_labels": controls, "all_labels": names}
+            "head_sha": head["sha"], "draft": pr["draft"], "control_labels": controls, "all_labels": names}
 
 
 def _admitted(admission, context, attempt):

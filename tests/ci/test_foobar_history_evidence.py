@@ -1258,6 +1258,106 @@ class HistoryEvidenceTests(unittest.TestCase):
                 self.assertEqual(dict(zip(("root", "output", "lane"), args)) | kwargs,
                                  {"root": ROOT, "output": _MemoryFiles.output, "lane": lane})
 
+        # Draft is identity, not a readiness gate. Preserve both Boolean values
+        # before passing the unchanged native admission owner its real event.
+        def event_draft(data, value):
+            data["pull_request"]["draft"] = value
+
+        def admission_draft(data, value):
+            data["trigger"]["draft"] = value
+            data["current"]["draft"] = value
+
+        for draft in (False, True):
+            with self.subTest(draft_context=draft):
+                event_value = _event()
+                event_draft(event_value, draft)
+                before = copy.deepcopy(event_value)
+                expected = copy.deepcopy(_admission()["trigger"])
+                expected["draft"] = draft
+                observed = self.subject._event_context(event_value)
+                self.assertEqual(observed, expected)
+                self.assertIs(observed["draft"], draft)
+                self.assertEqual(event_value, before)
+                code, fs, calls, _, _ = self._driver(
+                    event_change=lambda data: event_draft(data, draft),
+                    admission_change=lambda data: admission_draft(data, draft))
+                self.assertEqual(code, 0)
+                self.assertEqual([call["name"] for call in calls], ["git", "admission", "controls", "history"])
+                self.assertIs(fs.get("admission.json")["trigger"]["draft"], draft)
+                self.assertIs(fs.get("admission.json")["current"]["draft"], draft)
+                self.assertTrue(fs.get("inventory.json")["complete"])
+
+        missing_draft = object()
+        for label, value in (("missing", missing_draft), ("null", None), ("zero", 0), ("one", 1),
+                             ("false-string", "false"), ("true-string", "true"), ("list", []), ("mapping", {})):
+            def malformed_draft(data):
+                if value is missing_draft:
+                    del data["pull_request"]["draft"]
+                else:
+                    event_draft(data, value)
+            with self.subTest(malformed_draft=label):
+                code, fs, calls, _, shared = self._driver(event_change=malformed_draft)
+                self.assertEqual(code, 1)
+                self.assertEqual(calls, [])
+                shared.run_owned.assert_not_called()
+                self.assertIsNone(fs.get("process-records.json")["identity"])
+                self.assertEqual(fs.get("process-records.json")["phases"], [])
+                for name in ("identity.json", "git.log", "admission.json", "controls-result.json", "result.json"):
+                    self.assertNotIn(str(fs.output / name), fs.files)
+
+        # The original false-event/current-true rejection above is unchanged.
+        # Add the other view/direction combinations rather than replacing it.
+        for draft, view in ((False, "trigger"), (True, "trigger"), (True, "current")):
+            def mismatch_draft(data):
+                admission_draft(data, draft)
+                data[view]["draft"] = not draft
+            with self.subTest(draft_identity_change=(draft, view)):
+                code, fs, calls, _, _ = self._driver(
+                    event_change=lambda data: event_draft(data, draft), admission_change=mismatch_draft)
+                self.assertEqual(code, 1)
+                self.assertEqual([call["name"] for call in calls], ["git", "admission"])
+                self.assertNotIn(str(fs.output / "controls-result.json"), fs.files)
+                self.assertNotIn(str(fs.output / "result.json"), fs.files)
+
+        for draft in (False, True):
+            def initial_hold(data):
+                data["trigger"]["draft"] = draft
+                data.update(decision="hold", reason_codes=["initial-attempt"],
+                            current=None, native=None, inspected=[])
+            def hold_exit(phase, record):
+                if phase == "admission":
+                    record["exit_code"] = 1
+            with self.subTest(initial_draft=draft), mock.patch.object(
+                    _MemoryFiles, "output", _MemoryFiles.base / "foobar-history-801-1"):
+                code, fs, calls, records, _ = self._driver(attempt=1,
+                    event_change=lambda data: event_draft(data, draft),
+                    admission_change=initial_hold, record_change=hold_exit)
+                self.assertEqual(code, 1)
+                self.assertEqual(fs.output.name, "foobar-history-801-1")
+                self.assertEqual([call["name"] for call in calls], ["git", "admission"])
+                self.assertEqual([record["exit_code"] for record in records], [0, 1])
+                held = fs.get("admission.json")
+                self.assertIs(held["trigger"]["draft"], draft)
+                self.assertEqual(held["decision"], "hold")
+                self.assertEqual(held["reason_codes"], ["initial-attempt"])
+                self.assertIsNone(held["current"])
+                self.assertIsNone(held["native"])
+                self.assertEqual(held["inspected"], [])
+                expected_reference = {**_reference(), "attempt": 1}
+                recorded = fs.get("process-records.json")
+                self.assertEqual(recorded["identity"], expected_reference)
+                self.assertEqual([phase["name"] for phase in recorded["phases"]], ["git", "admission"])
+                self.assertEqual(recorded["phases"][-1]["record"]["exit_code"], 1)
+                self.assertEqual(recorded["phases"][-1]["log"],
+                                 {"name": "admission.log", "size_bytes": 0, "sha256": _digest(b"")})
+                inventory = fs.get("inventory.json")
+                self.assertEqual(inventory["identity"], expected_reference)
+                self.assertFalse(inventory["complete"])
+                self.assertIn("admission.json", [entry["name"] for entry in inventory["files"]])
+                for name in ("controls.log", "controls-result.json", "history.log", "collection.json", "result.json"):
+                    self.assertNotIn(str(fs.output / name), fs.files)
+                    self.assertIn(name, inventory["missing"])
+
     def test_workflow_and_budget_contract(self):
         def assert_workflow(text):
             # Concrete workflow checks only; no general-purpose YAML parser or new dependency.

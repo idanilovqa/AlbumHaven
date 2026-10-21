@@ -138,7 +138,11 @@ env:
                     chunk.copy(bytes, used);
                     used += chunk.length;
                   }
-                  if (used === capacity) check(current.readableLength === 0);
+                  if (used === capacity) {
+                    check(current.readableLength === 0);
+                    current.read(0);
+                    check(current.readableLength === 0);
+                  }
                 } catch (_) { fail(); }
               });
               current.on('end', () => {

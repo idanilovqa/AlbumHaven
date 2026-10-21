@@ -19,9 +19,9 @@ const HostBuffer = Buffer;
 const HOST_VERSION = process.version;
 const FILE = 'tests/ci/foobar_preview_transfer_literal_cases.cjs';
 const WORKFLOW = '.github/workflows/foobar-preview-backend-evidence.yml';
-const WORKFLOW_SHA = 'c5cccbcbdfdbe85ce637fdc454a7f2c786d227d080c0814e5d08b707d8707726';
-const LITERAL_SHA = '65a5239082ab154affd06ec85183a5ecd451d630954e43d8aeb04ca46eebbe90';
-const LITERAL_BYTES = 15483;
+const WORKFLOW_SHA = '738769b2cf94002ebd1f5a90f7b9e2faa93d227dbdd5e71dd38702cba980bfc1';
+const LITERAL_SHA = '163f1165c127d77dac505fb8240fa2740a1b6f4d657add9763c8048ae6495564';
+const LITERAL_BYTES = 15603;
 const CAP = Object.freeze({metadata: 1048576, metadataTotal: 2097152, rpc: 262144,
   artifact: 268435456, aggregate: 2147483648, file: 33554432, pull: 65536});
 const NAMES = Object.freeze([
@@ -82,7 +82,17 @@ const NAMES = Object.freeze([
   'partial_upload_identity_rejected',
   'fixture_forbidden_effect_attempt_survives_catch',
   'fixture_unlisted_module_denied',
-  'fixture_host_environment_not_exposed'
+  'fixture_host_environment_not_exposed',
+  'blob_exact_capacity_eof_before_drain',
+  'blob_exact_capacity_eof_after_drain',
+  'metadata_exact_limit_eof_before_drain',
+  'metadata_exact_limit_eof_after_drain',
+  'rpc_exact_limit_eof_before_drain',
+  'rpc_exact_limit_eof_after_drain',
+  'full_capacity_delayed_surplus_rejected',
+  'full_capacity_missing_eof_times_out',
+  'full_capacity_stream_error_rejected',
+  'full_capacity_stream_abort_rejected'
 ]);
 const IDS = Object.freeze(NAMES.map(name => FILE + '::' + name));
 const SOURCE_PATHS = Object.freeze([
@@ -307,6 +317,7 @@ function fixture(name, nonfiniteLiteral = 'NaN') {
   let runBytes = jsonBytes(runData);
   let jobsBytes = jsonBytes(jobsData);
   if (name === 'metadata_declared_exact_limit' || name === 'metadata_aggregate_exact_limit' || name === 'metadata_aggregate_over_limit') runBytes = padJSON(runData, CAP.metadata);
+  if (name === 'metadata_exact_limit_eof_before_drain' || name === 'metadata_exact_limit_eof_after_drain') runBytes = padJSON(runData, CAP.metadata);
   if (name === 'metadata_aggregate_exact_limit') jobsBytes = padJSON(jobsData, CAP.metadata);
   if (name === 'metadata_aggregate_over_limit') jobsBytes = padJSON(jobsData, CAP.metadata + 1);
   if (name === 'metadata_chunked_over_limit') runBytes = padJSON(runData, CAP.metadata + 1);
@@ -350,7 +361,8 @@ function fixture(name, nonfiniteLiteral = 'NaN') {
       if (name === 'wrong_artifact_digest') record.digest = 'sha256:' + '0'.repeat(64);
       if (name === 'archive_aggregate_over_limit') record.size = String(CAP.aggregate + 1);
     }
-    const listBody = jsonBytes({artifacts: [record]});
+    const listBody = name === 'rpc_exact_limit_eof_before_drain' || name === 'rpc_exact_limit_eof_after_drain' ?
+      padJSON({artifacts: [record]}, CAP.rpc) : jsonBytes({artifacts: [record]});
     responses.push({role: 'list', owner: artifact.owner,
       url: 'https://synthetic.actions.githubusercontent.com/twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts',
       method: 'POST', body: listBody, status: 200, headers: {'content-length': String(listBody.length)}, delay: 1,
@@ -405,13 +417,29 @@ function fixture(name, nonfiniteLiteral = 'NaN') {
     assert.ok(['NaN', 'Infinity', '-Infinity'].includes(nonfiniteLiteral));
     replaceBody(list, HostBuffer.from('{"ignored":' + nonfiniteLiteral + ',' + utf8(list.body).slice(1)));
   }
-  const positives = new Set(NAMES.slice(0, 6).concat(['shared_deadline_before_110_seconds',
+  // These schedules are fixture-owned, not inferred from the transfer literal.
+  let eofTarget = null;
+  if (name.startsWith('blob_exact_capacity_eof_') || name.startsWith('full_capacity_')) eofTarget = blob;
+  else if (name.startsWith('metadata_exact_limit_eof_')) eofTarget = first;
+  else if (name.startsWith('rpc_exact_limit_eof_')) eofTarget = list;
+  if (eofTarget) {
+    eofTarget.eofSchedule = name.endsWith('_after_drain') ? 'late' : 'early';
+    if (name === 'full_capacity_delayed_surplus_rejected') {
+      eofTarget.eofSchedule = 'surplus';
+      eofTarget.body = HostBuffer.concat([eofTarget.body, HostBuffer.from([0x21])]);
+      delete eofTarget.headers['content-length'];
+    }
+    if (name === 'full_capacity_missing_eof_times_out') eofTarget.eofSchedule = 'missing';
+    if (name === 'full_capacity_stream_error_rejected') eofTarget.eofSchedule = 'error';
+    if (name === 'full_capacity_stream_abort_rejected') eofTarget.eofSchedule = 'aborted';
+  }
+  const positives = new Set(NAMES.slice(0, 6).concat(NAMES.slice(58, 64), ['shared_deadline_before_110_seconds',
     'metadata_declared_exact_limit', 'metadata_aggregate_exact_limit', 'request_pull_64k_bound',
     'buffer_capacity_bound', 'fixture_file_read_64k_bound', 'retained_outputs_no_bearer',
     'retained_outputs_no_signed_url', 'missing_upload_outputs_reconcile_explicit_absence',
     'fixture_forbidden_effect_attempt_survives_catch', 'fixture_unlisted_module_denied',
     'fixture_host_environment_not_exposed']));
-  return {name, consumer, producers, artifacts, trusted, environment, eventBytes, metadata, responses,
+  return {name, consumer, producers, artifacts, trusted, environment, eventBytes, metadata, responses, eofTarget,
     success: positives.has(name), symlink: name === 'fixture_symlink_rejected',
     mutateFile: name === 'fixture_file_mutation_during_read'};
 }
@@ -440,7 +468,8 @@ function createFakes(spec) {
   let timerId = 0;
   const events = [];
   const detailed = {requests: [], allocations: [], reads: [], fileReads: [], outputs: [],
-    writes: [], requestTimers: [], destroyed: [], controls: [], faults: [], consumed: []};
+    writes: [], requestTimers: [], destroyed: [], controls: [], faults: [], consumed: [],
+    zeroReads: [], streams: []};
   const files = new Map();
   const descriptors = new Map();
   const scheduled = [];
@@ -685,28 +714,96 @@ function createFakes(spec) {
           return;
         }
         const streamEvents = emitter();
+        const mode = response.eofSchedule || 'early';
         let offset = 0;
+        let available = 0;
+        let bodyArrived = false;
+        let eof = false;
+        let endQueued = false;
+        let ended = false;
         let destroyed = false;
+        const streamDetail = {request: index, mode, eofSequence: null, drainSequence: null,
+          queueSequence: null, endSequence: null, failureSequence: null, demands: [], dropped: []};
+        detailed.streams.push(streamDetail);
+        function active(operation) {
+          if (!destroyed && !requestDestroyed && !ended) return true;
+          record('https', 'stream.drop.' + operation);
+          streamDetail.dropped.push(operation);
+          return false;
+        }
+        function demandEnd(kind) {
+          if (!eof || available !== offset || endQueued || ended) return;
+          record('https', 'stream.eof-demand.' + kind);
+          streamDetail.demands.push({kind, sequence: events.length});
+          endQueued = true;
+          record('https', 'stream.queue.end');
+          streamDetail.queueSequence = events.length;
+          // Never emit end reentrantly from read(), nor merely after readable.
+          task(now, 1, () => {
+            if (!active('end')) return;
+            guard(eof && bodyArrived && available === offset);
+            ended = true;
+            record('https', 'stream.emit.end');
+            streamDetail.endSequence = events.length;
+            requestDetail.completed = now;
+            streamEvents.emit('end');
+          }, 'end');
+        }
+        function deliverEOF() {
+          if (!active('eof')) return;
+          guard(bodyArrived && !eof);
+          eof = true;
+          record('https', 'stream.receive.eof');
+          streamDetail.eofSequence = events.length;
+        }
+        function readable() {
+          if (!active('readable')) return;
+          record('https', 'stream.emit.readable');
+          streamEvents.emit('readable');
+        }
+        function streamFailure(kind) {
+          if (!active(kind)) return;
+          record('https', 'stream.emit.' + kind);
+          streamDetail.failureSequence = events.length;
+          streamEvents.emit(kind);
+        }
         const stream = Object.create(null);
         Object.defineProperties(stream, {
           statusCode: {value: response.status},
           headers: {value: seal({...response.headers})},
-          complete: {get() { record('https', 'stream.complete'); return !response.incomplete; }},
-          readableLength: {get() { const remaining = response.body.length - offset;
+          complete: {get() { record('https', 'stream.complete'); return bodyArrived && eof && !response.incomplete; }},
+          readableLength: {get() { const remaining = available - offset;
             record('https', 'stream.readableLength', null, remaining); return remaining; }},
           on: {value(name, listener) {
             guard(['readable', 'end', 'error', 'aborted'].includes(name));
             record('https', 'stream.on.' + name); streamEvents.on(name, listener); return stream;
           }},
           read: {value(size) {
-            guard(Number.isSafeInteger(size) && size > 0 && size <= CAP.pull && !destroyed);
-            const count = Math.min(size, response.body.length - offset);
+            guard(Number.isSafeInteger(size) && size >= 0 && size <= CAP.pull && !destroyed && !ended);
+            if (size === 0) {
+              const before = {offset, consumed: requestDetail.consumed, allocations: detailed.allocations.length};
+              record('https', 'stream.read.zero', 0, 0);
+              const sequence = events.length;
+              demandEnd('zero');
+              detailed.zeroReads.push({request: index, sequence, eof, buffered: available - offset,
+                before, after: {offset, consumed: requestDetail.consumed, allocations: detailed.allocations.length}, returned: 0});
+              return null;
+            }
+            const remaining = available - offset;
+            // Paused read(n) cannot invent a short chunk before EOF is known.
+            const count = remaining < size && !eof ? 0 : Math.min(size, remaining);
             detailed.reads.push({request: index, requested: size, returned: count});
             record('https', 'stream.read', size, count);
-            if (count === 0) return null;
+            if (count === 0) { demandEnd('positive'); return null; }
             const result = fromNative(response.body.subarray(offset, offset + count));
             offset += count;
             requestDetail.consumed += count;
+            if (available === offset) {
+              record('https', 'stream.drained');
+              streamDetail.drainSequence = events.length;
+            }
+            // A short read past known EOF can queue end; an exact drain cannot.
+            if (count < size) demandEnd('positive');
             return result;
           }},
           destroy: {value() { destroyed = true; requestDetail.responseDestroyed = true;
@@ -717,16 +814,35 @@ function createFakes(spec) {
         callback(stream);
         if (destroyed || requestDestroyed) return;
         if (response.streamFailure) {
-          record('https', 'stream.emit.' + response.streamFailure);
-          streamEvents.emit(response.streamFailure);
+          streamFailure(response.streamFailure);
           return;
         }
-        record('https', 'stream.emit.readable');
-        streamEvents.emit('readable');
-        if (destroyed || requestDestroyed) return;
-        record('https', 'stream.emit.end');
-        requestDetail.completed = now;
-        streamEvents.emit('end');
+        available = response.body.length - (mode === 'surplus' ? 1 : 0);
+        bodyArrived = available === response.body.length;
+        record('https', 'stream.body.arrival', available, available);
+        if (mode === 'early') deliverEOF();
+        readable();
+        // Independent finite task order: final drain is not an EOF signal.
+        // Late EOF is a separate task at the same clock instant, preserving the
+        // original response-delay/acquisition timestamp contract exactly.
+        if (mode === 'late') task(now, 1, () => { deliverEOF(); readable(); }, 'eof');
+        if (mode === 'surplus') {
+          task(now + 1, 1, () => {
+            if (!active('surplus')) return;
+            available += 1; bodyArrived = true;
+            record('https', 'stream.body.surplus', 1, 1);
+            readable();
+          }, 'surplus');
+          task(now + 2, 1, () => { deliverEOF(); readable(); }, 'eof');
+        }
+        if (mode === 'error' || mode === 'aborted') {
+          task(now + 1, 1, () => streamFailure(mode), 'stream-failure');
+          task(now + 2, 1, () => { deliverEOF(); readable(); }, 'eof');
+        }
+        if (mode === 'missing') {
+          // EOF never arrives. A late error cannot replace the fixed timeout.
+          task(now + 10000, 1, () => streamFailure('error'), 'late-error');
+        }
       }, 'response');
     }, destroy() {
       requestDestroyed = true;
@@ -855,6 +971,24 @@ function createFakes(spec) {
     for (const pull of detailed.reads.concat(detailed.fileReads)) {
       assert.ok(pull.requested > 0 && pull.requested <= CAP.pull);
       assert.ok(pull.returned >= 0 && pull.returned <= pull.requested);
+    }
+    for (const probe of detailed.zeroReads) {
+      assert.deepEqual(probe.after, probe.before, 'zero probe cannot consume bytes or allocate a body buffer');
+      assert.equal(probe.returned, 0);
+      const event = events[probe.sequence - 1];
+      assert.equal(event.operation, 'stream.read.zero');
+      assert.equal(event.requested_bytes, 0);
+      assert.equal(event.returned_bytes, 0);
+    }
+    for (const stream of detailed.streams) {
+      if (stream.endSequence !== null) {
+        assert.equal(stream.demands.length, 1, 'end must have an independently observed demand');
+        assert.notEqual(stream.eofSequence, null);
+        assert.notEqual(stream.queueSequence, null);
+        assert.ok(stream.eofSequence < stream.demands[0].sequence);
+        assert.ok(stream.demands[0].sequence < stream.queueSequence);
+        assert.ok(stream.queueSequence < stream.endSequence, 'end must be queued, not reentrant');
+      }
     }
     for (const timer of detailed.requestTimers) {
       assert.ok(timer.duration > 0 && timer.duration <= 10000);
@@ -1200,6 +1334,18 @@ function assertNamedOracle(spec, fakes, outcome) {
       assert.equal(Object.hasOwn(spec.environment, 'GITHUB_TOKEN'), false);
       assert.equal(fakes.events.filter(e => e.origin === 'control' && e.operation === 'read.GITHUB_TOKEN').length, 1);
       break;
+    case 'blob_exact_capacity_eof_before_drain':
+    case 'blob_exact_capacity_eof_after_drain':
+    case 'metadata_exact_limit_eof_before_drain':
+    case 'metadata_exact_limit_eof_after_drain':
+    case 'rpc_exact_limit_eof_before_drain':
+    case 'rpc_exact_limit_eof_after_drain':
+    case 'full_capacity_delayed_surplus_rejected':
+    case 'full_capacity_missing_eof_times_out':
+    case 'full_capacity_stream_error_rejected':
+    case 'full_capacity_stream_abort_rejected':
+      assertEOFOracle(spec, fakes, outcome);
+      break;
     default: throw new HarnessFault();
   }
   assert.equal(outcome.status, spec.success ? 'resolved' : 'rejected');
@@ -1212,6 +1358,95 @@ function assertNamedOracle(spec, fakes, outcome) {
     readLimit(index, response.role === 'metadata' ? CAP.metadata : response.role === 'blob' ?
       spec.artifacts.find(a => a.owner === response.owner).size : CAP.rpc);
   }
+}
+
+/* The additive EOF cases retain the common protocol, capacity, output, exact
+ * failure-message and retained-file assertions above. No subject helper or
+ * source-token check determines the fake's queue or these expected outcomes. */
+function assertEOFOracle(spec, fakes, outcome) {
+  const index = spec.responses.indexOf(spec.eofTarget);
+  const request = fakes.detailed.requests[index];
+  const stream = fakes.detailed.streams.find(item => item.request === index);
+  const capacity = spec.eofTarget.role === 'metadata' ? CAP.metadata :
+    spec.eofTarget.role === 'blob' ? spec.artifacts[0].size : CAP.rpc;
+  assert.ok(index >= 0 && stream);
+  assert.equal(request.consumed, capacity);
+  assert.ok(stream.drainSequence !== null);
+  const pulls = fakes.detailed.reads.filter(item => item.request === index);
+  assert.equal(pulls.reduce((sum, item) => sum + item.returned, 0), capacity);
+  assert.ok(pulls.every(item => item.requested > 0 && item.requested <= CAP.pull));
+  const probes = fakes.detailed.zeroReads.filter(item => item.request === index);
+  assert.equal(probes.length, spec.name.endsWith('_after_drain') ? 2 : 1,
+    'exactly one zero probe per full-capacity readable notification');
+  assert.ok(probes.every(item => item.sequence > stream.drainSequence && item.buffered === 0));
+  assert.equal(fakes.detailed.allocations.filter(item => item.request === index).length, 1);
+  assert.equal(fakes.detailed.allocations.find(item => item.request === index).size, capacity);
+  assert.equal(fakes.detailed.requestTimers.length, fakes.detailed.requests.length, 'no timer renewal');
+  assert.equal(fakes.timerCount(), 0);
+  if (spec.success) {
+    assert.equal(outcome.status, 'resolved');
+    assert.equal(stream.demands.length, 1);
+    assert.equal(stream.demands[0].kind, 'zero', 'exact drain must require zero-byte EOF demand');
+    assert.ok(stream.eofSequence < stream.demands[0].sequence);
+    assert.ok(stream.drainSequence < stream.demands[0].sequence);
+    assert.ok(stream.demands[0].sequence < stream.queueSequence);
+    assert.ok(stream.queueSequence < stream.endSequence);
+    assert.ok(probes.some(item => item.eof && item.sequence < stream.queueSequence));
+    if (spec.name.endsWith('_after_drain')) {
+      assert.ok(stream.drainSequence < stream.eofSequence);
+      assert.ok(probes.some(item => !item.eof && item.sequence < stream.eofSequence));
+    } else assert.ok(stream.eofSequence < stream.drainSequence);
+    assert.equal(request.completed, request.started + spec.eofTarget.delay);
+    assert.ok(fakes.detailed.requests.every(item => item.completed !== null));
+    assert.equal(fakes.events.some(item => item.operation === 'fire'), false);
+  } else {
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(fakes.detailed.requests.length, index + 1, 'no retry or continuation after stream failure');
+    assert.equal(request.completed, null);
+    assert.equal(request.requestDestroyed, true);
+    assert.equal(request.responseDestroyed, true);
+    assert.equal(stream.eofSequence, null);
+    assert.equal(stream.queueSequence, null);
+    assert.equal(stream.endSequence, null);
+    assert.deepEqual(stream.demands, []);
+    assert.ok(probes.every(item => item.eof === false));
+    assert.deepEqual(fakes.detailed.outputs, []);
+    assert.equal([...fakes.files.keys()].some(path => path.endsWith('.zip')), false);
+    assert.deepEqual(retainedJSON(fakes, 'transfer.json').archives, []);
+    if (spec.name === 'full_capacity_missing_eof_times_out') {
+      assert.equal(fakes.now(), request.started + 10000);
+      assert.equal(fakes.detailed.requestTimers[index].due, request.started + 10000);
+      assert.equal(fakes.events.filter(item => item.operation === 'fire').length, 1);
+      assert.equal(stream.failureSequence, null);
+    } else {
+      assert.equal(fakes.now(), request.started + spec.eofTarget.delay + 1);
+      assert.equal(fakes.events.some(item => item.operation === 'fire'), false);
+      if (spec.name === 'full_capacity_delayed_surplus_rejected') {
+        assert.equal(spec.eofTarget.body.length, capacity + 1);
+        assert.equal('content-length' in spec.eofTarget.headers, false);
+        assert.equal(stream.failureSequence, null);
+        assert.ok(fakes.events.some(item => item.operation === 'stream.body.surplus' && item.returned_bytes === 1));
+        assert.ok(fakes.events.some(item => item.operation === 'stream.readableLength' && item.returned_bytes === 1));
+      } else {
+        assert.ok(stream.failureSequence > stream.drainSequence);
+        assert.equal(fakes.events[stream.failureSequence - 1].operation,
+          spec.name === 'full_capacity_stream_error_rejected' ? 'stream.emit.error' : 'stream.emit.aborted');
+      }
+    }
+  }
+  // Drive already queued late notifications after settlement and require all
+  // accepted effects to remain frozen. This does not create new requests/tasks.
+  const effects = () => JSON.stringify({requests: fakes.detailed.requests,
+    allocations: fakes.detailed.allocations, reads: fakes.detailed.reads,
+    zeroReads: fakes.detailed.zeroReads, writes: fakes.detailed.writes,
+    outputs: fakes.detailed.outputs, timers: fakes.detailed.requestTimers,
+    ends: fakes.detailed.streams.map(item => [item.queueSequence, item.endSequence, item.failureSequence])});
+  const settled = effects();
+  for (let remaining = 0; remaining < 32 && fakes.pending() > 0; remaining += 1) fakes.advance();
+  assert.equal(fakes.pending(), 0, 'finite late-event queue must drain');
+  assert.equal(fakes.timerCount(), 0);
+  assert.equal(effects(), settled, 'late events cannot produce accepted effects after settlement');
+  if (!spec.success) assert.ok(stream.dropped.length > 0, 'late notification must actually be attempted and rejected');
 }
 
 async function evaluateExactLiteral(literal, fakes) {
@@ -1342,8 +1577,8 @@ async function main(argv) {
   assert.equal(argv[3], '--evidence-dir');
   const root = argv[2];
   const evidence = argv[4];
-  assert.equal(IDS.length, 58);
-  assert.equal(new Set(IDS).size, 58);
+  assert.equal(IDS.length, 68);
+  assert.equal(new Set(IDS).size, 68);
   const {literal, binding} = checkedContext(root, evidence);
   const writer = createProofWriter(evidence);
   if (argv[0] === '--list') {

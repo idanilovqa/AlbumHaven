@@ -30,7 +30,7 @@ _NODE_FILE = 'tests/ci/foobar_preview_transfer_literal_cases.cjs'
 _OLD = 'scripts/ci/new_feature_evidence.py'
 _ADMISSION = 'scripts/ci/admit-new-feature-evidence.py'
 _OLD_SHA = '8f45a3c1c3ada77a817928463527fb4add58f57f70a2d3f24cc9187cf5fb3673'
-_LITERAL_SHA = '65a5239082ab154affd06ec85183a5ecd451d630954e43d8aeb04ca46eebbe90'
+_LITERAL_SHA = '163f1165c127d77dac505fb8240fa2740a1b6f4d657add9763c8048ae6495564'
 _PRIMITIVES = ('run_owned', 'process_success', 'node_list', 'timestamp', 'owned_file')
 _IDS = ('git', 'python_collection', 'python_runtime', 'node_inventory', 'node_runtime')
 _RUNTIMES = (10, 60, 180, 60, 180)
@@ -118,8 +118,18 @@ _NODE_IDS = (
     'tests/ci/foobar_preview_transfer_literal_cases.cjs::fixture_forbidden_effect_attempt_survives_catch',
     'tests/ci/foobar_preview_transfer_literal_cases.cjs::fixture_unlisted_module_denied',
     'tests/ci/foobar_preview_transfer_literal_cases.cjs::fixture_host_environment_not_exposed',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::blob_exact_capacity_eof_before_drain',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::blob_exact_capacity_eof_after_drain',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::metadata_exact_limit_eof_before_drain',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::metadata_exact_limit_eof_after_drain',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::rpc_exact_limit_eof_before_drain',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::rpc_exact_limit_eof_after_drain',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::full_capacity_delayed_surplus_rejected',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::full_capacity_missing_eof_times_out',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::full_capacity_stream_error_rejected',
+    'tests/ci/foobar_preview_transfer_literal_cases.cjs::full_capacity_stream_abort_rejected',
 )
-_SOURCE_PINS = {'.github/workflows/foobar-preview-backend-evidence.yml': 'c5cccbcbdfdbe85ce637fdc454a7f2c786d227d080c0814e5d08b707d8707726',
+_SOURCE_PINS = {'.github/workflows/foobar-preview-backend-evidence.yml': '738769b2cf94002ebd1f5a90f7b9e2faa93d227dbdd5e71dd38702cba980bfc1',
  '.github/workflows/new-feature-backend-evidence.yml': 'f4b10af233a2544a28eae486d22435e66a19fdbce0f56648a09bd308484885f9',
  'scripts/ci/admit-new-feature-evidence.py': '90641268ec59f81ff185389e881db6d1305aee89e9c25a95a0c3f64297bbe2d6',
  'scripts/ci/new_feature_evidence.py': '8f45a3c1c3ada77a817928463527fb4add58f57f70a2d3f24cc9187cf5fb3673',
@@ -130,8 +140,8 @@ _SOURCE_PINS = {'.github/workflows/foobar-preview-backend-evidence.yml': 'c5cccb
  'tests/py/test_foobar_preview_ci_contract.py': '7241c03e61eefe8c925f47d354515c1901592f3c8b5c7d6ec9611d8c616de01b',
  'tests/py/test_foobar_preview_evidence.py': 'e0772fef33850f4cdbd3f2d5661c2351f4e881a0ef5b1c85ac39a17502aa9002',
  'music_app/services/foobar_snapshot_parser.py': '3348d8c4980125daa82036deb90117dd35ff443f7950ada382d59a449e7728e3',
- 'tests/ci/foobar_preview_validation_controls_cases.py': '769d5c1fd716d5429e903b48978b8b5c784a8ae80aafec48da92d5d7047591ea',
- 'tests/ci/foobar_preview_transfer_literal_cases.cjs': 'b30698c8be4385aa72a12924a2435b0cbe3f821e32ca339126f7c951f5211b61',
+ 'tests/ci/foobar_preview_validation_controls_cases.py': '6ddc54c4bedb083b6ae38fc8b1fabd32ad1f3138b403b7854472b0de5e9d496b',
+ 'tests/ci/foobar_preview_transfer_literal_cases.cjs': 'c8b0b629d36167eaca1d3c5666f8dee74255752c6d68c05e743c6fd860f1fff1',
  'requirements.txt': '018d1e446b65f3730ef877e68b23ecbe62b22273fb2bc3cc6a637458a37dbee7'}
 
 _SOURCE_PINS.update({
@@ -994,7 +1004,7 @@ def _literal(raw):
             break
         result.append(line[4:] if line else '')
     data = ('\n'.join(result).rstrip('\n') + '\n').encode('utf-8')
-    _need(len(data) == 15483 and _digest(data) == _LITERAL_SHA, 'literal', '/workflow')
+    _need(len(data) == 15603 and _digest(data) == _LITERAL_SHA, 'literal', '/workflow')
     return data
 
 
@@ -1255,7 +1265,7 @@ def _run(root, event_path, admission_path, output):
                     _listing(reader.json('node/list.json'), expected)
                 else:
                     outcomes, _, complete = _node(reader, expected)
-                    _need(complete and outcomes == ['passed'] * 58, 'node_event', '/node/runtime.json')
+                    _need(complete and outcomes == ['passed'] * 68, 'node_event', '/node/runtime.json')
                 reader.finish(); reader.scan()
             finally:
                 _disarm(old)

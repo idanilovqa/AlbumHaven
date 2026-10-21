@@ -371,6 +371,16 @@ NODE_IDS = (
     "tests/ci/foobar_preview_transfer_literal_cases.cjs::fixture_forbidden_effect_attempt_survives_catch",
     "tests/ci/foobar_preview_transfer_literal_cases.cjs::fixture_unlisted_module_denied",
     "tests/ci/foobar_preview_transfer_literal_cases.cjs::fixture_host_environment_not_exposed",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::blob_exact_capacity_eof_before_drain",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::blob_exact_capacity_eof_after_drain",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::metadata_exact_limit_eof_before_drain",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::metadata_exact_limit_eof_after_drain",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::rpc_exact_limit_eof_before_drain",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::rpc_exact_limit_eof_after_drain",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::full_capacity_delayed_surplus_rejected",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::full_capacity_missing_eof_times_out",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::full_capacity_stream_error_rejected",
+    "tests/ci/foobar_preview_transfer_literal_cases.cjs::full_capacity_stream_abort_rejected",
 )
 
 
@@ -1826,10 +1836,10 @@ def test_source_node_whole_file_registry_and_literal_binding_are_fixed():
     assert all(case_id.split("::", 1)[1] in source for case_id in NODE_IDS)
     assert "PREVIEW_TRANSFER_SCRIPT" in source and "--list" in source and "--run" in source
     assert "foobar-preview-transfer-fakes-v1" in source
-    assert "65a5239082ab154affd06ec85183a5ecd451d630954e43d8aeb04ca46eebbe90" in source
+    assert "163f1165c127d77dac505fb8240fa2740a1b6f4d657add9763c8048ae6495564" in source
     assert "fixture_forbidden_effect_attempt_survives_catch" in source
     assert "fixture_unlisted_module_denied" in source and "fixture_host_environment_not_exposed" in source
-    # Runtime behavior is the separate complete 58-case owner, not this source check.
+    # Runtime behavior is the separate complete 68-case owner, not this source check.
 
 
 @pytest.mark.parametrize("pid,index", list(zip(PROCESS_IDS, range(5))))

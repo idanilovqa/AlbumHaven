@@ -45,7 +45,9 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
       return readinessResult;
     });
     const runtimeView = await readRuntimeView(page);
-    const startupDiagnostics = await readStartupDiagnostics(page);
+    const startupDiagnostics = await readStartupDiagnostics(page, {
+      coverImageSelector: galleryActions.galleryPage.albumCard.coverImageSelector,
+    });
     const sidebarArtistCount = await navigationPanelActions.readSidebarArtistCount();
     const visibleAllArtistsCount = await navigationPanelActions.readAllArtistsVisibleCount();
     const visibleArtistHeadings = await galleryActions.readArtistHeadings();
@@ -86,6 +88,15 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
     const fullSidebarProof = await stepLogger.step('Wait for complete sidebar metadata rendering after visible readiness', async () => (
       awaitFullSidebarProof()
     ));
+    startupDiagnostics.phases.treeReadyMs = fullSidebarProof.treeReadyAtMs;
+    await stepLogger.step('Retain each true-cold startup phase', async () => {
+      for (const [phase, timingMs] of Object.entries(startupDiagnostics.phases)) {
+        expect(
+          Number.isFinite(timingMs) && timingMs >= 0,
+          `Expected ${phase} to retain a non-negative browser-monotonic timestamp.`,
+        ).toBe(true);
+      }
+    });
     const fullRuntimeView = await readRuntimeView(page);
     const sidebarArtistNames = await navigationPanelActions.readHydratedSidebarArtistNames();
     const fullSidebarArtistCount = sidebarArtistNames.length;
@@ -160,6 +171,7 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
       startupPersistenceSeam: fullRuntimeView.persistence_seam,
       startupViewDataSource: fullRuntimeView.view_data_source,
       startupDiagnostics,
+      startupPhases: startupDiagnostics.phases,
       persistenceBackend: fullRuntimeView.persistence_backend,
       persistenceSeam: fullRuntimeView.persistence_seam,
       viewDataSource: fullRuntimeView.view_data_source,

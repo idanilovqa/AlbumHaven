@@ -79,6 +79,32 @@ test('PR gallery traversal gates first cover and memory while soak gates every d
     'snapshot-only windows cannot prove decoded recovery');
 });
 
+test('app-open diagnostics retain every true-cold startup phase', () => {
+  const helper = readRepoFile('tests/e2e/helpers/appOpenAllArtistsHelpers.js');
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/appOpenAllArtists.spec.js');
+
+  for (const field of [
+    'navigationRequestStartMs',
+    'serverResponseMs',
+    'appShellRenderMs',
+    'initialUiFeedbackMs',
+    'rootPayloadReadyMs',
+    'treeReadyMs',
+    'galleryReadyMs',
+    'firstDecodedArtworkMs',
+  ]) {
+    assert.match(helper, new RegExp(`${field}:`));
+  }
+  assert.match(helper, /performance\.getEntriesByType\('paint'\)/);
+  assert.match(helper, /performance\.getEntriesByType\('resource'\)/);
+  assert.match(helper, /data-cover-decoded-at-ms/);
+  assert.match(helper, /querySelectorAll\(selectors\.coverImageSelector\)/);
+  assert.match(helper, /filter\(\(element\) => element\.hasAttribute\('data-cover-decoded-at-ms'\)\)/);
+  assert.match(spec, /coverImageSelector:\s*galleryActions\.galleryPage\.albumCard\.coverImageSelector/);
+  assert.match(spec, /startupDiagnostics\.phases\.treeReadyMs\s*=\s*fullSidebarProof\.treeReadyAtMs/);
+  assert.match(spec, /startupPhases:\s*startupDiagnostics\.phases/);
+});
+
 function readExportedFunction(source, signature, nextSignature) {
   const start = source.indexOf(signature);
   const end = source.indexOf(nextSignature, start + signature.length);

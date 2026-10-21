@@ -50,8 +50,22 @@ function loadStartupProgress() {
     frames.delete(next[0]);
     next[1](timestamp);
   };
-  return { content, controller: window.AlbumHavenStartupProgress, root, runNextFrame };
+  return {
+    content,
+    controller: window.AlbumHavenStartupProgress,
+    root,
+    runNextFrame,
+    startupMarks: window.__ALBUM_HAVEN_STARTUP_MARKS__,
+  };
 }
+
+test('startup progress records the first visible feedback boundary', () => {
+  const ui = loadStartupProgress();
+
+  assert.equal(ui.startupMarks.length, 1);
+  assert.equal(ui.startupMarks[0].name, 'startup_ui_feedback_visible');
+  assert.equal(typeof ui.startupMarks[0].atMs, 'number');
+});
 
 test('startup completion releases the usable app within two paint frames', () => {
   const ui = loadStartupProgress();

@@ -611,7 +611,355 @@ def _c_completed_stages(plan, expected, directories):
 
 
 
+def _c_hold_context(root, provenance):
+    producer = 'reconcile'
+    env = os.environ
+    _c_require(env.get('GITHUB_ACTIONS') == 'true' and env.get('RUNNER_OS') == 'Linux', 'Hosted Linux only')
+    _c_require(env.get('GITHUB_REPOSITORY') == _C_REPOSITORY and env.get('GITHUB_EVENT_NAME') == 'pull_request', 'Wrong workflow event')
+    event = _c_json(Path(env['GITHUB_EVENT_PATH']))
+    pr = event['pull_request']
+    head = pr['head']['sha']
+    _c_require(pr['head']['repo']['full_name'] == _C_REPOSITORY and
+               pr['head']['ref'] == '2026-10-03-album-tops', 'Wrong pull request source')
+    _c_require(env.get('GITHUB_JOB') == producer and producer in _C_OWNERS, 'Wrong producer job')
+    run_id, attempt = int(env['GITHUB_RUN_ID']), int(env['GITHUB_RUN_ATTEMPT'])
+    _c_require(run_id > 0 and attempt == 1 and re.fullmatch('[0-9a-f]{40}', head), 'Wrong run identity')
+    checkout_head = _c_bytes(_c_path(root, '.git/HEAD'), 256).decode('ascii').strip()
+    _c_require(checkout_head == head, 'Checkout must be detached at the admitted head')
+    workflow_ref = env.get('GITHUB_WORKFLOW_REF', '')
+    _c_require(workflow_ref.startswith(_C_REPOSITORY + '/' + _C_WORKFLOW + '@'), 'Wrong workflow path')
+    hashes = {relative: hashlib.sha256(_c_bytes(_c_path(root, relative))).hexdigest()
+              for relative in (*_C_CONTROLS, *_C_PRODUCTS)}
+    _c_require(hashes[_C_OLD] == _C_OLD_SHA, 'Unadmitted supervisor')
+    plan = _c_json(_c_path(root, _C_PLAN))
+    _v_check_plan(plan)
+    expected = {'repository': _C_REPOSITORY, 'head_sha': head, 'checkout_head': checkout_head,
+                'workflow_path': _C_WORKFLOW, 'workflow_sha256': hashes[_C_WORKFLOW],
+                'plan_sha256': hashes[_C_PLAN], 'run_id': run_id, 'run_attempt': attempt,
+                'producer_job': producer, 'cancelled': env.get('PREVIEW_CANCELLED') != 'false',
+                'source_hashes': hashes, 'provenance': provenance}
+    _v_hold_expected(expected)
+    _c_require(env.get('GITHUB_RUN_ATTEMPT') == '1' and env.get('PREVIEW_CANCELLED') in ('true', 'false'), 'Unknown held attempt or cancellation state')
+    return plan, expected
+
+
+def _c_hold_jobs(plan, expected, admission, retained):
+    temporary = Path(os.environ['RUNNER_TEMP'])
+    transfer = temporary / 'foobar-preview-transfer'
+    _c_require(os.environ.get('PREVIEW_TRANSFER_OUTCOME') == 'success', 'Incomplete metadata or artifact acquisition')
+    retained['acquisition.json'] = _c_bytes(_c_path(transfer, 'acquisition.json'), 1048576)
+    acquisition = _c_json_bytes(retained['acquisition.json'])
+    _c_require(set(acquisition) == {'schema_version', 'repository', 'head_sha', 'workflow_path', 'run_id',
+                                  'run_attempt', 'consumer_job', 'responses'}, 'Malformed acquisition envelope')
+    _c_require(acquisition['schema_version'] == 'foobar-preview-acquisition-v1' and
+               acquisition['consumer_job'] == expected['producer_job'], 'Wrong acquisition consumer')
+    for key in ('repository', 'head_sha', 'workflow_path', 'run_id', 'run_attempt'):
+        _c_require(type(acquisition[key]) is type(expected[key]) and acquisition[key] == expected[key], 'Acquisition context differs')
+    records = acquisition['responses']
+    _c_require(type(records) is list and len(records) == 2 and
+               [item.get('kind') for item in records] == ['run', 'jobs'], 'Incomplete acquisition response set')
+    base = 'https://api.github.com/repos/' + _C_REPOSITORY + '/actions/runs/' + str(expected['run_id']) + '/attempts/' + str(expected['run_attempt'])
+    parsed, previous, response_bytes = {}, None, 0
+    for record, kind, relative, url in zip(records, ('run', 'jobs'), ('run-attempt.json', 'attempt-jobs.json'),
+                                         (base, base + '/jobs?per_page=100&page=1')):
+        _c_require(set(record) == {'kind', 'url', 'status', 'started_at', 'finished_at', 'size', 'sha256', 'path'} and
+                   record['path'] == relative and record['url'] == url and type(record['status']) is int and record['status'] == 200,
+                   'Untrusted acquisition URL or response')
+        left, right = _v_stamp(record['started_at']), _v_stamp(record['finished_at'])
+        _c_require(left <= right and (right - left).total_seconds() < 10 and
+                   (previous is None or previous <= left), 'Unbounded or reversed acquisition interval')
+        previous = right
+        raw = _c_bytes(_c_path(transfer, relative), 1048576)
+        _c_require(type(record['size']) is int and 0 < len(raw) == record['size'] and
+                   hashlib.sha256(raw).hexdigest() == record['sha256'], 'Raw acquisition response differs')
+        response_bytes += len(raw)
+        _c_require(response_bytes <= 2097152, 'Acquisition response aggregate bound')
+        retained[relative] = raw
+        parsed[kind] = _c_json_bytes(raw)
+    run, listing = parsed['run'], parsed['jobs']
+    _c_require(type(run) is dict and all(type(run.get(key)) is int and run[key] == expected[wanted]
+               for key, wanted in (('id', 'run_id'), ('run_attempt', 'run_attempt'))), 'Wrong observed workflow attempt')
+    _c_require(run.get('repository', {}).get('full_name') == _C_REPOSITORY and run.get('head_sha') == expected['head_sha'] and
+               run.get('head_branch') == '2026-10-03-album-tops' and run.get('event') == 'pull_request' and
+               run.get('path') == _C_WORKFLOW and run.get('name') == 'Foobar Preview Backend Evidence (supplemental)' and
+               run.get('status') == 'in_progress' and run.get('conclusion') is None,
+               'Workflow identity, state or source differs from independent checkout context')
+    _c_require(type(listing) is dict and set(listing) == {'total_count', 'jobs'} and type(listing['jobs']) is list and
+               type(listing['total_count']) is int and listing['total_count'] == len(listing['jobs']) and
+               1 <= listing['total_count'] <= 8, 'Paginated, incomplete or oversized job listing')
+    jobs, identities = {}, set()
+    for job in listing['jobs']:
+        _c_require(type(job) is dict and job.get('name') in _C_OWNERS and job['name'] not in jobs and
+                   type(job.get('id')) is int and job['id'] > 0 and job['id'] not in identities, 'Duplicate or unknown job owner')
+        _c_require(type(job.get('run_id')) is int and job['run_id'] == expected['run_id'] and
+                   type(job.get('run_attempt')) is int and job['run_attempt'] == expected['run_attempt'] and
+                   job.get('head_sha') == expected['head_sha'] and job.get('head_branch') == '2026-10-03-album-tops' and
+                   job.get('workflow_name') == 'Foobar Preview Backend Evidence (supplemental)' and
+                   job.get('run_url') == base.split('/attempts/')[0] and
+                   job.get('url') == 'https://api.github.com/repos/' + _C_REPOSITORY + '/actions/jobs/' + str(job['id']),
+                   'Job is not bound to the exact observed attempt and workflow')
+        jobs[job['name']] = job
+        identities.add(job['id'])
+    _c_require(expected['producer_job'] in jobs and jobs[expected['producer_job']]['status'] == 'in_progress',
+               'Acquisition was not observed during its actual consumer job')
+    consumer_started = _v_stamp(jobs[expected['producer_job']]['started_at'])
+    _c_require(set(jobs) == set(_C_OWNERS) and jobs['reconcile'].get('conclusion') is None and
+               jobs['reconcile'].get('completed_at') is None and consumer_started <= _v_stamp(records[0]['started_at']),
+               'Missing owners or invalid current reconciliation interval')
+    job = jobs['admission']
+    _c_require(job.get('status') == 'completed' and job.get('conclusion') == 'failure', 'Initial admission was not a completed hold failure')
+    start, finish, upper, _ = _c_interval(job)
+    _c_require(finish <= consumer_started and finish <= _v_stamp(records[1]['started_at']) and upper <= 120,
+               'Initial admission completion is missing, late or over budget')
+    names = ['Set up job', _C_STAGE_NAMES['checkout'], _C_STAGE_NAMES['admission'],
+             'Retain fresh original admission even on hold', 'Post ' + _C_STAGE_NAMES['checkout'], 'Complete job']
+    steps = job.get('steps')
+    _c_require(type(steps) is list and len(steps) == 6 and [step.get('name') for step in steps] == names,
+               'Initial hold requires exactly all six source-known admission stages')
+    numbers = [step.get('number') for step in steps]
+    _c_require(all(type(number) is int and number > 0 for number in numbers) and numbers == sorted(set(numbers)),
+               'Malformed held admission stage identities')
+    previous, durations = None, {}
+    for step in steps:
+        wanted = 'failure' if step['name'] == _C_STAGE_NAMES['admission'] else 'success'
+        _c_require(step.get('status') == 'completed' and step.get('conclusion') == wanted,
+                   'Held admission has a contradictory, skipped or cancelled stage')
+        left, right, duration, _ = _c_interval(step)
+        _c_require((left - start).total_seconds() >= -1 and (right - finish).total_seconds() <= 1 and
+                   (previous is None or previous <= left), 'Held stage timing escapes or overlaps its job')
+        previous = right
+        durations[step['name']] = duration
+        if step['name'] == _C_STAGE_NAMES['admission']:
+            observed = _v_stamp(admission['observed_at'])
+            _c_require((observed - left).total_seconds() >= -1 and (observed - right).total_seconds() <= 1,
+                       'Original held observation is outside its actual admission step')
+    _c_require(durations[names[1]] + durations[names[4]] <= 120 and durations[names[2]] <= 120 and durations[names[3]] <= 60,
+               'Held admission overhead exceeded its unchanged category bound')
+    for owner in _C_OWNERS[1:-1]:
+        skipped = jobs[owner]
+        _c_require(skipped.get('status') == 'completed' and skipped.get('conclusion') == 'skipped' and
+                   skipped.get('steps') == [], 'Downstream owner did not explicitly remain unexecuted')
+        left, right = skipped.get('started_at'), skipped.get('completed_at')
+        _c_require((left is None and right is None) or (type(left) is str and left == right),
+                   'Skipped owner contradicts zero executed work')
+        if left is not None:
+            _c_require(finish <= _v_stamp(left) <= consumer_started, 'Skipped owner time contradicts dependency order')
+    return retained
+
+
+def _c_hold_transfer(temporary, expected):
+    _c_require(os.environ.get('PREVIEW_TRANSFER_OUTCOME') == 'success', 'Initial hold transfer is unproven')
+    transfer, _ = _v_directory(temporary / 'foobar-preview-transfer')
+    names = set()
+    wanted = {'transfer.json', 'acquisition.json', 'run-attempt.json', 'attempt-jobs.json', 'admission.zip'}
+    with os.scandir(transfer) as entries:
+        for entry in entries:
+            _c_require(len(names) < 5 and entry.name in wanted and entry.name not in names,
+                       'Held transfer contains an unexpected or interrupted writer')
+            names.add(entry.name)
+    _c_require(names == wanted, 'Held transfer is incomplete')
+    raw = _c_bytes(_c_path(transfer, 'transfer.json'), 1048576)
+    metadata = _c_json_bytes(raw)
+    _c_require(set(metadata) == {'schema_version', 'repository', 'head_sha', 'workflow_path', 'run_id',
+                               'run_attempt', 'cancelled', 'provenance', 'archives'} and
+               metadata['schema_version'] == 'foobar-preview-transfer-v1', 'Malformed held transfer checkpoint')
+    for key in ('repository', 'head_sha', 'workflow_path', 'run_id', 'run_attempt', 'cancelled', 'provenance'):
+        _c_require(_v_same(metadata[key], expected[key]), 'Held transfer differs from current bound context')
+    archives = metadata['archives']
+    _c_require(type(archives) is list and len(archives) == 1, 'Held transfer must contain only the original admission archive')
+    record = archives[0]
+    _c_require(set(record) == {'producer_job', 'path', 'size', 'sha256'} and record['producer_job'] == 'admission' and
+               record['path'] == 'admission.zip' and type(record['size']) is int and 0 < record['size'] <= _C_BYTES and
+               _v_hex(record['sha256']), 'Invalid original admission archive binding')
+    archive = _c_path(transfer, record['path'])
+    before = archive.lstat()
+    _c_require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size == record['size'], 'Unsafe admission archive')
+    digest = hashlib.sha256()
+    with archive.open('rb') as stream:
+        _c_require(_v_stat_id(os.fstat(stream.fileno())) == _v_stat_id(before), 'Admission archive was replaced')
+        remaining = before.st_size
+        while remaining:
+            chunk = stream.read(min(remaining, 65536))
+            _c_require(chunk and len(chunk) <= remaining, 'Admission archive length changed')
+            digest.update(chunk)
+            remaining -= len(chunk)
+        _c_require(stream.read(1) == b'' and _v_stat_id(os.fstat(stream.fileno())) == _v_stat_id(before), 'Admission archive changed while read')
+    _c_require(digest.hexdigest() == record['sha256'], 'Admission archive digest differs from immutable transfer')
+    inputs = temporary / 'foobar-preview-inputs'
+    _c_require(not inputs.exists() and not inputs.is_symlink(), 'Held inputs must be fresh')
+    inputs.mkdir()
+    _c_decode_zip(archive, inputs / 'admission', _C_AGGREGATE - 4194304, _C_AGGREGATE_FILES - 4)
+    _c_require(_v_stat_id(archive.lstat()) == _v_stat_id(before), 'Archive changed across bounded decoding')
+    return raw
+
+
+def _c_hold_prepare():
+    # The lease is private to this terminal branch and this same runner. Ordinary
+    # owners still use the unchanged one-field spent_seconds budget and reader.
+    started = time.monotonic()
+    with _c_deadline(120 - (time.monotonic() - started)):
+        root = Path(__file__).resolve(strict=True).parents[2]
+        temporary, _ = _v_directory(os.environ['RUNNER_TEMP'])
+        budget_path = temporary / 'foobar-preview-verification-budget.json'
+        _c_require(not budget_path.exists() and not budget_path.is_symlink(), 'Held verification lease already exists')
+        metadata = _c_json(_c_path(temporary / 'foobar-preview-transfer', 'transfer.json'))
+        plan, expected = _c_hold_context(root, metadata['provenance'])
+        _c_require(os.environ.get('PREVIEW_TRANSFER_OUTCOME') == 'success' and not expected['cancelled'],
+                   'No verification lease for failed transfer or cancellation')
+        _c_write(temporary / 'foobar-preview-context.json', expected)
+        spent = time.monotonic() - started
+        _c_require(0 <= spent < 120, 'Held preparation exhausted aggregate verification')
+        # The absolute deadline also charges this commit, interpreter exit and
+        # the inter-step gap. No later reader resets it to now + remaining.
+        # This is NOT a successful-prepare marker: even a later writer/readback
+        # or interpreter failure leaves only this original absolute ceiling.
+        _c_write(budget_path, {'spent_seconds': spent, 'deadline_monotonic': started + 120,
+            'context_sha256': hashlib.sha256(_c_bytes(temporary / 'foobar-preview-context.json')).hexdigest()})
+
+
+def _c_hold_main(args):
+    # All this path's work is conservatively charged to finalize120, and proof
+    # authentication is additionally bounded by the original prepare lease.
+    # These are separate caps, not pooled allowance or a cleanup guarantee.
+    final_started = time.monotonic()
+    directory, expected, retained, pair = args.evidence_dir, None, {}, {}
+    result = _v_hold_diagnostic(cancelled=os.environ.get('PREVIEW_CANCELLED') == 'true')
+    try:
+        with _c_deadline(120 - (time.monotonic() - final_started)):
+            import resource
+            resource.setrlimit(resource.RLIMIT_FSIZE, (_C_FILE, _C_FILE))
+            _c_require(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('RUNNER_OS') == 'Linux' and
+                       os.environ.get('GITHUB_REPOSITORY') == _C_REPOSITORY and os.environ.get('GITHUB_EVENT_NAME') == 'pull_request' and
+                       os.environ.get('GITHUB_JOB') == 'reconcile' and os.environ.get('GITHUB_RUN_ATTEMPT') == '1',
+                       'Initial diagnostic is confined to the hosted first-attempt reconcile owner')
+            root = args.root.resolve(strict=True)
+            _c_require(root == Path(__file__).resolve(strict=True).parents[2], 'Wrong held source root')
+            temporary, _ = _v_directory(os.environ['RUNNER_TEMP'])
+            _c_require(directory == temporary / 'foobar-preview-output' and not directory.exists() and not directory.is_symlink(),
+                       'Held diagnostic output must be fresh, fixed and safely owned')
+            inputs = temporary / 'foobar-preview-inputs'
+            _c_require(args.phase == 'reconcile' and args.attempt == 1 and args.input_dir == inputs and
+                       args.admission == inputs / 'admission/admission.json' and args.helper_evidence == inputs / 'helper' and
+                       args.shard_index is args.canonical_core_evidence is args.predecessor_evidence is None and
+                       args.plan.resolve(strict=True) == (root / _C_PLAN).resolve(strict=True), 'Unexpected held CLI paths or options')
+            directory.mkdir()
+            budget = None
+            try:
+                budget = _c_json(temporary / 'foobar-preview-verification-budget.json')
+                _c_require(set(budget) == {'spent_seconds', 'deadline_monotonic', 'context_sha256'} and
+                    all(type(budget[key]) in (int, float) and math.isfinite(budget[key]) for key in ('spent_seconds', 'deadline_monotonic')) and
+                    0 <= budget['spent_seconds'] < 120 and _v_hex(budget['context_sha256']), 'Invalid held verification lease')
+            except Exception:
+                budget = None  # Unknown preparation spend: finalization only.
+        # A committed valid lease can bound time even if prepare later failed;
+        # it never proves that stage succeeded. Hosted completion stays external.
+        if budget is not None:
+            failure = ('deadline', '/verification', 'The original aggregate verification lease is malformed, expired or unproven.')
+            try:
+                now = time.monotonic()
+                started = budget['deadline_monotonic'] - 120
+                _c_require(0 <= started <= now and budget['spent_seconds'] <= now - started and
+                           now < budget['deadline_monotonic'], 'Missing, reversed or expired held verification ownership')
+                with _c_deadline(min(budget['deadline_monotonic'] - now, 120 - (now - final_started))):
+                    failure = ('identity', '/context', 'Current held source, event or CLI identity cannot be independently bound.')
+                    context_raw = _c_bytes(temporary / 'foobar-preview-context.json')
+                    _c_require(hashlib.sha256(context_raw).hexdigest() == budget['context_sha256'], 'Held lease context binding changed')
+                    stored = _c_json_bytes(context_raw)
+                    plan, current = _c_hold_context(root, stored['provenance'])
+                    _c_require(_v_same(current, stored), 'Held prepared source context changed')
+                    _c_require((args.expected_head, args.run_id, args.attempt) ==
+                               (current['head_sha'], current['run_id'], current['run_attempt']), 'Held CLI identity differs')
+                    _v_need(not current['cancelled'], 'cancellation', '/expected/cancelled', 'Cancellation suppresses authentication.')
+                    retained['transfer-context.json'] = context_raw
+                    failure = ('missing_owner', '/transfer', 'Actual initial admission transfer or immutable archive binding is unproven.')
+                    retained['transfer.json'] = _c_hold_transfer(temporary, current)
+                    # Keep only bounded actual decoded bytes, never a replacement
+                    # admission. Their retention is not authentication on failure.
+                    for name in ('admission.json', 'admission-context.json'):
+                        pair[name] = _c_bytes(_c_path(inputs / 'admission', name))
+                    admission, verified_pair = _v_hold_pair(inputs, current)
+                    _c_require(pair == verified_pair, 'Admission changed between retention and validation')
+                    failure = ('admission', '/event', 'Original held trigger differs from the current raw event.')
+                    event = _c_json(Path(os.environ['GITHUB_EVENT_PATH']))
+                    pr, trigger = event['pull_request'], admission['trigger']
+                    _c_require(event['repository']['full_name'] == _C_REPOSITORY and type(pr['number']) is int and
+                               _v_same(trigger['number'], pr['number']) and _v_same(trigger['draft'], pr['draft']) and
+                               _v_same(event['number'], pr['number']) and trigger['head_sha'] == pr['head']['sha'] and
+                               trigger['branch'] == pr['head']['ref'] and pr['head']['repo']['full_name'] == _C_REPOSITORY,
+                               'Original held trigger does not match current raw event')
+                    labels = pr['labels']
+                    _c_require(type(labels) is list and all(type(item) is dict and type(item.get('name')) is str for item in labels),
+                               'Malformed current event labels')
+                    _c_require(trigger['all_labels'] == sorted({item['name'].strip() for item in labels if item['name'].strip()}),
+                               'Held trigger labels differ from current event')
+                    failure = ('predecessor', '/completed-stages', 'Completed held-admission stages or explicitly skipped downstream owners remain unproven.')
+                    _c_hold_jobs(plan, current, admission, retained)
+                    failure = ('source_hash', '/source', 'Bound held source bytes changed before acceptance.')
+                    _c_check_sources(root, current)
+                    failure = ('deadline', '/verification', 'Aggregate held verification expired before acceptance.')
+                    _c_require(time.monotonic() < budget['deadline_monotonic'], 'Held verification expired before acceptance')
+                    expected = current
+                    result = _v_hold_diagnostic()
+                    result['errors'] = [_v_error(_v_Problem('missing_owner', '/admission',
+                        'Authenticated original initial-attempt hold; all six dependent producers explicitly skipped. No execution is admitted.'), 'admission')]
+                    for node in result['nodes']:
+                        node.update(status='unrun', cause='initial_attempt_hold_owner_observed_skipped')
+                    for entry in result['owners']:
+                        entry['cause'] = ('authenticated_initial_attempt_hold' if entry['job_id'] == 'admission' else
+                                          'final_completion_unproven' if entry['job_id'] == 'reconcile' else
+                                          'initial_attempt_hold_owner_observed_skipped')
+            except Exception as problem:
+                expected = None
+                if not isinstance(problem, _v_Problem):
+                    problem = _v_Problem(*failure)
+                result = _v_hold_diagnostic(problem, cancelled=os.environ.get('PREVIEW_CANCELLED') == 'true')
+        remaining = 120 - (time.monotonic() - final_started)
+        with _c_deadline(remaining):
+            for name, raw in pair.items():
+                _c_write(directory / 'admission' / name, raw)
+            for name, raw in retained.items():
+                _c_write(directory / ('transfer-context.json' if name == 'transfer-context.json' else 'completed-stages/' + name), raw)
+            _c_write(directory / 'reconciliation.json', result)
+            if expected is not None:
+                _c_write(directory / 'completion.json', {'schema_version': 'foobar-preview-final-v1', 'completion': 'unproven',
+                    'repository': expected['repository'], 'head_sha': expected['head_sha'], 'run_id': expected['run_id'],
+                    'run_attempt': expected['run_attempt'], 'reconciliation_sha256': hashlib.sha256(_c_bytes(directory / 'reconciliation.json')).hexdigest()})
+            wanted = {'reconciliation.json', *('admission/' + name for name in pair),
+                      *('transfer-context.json' if name == 'transfer-context.json' else 'completed-stages/' + name for name in retained)}
+            if expected is not None:
+                wanted.add('completion.json')
+            reader = _v_Reader(directory)
+            found, folders = _v_scan(reader)
+            _c_require(set(found) == wanted and folders == {name.split('/')[0] for name in wanted if '/' in name} and
+                       len(found) + 2 <= _C_FILES and sum(info.st_size for info in found.values()) + 2 * _C_FILE <= _C_BYTES,
+                       'Diagnostic writer set or aggregate reserve is uncertain')
+            inventory = []
+            for relative in sorted(wanted):
+                _, digest, size = reader.read(relative, keep=False)
+                inventory.append({'path': relative, 'size': size, 'sha256': digest})
+            reader.check_unchanged()
+            _c_write(directory / 'final-inventory.json', {'schema_version': 'foobar-preview-final-inventory-v1', 'files': inventory})
+            _c_write(directory / 'final-complete.json', {'schema_version': 'foobar-preview-final-complete-v1',
+                'writer_complete': True, 'upload_completion': 'unproven',
+                'inventory_sha256': hashlib.sha256(_c_bytes(directory / 'final-inventory.json')).hexdigest()})
+            for parent in [*(directory / name for name in sorted(folders)), directory]:
+                descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            _c_require(time.monotonic() - final_started < 120, 'Held finalization exceeded its absolute allowance')
+            _c_output('continue_allowed', 'false')
+    except Exception:
+        # Never start another finalization allowance or manufacture a complete
+        # marker after unsafe ownership, a deadline, or a failed writer.
+        return 1
+    return 1
+
+
 def _workflow_prepare():
+    if os.environ.get('GITHUB_JOB') == 'reconcile' and os.environ.get('GITHUB_RUN_ATTEMPT') == '1':
+        return _c_hold_prepare()
     verification_started = time.monotonic()
     # This runs in a single bounded verification step before dependency setup.
     with _c_deadline(120):
@@ -997,6 +1345,8 @@ def _main():
     parser.add_argument('--input-dir', type=Path)
     args = parser.parse_args()
     directory = args.evidence_dir
+    if args.phase == 'reconcile' and args.attempt == 1:
+        return _c_hold_main(args)
     try:
         import resource
         resource.setrlimit(resource.RLIMIT_FSIZE, (_C_FILE, _C_FILE))
@@ -2097,8 +2447,116 @@ def _v_global_shell(status='incomplete'):
     return result
 
 
+def _v_hold_expected(expected):
+    """Separate terminal-diagnostic identity; never an execution admission."""
+    _v_closed(expected, _v_EXPECTED_KEYS, '/expected')
+    _v_need(expected['repository'] == _v_REPO and expected['workflow_path'] == _v_WORKFLOW,
+            'identity', '/expected', 'Unexpected hold repository or workflow.')
+    _v_need(_v_hex(expected['head_sha'], 40) and expected['checkout_head'] == expected['head_sha'],
+            'identity', '/expected/checkout_head', 'Hold checkout must match the exact head.')
+    _v_need(type(expected['run_id']) is int and expected['run_id'] > 0 and
+            type(expected['run_attempt']) is int and expected['run_attempt'] == 1 and
+            expected['producer_job'] == 'reconcile', 'identity', '/expected',
+            'Only first-attempt reconciliation may diagnose an initial hold.')
+    _v_need(type(expected['cancelled']) is bool, 'schema', '/expected/cancelled', 'Cancellation must be independently observed.')
+    for key in ('workflow_sha256', 'plan_sha256'):
+        _v_need(_v_hex(expected[key]), 'identity', '/expected/' + key, 'Malformed source digest.')
+    hashes = expected['source_hashes']
+    _v_closed(hashes, _v_CONTROLS + _v_PRODUCTS, '/expected/source_hashes', 'source_hash')
+    _v_need(all(_v_hex(value) for value in hashes.values()), 'source_hash', '/expected/source_hashes', 'Malformed source digest.')
+    _v_need(hashes[_v_OLD] == _v_SUPERVISOR and hashes[_v_PLAN] == expected['plan_sha256'] and
+            hashes[_v_WORKFLOW] == expected['workflow_sha256'], 'identity', '/expected/source_hashes', 'Inconsistent source binding.')
+    provenance = expected['provenance']
+    _v_need(type(provenance) is list and len(provenance) == 1, 'provenance', '/expected/provenance',
+            'An initial hold requires exactly the original admission artifact, no downstream execution.')
+    record = provenance[0]
+    _v_closed(record, {'producer_job', 'artifact_name', 'artifact_id', 'repository', 'head_sha',
+                      'workflow_path', 'run_id', 'run_attempt'}, '/expected/provenance/0', 'provenance')
+    _v_need(record['producer_job'] == 'admission' and type(record['artifact_id']) is int and record['artifact_id'] > 0 and
+            record['artifact_name'] == _v_name(expected, 'admission') and
+            all(_v_same(record[key], expected[key]) for key in ('repository', 'head_sha', 'workflow_path', 'run_id', 'run_attempt')),
+            'provenance', '/expected/provenance/0', 'Original admission provenance differs from the exact held attempt.')
+
+
+def _v_hold_pair(input_dir, expected):
+    root, stamps = _v_directory(input_dir)
+    root_before = _v_stat_id(_v_os.lstat(root))
+    names = []
+    with _v_os.scandir(root) as entries:
+        for entry in entries:
+            _v_need(len(names) < 7 and entry.name in _v_JOBS[:-1], 'global_ownership', '/inputs', 'Unexpected initial-hold owner.')
+            names.append(entry.name)
+    _v_need(names == ['admission'], 'global_ownership', '/inputs', 'Initial hold cannot contain downstream execution artifacts.')
+    reader = _v_Reader(root / 'admission')
+    admission_before = _v_stat_id(_v_os.lstat(reader.root))
+    found, directories = _v_scan(reader)
+    _v_need(set(found) == {'admission.json', 'admission-context.json'} and not directories,
+            'admission', '/inputs/admission', 'Initial admission must retain exactly the original two files.')
+    pair = {name: reader.read(name)[0] for name in ('admission.json', 'admission-context.json')}
+    data = _v_decode(pair['admission.json'], '/admission.json')
+    context = _v_decode(pair['admission-context.json'], '/admission-context.json')
+    _v_closed(context, {'schema_version', 'repository', 'head_sha', 'run_id', 'attempt', 'admission_sha256'}, '/admission-context.json', 'admission')
+    _v_need(type(context['schema_version']) is int and context['schema_version'] == 1 and
+            all(_v_same(context[key], expected[key]) for key in ('repository', 'head_sha', 'run_id')) and
+            _v_same(context['attempt'], expected['run_attempt']) and context['admission_sha256'] == reader.records['admission.json'][1],
+            'admission', '/admission-context.json', 'Original hold sidecar does not bind this exact snapshot and attempt.')
+    _v_closed(data, {'schema_version', 'authority', 'coverage', 'observed_at', 'decision', 'reason_codes',
+                     'trigger', 'current', 'native', 'inspected'}, '/admission.json', 'admission')
+    _v_need(type(data['schema_version']) is int and data['schema_version'] == 1 and
+            data['authority'] == 'supplemental-only' and data['coverage'] == 'unproven' and
+            data['decision'] == 'hold' and data['reason_codes'] == ['initial-attempt'] and
+            data['current'] is None and data['native'] is None and data['inspected'] == [],
+            'admission', '/admission.json', 'Snapshot is not the unchanged original initial-attempt hold.')
+    _v_stamp(data['observed_at'], '/admission.json/observed_at')
+    entry = data['trigger']
+    _v_closed(entry, {'repository', 'number', 'branch', 'head_sha', 'draft', 'control_labels', 'all_labels'}, '/admission.json/trigger', 'admission')
+    _v_need(entry['repository'] == _v_REPO and entry['head_sha'] == expected['head_sha'] and
+            entry['branch'] == '2026-10-03-album-tops' and type(entry['number']) is int and entry['number'] > 0 and
+            type(entry['draft']) is bool, 'admission', '/admission.json/trigger', 'Invalid held pull-request identity.')
+    labels = entry['all_labels']
+    _v_need(type(labels) is list and all(_v_string(label) and label == label.strip() for label in labels) and
+            labels == sorted(set(labels)), 'admission', '/admission.json/trigger/all_labels', 'Malformed normalized labels.')
+    controls = {'run_reviews', 'skip_tests', 'ci:full-review', 'ci:focused-e2e', 'ci:focused-related'}
+    _v_need(entry['control_labels'] == [name for name in labels if name in controls or name.startswith(('ci:e2e:', 'ci:e2e-performance:'))],
+            'admission', '/admission.json/trigger/control_labels', 'Inconsistent control-label normalization.')
+    reader.check_unchanged()
+    _v_need(_v_stat_id(_v_os.lstat(root)) == root_before and
+            _v_stat_id(_v_os.lstat(reader.root)) == admission_before, 'writer', '/inputs', 'Held directory inventory changed during validation.')
+    for path, stamp in stamps:
+        _v_need(_v_dir_id(_v_os.lstat(path)) == stamp, 'path', '/inputs', 'Hold input ownership changed.')
+    return data, pair
+
+
+def _v_hold_diagnostic(problem=None, *, cancelled=False, raw_held=False):
+    status = 'cancelled' if cancelled else 'incomplete' if problem is None else _v_status(_v_error(problem)['code'])
+    result = _v_global_shell(status)
+    problem = (_v_Problem('cancellation', '/expected/cancelled', 'Cancellation suppresses initial-hold authentication.')
+               if cancelled else problem or _v_Problem('missing_owner', '/admission',
+                   'Raw initial-attempt hold is not execution admission; transfer, completed stages and downstream nonexecution remain unproven.'
+                   if raw_held else 'Initial admission acquisition or verification is unavailable; no hold authentication or downstream nonexecution is proved.'))
+    result['errors'] = [_v_error(problem, 'admission')]
+    for node in result['nodes']:
+        node['cause'] = 'initial_hold_provenance_unproven'
+    for owner in result['owners']:
+        owner['cause'] = 'cancellation' if cancelled else 'initial_hold_provenance_unproven'
+    return result
+
+
+def _v_reconcile_hold(input_dir, plan, expected):
+    try:
+        _v_check_plan(plan)
+        _v_hold_expected(expected)
+        _v_need(not expected['cancelled'], 'cancellation', '/expected/cancelled', 'Cancellation suppresses initial-hold authentication.')
+        _v_hold_pair(input_dir, expected)
+        return _v_hold_diagnostic(raw_held=True)
+    except Exception as problem:
+        return _v_hold_diagnostic(problem, cancelled=isinstance(problem, _v_Problem) and problem.code == 'cancellation')
+
+
 def reconcile_artifacts(input_dir, *, plan, expected):
     """Read only seven fixed transfers. The computed result is not upload proof."""
+    if type(expected) is dict and type(expected.get('run_attempt')) is int and expected['run_attempt'] == 1:
+        return _v_reconcile_hold(input_dir, plan, expected)
     result = _v_global_shell()
     try:
         _v_check_plan(plan); _v_check_expected(expected, 'reconcile')

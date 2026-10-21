@@ -123,14 +123,14 @@ _SOURCE_PINS = {'.github/workflows/foobar-preview-backend-evidence.yml': 'c5cccb
  '.github/workflows/new-feature-backend-evidence.yml': 'f4b10af233a2544a28eae486d22435e66a19fdbce0f56648a09bd308484885f9',
  'scripts/ci/admit-new-feature-evidence.py': '90641268ec59f81ff185389e881db6d1305aee89e9c25a95a0c3f64297bbe2d6',
  'scripts/ci/new_feature_evidence.py': '8f45a3c1c3ada77a817928463527fb4add58f57f70a2d3f24cc9187cf5fb3673',
- 'scripts/ci/foobar_preview_evidence.py': '5e7e14030f9aebb6a1b8e359a0d6ebda470d61132f62b052437533c29227369e',
+ 'scripts/ci/foobar_preview_evidence.py': '4749e4884526e68299548e48eabd8e5780ba3722f921134df06b922b80bbac3d',
  'scripts/ci/foobar_preview_plan.json': '268da6db28d96ca0174998259b15cba2dd10ec80bb3c20b176b8c4a55a831d72',
  'tests/py/test_new_feature_ci_contract.py': '9bb543abfb0b3c2940607be73f517d93107bf757c37929a651091b3c7c410da3',
  'tests/py/test_new_feature_evidence.py': '5611972c0fc88fae2433f974bf283e5be6f21a6a3ebac4754fa8449ac6aad847',
  'tests/py/test_foobar_preview_ci_contract.py': '7241c03e61eefe8c925f47d354515c1901592f3c8b5c7d6ec9611d8c616de01b',
  'tests/py/test_foobar_preview_evidence.py': 'e0772fef33850f4cdbd3f2d5661c2351f4e881a0ef5b1c85ac39a17502aa9002',
  'music_app/services/foobar_snapshot_parser.py': '3348d8c4980125daa82036deb90117dd35ff443f7950ada382d59a449e7728e3',
- 'tests/ci/foobar_preview_validation_controls_cases.py': '74da983102e936605942837d1a3ed8c6c1a38e2207aed6e8e431506075033e36',
+ 'tests/ci/foobar_preview_validation_controls_cases.py': '769d5c1fd716d5429e903b48978b8b5c784a8ae80aafec48da92d5d7047591ea',
  'tests/ci/foobar_preview_transfer_literal_cases.cjs': 'b30698c8be4385aa72a12924a2435b0cbe3f821e32ca339126f7c951f5211b61',
  'requirements.txt': '018d1e446b65f3730ef877e68b23ecbe62b22273fb2bc3cc6a637458a37dbee7'}
 

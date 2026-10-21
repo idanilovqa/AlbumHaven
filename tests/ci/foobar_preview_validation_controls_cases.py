@@ -2190,3 +2190,688 @@ def test_output_relocation_rejects_contradictory_or_noncanonical_identity_withou
     assert not any(node["status"] == "passed" for node in result["nodes"] if node["case_id"] in affected)
     assert expected == expected_before
     assert relocation_snapshot(local) == before and relocation_snapshot(producer) == producer_before
+
+
+# Initial-hold extension: six closed families, exactly 36 additional variants.
+# This fixture uses the real private/CLI routes, never a held-validator stub.
+def initial_hold_fixture(subject, tmp_path, monkeypatch):
+    root = tmp_path / "checkout"
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    for relative in SOURCE_PATHS[:14]:
+        put(root, relative, (ROOT / relative).read_bytes())
+    put(root, ".git/HEAD", (HEAD + "\n").encode())
+    assert get(root, "scripts/ci/foobar_preview_plan.json") == PLAN
+    assert digest((root / "scripts/ci/new_feature_evidence.py").read_bytes()) == OLD_HASH
+    event, admitted = admission_fixture()
+    put(runner, "event.json", event)
+    raw = {"schema_version": 1, "authority": "supplemental-only", "coverage": "unproven",
+           "observed_at": stamp(107), "decision": "hold", "reason_codes": ["initial-attempt"],
+           "trigger": copy.deepcopy(admitted["trigger"]), "current": None, "native": None, "inspected": []}
+    hashes = {p: digest((root / p).read_bytes()) for p in SOURCE_PATHS[:14]}
+    provenance = {"producer_job": "admission", "artifact_name": "preview-v1-" + HEAD + "-1234-1-admission",
+                  "artifact_id": 700, "repository": REPOSITORY, "head_sha": HEAD,
+                  "workflow_path": WORKFLOW, "run_id": 1234, "run_attempt": 1}
+    expected = {"repository": REPOSITORY, "head_sha": HEAD, "checkout_head": HEAD,
+                "workflow_path": WORKFLOW, "workflow_sha256": hashes[WORKFLOW],
+                "plan_sha256": hashes["scripts/ci/foobar_preview_plan.json"], "run_id": 1234,
+                "run_attempt": 1, "producer_job": "reconcile", "cancelled": False,
+                "source_hashes": hashes, "provenance": [copy.deepcopy(provenance)]}
+    jobs = {}
+    for owner in OWNERS:
+        job = job_fixture(owner, 100 if owner == "admission" else 200)
+        job["run_attempt"] = 1
+        if owner == "admission":
+            job["conclusion"] = "failure"
+            for index, step in enumerate(job["steps"]):
+                step["number"] = 2 * (index + 1)  # Strictly increasing, not necessarily consecutive.
+                if step["name"] == STAGES["admission"]:
+                    step["conclusion"] = "failure"
+        elif owner == "reconcile":
+            job.update(status="in_progress", conclusion=None, completed_at=None, steps=[])
+        else:
+            job.update(status="completed", conclusion="skipped", started_at=None, completed_at=None, steps=[])
+        jobs[owner] = job
+    state = {"root": root, "runner": runner, "raw": raw, "expected": expected,
+             "provenance": [provenance], "jobs": jobs, "pair_overrides": {},
+             "pure": tmp_path / "pure-inputs", "transfer": runner / "foobar-preview-transfer",
+             "output": runner / "foobar-preview-output", "clock": 0.0, "stage": None,
+             "attempts": [], "reads": [], "alarms": [], "limits": []}
+    monkeypatch.setattr(subject, "__file__", str(root / SUBJECT))
+    environment = {"GITHUB_ACTIONS": "true", "RUNNER_OS": "Linux", "GITHUB_REPOSITORY": REPOSITORY,
+                   "GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(runner / "event.json"),
+                   "GITHUB_JOB": "reconcile", "GITHUB_RUN_ID": "1234", "GITHUB_RUN_ATTEMPT": "1",
+                   "GITHUB_WORKFLOW_REF": REPOSITORY + "/" + WORKFLOW + "@refs/pull/17/merge",
+                   "RUNNER_TEMP": str(runner), "GITHUB_OUTPUT": str(runner / "github-output"),
+                   "PREVIEW_EXPECTED_HEAD": HEAD, "PREVIEW_CANCELLED": "false",
+                   "PREVIEW_TRANSFER_OUTCOME": "success"}
+    # Expose only the declared synthetic workflow context, never host tokens.
+    # PREVIEW_ARTIFACTS belongs to the transfer step only. Do not invent a later
+    # stage capability or pass an authentication Boolean to the pure seam.
+    monkeypatch.setattr(os, "environ", dict(environment))
+    initial_hold_write_transfer(state)
+    return state
+
+
+def initial_hold_write_transfer(state):
+    raw = state.get("raw_bytes", encode(state["raw"]))
+    sidecar = {"schema_version": 1, "repository": REPOSITORY, "head_sha": HEAD, "run_id": 1234,
+               "attempt": 1, "admission_sha256": digest(raw), **state.get("sidecar_override", {})}
+    pair = {"admission.json": raw, "admission-context.json": encode(sidecar)}
+    pair.update(state["pair_overrides"])
+    pair = {name: data for name, data in pair.items() if data is not None}
+    for name, data in pair.items():
+        put(state["pure"], "admission/" + name, data)
+    archive, _ = independent_zip([{"name": name, "data": data} for name, data in pair.items()])
+    put(state["transfer"], "admission.zip", archive)
+    metadata = {"schema_version": "foobar-preview-transfer-v1", "repository": REPOSITORY,
+                "head_sha": HEAD, "workflow_path": WORKFLOW, "run_id": 1234, "run_attempt": 1,
+                "cancelled": False, "provenance": copy.deepcopy(state["provenance"]),
+                "archives": [{"producer_job": "admission", "path": "admission.zip",
+                              "size": len(archive), "sha256": digest(archive)}]}
+    metadata.update(state.get("transfer_override", {}))
+    put(state["transfer"], "transfer.json", metadata)
+    run = {"id": 1234, "run_attempt": 1, "repository": {"full_name": REPOSITORY}, "head_sha": HEAD,
+           "head_branch": BRANCH, "event": "pull_request", "path": WORKFLOW,
+           "name": "Foobar Preview Backend Evidence (supplemental)", "status": "in_progress", "conclusion": None}
+    listing = {"total_count": 8, "jobs": list(state["jobs"].values())}
+    base = "https://api.github.com/repos/" + REPOSITORY + "/actions/runs/1234/attempts/1"
+    records = []
+    for index, (kind, name, value, url) in enumerate((("run", "run-attempt.json", run, base),
+            ("jobs", "attempt-jobs.json", listing, base + "/jobs?per_page=100&page=1"))):
+        data = encode(value)
+        put(state["transfer"], name, data)
+        records.append({"kind": kind, "url": url, "status": 200, "started_at": stamp(300 + index),
+                        "finished_at": stamp(300.25 + index), "size": len(data), "sha256": digest(data), "path": name})
+    put(state["transfer"], "acquisition.json", {"schema_version": "foobar-preview-acquisition-v1",
+        "repository": REPOSITORY, "head_sha": HEAD, "workflow_path": WORKFLOW, "run_id": 1234,
+        "run_attempt": 1, "consumer_job": "reconcile", "responses": records})
+    state["pair"] = pair
+
+
+def initial_hold_read(path, maximum=33554432):
+    """Inspect one regular fixture file before any allocation of its bytes."""
+    before = path.lstat()
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    assert stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and 0 <= before.st_size <= maximum
+    blocks, remaining = [], before.st_size
+    with path.open("rb") as stream:
+        assert identity(os.fstat(stream.fileno())) == identity(before)
+        while remaining:
+            block = stream.read(min(65536, remaining))
+            assert block and len(block) <= remaining
+            blocks.append(block); remaining -= len(block)
+        assert stream.read(1) == b""
+        assert identity(os.fstat(stream.fileno())) == identity(before)
+    assert identity(path.lstat()) == identity(before)
+    return b"".join(blocks)
+
+
+def initial_hold_snapshot(directory, *, transfer=False):
+    """Preflight finite entry counts and aggregate sizes before reading files.
+
+    The transfer has the existing 2 GiB aggregate / 256 MiB encoded archive
+    ceiling. Diagnostics retain the existing 4096 files / 256 MiB aggregate.
+    No frozen relocation helper is changed or used for this inspection.
+    """
+    files, pending, directories, total = [], [directory], 0, 0
+    aggregate, count_limit = (2147483648, 32768) if transfer else (268435456, 4096)
+    assert stat.S_ISDIR(directory.lstat().st_mode)
+    while pending:
+        parent = pending.pop()
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                path = parent / entry.name
+                info = path.lstat()
+                assert not stat.S_ISLNK(info.st_mode)
+                if stat.S_ISDIR(info.st_mode):
+                    directories += 1
+                    assert directories <= count_limit
+                    pending.append(path)
+                else:
+                    maximum = 268435456 if transfer and path == directory / "admission.zip" else 33554432
+                    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 <= info.st_size <= maximum
+                    total += info.st_size
+                    assert len(files) < count_limit and total <= aggregate
+                    files.append((path, info.st_size, maximum))
+    result = {}
+    retained = 0
+    for path, size, maximum in files:
+        # Recheck the planned size before consumption, not after a read-all.
+        assert path.lstat().st_size == size and retained + size <= aggregate
+        raw = initial_hold_read(path, maximum)
+        assert len(raw) == size
+        result[path.relative_to(directory).as_posix()] = raw
+        retained += size
+    return result
+
+
+def initial_hold_io(guard, state, descriptors, deny, *, pure, writable=None):
+    """Finite fixture I/O only; safe acquisition is distinct from consumption."""
+    originals = {name: getattr(os, name) for name in ("open", "read", "close", "stat", "lstat", "fstat",
+                 "scandir", "listdir", "lseek", "fsync", "readlink", "access")}
+    original_open, original_io_open, original_fdopen = builtins.open, io.open, os.fdopen
+    abspath = os.path.abspath
+    if pure:
+        trees = (state["pure"],)
+        fixed = {state["pure"] / "admission" / name for name in ("admission.json", "admission-context.json")}
+        enumerated = {state["pure"], state["pure"] / "admission"}
+    else:
+        runner = state["runner"]
+        trees = (runner / "foobar-preview-inputs", state["output"])
+        fixed = {state["root"] / relative for relative in SOURCE_PATHS[:14]}
+        fixed |= {state["root"] / ".git/HEAD", runner / "event.json", runner / "github-output",
+                  runner / "foobar-preview-context.json", runner / "foobar-preview-verification-budget.json",
+                  runner / "foobar-preview-context.json.writing", runner / "foobar-preview-verification-budget.json.writing"}
+        fixed |= {state["transfer"] / name for name in
+                  ("admission.zip", "transfer.json", "acquisition.json", "run-attempt.json", "attempt-jobs.json")}
+        enumerated = {state["transfer"]}
+    ancestors = {parent for target in fixed | set(trees) for parent in target.parents}
+    archive = None if pure else state["transfer"] / "admission.zip"
+    def path(value, dir_fd=None):
+        if isinstance(value, int):
+            if value not in descriptors: return deny("untracked descriptor")
+            return descriptors[value]
+        name = os.fsdecode(os.fspath(value))
+        if dir_fd is not None and not os.path.isabs(name): name = os.path.join(path(dir_fd), name)
+        return Path(abspath(name))
+    def within(name):
+        return any(name == tree or tree in name.parents for tree in trees)
+    def checked(value, *, metadata=False, directory=False, dir_fd=None):
+        name = path(value, dir_fd)
+        allowed = name in fixed or (within(name) and not pure)
+        if directory: allowed |= name in enumerated or within(name)
+        if metadata: allowed |= name in ancestors or within(name)
+        if not allowed: return deny("outside fixture I/O: " + str(name))
+        return name
+    def unchanged(info):
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_mode, info.st_nlink)
+    def consume(fd, size, position, *, eof=False):
+        name = checked(fd)
+        info = originals["fstat"](fd)
+        maximum = 268435456 if name == archive else 33554432
+        if not (stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 <= info.st_size <= maximum):
+            return deny("read before finite regular-file preflight")
+        if type(position) is not int or not 0 <= position <= info.st_size: return deny("unproven read position")
+        if eof and size in (-1, None):
+            # ZipFile's EOCD read may omit size. Convert it to the independently
+            # fstat-bounded remaining range, never forward read(-1) to the host.
+            if name != archive: return deny("unbounded non-archive read")
+            size = info.st_size - position
+        if type(size) is not int or not 0 <= size <= maximum: return deny("unbounded read request")
+        if not pure: state["reads"].append((state["stage"], str(name), state["active_alarm"]))
+        return size, unchanged(info)
+    def after(fd, identity):
+        if unchanged(originals["fstat"](fd)) != identity: return deny("file changed during bounded read")
+    class File:
+        def __init__(self, stream, name):
+            self._stream, self._fd = stream, stream.fileno()
+            descriptors[self._fd] = name
+        def __enter__(self): return self
+        def __exit__(self, *args): self.close()
+        def close(self):
+            try: return self._stream.close()
+            finally: descriptors.pop(self._fd, None)
+        def _read(self, method, size=-1):
+            size, identity = consume(self._fd, size, self._stream.tell(), eof=True)
+            result = getattr(self._stream, method)(size)
+            after(self._fd, identity)
+            return result
+        def read(self, size=-1): return self._read("read", size)
+        def read1(self, size=-1): return self._read("read1", size)
+        def readline(self, size=-1): return self._read("readline", size)
+        def _into(self, method, buffer):
+            _, identity = consume(self._fd, memoryview(buffer).nbytes, self._stream.tell())
+            result = getattr(self._stream, method)(buffer)
+            after(self._fd, identity)
+            return result
+        def readinto(self, buffer): return self._into("readinto", buffer)
+        def readinto1(self, buffer): return self._into("readinto1", buffer)
+        def readlines(self, *args): return deny("unbounded readlines")
+        def __iter__(self): return deny("unbounded file iteration")
+        def write(self, value):
+            if writable is None: return deny("pure file write")
+            writable(self._fd)
+            return self._stream.write(value)
+        def writelines(self, *args): return deny("unobserved writelines")
+        def truncate(self, *args): return deny("unobserved truncate")
+        def __getattr__(self, name):
+            if name not in ("fileno", "seek", "tell", "flush", "closed", "name", "mode", "encoding",
+                            "readable", "writable", "seekable"):
+                return deny("unobserved stream capability: " + name)
+            return getattr(self._stream, name)
+    def opening(original):
+        def call(value, mode="r", *args, **kwargs):
+            if not isinstance(mode, str) or kwargs.get("opener") is not None: return deny("custom file opener")
+            writing = any(flag in mode for flag in "wax+")
+            if writing:
+                if writable is None: return deny("pure write mode")
+                name = writable(value)
+            else: name = checked(value)
+            return File(original(value, mode, *args, **kwargs), name)
+        return call
+    def os_open(value, flags, *args, **kwargs):
+        writing = flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+        name = path(value, kwargs.get("dir_fd"))
+        if writing:
+            if writable is None: return deny("pure write flags")
+            writable(name)
+        else:
+            directory, nofollow = getattr(os, "O_DIRECTORY", 0), getattr(os, "O_NOFOLLOW", 0)
+            safe = bool(directory and nofollow and flags & directory and flags & nofollow)
+            checked(name, metadata=safe, directory=bool(directory and flags & directory))
+        fd = originals["open"](value, flags, *args, **kwargs); descriptors[fd] = name
+        return fd
+    def read(fd, size):
+        checked(fd)
+        size, identity = consume(fd, size, originals["lseek"](fd, 0, os.SEEK_CUR))
+        result = originals["read"](fd, size); after(fd, identity)
+        return result
+    def close(fd):
+        checked(fd, metadata=True)
+        try: return originals["close"](fd)
+        finally: descriptors.pop(fd, None)
+    def metadata(original):
+        def call(value, *args, **kwargs):
+            checked(value, metadata=True, dir_fd=kwargs.get("dir_fd"))
+            return original(value, *args, **kwargs)
+        return call
+    class Entries:
+        def __init__(self, value):
+            name = path(value)
+            if not (name in enumerated or within(name)): return deny("outside owned directory enumeration")
+            self._entries, self._count = originals["scandir"](value), 0
+        def __enter__(self): return self
+        def __exit__(self, *args): self.close()
+        def close(self): return self._entries.close()
+        def __iter__(self): return self
+        def __next__(self):
+            entry = next(self._entries)
+            self._count += 1
+            if self._count > 8192: return deny("directory entry ceiling")
+            return entry
+    def listdir(value="."):
+        with Entries(value) as entries: return [entry.name for entry in entries]
+    def blocked(label):
+        def call(*args, **kwargs): return deny(label)
+        return call
+    guard.setattr(builtins, "open", opening(original_open)); guard.setattr(io, "open", opening(original_io_open))
+    guard.setattr(os, "fdopen", opening(original_fdopen))
+    guard.setattr(os, "open", os_open); guard.setattr(os, "read", read); guard.setattr(os, "close", close)
+    for name in ("stat", "lstat", "fstat", "access", "readlink", "lseek", "fsync"):
+        guard.setattr(os, name, metadata(originals[name]))
+    guard.setattr(os, "scandir", Entries); guard.setattr(os, "listdir", listdir)
+    for name in ("pread", "preadv", "readv", "sendfile", "copy_file_range", "dup", "dup2", "writev", "pwrite", "pwritev"):
+        guard.setattr(os, name, blocked("unobserved os." + name), raising=False)
+    guard.setattr(io, "FileIO", blocked("unobserved io.FileIO"))
+    guard.setattr(io, "open_code", blocked("unobserved io.open_code"), raising=False)
+
+
+def initial_hold_pure(subject, state, monkeypatch):
+    """The public seam cannot read CLI environment/transport/stage inputs."""
+    attempts, descriptors = [], {}
+    original_import = builtins.__import__
+    def deny(label):
+        attempts.append(label)
+        raise AssertionError("pure held diagnostic accessed undeclared capability: " + label)
+    def blocked(label):
+        def call(*args, **kwargs): return deny(label)
+        return call
+    def importing(name, *args, **kwargs):
+        if name == "pytest" or name.startswith("pytest.") or name == "music_app" or name.startswith("music_app."):
+            return deny("product or pytest import")
+        return original_import(name, *args, **kwargs)
+    class NoEnvironment(dict):
+        def __getitem__(self, key): return deny("environment lookup")
+        def get(self, *args): return deny("environment lookup")
+        def __iter__(self): return deny("environment iteration")
+        def copy(self): return deny("environment copy")
+        def items(self): return deny("environment items")
+        def keys(self): return deny("environment keys")
+        def values(self): return deny("environment values")
+        def __contains__(self, key): return deny("environment membership")
+        def __len__(self): return deny("environment length")
+    before = initial_hold_snapshot(state["pure"])
+    expected = copy.deepcopy(state["expected"])
+    with monkeypatch.context() as guard:
+        guard.setattr(os, "environ", NoEnvironment())
+        initial_hold_io(guard, state, descriptors, deny, pure=True)
+        guard.setattr(builtins, "__import__", importing)
+        guard.setattr(importlib.util, "spec_from_file_location", blocked("helper/module loading"))
+        guard.setattr(subject, "_legacy_helper", blocked("legacy helper loading"))
+        for name in ("signal", "setitimer", "alarm", "raise_signal", "pthread_kill"):
+            guard.setattr(signal, name, blocked("pure signal." + name), raising=False)
+        for name in ("write", "writev", "pwrite", "unlink", "remove", "mkdir", "makedirs", "rmdir", "removedirs",
+                     "rename", "replace", "link", "symlink", "chmod", "chown", "utime", "chdir", "fchdir", "truncate", "ftruncate"):
+            guard.setattr(os, name, blocked("os." + name), raising=False)
+        for name in ("fork", "forkpty", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe",
+                     "spawnv", "spawnve", "spawnvp", "spawnvpe", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe"):
+            guard.setattr(os, name, blocked("process." + name), raising=False)
+        result = subject.reconcile_artifacts(state["pure"], plan=copy.deepcopy(PLAN), expected=state["expected"])
+    assert attempts == [], "Caught hidden-input access is still a failure: " + repr(attempts)
+    assert state["expected"] == expected and initial_hold_snapshot(state["pure"]) == before
+    initial_hold_assert_global(result, authenticated=False)
+    return result
+
+
+def initial_hold_assert_global(result, *, authenticated):
+    assert set(result) == {"schema_version", "authority", "kind", "status", "continue_allowed", "errors",
+                           "nodes", "expected_ids", "observed_ids", "owners"}
+    assert result["schema_version"] == "foobar-preview-validation-v1" and result["kind"] == "global"
+    assert result["authority"] == "supplemental-only" and result["continue_allowed"] is False
+    assert result["status"] not in ("passed", "assertion_failed", "timed_out_safe") and result["errors"]
+    assert result["expected_ids"] == PLAN["resource_ids"] and result["observed_ids"] == []
+    assert [node["nodeid"] for node in result["nodes"]] == PLAN["resource_ids"]
+    assert [owner["job_id"] for owner in result["owners"]] == list(OWNERS)
+    nonpassing = {"assertion_failed", "timed_out_safe", "collection_failed", "identity_failed", "helper_failed",
+                  "cancelled", "cleanup_unsafe", "evidence_invalid", "writer_uncertain", "incomplete"}
+    assert result["status"] in nonpassing
+    assert all(owner["status"] in nonpassing for owner in result["owners"])
+    assert result["owners"][-1]["completion"] == "unproven"
+    assert all(node["status"] == ("unrun" if authenticated else "unknown") for node in result["nodes"])
+    if authenticated:
+        assert result["status"] == "incomplete"
+        # Unrun belongs to node accounting, never the preserved owner enum.
+        for owner in result["owners"][1:-1]:
+            assert owner["completion"] == "incomplete"
+            assert isinstance(owner["cause"], str) and owner["cause"]
+        # The cause must explain the authenticated skip/initial hold. Its
+        # truthful meaning is independently source-reviewed, not a new enum.
+        assert all(isinstance(node["cause"], str) and node["cause"] for node in result["nodes"])
+    else:
+        assert all(owner["completion"] != "complete" and owner["status"] != "unrun" for owner in result["owners"])
+
+
+def initial_hold_cli(subject, state, monkeypatch, *, allow_no_output=False):
+    """Run only real prepare/main routing under finite external capability fakes."""
+    from types import SimpleNamespace
+    attempts, descriptors = state["attempts"], {}
+    runner, output = state["runner"], state["output"]
+    original_import, abspath = builtins.__import__, os.path.abspath
+    original_mkdir, original_rename, original_replace = os.mkdir, os.rename, os.replace
+    original_write = os.write
+    protected = initial_hold_snapshot(state["root"])
+    transfer_before = initial_hold_snapshot(state["transfer"], transfer=True)
+    def deny(label):
+        attempts.append(label)
+        raise AssertionError("initial hold attempted forbidden effect: " + label)
+    def path(value):
+        if isinstance(value, int):
+            if value not in descriptors: return deny("unknown write descriptor")
+            return descriptors[value]
+        return Path(abspath(os.fsdecode(os.fspath(value))))
+    def writable(value):
+        name = path(value)
+        fixed = {runner / "github-output", runner / "foobar-preview-context.json",
+                 runner / "foobar-preview-verification-budget.json"}
+        permitted = name in fixed or name.parent == runner and name.name in {
+            "foobar-preview-context.json.writing", "foobar-preview-verification-budget.json.writing"}
+        permitted |= any(name == parent or parent in name.parents for parent in (runner / "foobar-preview-inputs", output))
+        if not permitted: return deny("write outside owned proof")
+        return name
+    def mkdir(value, *args, **kwargs):
+        # Path.mkdir(exist_ok=True) still attempts mkdir on the already-owned
+        # runner parent; forwarding that harmless EEXIST is not an outside write.
+        if path(value) != runner: writable(value)
+        return original_mkdir(value, *args, **kwargs)
+    def rename(original):
+        def call(source, destination, *args, **kwargs):
+            writable(source); writable(destination)
+            return original(source, destination, *args, **kwargs)
+        return call
+    def write(fd, data):
+        writable(fd)
+        return original_write(fd, data)
+    def blocked(label):
+        def call(*args, **kwargs): return deny(label)
+        return call
+    def importing(name, *args, **kwargs):
+        if name == "pytest" or name.startswith("pytest.") or name == "music_app" or name.startswith("music_app."):
+            return deny("product or pytest import")
+        return original_import(name, *args, **kwargs)
+    def monotonic():
+        state["clock"] += 0.25
+        return state["clock"]
+    def setrlimit(which, values):
+        if which != 1 or values != (33554432, 33554432): return deny("unexpected resource limit")
+        state["limits"].append(values)
+    sigalrm, itimer = getattr(signal, "SIGALRM", 14), getattr(signal, "ITIMER_REAL", 0)
+    handlers = {sigalrm: None}
+    def getsignal(kind):
+        if kind != sigalrm: return deny("non-orchestration signal lookup")
+        return handlers[kind]
+    def setsignal(kind, handler):
+        if kind != sigalrm: return deny("non-orchestration signal handler")
+        old = handlers[kind]; handlers[kind] = handler
+        return old
+    def timer(kind, seconds, interval=0):
+        if kind != itimer or interval != 0 or type(seconds) not in (int, float) or not 0 <= seconds <= 120:
+            return deny("unbounded or non-orchestration timer")
+        state["alarms"].append((state["stage"], seconds))
+        state["active_alarm"] = seconds
+        return (0.0, 0.0)
+    state["active_alarm"] = 0
+    inputs = runner / "foobar-preview-inputs"
+    argv = [str(state["root"] / SUBJECT), "reconcile", "--root", str(state["root"]),
+            "--plan", str(state["root"] / "scripts/ci/foobar_preview_plan.json"),
+            "--admission", str(inputs / "admission/admission.json"), "--evidence-dir", str(output),
+            "--expected-head", HEAD, "--run-id", "1234", "--attempt", "1",
+            "--helper-evidence", str(inputs / "helper"), "--input-dir", str(inputs)]
+    with monkeypatch.context() as guard:
+        guard.setattr(sys, "argv", argv)
+        guard.setattr(subject, "time", SimpleNamespace(monotonic=monotonic))
+        guard.setitem(sys.modules, "resource", SimpleNamespace(RLIMIT_FSIZE=1, setrlimit=setrlimit))
+        guard.setattr(signal, "SIGALRM", sigalrm, raising=False); guard.setattr(signal, "ITIMER_REAL", itimer, raising=False)
+        guard.setattr(signal, "getsignal", getsignal); guard.setattr(signal, "signal", setsignal)
+        guard.setattr(signal, "setitimer", timer, raising=False)
+        for name in ("alarm", "raise_signal", "pthread_kill"):
+            guard.setattr(signal, name, blocked("signal." + name), raising=False)
+        guard.setattr(builtins, "__import__", importing)
+        guard.setattr(importlib.util, "spec_from_file_location", blocked("helper/module loading"))
+        for name in ("_legacy_helper", "_c_run", "_c_collect", "_c_execute", "_c_legacy", "_child_entry"):
+            guard.setattr(subject, name, blocked(name))
+        initial_hold_io(guard, state, descriptors, deny, pure=False, writable=writable)
+        guard.setattr(os, "write", write); guard.setattr(os, "mkdir", mkdir)
+        guard.setattr(os, "rename", rename(original_rename)); guard.setattr(os, "replace", rename(original_replace))
+        for name in ("unlink", "remove", "rmdir", "removedirs", "link", "symlink", "chmod", "chown", "utime", "chdir", "fchdir", "truncate", "ftruncate"):
+            guard.setattr(os, name, blocked("os." + name), raising=False)
+        for name in ("fork", "forkpty", "posix_spawn", "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe",
+                     "spawnv", "spawnve", "spawnvp", "spawnvpe", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe"):
+            guard.setattr(os, name, blocked("process." + name), raising=False)
+        state["stage"] = "prepare"
+        try:
+            subject._workflow_prepare()
+            state["prepare_error"] = None
+        except (Exception, SystemExit) as error:
+            state["prepare_error"] = type(error).__name__
+        state["prepare_clock"] = state["clock"]
+        budget_path = runner / "foobar-preview-verification-budget.json"
+        # Bookkeeping occurs before the main stage and is not an upstream proof read.
+        state["budget"] = json.loads(initial_hold_read(budget_path)) if budget_path.is_file() else None
+        state["stage"] = "main"
+        result = subject._main()
+    assert type(result) is int and result != 0
+    assert attempts == [], "A caught effect attempt still fails: " + repr(attempts)
+    assert state["active_alarm"] == 0
+    assert all(0 <= seconds <= 120 for _, seconds in state["alarms"])
+    assert initial_hold_snapshot(state["root"]) == protected
+    assert initial_hold_snapshot(state["transfer"], transfer=True) == transfer_before
+    if state["budget"] is None:
+        # Unknown spend cannot become a newly manufactured verification budget.
+        # Bounded diagnostic copying is finalization, not proof authentication;
+        # do not mislabel safe acquisition itself as a verification pass.
+        assert not budget_path.exists()
+    else:
+        spent = state["budget"]["spent_seconds"]
+        assert type(spent) in (int, float) and 0 <= spent < 120
+        assert spent >= max(0, state["prepare_clock"] - 0.5)
+        assert json.loads(initial_hold_read(budget_path))["spent_seconds"] >= spent
+    if (runner / "github-output").exists():
+        emitted = initial_hold_read(runner / "github-output").decode("utf-8")
+        assert "continue_allowed=true" not in emitted and "global_success_candidate=true" not in emitted
+    if allow_no_output and not output.exists():
+        state["files"] = {}
+        return None
+    assert output.is_dir(), "A safe owned runner must retain a bounded nonpassing diagnostic"
+    files = initial_hold_snapshot(output)
+    assert files and len(files) <= 4096 and sum(map(len, files.values())) <= 268435456
+    assert all(len(raw) <= 33554432 for raw in files.values())
+    assert not any(name.endswith(("reports.json", "junit.xml", "git-operation.json")) or "invocation" in name for name in files)
+    if "reconciliation.json" in files:
+        diagnostic = json.loads(files["reconciliation.json"])
+    else:
+        assert "failure.json" in files
+        failure = json.loads(files["failure.json"])
+        assert failure["schema_version"] == "foobar-preview-failure-v1"
+        assert failure["status"] == "incomplete" and failure["continue_allowed"] is False
+        diagnostic = None
+    if "completion.json" in files:
+        completion = json.loads(files["completion.json"])
+        assert set(completion) == {"schema_version", "completion", "repository", "head_sha", "run_id", "run_attempt", "reconciliation_sha256"}
+        assert completion["schema_version"] == "foobar-preview-final-v1" and completion["completion"] == "unproven"
+        assert (completion["repository"], completion["head_sha"], completion["run_id"], completion["run_attempt"]) == (REPOSITORY, HEAD, 1234, 1)
+        assert completion["reconciliation_sha256"] == digest(files["reconciliation.json"])
+    if "final-complete.json" in files:
+        marker = json.loads(files["final-complete.json"])
+        inventory = json.loads(files["final-inventory.json"])
+        assert set(marker) == {"schema_version", "writer_complete", "upload_completion", "inventory_sha256"}
+        assert marker["schema_version"] == "foobar-preview-final-complete-v1"
+        assert marker["writer_complete"] is True and marker["upload_completion"] == "unproven"
+        assert marker["inventory_sha256"] == digest(files["final-inventory.json"])
+        assert set(inventory) == {"schema_version", "files"} and inventory["schema_version"] == "foobar-preview-final-inventory-v1"
+        names = [entry["path"] for entry in inventory["files"]]
+        assert len(names) == len(set(names)) and set(names) == set(files) - {"final-inventory.json", "final-complete.json"}
+        for entry in inventory["files"]:
+            assert entry["size"] == len(files[entry["path"]]) and entry["sha256"] == digest(files[entry["path"]])
+    state["files"] = files
+    return diagnostic
+
+
+def test_initial_hold_authenticated_cli_and_limited_pure_diagnostic(subject, tmp_path, monkeypatch):
+    state = initial_hold_fixture(subject, tmp_path, monkeypatch)
+    pure = initial_hold_pure(subject, state, monkeypatch)
+    assert pure["status"] == "incomplete"
+    result = initial_hold_cli(subject, state, monkeypatch)
+    initial_hold_assert_global(result, authenticated=True)
+    for name, raw in state["pair"].items():
+        copies = [data for relative, data in state["files"].items() if PurePosixPath(relative).name == name]
+        assert copies and all(data == raw for data in copies)
+    assert {"reconciliation.json", "completion.json", "final-inventory.json", "final-complete.json"} <= set(state["files"])
+
+
+@pytest.mark.parametrize("missing", ["failed-transfer", "checkpoint", "archive", "original-pair"])
+def test_initial_hold_unavailable_acquisition_is_not_authenticated(subject, tmp_path, monkeypatch, missing):
+    state = initial_hold_fixture(subject, tmp_path, monkeypatch)
+    if missing == "failed-transfer": monkeypatch.setenv("PREVIEW_TRANSFER_OUTCOME", "failure")
+    elif missing == "checkpoint": (state["transfer"] / "transfer.json").unlink()
+    elif missing == "archive": (state["transfer"] / "admission.zip").unlink()
+    else:
+        state["pair_overrides"]["admission.json"] = None
+        (state["pure"] / "admission/admission.json").unlink()
+        initial_hold_write_transfer(state)
+    initial_hold_pure(subject, state, monkeypatch)
+    result = initial_hold_cli(subject, state, monkeypatch)
+    if result is not None: initial_hold_assert_global(result, authenticated=False)
+
+
+@pytest.mark.parametrize("mutation", ["wrong-head", "wrong-run", "wrong-attempt", "wrong-workflow", "non-reconcile-owner",
+    "admit-decision", "wrong-sole-reason", "non-null-current", "non-null-native", "nonempty-inspected",
+    "wrong-sidecar-hash", "duplicate-provenance-owner", "unknown-raw-key", "duplicate-json-key", "nonfinite-json"])
+def test_initial_hold_raw_identity_policy_and_proof_corruption(subject, tmp_path, monkeypatch, mutation):
+    state = initial_hold_fixture(subject, tmp_path, monkeypatch)
+    if mutation == "wrong-head": state["raw"]["trigger"]["head_sha"] = "f" * 40
+    elif mutation == "wrong-run": state["sidecar_override"] = {"run_id": 1235}
+    elif mutation == "wrong-attempt": state["sidecar_override"] = {"attempt": 2}
+    elif mutation == "wrong-workflow":
+        state["transfer_override"] = {"workflow_path": ".github/workflows/pr-gates.yml"}
+        state["expected"]["workflow_path"] = ".github/workflows/pr-gates.yml"
+    elif mutation == "non-reconcile-owner":
+        monkeypatch.setenv("GITHUB_JOB", "helper")
+        state["expected"]["producer_job"] = "helper"
+    elif mutation == "admit-decision": state["raw"]["decision"] = "admit"
+    elif mutation == "wrong-sole-reason": state["raw"]["reason_codes"] = ["native-active"]
+    elif mutation == "non-null-current": state["raw"]["current"] = copy.deepcopy(state["raw"]["trigger"])
+    elif mutation == "non-null-native": state["raw"]["native"] = {"status": "completed"}
+    elif mutation == "nonempty-inspected": state["raw"]["inspected"] = [{"url": "https://api.github.com/unrequested"}]
+    elif mutation == "wrong-sidecar-hash": state["sidecar_override"] = {"admission_sha256": "0" * 64}
+    elif mutation == "duplicate-provenance-owner":
+        state["provenance"].append(copy.deepcopy(state["provenance"][0]))
+        state["expected"]["provenance"] = copy.deepcopy(state["provenance"])
+    elif mutation == "unknown-raw-key": state["raw"]["authenticated"] = True
+    elif mutation == "duplicate-json-key": state["raw_bytes"] = b'{"decision":"hold",' + encode(state["raw"])[1:]
+    else:
+        # Keep the exact raw key set: exercise earliest finite/scalar-type
+        # rejection, not another unknown-key case or a specific decoder hook.
+        state["raw_bytes"] = encode(state["raw"]).replace(b'"schema_version":1', b'"schema_version":NaN', 1)
+    initial_hold_write_transfer(state)
+    initial_hold_pure(subject, state, monkeypatch)
+    result = initial_hold_cli(subject, state, monkeypatch, allow_no_output=mutation == "non-reconcile-owner")
+    if result is not None: initial_hold_assert_global(result, authenticated=False)
+
+
+@pytest.mark.parametrize("mutation", ["observation-success", "upload-failure", "missing-post", "cancelled", "unknown-step", "over-limit"])
+def test_initial_hold_completed_metadata_requires_exact_held_exception(subject, tmp_path, monkeypatch, mutation):
+    state = initial_hold_fixture(subject, tmp_path, monkeypatch)
+    job = state["jobs"]["admission"]
+    observation = next(step for step in job["steps"] if step["name"] == STAGES["admission"])
+    upload = next(step for step in job["steps"] if step["name"] == "Retain fresh original admission even on hold")
+    if mutation == "observation-success": observation["conclusion"] = "success"
+    elif mutation == "upload-failure": upload["conclusion"] = "failure"
+    elif mutation == "missing-post": job["steps"] = [step for step in job["steps"] if step["name"] != "Post " + STAGES["checkout"]]
+    elif mutation == "cancelled": job["conclusion"] = "cancelled"
+    elif mutation == "unknown-step": job["steps"][0]["name"] = "Unapproved initialization"
+    else:
+        # Total upper interval is 120.001; contained steps remain unchanged.
+        # This is the earliest job bound, not invented independent cap coverage.
+        job["completed_at"] = stamp(218.001)
+        state["jobs"]["reconcile"]["started_at"] = stamp(250)
+    initial_hold_write_transfer(state)
+    pure = initial_hold_pure(subject, state, monkeypatch)
+    assert pure["status"] == "incomplete", "Pure evidence cannot consume these stage mutations"
+    result = initial_hold_cli(subject, state, monkeypatch)
+    if result is not None: initial_hold_assert_global(result, authenticated=False)
+    assert any(name.endswith("attempt-jobs.json") for _, name, _ in state["reads"])
+
+
+@pytest.mark.parametrize("condition", ["authenticated-hold", "unavailable-transfer", "cancellation"])
+def test_initial_hold_routing_has_no_product_effects_or_budget_reset(subject, tmp_path, monkeypatch, condition):
+    state = initial_hold_fixture(subject, tmp_path, monkeypatch)
+    if condition == "unavailable-transfer": monkeypatch.setenv("PREVIEW_TRANSFER_OUTCOME", "failure")
+    elif condition == "cancellation":
+        monkeypatch.setenv("PREVIEW_CANCELLED", "true")
+        state["expected"]["cancelled"] = True
+    pure = initial_hold_pure(subject, state, monkeypatch)
+    if condition == "cancellation": assert pure["status"] == "cancelled"
+    result = initial_hold_cli(subject, state, monkeypatch)
+    if condition == "authenticated-hold": initial_hold_assert_global(result, authenticated=True)
+    elif result is not None:
+        initial_hold_assert_global(result, authenticated=False)
+        if condition == "cancellation": assert result["status"] == "cancelled"
+    assert state["attempts"] == []
+    assert state["alarms"] and all(seconds <= 120 for _, seconds in state["alarms"])
+
+
+@pytest.mark.parametrize("owner", ["helper", "core", "resource_1", "resource_2", "resource_3", "resource_4", "reconcile"])
+def test_initial_hold_never_weakens_ordinary_execution_admission(subject, tmp_path, monkeypatch, owner):
+    state = initial_hold_fixture(subject, tmp_path, monkeypatch)
+    expected = copy.deepcopy(state["expected"])
+    expected["producer_job"] = owner
+    if owner != "reconcile":
+        monkeypatch.setenv("GITHUB_JOB", owner)
+        with pytest.raises(ValueError): subject._c_context(state["root"], owner, expected["provenance"])
+        with pytest.raises(subject._v_Problem): subject._v_check_expected(expected, owner)
+        empty = tmp_path / "ordinary-owner"; empty.mkdir()
+        result = subject.validate_artifact(empty, plan=copy.deepcopy(PLAN), expected=expected,
+                                           inputs={"admission": state["pure"] / "admission"})
+        assert result["status"] != "passed" and result["continue_allowed"] is False and result["observed_ids"] == []
+    else:
+        expected["run_attempt"] = 2
+        for item in expected["provenance"]:
+            item["run_attempt"] = 2
+            item["artifact_name"] = "preview-v1-" + HEAD + "-1234-2-admission"
+        sidecar = get(state["pure"], "admission/admission-context.json"); sidecar["attempt"] = 2
+        put(state["pure"], "admission/admission-context.json", sidecar)
+        subject._v_check_expected(expected, owner)
+        with pytest.raises(subject._v_Problem): subject._v_admission(subject._v_Reader(state["pure"] / "admission"), expected)
+        result = subject.reconcile_artifacts(state["pure"], plan=copy.deepcopy(PLAN), expected=expected)
+        assert result["status"] != "passed" and result["continue_allowed"] is False and result["observed_ids"] == []

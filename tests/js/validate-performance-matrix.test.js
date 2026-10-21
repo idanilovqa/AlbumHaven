@@ -22,7 +22,7 @@ const FIXTURE_RELEASE = 'fixtures-v1.0.25';
 const FIXTURE_MANIFEST_SHA256 = 'e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60';
 const ARTWORK_GENERATOR_COMMIT = 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11';
 const EXPECTED_SHARDS = [
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,notification-history,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
@@ -119,9 +119,9 @@ function stepContaining(job, marker) {
   return step;
 }
 
-test('approved registry keeps 28 independently schedulable targets and 57 cases', () => {
-  assert.equal(contract.targets.length, 28);
-  assert.equal(contract.targets.flatMap((target) => target.cases).length, 57);
+test('approved registry keeps 29 independently schedulable targets and 59 cases', () => {
+  assert.equal(contract.targets.length, 29);
+  assert.equal(contract.targets.flatMap((target) => target.cases).length, 59);
   assert.deepEqual(
     contract.targets.filter((target) => target.defaultMember).map((target) => target.name),
     contract.targets.map((target) => target.name),
@@ -133,7 +133,7 @@ test('approved registry keeps 28 independently schedulable targets and 57 cases'
   const scrollNavigation = contract.targets.find((target) => (
     target.name === 'artist-tree-scroll-navigation'
   ));
-  assert.equal(scrollNavigation.cases.length, 22);
+  assert.equal(scrollNavigation.cases.length, 23);
   assert.deepEqual(
     scrollNavigation.cases
       .filter((entry) => entry.test.endsWith('galleryNativeScrollStability.spec.js'))
@@ -157,13 +157,13 @@ test('performance validator and shard runner exist', () => {
   assert.equal(fs.existsSync(shardRunnerPath), true, 'Missing scripts/ci/run-performance-shard.ps1');
 });
 
-test('workflow has five selectable fixture-profile runners owning all 28 targets once', () => {
+test('workflow has five selectable fixture-profile runners owning all 29 targets once', () => {
   const job = performanceJobSource();
   const rows = validator.parseStaticPerformanceMatrix(workflow);
   assert.deepEqual(rows, EXPECTED_SHARDS);
   const owned = rows.flatMap((row) => row.targets.split(','));
-  assert.equal(owned.length, 28);
-  assert.equal(new Set(owned).size, 28);
+  assert.equal(owned.length, 29);
+  assert.equal(new Set(owned).size, 29);
   assert.deepEqual(new Set(owned), new Set(contract.targets.map((target) => target.name)));
   assert.match(job, /shard:\s*\$\{\{\s*fromJSON\(needs\.review_scope\.outputs\.performance_shards_json\)\s*\}\}/);
   assert.match(job, /resolve-ci-shard\.cjs performance \$\{\{\s*matrix\.shard\s*\}\}/);
@@ -175,7 +175,7 @@ test('workflow has five selectable fixture-profile runners owning all 28 targets
     rows.map((row) => row.fixtureProfile),
     ['synthetic-large-library', 'utility-problematic-files', 'playback-media', 'scan-library', 'synthetic-large-library'],
   );
-  assert.equal(rows[0].targets.split(',').length, 16, 'synthetic-large-library must own all sixteen compatible targets');
+  assert.equal(rows[0].targets.split(',').length, 17, 'synthetic-large-library must own all seventeen compatible targets');
   assert.doesNotMatch(job, /timeout-minutes:/, 'a multi-target shard must not squeeze later targets into a shared wall-clock budget');
 });
 
@@ -196,7 +196,7 @@ test('validator accepts selectable shards and rejects routing and case drift', (
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
-  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /57 cases/);
+  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /59 cases/);
 
   const paidCampaign = structuredClone(contract);
   paidCampaign.calibrationPolicy.separateCampaignRequired = true;
@@ -349,5 +349,6 @@ test('functional shards and all performance target artifacts remain present with
   assert.match(workflow, /^\s{2}e2e_functional:/m);
   assert.match(workflow, /validate-functional-shards\.cjs @arguments/);
   assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target16\s*\}\}/);
+  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target17\s*\}\}/);
   assert.doesNotMatch(workflow, /^  (?:merge_cloud_reports|deploy_cloud_reports):/m);
 });

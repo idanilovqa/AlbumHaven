@@ -517,9 +517,10 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
     'scan-health',
     'paired-search-calibration',
     'scan-error',
+      'notification-history',
     ]
   );
-  assert.equal(targets.length, 28);
+  assert.equal(targets.length, 29);
 });
 test('resolveRequestedTargets rejects an unknown performance group', () => {
   assert.throws(() => _private.resolveRequestedTargets({
@@ -2441,6 +2442,7 @@ test('artist scroll completion requires all navigation, restoration, presentatio
   const titles = [
     'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
     'root continuation starts eight viewports early and never reaches a hard stop during its real request',
+    'search and Home destinations do not rebound after settling',
     ...['Cards', 'Covers', 'Rows'].flatMap((view) => [
       `mobile ${view} > long-press Scroll, album, Back restores an artist beyond the first root page`,
       `mobile ${view} > long-press Scroll, ordinary scroll to another artist, album, Back retains the new position`,
@@ -2469,8 +2471,9 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     expectedCasePatterns: target.casePatterns || [target.casePattern],
     parsedTestResults,
   };
-  assert.equal(target.casePatterns.length, 22);
-  assert.equal(new Set(target.casePatterns).size, 22);
+  assert.equal(target.casePatterns.length, 23);
+  assert.equal(new Set(target.casePatterns).size, 23);
+  assert.match('FTC-GALLERY-NAV-037', new RegExp(target.grep));
   assert.equal(target.casePatterns.some((pattern) => pattern.includes('›')), true);
   assert.equal(_private.classifyPerformanceAttempt(record, 'local').outcome, 'passed');
   for (const incomplete of [
@@ -2951,7 +2954,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 28);
+  assert.equal(calls.length, 29);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
   assert.equal(
     calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
@@ -2963,7 +2966,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   );
   assert.deepEqual(
     calls.map((call) => call.args[1]),
-    new Array(28).fill('test'),
+    new Array(29).fill('test'),
   );
   assert.equal(calls[3].args.includes('--real-app-port=5001'), true);
   assert.equal(calls[4].args.includes('--real-app-port=5011'), true);
@@ -3048,7 +3051,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[12].args.includes('--grep=FTC-SEARCH-NAV-030P'), true);
   assert.equal(calls[13].args.includes('--grep=FTC-GALLERY-STARTUP-005R'), true);
   assert.equal(calls[14].args.includes('--grep=FTC-GALLERY-STARTUP-005S'), true);
-  assert.equal(calls[15].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3|4|5)'), true);
+  assert.equal(calls[15].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3|4|5|7)'), true);
   assert.equal(calls[16].args.includes('--grep=FTC-GALLERY-NAV-036'), true);
   assert.equal(calls[17].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
   assert.equal(calls[18].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);
@@ -3058,6 +3061,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[22].args.includes('--grep=FTC-OPS-016'), true);
   assert.equal(calls[23].args.includes('--grep=FTC-OPS-017'), true);
   assert.equal(calls[24].args.includes('--grep=FTC-OPS-003(C|E)'), true);
+  assert.equal(calls[28].args.includes('--grep=FTC-NOTIFICATIONS-001P'), true);
 });
 
 test('resolvePerformanceAttemptStatus rejects a false-zero child status when Playwright reported a failed test', () => {
@@ -3220,7 +3224,7 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 28);
+  assert.equal(calls.length, 29);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
   }

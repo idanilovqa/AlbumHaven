@@ -4,9 +4,9 @@ const { spawnSync } = require('node:child_process');
 const { PERFORMANCE_SHARDS } = require('./resolve-ci-shard.cjs');
 const { validatePerformanceChangeImpact } = require('./performance-change-impact.cjs');
 
-const EXPECTED_TARGET_COUNT = 28;
-const EXPECTED_CASE_COUNT = 57;
-const PERFORMANCE_ARTIFACT_SLOT_COUNT = 16;
+const EXPECTED_TARGET_COUNT = 29;
+const EXPECTED_CASE_COUNT = 59;
+const PERFORMANCE_ARTIFACT_SLOT_COUNT = 17;
 const MATRIX_FIELDS = ['shard', 'fixtureProfile', 'fixtureMode', 'harness', 'basePort', 'targets'];
 const CALIBRATION_POLICY = Object.freeze({
   evidenceMode: 'retained-cohorts',
@@ -24,7 +24,7 @@ const CALIBRATION_POLICY = Object.freeze({
   exceptionsRequireOwnerApproval: true,
 });
 const SHARD_DEFINITIONS = Object.freeze([
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,notification-history,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
@@ -149,7 +149,7 @@ function validateShardRows(errors, rawRows, contract) {
   const registered = (contract.targets || []).map((target) => target.name);
   if (owned.length !== registered.length || new Set(owned).size !== registered.length
     || registered.some((name) => !owned.includes(name))) {
-    errors.push('all 28 performance targets must be owned exactly once across five profile runners');
+    errors.push('all 29 performance targets must be owned exactly once across five profile runners');
   }
 }
 

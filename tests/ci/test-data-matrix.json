@@ -8627,6 +8627,20 @@
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js",
+    "case": "FTC-NOTIFICATIONS-001P large notification history › keeps history bounded and leaves search responsive",
+    "profile": "synthetic-large-library",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": ["large-library:notification-history-528"],
+    "filesystemScenarios": ["media:synthetic-large-library"],
+    "expectedContracts": ["notification-count-without-history-load", "cursor-pagination", "virtualized-history-window", "post-history-navigation-responsiveness", "bounded-notification-memory"],
+    "mutationOwnership": {"databaseIdentity": "case:ftc-notifications-001p"},
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js",
     "case": "FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounded cover objects",
     "profile": "synthetic-large-library",
@@ -8696,6 +8710,19 @@
     "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
     "filesystemScenarios": ["media:synthetic-large-library"],
     "expectedContracts": ["gallery-presentation-semantic-anchor", "desktop-gallery-position-stability"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/gallerySearchHomeAnchor.spec.js",
+    "case": "FTC-GALLERY-NAV-037 synthetic-large desktop search and Home anchoring › search and Home destinations do not rebound after settling",
+    "profile": "synthetic-large-library",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
+    "filesystemScenarios": ["media:synthetic-large-library"],
+    "expectedContracts": ["search-destination-semantic-anchor", "home-destination-semantic-anchor", "desktop-gallery-position-stability"],
     "ownerApproval": "approved"
   },
   {

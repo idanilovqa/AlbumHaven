@@ -126,6 +126,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-health',
     'paired-search-calibration',
     'scan-error',
+    'notification-history',
   ],
   'library-browse': [
     'all-artists',
@@ -141,6 +142,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'app-open-all-artists',
     'rules-focused',
     'paired-search-calibration',
+    'notification-history',
   ],
   'idle-memory': [
     'idle-memory',
@@ -325,22 +327,6 @@ const PERFORMANCE_TARGETS = {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     },
   },
-  'notification-history': {
-    kind: 'synthetic',
-    fixtureProfile: 'synthetic-large-library',
-    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
-    coverageClass: 'real-app-library-browse-load',
-    coverageDescription: 'PostgreSQL-backed 528-row notification pagination, virtualization, retained-memory, and post-history navigation coverage.',
-    specPath: 'tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js',
-    grep: 'FTC-NOTIFICATIONS-001P',
-    aliasNames: ['notification-history', 'notifications-performance'],
-    reportId: 'notificationHistoryLocal',
-    casePattern: 'FTC-NOTIFICATIONS-001P',
-    env: {
-      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
-      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
-    },
-  },
   'edit-tags-post-edit': {
     kind: 'synthetic',
     fixtureProfile: 'synthetic-large-library',
@@ -438,12 +424,13 @@ const PERFORMANCE_TARGETS = {
     fixtureProfile: 'synthetic-large-library',
     fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
     coverageClass: 'real-app-library-browse-load',
-    coverageDescription: 'Real local large-library Artist Tree jump alignment, reverse paging stability, complete groups, and early root continuation coverage.',
+    coverageDescription: 'Real local large-library Artist Tree jump alignment, restoration, search/Home anchoring, and root continuation coverage.',
     specPath: 'tests/e2e/syntheticLargeLibrary',
-    grep: 'FTC-GALLERY-NAV-03(?:2|3|4|5)',
+    grep: 'FTC-GALLERY-NAV-03(?:2|3|4|5|7)',
     aliasNames: ['artist-tree-scroll-navigation', 'artist-tree-scroll', 'gallery-scroll-navigation'],
-    casePattern: 'FTC-GALLERY-NAV-03(?:2|3|4|5)',
+    casePattern: 'FTC-GALLERY-NAV-03(?:2|3|4|5|7)',
     casePatterns: [
+      'search and Home destinations do not rebound after settling',
       'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
       'root continuation starts eight viewports early and never reaches a hard stop during its real request',
       'mobile Cards › long-press Scroll, album, Back restores an artist beyond the first root page',
@@ -658,6 +645,23 @@ PERFORMANCE_TARGETS['scan-error'] = {
   env: {
     ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO: 'cached',
     ALBUM_HAVEN_COVER_PROVIDER_GROUPS: 'offline',
+  },
+};
+
+PERFORMANCE_TARGETS['notification-history'] = {
+  kind: 'synthetic',
+  fixtureProfile: 'synthetic-large-library',
+  fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+  coverageClass: 'real-app-library-browse-load',
+  coverageDescription: 'PostgreSQL-backed 528-row notification pagination, virtualization, retained-memory, and post-history navigation coverage.',
+  specPath: 'tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js',
+  grep: 'FTC-NOTIFICATIONS-001P',
+  aliasNames: ['notification-history', 'notifications-performance'],
+  reportId: 'notificationHistoryLocal',
+  casePattern: 'FTC-NOTIFICATIONS-001P',
+  env: {
+    ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
   },
 };
 

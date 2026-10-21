@@ -207,7 +207,7 @@ def grow_album(db, album, count):
             con.execute("""insert into library.local_tracks
                 (library_id,album_id,track_key,title,disc_number,track_number)
                 select %s,%s,%s || n::text,'Budget witness',1,n
-                from generate_series(%s,%s) n""", (db.library, album, uuid4().hex, old + 1, count))
+                from generate_series(%s::integer,%s::integer) n""", (db.library, album, uuid4().hex, old + 1, count))
         return [row["id"] for row in con.execute("""select id from library.local_tracks
             where library_id=%s and album_id=%s order by id""", (db.library, album)).fetchall()]
 

@@ -399,6 +399,16 @@ test('owns the exact five-track typo-artist rename inside the isolated Edit Tags
   assert.match(spec, /expect\(\[\.\.\.visibleSuccessMessages\]\)\.toHaveLength\(1\)/);
   assert.match(spec, /const MAX_RETAINED_HEAP_GROWTH_BYTES = 32 \* 1024 \* 1024;/);
   assert.match(spec, /const MAX_RETAINED_DOM_NODE_GROWTH = 1_500;/);
+  assert.match(spec, /coverLookupActions,/);
+  assert.match(spec, /coverLookupActions\.openDrawer\(/);
+  assert.match(spec, /coverLookupActions\.closeDrawer\(/);
+  assert.match(spec, /trackModalActions\.activateCoverLookup\(/);
+  assert.match(spec, /\/utilities\/cover-lookup\/gallery/);
+  assert.match(spec, /expect\(galleryResponse\.ok\(\)/);
+  assert.match(spec, /coverLookupActions\.waitForModalResultsReady\(/);
+  assert.match(spec, /retentionSamples/);
+  assert.match(spec, /retainedPlateauHeapGrowthBytes/);
+  assert.match(spec, /retainedPlateauDomNodeGrowth/);
   assert.match(spec, /Memory\.getDOMCounters/);
   assert.match(spec, /const editOpenTimingsMs = \[\];/);
   assert.match(spec, /retainedHeapGrowthBytes/);

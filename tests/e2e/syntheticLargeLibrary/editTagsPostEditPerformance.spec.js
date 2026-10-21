@@ -160,6 +160,7 @@ async function sampleRendererRetention(cdp, phase) {
 test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
   test('repeated saves leave navigation responsive', async ({
     appBarActions,
+    coverLookupActions,
     editTagsPostEditLocalReport,
     galleryActions,
     managedAppLifecycle,
@@ -174,6 +175,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
 
     const saveTimingsMs = [];
     const editOpenTimingsMs = [];
+    const retentionSamples = [];
     const metrics = {};
     let cdp = null;
     let retentionBaseline = null;
@@ -379,6 +381,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
         cdp = await page.context().newCDPSession(page);
         retentionBaseline = await sampleRendererRetention(cdp, 'before-repeated-edits');
+        retentionSamples.push(retentionBaseline);
       });
 
       for (const [index, destinationAlbum] of [
@@ -492,9 +495,43 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           await galleryActions.clickAlbumDetailsByAlbumName(destinationAlbum);
           await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
         });
+        retentionSamples.push(await sampleRendererRetention(
+          cdp,
+          `after-edit-cycle-${index + 1}`,
+        ));
       }
 
-      retentionFinal = await sampleRendererRetention(cdp, 'after-repeated-edits');
+      const plateauStart = retentionSamples.at(-2);
+      const plateauEnd = retentionSamples.at(-1);
+      metrics.retainedPlateauHeapGrowthBytes = plateauEnd.heap.usedSize
+        - plateauStart.heap.usedSize;
+      metrics.retainedPlateauDomNodeGrowth = plateauEnd.dom.nodes - plateauStart.dom.nodes;
+      expect(metrics.retainedPlateauHeapGrowthBytes).toBeLessThanOrEqual(
+        MAX_RETAINED_HEAP_GROWTH_BYTES,
+      );
+      expect(metrics.retainedPlateauDomNodeGrowth).toBeLessThanOrEqual(
+        MAX_RETAINED_DOM_NODE_GROWTH,
+      );
+
+      await stepLogger.step('Exercise Cover Lookup and notifications after repeated edits', async () => {
+        await trackModalActions.prepareCoverLookup();
+        const galleryResponsePromise = page.waitForResponse((response) => (
+          response.request().method() === 'POST'
+          && new URL(response.url()).pathname === '/utilities/cover-lookup/gallery'
+        ), { timeout: 60000 });
+        await trackModalActions.activateCoverLookup();
+        const galleryResponse = await galleryResponsePromise;
+        expect(galleryResponse.ok(), 'Post-edit Cover Lookup gallery request must succeed.').toBe(true);
+        await coverLookupActions.waitForModalReady({ timeout: 60000 });
+        await coverLookupActions.waitForModalResultsReady({ timeout: 60000 });
+        await coverLookupActions.closeModal();
+        await trackModalActions.close();
+        await coverLookupActions.openDrawer({ timeout: 60000 });
+        await coverLookupActions.closeDrawer({ timeout: 60000 });
+      });
+
+      retentionFinal = await sampleRendererRetention(cdp, 'after-complete-long-session');
+      retentionSamples.push(retentionFinal);
       metrics.retainedHeapGrowthBytes = retentionFinal.heap.usedSize
         - retentionBaseline.heap.usedSize;
       metrics.retainedDomNodeGrowth = retentionFinal.dom.nodes - retentionBaseline.dom.nodes;
@@ -506,8 +543,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       );
       metrics.tagEditorOpenMs = Math.max(...editOpenTimingsMs);
 
-      await stepLogger.step('Close Album Details after the restored save', async () => {
-        await trackModalActions.close();
+      await stepLogger.step('Confirm the restored gallery after the completed interaction cycle', async () => {
         await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ORIGINAL_ALBUM, {
           timeout: 60000,
         });
@@ -676,12 +712,14 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         maximumDomNodeGrowth: MAX_RETAINED_DOM_NODE_GROWTH,
         baseline: retentionBaseline,
         final: retentionFinal,
+        samples: retentionSamples,
       },
     });
     editTagsPostEditLocalReport.setMetricsPayload({
       ...metrics,
       editOpenTimingsMs,
       saveTimingsMs,
+      retentionSamples,
       treeAlbum,
       treeArtist,
     });

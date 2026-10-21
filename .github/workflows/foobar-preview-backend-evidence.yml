@@ -1,0 +1,1090 @@
+name: Foobar Preview Backend Evidence (supplemental)
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foobar-preview-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+  PREVIEW_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+  PREVIEW_TRANSFER_SCRIPT: |
+    try {
+      // This same literal program runs in one bounded Node action per consumer.
+      // The runner injects its ephemeral same-run artifact-service identity into Node
+      // actions. Neither that identity nor a signed download URL is ever retained.
+      // Protocol references: actions/toolkit packages/artifact/src/internal/shared/
+      // artifact-twirp-client.ts, util.ts and download/download-artifact.ts.
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const https = require('node:https');
+      const crypto = require('node:crypto');
+      const { TextDecoder } = require('node:util');
+      const deadline = performance.now() + 110000;
+      const artifactLimit = 268435456;
+      const aggregateLimit = 2147483648;
+      const fileLimit = 33554432;
+      const allOwners = ['admission', 'helper', 'core', 'resource_1', 'resource_2', 'resource_3', 'resource_4'];
+      const owner = process.env.GITHUB_JOB;
+      const needed = {
+        helper: ['admission'],
+        core: ['admission', 'helper'],
+        resource_1: ['admission', 'helper', 'core'],
+        resource_2: ['admission', 'helper', 'core', 'resource_1'],
+        resource_3: ['admission', 'helper', 'core', 'resource_1', 'resource_2'],
+        resource_4: ['admission', 'helper', 'core', 'resource_1', 'resource_2', 'resource_3'],
+        reconcile: allOwners
+      }[owner];
+      function check(condition) {
+        if (!condition || performance.now() >= deadline) throw new Error('Invalid or incomplete preview transfer');
+      }
+      function positive(value) {
+        check(typeof value === 'string' && /^[1-9][0-9]*$/.test(value));
+        const number = Number(value);
+        check(Number.isSafeInteger(number) && number > 0);
+        return number;
+      }
+      function exactKeys(value, keys) {
+        check(value && typeof value === 'object' && !Array.isArray(value));
+        check(Object.keys(value).sort().join('\0') === [...keys].sort().join('\0'));
+      }
+      function protocolField(record, snake, camel) {
+        check(record && typeof record === 'object' && !Array.isArray(record));
+        const a = Object.prototype.hasOwnProperty.call(record, snake);
+        const b = Object.prototype.hasOwnProperty.call(record, camel);
+        check(a !== b);
+        return a ? record[snake] : record[camel];
+      }
+      function decodeJSON(raw) {
+        return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw), (key, value) => {
+          check(typeof value !== 'number' || Number.isFinite(value));
+          return value;
+        });
+      }
+      function confinedRead(filename, limit) {
+        const descriptor = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+          const before = fs.fstatSync(descriptor);
+          check(before.isFile() && before.size <= limit && before.size >= 0);
+          const bytes = Buffer.alloc(before.size);
+          let used = 0;
+          while (used < bytes.length) {
+            check(true);
+            const count = fs.readSync(descriptor, bytes, used, Math.min(65536, bytes.length - used), used);
+            check(count > 0);
+            used += count;
+          }
+          const after = fs.fstatSync(descriptor);
+          check(before.dev === after.dev && before.ino === after.ino && before.size === after.size &&
+                before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs);
+          return bytes;
+        } finally {
+          fs.closeSync(descriptor);
+        }
+      }
+      // Only bounded reads enter application buffers. No decompression happens here:
+      // the separately bounded Python verification stage preflights the ZIP directory
+      // and enforces decoded file/count/aggregate limits before extracting any entry.
+      function requestBytes(url, { method = 'GET', body = null, authorization = null,
+                                  maxBytes, expectedSize = null, publicMetadata = false }) {
+        check(Number.isSafeInteger(maxBytes) && maxBytes > 0);
+        const capacity = expectedSize === null ? maxBytes : expectedSize;
+        check(Number.isSafeInteger(capacity) && capacity > 0 && capacity <= maxBytes);
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          let response = null;
+          const headers = { 'Accept-Encoding': 'identity', 'User-Agent': 'AlbumHaven-preview-evidence-v1' };
+          if (authorization !== null) headers.Authorization = 'Bearer ' + authorization;
+          if (body !== null) {
+            headers['Content-Type'] = 'application/json';
+            headers['Content-Length'] = String(Buffer.byteLength(body));
+          }
+          const request = https.request(url, { method, headers }, current => {
+            response = current;
+            try {
+              check(current.statusCode === 200);
+              if (publicMetadata) check(current.headers.link === undefined && current.headers.location === undefined);
+              check(!current.headers['content-encoding'] || current.headers['content-encoding'] === 'identity');
+              const declared = current.headers['content-length'];
+              if (declared !== undefined) {
+                check(typeof declared === 'string' && /^[0-9]+$/.test(declared));
+                const length = Number(declared);
+                check(Number.isSafeInteger(length) && length <= capacity);
+                if (expectedSize !== null) check(length === expectedSize);
+              }
+              const bytes = Buffer.alloc(capacity);
+              let used = 0;
+              current.on('readable', () => {
+                try {
+                  check(true);
+                  while (used < capacity) {
+                    const chunk = current.read(Math.min(65536, capacity - used));
+                    if (chunk === null) break;
+                    check(Buffer.isBuffer(chunk) && chunk.length <= capacity - used);
+                    chunk.copy(bytes, used);
+                    used += chunk.length;
+                  }
+                  if (used === capacity) check(current.readableLength === 0);
+                } catch (_) { fail(); }
+              });
+              current.on('end', () => {
+                try {
+                  check(current.complete && (expectedSize === null || used === expectedSize));
+                  if (!settled) {
+                    settled = true;
+                    clearTimeout(timer);
+                    resolve(bytes.subarray(0, used));
+                  }
+                } catch (_) { fail(); }
+              });
+              current.on('error', fail);
+              current.on('aborted', fail);
+            } catch (_) { fail(); }
+          });
+          function fail() {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (response) response.destroy();
+            request.destroy();
+            // Never expose a URL, bearer credential, or raw networking exception.
+            reject(new Error('Preview artifact transfer did not complete'));
+          }
+          const timer = setTimeout(fail, Math.min(10000, Math.max(1, deadline - performance.now())));
+          request.on('error', fail);
+          request.end(body);
+        });
+      }
+      check(Array.isArray(needed));
+      check(process.env.GITHUB_REPOSITORY === 'idanilovqa/AlbumHaven');
+      check(process.env.GITHUB_EVENT_NAME === 'pull_request');
+      check(process.env.PREVIEW_CANCELLED === 'false');
+      const head = process.env.PREVIEW_EXPECTED_HEAD;
+      check(typeof head === 'string' && /^[0-9a-f]{40}$/.test(head));
+      const runId = positive(process.env.GITHUB_RUN_ID);
+      const attempt = positive(process.env.GITHUB_RUN_ATTEMPT);
+      // Reconcile may truthfully retain a first-attempt hold; product preparation
+      // separately requires attempt >= 2 and an admitted original snapshot.
+      check(attempt >= 2 || owner === 'reconcile');
+      const event = decodeJSON(confinedRead(process.env.GITHUB_EVENT_PATH, fileLimit));
+      check(event.repository.full_name === 'idanilovqa/AlbumHaven');
+      check(event.pull_request.head.sha === head);
+      check(event.pull_request.head.repo.full_name === 'idanilovqa/AlbumHaven');
+      check(event.pull_request.head.ref === '2026-10-03-album-tops');
+      const trusted = JSON.parse(process.env.PREVIEW_ARTIFACTS);
+      exactKeys(trusted, needed);
+      const runtimeToken = process.env.ACTIONS_RUNTIME_TOKEN;
+      check(typeof runtimeToken === 'string' && runtimeToken.length > 0);
+      const tokenParts = runtimeToken.split('.');
+      check(tokenParts.length === 3);
+      const claims = decodeJSON(Buffer.from(tokenParts[1], 'base64url'));
+      check(typeof claims.scp === 'string');
+      const scope = claims.scp.split(' ').filter(value => value.startsWith('Actions.Results:'));
+      check(scope.length === 1);
+      const backend = scope[0].split(':');
+      check(backend.length === 3 && backend.slice(1).every(value => /^[0-9a-f-]{36}$/i.test(value)));
+      const resultsURL = new URL(process.env.ACTIONS_RESULTS_URL);
+      check(resultsURL.protocol === 'https:' && resultsURL.hostname.endsWith('.actions.githubusercontent.com'));
+      check(!resultsURL.username && !resultsURL.password && !resultsURL.search && !resultsURL.hash);
+      const resultsOrigin = resultsURL.origin;
+      async function rpc(method, body) {
+        check(['ListArtifacts', 'GetSignedArtifactURL'].includes(method));
+        const url = new URL('/twirp/github.actions.results.api.v1.ArtifactService/' + method, resultsOrigin);
+        return decodeJSON(await requestBytes(url, { method: 'POST', body: JSON.stringify(body),
+          authorization: runtimeToken, maxBytes: 262144 }));
+      }
+      const directory = path.join(process.env.RUNNER_TEMP, 'foobar-preview-transfer');
+      fs.mkdirSync(directory, { mode: 0o700 });
+      const transfer = {
+        schema_version: 'foobar-preview-transfer-v1',
+        repository: 'idanilovqa/AlbumHaven', head_sha: head,
+        workflow_path: '.github/workflows/foobar-preview-backend-evidence.yml',
+        run_id: runId, run_attempt: attempt, cancelled: false,
+        provenance: [], archives: []
+      };
+      // Anonymous, origin-authenticated HTTPS reads of this exact public attempt.
+      // Retained JSON is not a cryptographic signature. Consumers independently
+      // reacquire these completed intervals; no producer receipt claims authority.
+      const acquisition = {
+        schema_version: 'foobar-preview-acquisition-v1',
+        repository: transfer.repository, head_sha: head, workflow_path: transfer.workflow_path,
+        run_id: runId, run_attempt: attempt, consumer_job: owner, responses: []
+      };
+      const attemptURL = 'https://api.github.com/repos/idanilovqa/AlbumHaven/actions/runs/' +
+        runId + '/attempts/' + attempt;
+      let metadataBytes = 0;
+      for (const item of [
+        {kind: 'run', url: attemptURL, path: 'run-attempt.json'},
+        {kind: 'jobs', url: attemptURL + '/jobs?per_page=100&page=1', path: 'attempt-jobs.json'}
+      ]) {
+        const started = new Date().toISOString();
+        const monotonicStart = performance.now();
+        const raw = await requestBytes(new URL(item.url), {maxBytes: 1048576, publicMetadata: true});
+        const finished = new Date().toISOString();
+        check(performance.now() - monotonicStart < 10000 && raw.length > 0);
+        metadataBytes += raw.length;
+        check(metadataBytes <= 2097152);
+        fs.writeFileSync(path.join(directory, item.path), raw, {flag: 'wx', mode: 0o600});
+        acquisition.responses.push({kind: item.kind, url: item.url, status: 200,
+          started_at: started, finished_at: finished, size: raw.length,
+          sha256: crypto.createHash('sha256').update(raw).digest('hex'), path: item.path});
+      }
+      const acquisitionBytes = Buffer.from(JSON.stringify(acquisition) + '\n');
+      check(acquisitionBytes.length <= 16384);
+      fs.writeFileSync(path.join(directory, 'acquisition.json'), acquisitionBytes, {flag: 'wx', mode: 0o600});
+      // Include acquisition and transfer-envelope reserve in aggregate storage.
+      let encodedTotal = metadataBytes + acquisitionBytes.length + 32768;
+      const artifactIds = new Set();
+      function checkpoint() {
+        const temporary = path.join(directory, 'transfer.pending');
+        fs.writeFileSync(temporary, JSON.stringify(transfer) + '\n', { flag: 'wx', mode: 0o600 });
+        fs.renameSync(temporary, path.join(directory, 'transfer.json'));
+      }
+      checkpoint();
+      for (const producer of needed) {
+        check(true);
+        const binding = trusted[producer];
+        exactKeys(binding, ['artifact_id', 'sha256']);
+        // A missing upload cannot become a fabricated owner. Reconcile records that
+        // absence through the absent input directory; other consumers fail closed.
+        if (binding.artifact_id === '' && binding.sha256 === '') {
+          check(owner === 'reconcile');
+          continue;
+        }
+        const artifactId = positive(binding.artifact_id);
+        check(!artifactIds.has(artifactId));
+        artifactIds.add(artifactId);
+        check(typeof binding.sha256 === 'string' && /^[0-9a-f]{64}$/.test(binding.sha256));
+        const expectedName = 'preview-v1-' + head + '-' + runId + '-' + attempt + '-' + producer;
+        const listed = await rpc('ListArtifacts', {
+          workflow_run_backend_id: backend[1], workflow_job_run_backend_id: backend[2],
+          id_filter: String(artifactId)
+        });
+        check(Array.isArray(listed.artifacts) && listed.artifacts.length === 1);
+        const rawArtifact = listed.artifacts[0];
+        const artifact = {
+          database_id: protocolField(rawArtifact, 'database_id', 'databaseId'),
+          workflow_run_backend_id: protocolField(rawArtifact, 'workflow_run_backend_id', 'workflowRunBackendId'),
+          workflow_job_run_backend_id: protocolField(rawArtifact, 'workflow_job_run_backend_id', 'workflowJobRunBackendId'),
+          name: rawArtifact.name, size: rawArtifact.size, digest: rawArtifact.digest
+        };
+        check(artifact.database_id === String(artifactId));
+        check(artifact.workflow_run_backend_id === backend[1]);
+        check(typeof artifact.workflow_job_run_backend_id === 'string' &&
+              /^[0-9a-f-]{36}$/i.test(artifact.workflow_job_run_backend_id));
+        check(artifact.name === expectedName);
+        const encodedSize = positive(artifact.size);
+        // The encoded cap is deliberately conservative in addition to the required
+        // decoded cap. It never authorizes larger decoded artifacts or extra work.
+        check(encodedSize <= artifactLimit && encodedTotal + encodedSize <= aggregateLimit);
+        if (artifact.digest !== undefined && artifact.digest !== null && artifact.digest !== '') {
+          check(artifact.digest === 'sha256:' + binding.sha256 || artifact.digest === binding.sha256);
+        }
+        const signed = await rpc('GetSignedArtifactURL', {
+          workflow_run_backend_id: artifact.workflow_run_backend_id,
+          workflow_job_run_backend_id: artifact.workflow_job_run_backend_id,
+          name: expectedName
+        });
+        const signedURL = protocolField(signed, 'signed_url', 'signedUrl');
+        check(typeof signedURL === 'string');
+        const blobURL = new URL(signedURL);
+        check(blobURL.protocol === 'https:' && !blobURL.username && !blobURL.password && !blobURL.hash);
+        check(blobURL.hostname.endsWith('.blob.core.windows.net') ||
+              blobURL.hostname.endsWith('.actions.githubusercontent.com'));
+        const bytes = await requestBytes(blobURL, { maxBytes: artifactLimit, expectedSize: encodedSize });
+        const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+        check(digest === binding.sha256);
+        const filename = producer + '.zip';
+        fs.writeFileSync(path.join(directory, filename), bytes, { flag: 'wx', mode: 0o600 });
+        encodedTotal += encodedSize;
+        transfer.provenance.push({ producer_job: producer, artifact_name: expectedName,
+          artifact_id: artifactId, repository: transfer.repository, head_sha: head,
+          workflow_path: transfer.workflow_path, run_id: runId, run_attempt: attempt });
+        transfer.archives.push({ producer_job: producer, path: filename, size: encodedSize, sha256: digest });
+        checkpoint();
+      }
+      check(true);
+      core.setOutput('transferred', String(transfer.archives.length));
+    } catch (_) {
+      throw new Error("Preview artifact transfer failed closed; no evidence acceptance is available");
+    }
+
+# All execution is supplemental. Attempt one holds under the unchanged native
+# admission owner. Upload IDs are scheduler-carried hints with an independently
+# authenticated exact-ID transfer; raw receipt validation still gates execution.
+# A completed local summary remains provisional until its actual upload succeeds.
+# Checkout has inherited 60s main and 60s post cancellation thresholds; setup
+# has inherited 120s main and 120s post thresholds, with caching disabled.
+# Runner cancellation/stream teardown may extend past those thresholds. The
+# consumer reacquires completed producer stages and rejects missing or over-limit
+# observations. Its own future completion remains unproven for external review.
+jobs:
+  admission:
+    name: admission
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Observe unchanged first-attempt and native-terminal admission
+        timeout-minutes: 2
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          COMPANION_RUN: ${{ github.run_id }}
+          COMPANION_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          ulimit -f 32768
+          mkdir "$RUNNER_TEMP/foobar-preview-admission"
+          set +e
+          python scripts/ci/admit-new-feature-evidence.py \
+            --event "${{ github.event_path }}" --attempt "${{ github.run_attempt }}" \
+            --output "$RUNNER_TEMP/foobar-preview-admission/admission.json"
+          admission_status=$?
+          set -e
+          python - <<'PY_ADMISSION'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          directory = Path(os.environ['RUNNER_TEMP']) / 'foobar-preview-admission'
+          target = directory / 'admission.json'
+          assert target.is_file() and not target.is_symlink()
+          assert target.stat().st_size < 33554432
+          with target.open('rb') as stream:
+              raw = stream.read(33554433)
+          assert len(raw) < 33554432
+          record = json.loads(raw)
+          assert record['trigger']['repository'] == 'idanilovqa/AlbumHaven'
+          assert record['trigger']['head_sha'] == os.environ['EXPECTED_HEAD']
+          context = {
+              'schema_version': 1, 'repository': 'idanilovqa/AlbumHaven',
+              'head_sha': os.environ['EXPECTED_HEAD'],
+              'run_id': int(os.environ['COMPANION_RUN']),
+              'attempt': int(os.environ['COMPANION_ATTEMPT']),
+              'admission_sha256': hashlib.sha256(raw).hexdigest(),
+          }
+          with (directory / 'admission-context.json').open('x', encoding='utf-8') as stream:
+              json.dump(context, stream, indent=2, sort_keys=True)
+              stream.write('\n')
+          PY_ADMISSION
+          exit "$admission_status"
+
+      - name: Retain fresh original admission even on hold
+        id: upload
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-admission
+          path: ${{ runner.temp }}/foobar-preview-admission
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  helper:
+    name: helper
+    needs: [admission]
+    if: ${{ !cancelled() && needs.admission.result == 'success' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == '2026-10-03-album-tops' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      continue_allowed: ${{ steps.run.outputs.continue_allowed == 'true' && steps.upload.outcome == 'success' && steps.upload.outputs.artifact-id != '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Transfer only exact authenticated same-attempt artifact IDs
+        id: transfer
+        timeout-minutes: 2
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_ARTIFACTS: >-
+            {"admission":{"artifact_id":"${{ needs.admission.outputs.artifact_id }}","sha256":"${{ needs.admission.outputs.artifact_digest }}"}}
+        with:
+          retries: 0
+          script: ${{ env.PREVIEW_TRANSFER_SCRIPT }}
+
+      - name: Decode bounded inputs and validate complete upstream proof before setup
+        id: prepare
+        timeout-minutes: 2
+        env:
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          python - <<'PY_PREPARE'
+          import importlib.util
+          from pathlib import Path
+          source = Path.cwd() / 'scripts/ci/foobar_preview_evidence.py'
+          spec = importlib.util.spec_from_file_location('_foobar_preview_workflow', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._workflow_prepare()
+          PY_PREPARE
+
+      - name: Set up Python without post-job cache work
+        id: python
+        timeout-minutes: 2
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install only existing requirements after raw-proof admission
+        id: install
+        timeout-minutes: 5
+        run: python -m pip install -r requirements.txt
+
+      - name: Execute unchanged complete legacy CI-helper lane first
+        id: legacy
+        timeout-minutes: 8
+        env:
+          PREVIEW_LEGACY_DIR: ${{ runner.temp }}/foobar-preview-legacy
+        run: |
+          ulimit -f 32768
+          printf '%s\n' \
+            'tests/py/test_new_feature_ci_contract.py' \
+            'tests/py/test_new_feature_evidence.py' > "$RUNNER_TEMP/foobar-preview-legacy-selection.txt"
+          python scripts/ci/new_feature_evidence.py run --lane ci-helper \
+            --selection "$RUNNER_TEMP/foobar-preview-legacy-selection.txt" \
+            --evidence-dir "$PREVIEW_LEGACY_DIR" \
+            --admission "$RUNNER_TEMP/foobar-preview-inputs/admission/admission.json" \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}"
+
+      - name: Execute fixed helper phase with fail-closed evidence
+        id: run
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.python.outcome == 'success' && steps.install.outcome == 'success' && steps.legacy.outcome == 'success' }}
+        timeout-minutes: 12
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+          PREVIEW_LEGACY_OUTCOME: ${{ steps.legacy.outcome }}
+          PREVIEW_LEGACY_DIR: ${{ runner.temp }}/foobar-preview-legacy
+        run: |
+          python scripts/ci/foobar_preview_evidence.py helper \
+            --root "$GITHUB_WORKSPACE" \
+            --plan scripts/ci/foobar_preview_plan.json \
+            --admission "$RUNNER_TEMP/foobar-preview-inputs/admission/admission.json" \
+            --evidence-dir "$RUNNER_TEMP/foobar-preview-output" \
+            --expected-head "${{ github.event.pull_request.head.sha }}" \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}"
+
+      - name: Retain helper proof without masking any failure
+        id: upload
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-helper
+          path: ${{ steps.run.outcome == 'skipped' && format('{0}/foobar-preview-legacy', runner.temp) || format('{0}/foobar-preview-output', runner.temp) }}
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  core:
+    name: core
+    needs: [admission, helper]
+    if: ${{ !cancelled() && needs.admission.result == 'success' && needs.helper.result == 'success' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == '2026-10-03-album-tops' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      continue_allowed: ${{ steps.run.outputs.continue_allowed == 'true' && steps.upload.outcome == 'success' && steps.upload.outputs.artifact-id != '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Transfer only exact authenticated same-attempt artifact IDs
+        id: transfer
+        timeout-minutes: 2
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_ARTIFACTS: >-
+            {"admission":{"artifact_id":"${{ needs.admission.outputs.artifact_id }}","sha256":"${{ needs.admission.outputs.artifact_digest }}"},"helper":{"artifact_id":"${{ needs.helper.outputs.artifact_id }}","sha256":"${{ needs.helper.outputs.artifact_digest }}"}}
+        with:
+          retries: 0
+          script: ${{ env.PREVIEW_TRANSFER_SCRIPT }}
+
+      - name: Decode bounded inputs and validate complete upstream proof before setup
+        id: prepare
+        timeout-minutes: 2
+        env:
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          python - <<'PY_PREPARE'
+          import importlib.util
+          from pathlib import Path
+          source = Path.cwd() / 'scripts/ci/foobar_preview_evidence.py'
+          spec = importlib.util.spec_from_file_location('_foobar_preview_workflow', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._workflow_prepare()
+          PY_PREPARE
+
+      - name: Set up Python without post-job cache work
+        id: python
+        timeout-minutes: 2
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install only existing requirements after raw-proof admission
+        id: install
+        timeout-minutes: 5
+        run: python -m pip install -r requirements.txt
+
+      - name: Execute fixed core phase with fail-closed evidence
+        id: run
+        timeout-minutes: 23
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+        run: |
+          python scripts/ci/foobar_preview_evidence.py core \
+            --root "$GITHUB_WORKSPACE" \
+            --plan scripts/ci/foobar_preview_plan.json \
+            --admission "$RUNNER_TEMP/foobar-preview-inputs/admission/admission.json" \
+            --evidence-dir "$RUNNER_TEMP/foobar-preview-output" \
+            --expected-head "${{ github.event.pull_request.head.sha }}" \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --helper-evidence "$RUNNER_TEMP/foobar-preview-inputs/helper"
+
+      - name: Retain core proof without masking any failure
+        id: upload
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-core
+          path: ${{ runner.temp }}/foobar-preview-output
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  resource_1:
+    name: resource_1
+    needs: [admission, helper, core]
+    if: ${{ always() && !cancelled() && needs.admission.result == 'success' && needs.helper.result == 'success' && needs.core.outputs.continue_allowed == 'true' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == '2026-10-03-album-tops' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      continue_allowed: ${{ steps.run.outputs.continue_allowed == 'true' && steps.upload.outcome == 'success' && steps.upload.outputs.artifact-id != '' }}
+      core_artifact_id: ${{ needs.core.outputs.artifact_id }}
+      core_artifact_digest: ${{ needs.core.outputs.artifact_digest }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Transfer only exact authenticated same-attempt artifact IDs
+        id: transfer
+        timeout-minutes: 2
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_ARTIFACTS: >-
+            {"admission":{"artifact_id":"${{ needs.admission.outputs.artifact_id }}","sha256":"${{ needs.admission.outputs.artifact_digest }}"},"helper":{"artifact_id":"${{ needs.helper.outputs.artifact_id }}","sha256":"${{ needs.helper.outputs.artifact_digest }}"},"core":{"artifact_id":"${{ needs.core.outputs.artifact_id }}","sha256":"${{ needs.core.outputs.artifact_digest }}"}}
+        with:
+          retries: 0
+          script: ${{ env.PREVIEW_TRANSFER_SCRIPT }}
+
+      - name: Decode bounded inputs and validate complete upstream proof before setup
+        id: prepare
+        timeout-minutes: 2
+        env:
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          python - <<'PY_PREPARE'
+          import importlib.util
+          from pathlib import Path
+          source = Path.cwd() / 'scripts/ci/foobar_preview_evidence.py'
+          spec = importlib.util.spec_from_file_location('_foobar_preview_workflow', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._workflow_prepare()
+          PY_PREPARE
+
+      - name: Set up Python without post-job cache work
+        id: python
+        timeout-minutes: 2
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install only existing requirements after raw-proof admission
+        id: install
+        timeout-minutes: 5
+        run: python -m pip install -r requirements.txt
+
+      - name: Execute fixed resource phase with fail-closed evidence
+        id: run
+        timeout-minutes: 66
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+        run: |
+          python scripts/ci/foobar_preview_evidence.py resource \
+            --root "$GITHUB_WORKSPACE" \
+            --plan scripts/ci/foobar_preview_plan.json \
+            --admission "$RUNNER_TEMP/foobar-preview-inputs/admission/admission.json" \
+            --evidence-dir "$RUNNER_TEMP/foobar-preview-output" \
+            --expected-head "${{ github.event.pull_request.head.sha }}" \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --helper-evidence "$RUNNER_TEMP/foobar-preview-inputs/helper" \
+            --shard-index 1 \
+            --canonical-core-evidence "$RUNNER_TEMP/foobar-preview-inputs/core" \
+            --predecessor-evidence "$RUNNER_TEMP/foobar-preview-inputs/core"
+
+      - name: Retain resource_1 proof without masking any failure
+        id: upload
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-resource_1
+          path: ${{ runner.temp }}/foobar-preview-output
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  resource_2:
+    name: resource_2
+    needs: [admission, helper, resource_1]
+    if: ${{ always() && !cancelled() && needs.admission.result == 'success' && needs.helper.result == 'success' && needs.resource_1.outputs.continue_allowed == 'true' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == '2026-10-03-album-tops' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      continue_allowed: ${{ steps.run.outputs.continue_allowed == 'true' && steps.upload.outcome == 'success' && steps.upload.outputs.artifact-id != '' }}
+      core_artifact_id: ${{ needs.resource_1.outputs.core_artifact_id }}
+      core_artifact_digest: ${{ needs.resource_1.outputs.core_artifact_digest }}
+      resource_1_artifact_id: ${{ needs.resource_1.outputs.artifact_id }}
+      resource_1_artifact_digest: ${{ needs.resource_1.outputs.artifact_digest }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Transfer only exact authenticated same-attempt artifact IDs
+        id: transfer
+        timeout-minutes: 2
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_ARTIFACTS: >-
+            {"admission":{"artifact_id":"${{ needs.admission.outputs.artifact_id }}","sha256":"${{ needs.admission.outputs.artifact_digest }}"},"helper":{"artifact_id":"${{ needs.helper.outputs.artifact_id }}","sha256":"${{ needs.helper.outputs.artifact_digest }}"},"core":{"artifact_id":"${{ needs.resource_1.outputs.core_artifact_id }}","sha256":"${{ needs.resource_1.outputs.core_artifact_digest }}"},"resource_1":{"artifact_id":"${{ needs.resource_1.outputs.artifact_id }}","sha256":"${{ needs.resource_1.outputs.artifact_digest }}"}}
+        with:
+          retries: 0
+          script: ${{ env.PREVIEW_TRANSFER_SCRIPT }}
+
+      - name: Decode bounded inputs and validate complete upstream proof before setup
+        id: prepare
+        timeout-minutes: 2
+        env:
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          python - <<'PY_PREPARE'
+          import importlib.util
+          from pathlib import Path
+          source = Path.cwd() / 'scripts/ci/foobar_preview_evidence.py'
+          spec = importlib.util.spec_from_file_location('_foobar_preview_workflow', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._workflow_prepare()
+          PY_PREPARE
+
+      - name: Set up Python without post-job cache work
+        id: python
+        timeout-minutes: 2
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install only existing requirements after raw-proof admission
+        id: install
+        timeout-minutes: 5
+        run: python -m pip install -r requirements.txt
+
+      - name: Execute fixed resource phase with fail-closed evidence
+        id: run
+        timeout-minutes: 66
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+        run: |
+          python scripts/ci/foobar_preview_evidence.py resource \
+            --root "$GITHUB_WORKSPACE" \
+            --plan scripts/ci/foobar_preview_plan.json \
+            --admission "$RUNNER_TEMP/foobar-preview-inputs/admission/admission.json" \
+            --evidence-dir "$RUNNER_TEMP/foobar-preview-output" \
+            --expected-head "${{ github.event.pull_request.head.sha }}" \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --helper-evidence "$RUNNER_TEMP/foobar-preview-inputs/helper" \
+            --shard-index 2 \
+            --canonical-core-evidence "$RUNNER_TEMP/foobar-preview-inputs/core" \
+            --predecessor-evidence "$RUNNER_TEMP/foobar-preview-inputs/resource_1"
+
+      - name: Retain resource_2 proof without masking any failure
+        id: upload
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-resource_2
+          path: ${{ runner.temp }}/foobar-preview-output
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  resource_3:
+    name: resource_3
+    needs: [admission, helper, resource_2]
+    if: ${{ always() && !cancelled() && needs.admission.result == 'success' && needs.helper.result == 'success' && needs.resource_2.outputs.continue_allowed == 'true' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == '2026-10-03-album-tops' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      continue_allowed: ${{ steps.run.outputs.continue_allowed == 'true' && steps.upload.outcome == 'success' && steps.upload.outputs.artifact-id != '' }}
+      core_artifact_id: ${{ needs.resource_2.outputs.core_artifact_id }}
+      core_artifact_digest: ${{ needs.resource_2.outputs.core_artifact_digest }}
+      resource_1_artifact_id: ${{ needs.resource_2.outputs.resource_1_artifact_id }}
+      resource_1_artifact_digest: ${{ needs.resource_2.outputs.resource_1_artifact_digest }}
+      resource_2_artifact_id: ${{ needs.resource_2.outputs.artifact_id }}
+      resource_2_artifact_digest: ${{ needs.resource_2.outputs.artifact_digest }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Transfer only exact authenticated same-attempt artifact IDs
+        id: transfer
+        timeout-minutes: 2
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_ARTIFACTS: >-
+            {"admission":{"artifact_id":"${{ needs.admission.outputs.artifact_id }}","sha256":"${{ needs.admission.outputs.artifact_digest }}"},"helper":{"artifact_id":"${{ needs.helper.outputs.artifact_id }}","sha256":"${{ needs.helper.outputs.artifact_digest }}"},"core":{"artifact_id":"${{ needs.resource_2.outputs.core_artifact_id }}","sha256":"${{ needs.resource_2.outputs.core_artifact_digest }}"},"resource_1":{"artifact_id":"${{ needs.resource_2.outputs.resource_1_artifact_id }}","sha256":"${{ needs.resource_2.outputs.resource_1_artifact_digest }}"},"resource_2":{"artifact_id":"${{ needs.resource_2.outputs.artifact_id }}","sha256":"${{ needs.resource_2.outputs.artifact_digest }}"}}
+        with:
+          retries: 0
+          script: ${{ env.PREVIEW_TRANSFER_SCRIPT }}
+
+      - name: Decode bounded inputs and validate complete upstream proof before setup
+        id: prepare
+        timeout-minutes: 2
+        env:
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          python - <<'PY_PREPARE'
+          import importlib.util
+          from pathlib import Path
+          source = Path.cwd() / 'scripts/ci/foobar_preview_evidence.py'
+          spec = importlib.util.spec_from_file_location('_foobar_preview_workflow', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._workflow_prepare()
+          PY_PREPARE
+
+      - name: Set up Python without post-job cache work
+        id: python
+        timeout-minutes: 2
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install only existing requirements after raw-proof admission
+        id: install
+        timeout-minutes: 5
+        run: python -m pip install -r requirements.txt
+
+      - name: Execute fixed resource phase with fail-closed evidence
+        id: run
+        timeout-minutes: 66
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+        run: |
+          python scripts/ci/foobar_preview_evidence.py resource \
+            --root "$GITHUB_WORKSPACE" \
+            --plan scripts/ci/foobar_preview_plan.json \
+            --admission "$RUNNER_TEMP/foobar-preview-inputs/admission/admission.json" \
+            --evidence-dir "$RUNNER_TEMP/foobar-preview-output" \
+            --expected-head "${{ github.event.pull_request.head.sha }}" \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --helper-evidence "$RUNNER_TEMP/foobar-preview-inputs/helper" \
+            --shard-index 3 \
+            --canonical-core-evidence "$RUNNER_TEMP/foobar-preview-inputs/core" \
+            --predecessor-evidence "$RUNNER_TEMP/foobar-preview-inputs/resource_2"
+
+      - name: Retain resource_3 proof without masking any failure
+        id: upload
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-resource_3
+          path: ${{ runner.temp }}/foobar-preview-output
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  resource_4:
+    name: resource_4
+    needs: [admission, helper, resource_3]
+    if: ${{ always() && !cancelled() && needs.admission.result == 'success' && needs.helper.result == 'success' && needs.resource_3.outputs.continue_allowed == 'true' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == '2026-10-03-album-tops' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      continue_allowed: ${{ steps.run.outputs.continue_allowed == 'true' && steps.upload.outcome == 'success' && steps.upload.outputs.artifact-id != '' }}
+      core_artifact_id: ${{ needs.resource_3.outputs.core_artifact_id }}
+      core_artifact_digest: ${{ needs.resource_3.outputs.core_artifact_digest }}
+      resource_1_artifact_id: ${{ needs.resource_3.outputs.resource_1_artifact_id }}
+      resource_1_artifact_digest: ${{ needs.resource_3.outputs.resource_1_artifact_digest }}
+      resource_2_artifact_id: ${{ needs.resource_3.outputs.resource_2_artifact_id }}
+      resource_2_artifact_digest: ${{ needs.resource_3.outputs.resource_2_artifact_digest }}
+      resource_3_artifact_id: ${{ needs.resource_3.outputs.artifact_id }}
+      resource_3_artifact_digest: ${{ needs.resource_3.outputs.artifact_digest }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Transfer only exact authenticated same-attempt artifact IDs
+        id: transfer
+        timeout-minutes: 2
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_ARTIFACTS: >-
+            {"admission":{"artifact_id":"${{ needs.admission.outputs.artifact_id }}","sha256":"${{ needs.admission.outputs.artifact_digest }}"},"helper":{"artifact_id":"${{ needs.helper.outputs.artifact_id }}","sha256":"${{ needs.helper.outputs.artifact_digest }}"},"core":{"artifact_id":"${{ needs.resource_3.outputs.core_artifact_id }}","sha256":"${{ needs.resource_3.outputs.core_artifact_digest }}"},"resource_1":{"artifact_id":"${{ needs.resource_3.outputs.resource_1_artifact_id }}","sha256":"${{ needs.resource_3.outputs.resource_1_artifact_digest }}"},"resource_2":{"artifact_id":"${{ needs.resource_3.outputs.resource_2_artifact_id }}","sha256":"${{ needs.resource_3.outputs.resource_2_artifact_digest }}"},"resource_3":{"artifact_id":"${{ needs.resource_3.outputs.artifact_id }}","sha256":"${{ needs.resource_3.outputs.artifact_digest }}"}}
+        with:
+          retries: 0
+          script: ${{ env.PREVIEW_TRANSFER_SCRIPT }}
+
+      - name: Decode bounded inputs and validate complete upstream proof before setup
+        id: prepare
+        timeout-minutes: 2
+        env:
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          python - <<'PY_PREPARE'
+          import importlib.util
+          from pathlib import Path
+          source = Path.cwd() / 'scripts/ci/foobar_preview_evidence.py'
+          spec = importlib.util.spec_from_file_location('_foobar_preview_workflow', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._workflow_prepare()
+          PY_PREPARE
+
+      - name: Set up Python without post-job cache work
+        id: python
+        timeout-minutes: 2
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install only existing requirements after raw-proof admission
+        id: install
+        timeout-minutes: 5
+        run: python -m pip install -r requirements.txt
+
+      - name: Execute fixed resource phase with fail-closed evidence
+        id: run
+        timeout-minutes: 66
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+        run: |
+          python scripts/ci/foobar_preview_evidence.py resource \
+            --root "$GITHUB_WORKSPACE" \
+            --plan scripts/ci/foobar_preview_plan.json \
+            --admission "$RUNNER_TEMP/foobar-preview-inputs/admission/admission.json" \
+            --evidence-dir "$RUNNER_TEMP/foobar-preview-output" \
+            --expected-head "${{ github.event.pull_request.head.sha }}" \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --helper-evidence "$RUNNER_TEMP/foobar-preview-inputs/helper" \
+            --shard-index 4 \
+            --canonical-core-evidence "$RUNNER_TEMP/foobar-preview-inputs/core" \
+            --predecessor-evidence "$RUNNER_TEMP/foobar-preview-inputs/resource_3"
+
+      - name: Retain resource_4 proof without masking any failure
+        id: upload
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-resource_4
+          path: ${{ runner.temp }}/foobar-preview-output
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  reconcile:
+    name: reconcile
+    needs: [admission, helper, core, resource_1, resource_2, resource_3, resource_4]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      # A candidate is not evidence of this job's later post-action completion.
+      # Root must independently verify the completed reconciler job, every post
+      # action, the actual immutable upload and all original source-bound proof.
+      global_success_candidate: ${{ steps.run.outcome == 'success' && steps.upload.outcome == 'success' && steps.upload.outputs.artifact-id != '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        timeout-minutes: 1
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Transfer only exact authenticated same-attempt artifact IDs
+        id: transfer
+        timeout-minutes: 2
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_ARTIFACTS: >-
+            {"admission":{"artifact_id":"${{ needs.admission.outputs.artifact_id }}","sha256":"${{ needs.admission.outputs.artifact_digest }}"},"helper":{"artifact_id":"${{ needs.helper.outputs.artifact_id }}","sha256":"${{ needs.helper.outputs.artifact_digest }}"},"core":{"artifact_id":"${{ needs.core.outputs.artifact_id }}","sha256":"${{ needs.core.outputs.artifact_digest }}"},"resource_1":{"artifact_id":"${{ needs.resource_1.outputs.artifact_id }}","sha256":"${{ needs.resource_1.outputs.artifact_digest }}"},"resource_2":{"artifact_id":"${{ needs.resource_2.outputs.artifact_id }}","sha256":"${{ needs.resource_2.outputs.artifact_digest }}"},"resource_3":{"artifact_id":"${{ needs.resource_3.outputs.artifact_id }}","sha256":"${{ needs.resource_3.outputs.artifact_digest }}"},"resource_4":{"artifact_id":"${{ needs.resource_4.outputs.artifact_id }}","sha256":"${{ needs.resource_4.outputs.artifact_digest }}"}}
+        with:
+          retries: 0
+          script: ${{ env.PREVIEW_TRANSFER_SCRIPT }}
+
+      - name: Decode bounded inputs and validate complete upstream proof before setup
+        id: prepare
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 2
+        env:
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          python - <<'PY_PREPARE'
+          import importlib.util
+          from pathlib import Path
+          source = Path.cwd() / 'scripts/ci/foobar_preview_evidence.py'
+          spec = importlib.util.spec_from_file_location('_foobar_preview_workflow', source)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._workflow_prepare()
+          PY_PREPARE
+
+      - name: Reconcile all owners without collection or product loading
+        id: run
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 6
+        env:
+          PREVIEW_CANCELLED: ${{ job.status == 'cancelled' }}
+          PREVIEW_TRANSFER_OUTCOME: ${{ steps.transfer.outcome }}
+        run: |
+          python scripts/ci/foobar_preview_evidence.py reconcile \
+            --root "$GITHUB_WORKSPACE" \
+            --plan scripts/ci/foobar_preview_plan.json \
+            --admission "$RUNNER_TEMP/foobar-preview-inputs/admission/admission.json" \
+            --evidence-dir "$RUNNER_TEMP/foobar-preview-output" \
+            --expected-head "${{ github.event.pull_request.head.sha }}" \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --helper-evidence "$RUNNER_TEMP/foobar-preview-inputs/helper" \
+            --input-dir "$RUNNER_TEMP/foobar-preview-inputs"
+
+      - name: Retain reconcile proof without masking any failure
+        id: upload
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-v1-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-reconcile
+          path: ${{ runner.temp }}/foobar-preview-output
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14

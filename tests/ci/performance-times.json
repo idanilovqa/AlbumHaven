@@ -23,6 +23,8 @@
   "edit-tags-post-edit.albumDetailsShellMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },
   "edit-tags-post-edit.albumDetailsCoverMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },
   "edit-tags-post-edit.tagEditorOpenMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },
+  "edit-tags-post-edit.artistJumpAlignedMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },
+  "edit-tags-post-edit.rootContinuationCommittedMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },
   "notification-history.drawerOpenMs": { "local": { "targetMs": 500, "graceMs": 200, "hardCeilingMs": 700 }, "ci": { "targetMs": 500, "graceMs": 200, "hardCeilingMs": 700 } },
   "notification-history.paginationMs": { "local": { "targetMs": 500, "graceMs": 200, "hardCeilingMs": 700 }, "ci": { "targetMs": 500, "graceMs": 200, "hardCeilingMs": 700 } },
   "notification-history.searchGalleryReadyMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },

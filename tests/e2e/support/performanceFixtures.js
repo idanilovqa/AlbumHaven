@@ -396,6 +396,8 @@ function buildEditTagsPostEditSummaryCards(_checkpoints, metricsPayload) {
     ['Tree Highlight', metricsPayload?.treeHighlightMs, 'Post-edit Artist Tree selection'],
     ['Tree Gallery', metricsPayload?.treeGalleryReadyMs, 'Selected-artist visible gallery'],
     ['Album Details', metricsPayload?.albumDetailsOpenMs, 'Selected album track table'],
+    ['Artist Jump', metricsPayload?.artistJumpAlignedMs, 'Root gallery direct jump'],
+    ['Root Pagination', metricsPayload?.rootContinuationCommittedMs, 'Next page committed'],
   ].map(([label, timingMs, note]) => ({
     label,
     value: Number.isFinite(timingMs) ? `${Math.round(timingMs)} ms` : 'Not recorded',
@@ -1186,6 +1188,8 @@ export const test = base.extend({
         'edit-tags-post-edit.albumDetailsOpenMs',
         'edit-tags-post-edit.albumDetailsShellMs',
         'edit-tags-post-edit.albumDetailsCoverMs',
+        'edit-tags-post-edit.artistJumpAlignedMs',
+        'edit-tags-post-edit.rootContinuationCommittedMs',
       ],
     });
   },

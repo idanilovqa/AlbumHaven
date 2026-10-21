@@ -409,6 +409,11 @@ test('owns the exact five-track typo-artist rename inside the isolated Edit Tags
   assert.match(spec, /retentionSamples/);
   assert.match(spec, /retainedPlateauHeapGrowthBytes/);
   assert.match(spec, /retainedPlateauDomNodeGrowth/);
+  assert.match(spec, /GalleryRegressions/);
+  assert.match(spec, /artistJumpAlignedMs/);
+  assert.match(spec, /rootContinuationCommittedMs/);
+  assert.match(spec, /gallery_cursor/);
+  assert.match(spec, /scrollToArtistAction\.click\(/);
   assert.match(spec, /Memory\.getDOMCounters/);
   assert.match(spec, /const editOpenTimingsMs = \[\];/);
   assert.match(spec, /retainedHeapGrowthBytes/);

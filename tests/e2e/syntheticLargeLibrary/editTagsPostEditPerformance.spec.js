@@ -24,6 +24,7 @@ import {
   requirePostgresRuntimeEnv,
   waitForPostgresBrowseWarmRoot,
 } from '../helpers/realAppBenchmarkHelpers.js';
+import { GalleryRegressions } from '../poms/galleryRegressions.js';
 
 const CASE_ID = 'FTC-TAGS-026P';
 const ARTIST = 'ДДТ';
@@ -58,6 +59,8 @@ const BUDGETS = Object.freeze(Object.fromEntries([
   'albumDetailsShellMs',
   'albumDetailsOpenMs',
   'albumDetailsCoverMs',
+  'artistJumpAlignedMs',
+  'rootContinuationCommittedMs',
 ].map((key) => [key, Object.freeze(
   performanceTimingBudget(`edit-tags-post-edit.${key}`),
 )])));
@@ -177,6 +180,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
     const editOpenTimingsMs = [];
     const retentionSamples = [];
     const metrics = {};
+    const galleryRegressions = new GalleryRegressions(page);
     let cdp = null;
     let retentionBaseline = null;
     let retentionFinal = null;
@@ -631,6 +635,70 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       await trackModalActions.waitForDetailedCoverImageCheckpoint({ timeout: 60000 });
       metrics.albumDetailsCoverMs = performance.now() - albumDetailsStartedAt;
       await trackModalActions.close();
+
+      await stepLogger.step('Measure direct artist jump after the long session', async () => {
+        await appBarActions.openLibraryHome();
+        await searchToolbarActions.waitForQuery('', { timeout: 60000 });
+        await navigationPanelActions.waitForSidebarFullyHydrated({ timeout: 60000 });
+        await galleryActions.waitForGalleryReady({ timeout: 60000 });
+        await galleryRegressions.openArtistTreeContextMenu(TREE_ARTIST);
+        await expect(galleryRegressions.scrollToArtistAction).toBeVisible();
+
+        const jumpStartedAt = performance.now();
+        await galleryRegressions.scrollToArtistAction.click();
+        await expect.poll(async () => (
+          Object.values(await galleryRegressions.readArtistJumpPlacement(TREE_ARTIST)).every(Boolean)
+        ), { timeout: 60000 }).toBe(true);
+        metrics.artistJumpAlignedMs = performance.now() - jumpStartedAt;
+      });
+
+      await stepLogger.step('Measure root pagination after the long session', async () => {
+        await appBarActions.openLibraryHome();
+        await searchToolbarActions.waitForQuery('', { timeout: 60000 });
+        await galleryActions.waitForGalleryReady({ timeout: 60000 });
+        // parity-check: allow-read-only-measurement-evaluate -- snapshot root identities before pagination.
+        const initialAlbumKeys = new Set(await page.evaluate(() => (
+          (state.view.artist_groups || [])
+            .flatMap((group) => (group.albums || []).map((album) => album.key))
+        )));
+        const continuationResponsePromise = page.waitForResponse((response) => {
+          const url = new URL(response.url());
+          return response.request().method() === 'GET'
+            && url.pathname === '/view-data'
+            && url.searchParams.has('gallery_cursor');
+        }, { timeout: 60000 });
+
+        let continuationResponse = null;
+        const viewport = await galleryRegressions.galleryScroll.boundingBox();
+        expect(viewport, 'Root gallery scroll viewport must be visible.').not.toBeNull();
+        await page.mouse.move(
+          viewport.x + viewport.width / 2,
+          viewport.y + viewport.height / 2,
+        );
+        for (let step = 0; step < 30 && !continuationResponse; step += 1) {
+          await page.mouse.wheel(0, 240);
+          continuationResponse = await Promise.race([
+            continuationResponsePromise,
+            page.waitForTimeout(80).then(() => null),
+          ]);
+        }
+        expect(continuationResponse, 'Post-edit root scrolling must request the next page.').not.toBeNull();
+        expect(continuationResponse.ok()).toBe(true);
+        const continuationPayload = await continuationResponse.json();
+        const appendedAlbumKey = (continuationPayload.artist_groups || [])
+          .flatMap((group) => group.albums || [])
+          .map((album) => album.key)
+          .find((key) => key && !initialAlbumKeys.has(key));
+        expect(appendedAlbumKey, 'Post-edit root continuation must append a new album.').toBeTruthy();
+        // parity-check: allow-read-only-measurement-evaluate -- observe the committed continuation in runtime state.
+        await expect.poll(() => page.evaluate((key) => (
+          (state.view.artist_groups || []).some((group) => (
+            (group.albums || []).some((album) => album.key === key)
+          ))
+        ), appendedAlbumKey), { timeout: 3000 }).toBe(true);
+        metrics.rootContinuationCommittedMs = Date.now()
+          - continuationResponse.request().timing().startTime;
+      });
     } finally {
       try {
         if (cdp) await cdp.detach();
@@ -650,6 +718,8 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       ['treeHighlightMs', 'Post-edit Artist Tree highlight'],
       ['treeGalleryReadyMs', 'Post-edit Artist Tree selected gallery'],
       ['albumDetailsOpenMs', 'Post-edit Album Details readiness'],
+      ['artistJumpAlignedMs', 'Post-edit direct artist jump'],
+      ['rootContinuationCommittedMs', 'Post-edit root pagination commit'],
     ]) {
       await editTagsPostEditLocalReport.recordTimingCheckpoint({
         key,

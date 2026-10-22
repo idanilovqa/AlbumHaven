@@ -1347,13 +1347,22 @@ class VirtualArtistGrid {
       const previousBlockHeights = Array.isArray(section.blockHeights)
         ? section.blockHeights
         : [];
+      const sectionMeasuredRowHeight = previousBlockHeights.find((height, index) => {
+        const measureKey = String(previousMeasureKeys[index] || '');
+        return measureKey.startsWith('row:')
+          && String(previousMeasuredKeys[index] || '') === measureKey
+          && Number(height) > 0;
+      });
+      const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
+        || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
+        || estimatedRowHeight;
       section.blockHeights = blocks.map((block, index) => {
         if (block.kind === 'subheading') return this.subsectionLabelHeight;
         const measureKey = nextMeasureKeys[index];
         const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
           && previousMeasuredKeys[index] === measureKey
           && Number(previousBlockHeights[index]) > 0;
-        return hasMeasuredHeight ? Number(previousBlockHeights[index]) : estimatedRowHeight;
+        return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
       });
       section.blockMeasureKeys = nextMeasureKeys;
       section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
@@ -2214,7 +2223,12 @@ class VirtualArtistGrid {
         this.scrollEl.scrollLeft = preservedAbsoluteScroll.scrollLeft;
         this.scrollEl.scrollTop = preservedAbsoluteScroll.scrollTop;
       } else {
+        const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
         this.restoreScrollAnchor(anchor);
+        if (anchor?.albumKey && Math.abs(Number(this.scrollEl.scrollTop || 0) - previousScrollTop) > 1) {
+          this.render(true);
+          this.restoreScrollAnchor(anchor);
+        }
       }
       this._pendingStabilizationScroll = {
         generation: stabilizeGeneration,

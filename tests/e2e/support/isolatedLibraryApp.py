@@ -195,7 +195,11 @@ def classify_fixture_profile_mode(fixture_profile: str) -> str:
 def fixture_profile_requires_provider_storage_policy_fixture(
     fixture_profile: str,
 ) -> bool:
-    return str(fixture_profile).strip() not in GENERATED_FIXTURE_PROFILES
+    normalized_profile = str(fixture_profile).strip()
+    return (
+        normalized_profile not in GENERATED_FIXTURE_PROFILES
+        and normalized_profile != "utility-problematic-files"
+    )
 
 
 DDT_STUDIO_RECORDS_FIXTURE_TRACKS = tuple(

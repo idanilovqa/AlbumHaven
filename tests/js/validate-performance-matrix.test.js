@@ -293,6 +293,7 @@ test('artwork-diversity CI pins a sibling generator checkout and passes it only 
   const pullRequestCheckout = stepContaining(job, 'ref: ${{ github.sha }}');
   const trustedCheckout = stepContaining(job, 'github.event.pull_request.base.sha');
   const generatorCheckout = stepContaining(job, 'idanilovqa/album-haven-test-data');
+  const generatorDependencies = stepContaining(job, 'album-haven-test-data\\requirements.txt');
   const runner = stepContaining(job, 'run-performance-shard.ps1');
 
   assert.match(job, /defaults:\s*\r?\n\s+run:\s*\r?\n\s+working-directory:\s*\$\{\{\s*github\.workspace\s*\}\}\\album-haven-app/);
@@ -305,6 +306,8 @@ test('artwork-diversity CI pins a sibling generator checkout and passes it only 
   assert.match(generatorCheckout, /path:\s*album-haven-test-data/);
   assert.match(generatorCheckout, /token:\s*\$\{\{\s*secrets\.ALBUM_HAVEN_FIXTURES_TOKEN\s*\}\}/);
   assert.match(generatorCheckout, /persist-credentials:\s*false/);
+  assert.match(generatorDependencies, /if:\s*(?:\$\{\{\s*)?matrix\.shard\s*==\s*['"]gallery-artwork-diversity['"](?:\s*\}\})?/);
+  assert.match(generatorDependencies, /python\s+-m\s+pip\s+install\s+-r\s+[^\r\n]*album-haven-test-data\\requirements\.txt/i);
   assert.match(job, /cache-dependency-path:\s*album-haven-app\/package-lock\.json/);
   assert.match(job, /cache-dependency-path:\s*album-haven-app\/requirements\.txt/);
   assert.match(job, /album-haven-trusted-ci\\scripts\\ci\\fetch-test-fixtures\.ps1/);

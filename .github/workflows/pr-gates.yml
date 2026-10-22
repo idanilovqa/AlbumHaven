@@ -900,6 +900,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Install artwork-diversity generator dependencies
+        if: matrix.shard == 'gallery-artwork-diversity'
+        run: python -m pip install -r "${{ github.workspace }}\album-haven-test-data\requirements.txt"
+
       - name: Set up pinned performance Chrome for Testing
         id: setup_performance_chrome
         uses: browser-actions/setup-chrome@v2

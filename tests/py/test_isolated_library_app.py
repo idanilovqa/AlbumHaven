@@ -518,7 +518,7 @@ def test_fixture_profile_mode_preserves_released_and_generated_boundaries(
         ("", True),
         ("functional-core", True),
         ("synthetic-large-library", True),
-        ("utility-problematic-files", True),
+        ("utility-problematic-files", False),
         ("playback-media", False),
         ("scan-library", False),
     ],

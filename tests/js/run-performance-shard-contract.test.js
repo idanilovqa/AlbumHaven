@@ -145,12 +145,12 @@ test('performance profile runner prepares one isolated fixture before compatible
   assert.match(source, /Set-Item\s+-LiteralPath\s+["']Env:\$key["']/i);
 });
 
-test('performance profile runner accepts the twelve-target synthetic profile', () => {
+test('performance profile runner accepts the seventeen-target synthetic profile', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   assert.match(
     source,
-    /\$targetNames\.Count\s+-gt\s+12\b/,
-    'the synthetic profile runner must accept its complete twelve-target registry',
+    /\$targetNames\.Count\s+-gt\s+17\b/,
+    'the synthetic profile runner must accept its complete seventeen-target registry',
   );
 });
 

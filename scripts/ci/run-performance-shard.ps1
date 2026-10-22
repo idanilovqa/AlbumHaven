@@ -25,8 +25,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $targetNames = @($Targets.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 12) {
-    throw 'Performance profile runner must own between one and twelve targets.'
+if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 17) {
+    throw 'Performance profile runner must own between one and seventeen targets.'
 }
 if ((@($targetNames | Select-Object -Unique)).Count -ne $targetNames.Count) {
     throw 'Performance shard target list contains a duplicate.'

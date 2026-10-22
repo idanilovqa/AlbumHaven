@@ -4940,6 +4940,7 @@ def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
 
     scheduled: list[dict[str, object]] = []
+    relation_projection_edit_fields: list[set[str]] = []
 
     def fake_schedule(
         config,
@@ -4961,6 +4962,9 @@ def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(
         return None
 
     def run_finalizer(**kwargs):
+        relation_projection_edit_fields.append(
+            set(kwargs["relation_projection_edit_fields"])
+        )
         kwargs["schedule_cache_updates_save"](
             app.config["CACHE_PATH"],
             {"track-1.flac": {"path": "track-1.flac", "album_artist": "New Artist"}},
@@ -5002,6 +5006,7 @@ def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(
             "rebuild_relation_projection": True,
         }
     ]
+    assert relation_projection_edit_fields == [set(asgi_routes._RELATION_PROJECTION_EDIT_FIELDS)]
 
 
 def test_asgi_edit_routes_preserve_task_and_validation_payloads(app):

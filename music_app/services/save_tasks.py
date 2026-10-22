@@ -499,6 +499,7 @@ def _finalize_save_task(
     changed_field_names: set[str],
     structural_edit_fields: set[str],
     log_entry: JsonDict,
+    relation_projection_edit_fields: set[str] | None = None,
     scoped_postgres_exception_only: bool = False,
     run_state_mutation: StateMutationGuard | None = None,
     compensate_save_task: StructuralTagEditCompensator | None = None,
@@ -635,9 +636,13 @@ def _finalize_save_task(
                 )
             except Exception as exc:
                 record_runtime_failure("Album state rebuild", exc)
-        relation_projection_edit_fields = structural_edit_fields | {"artist"}
+        relation_projection_fields = (
+            relation_projection_edit_fields
+            if relation_projection_edit_fields is not None
+            else structural_edit_fields | {"artist"}
+        )
         if (
-            changed_field_names & relation_projection_edit_fields
+            changed_field_names & relation_projection_fields
             and not scoped_postgres_exception_only
             and (
                 not isinstance(committed_relation_state, dict)

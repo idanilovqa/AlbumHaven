@@ -99,6 +99,28 @@ def _durable_save_finalize_kwargs(
     }
 
 
+def test_finalize_save_task_only_requires_relation_state_for_relation_fields(tmp_path):
+    persistence: Future[dict[str, object]] = Future()
+    persistence.set_result({})
+    task_id = create_save_task("edit-tags")
+    finalize_kwargs = _durable_save_finalize_kwargs(
+        tmp_path,
+        schedule_cache_updates_save=lambda *_args, **_kwargs: persistence,
+    )
+    finalize_kwargs.update(
+        changed_field_names={"album", "year"},
+        structural_edit_fields={"album", "year"},
+        relation_projection_edit_fields={"artist", "album_artist"},
+    )
+
+    finalize_save_task(task_id, **finalize_kwargs)
+
+    payload = save_task_result(task_id)
+    assert payload["status"] == "completed"
+    assert payload["requires_view_refresh"] is True
+    assert "warnings" not in payload
+
+
 def test_create_save_task_returns_pending_payload():
     task_id = create_save_task("repair-tags")
 

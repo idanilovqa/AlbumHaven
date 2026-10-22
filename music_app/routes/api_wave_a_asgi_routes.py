@@ -418,6 +418,7 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
     find_albums_by_track_paths = kwargs.pop("find_albums_by_track_paths", None)
     find_problematic_album_by_track_paths = kwargs.pop("find_problematic_album_by_track_paths", None)
     structural_edit_fields = kwargs.pop("structural_edit_fields", set(_STRUCTURAL_EDIT_FIELDS))
+    kwargs["relation_projection_edit_fields"] = set(_RELATION_PROJECTION_EDIT_FIELDS)
     get_state_provider = kwargs.pop("get_state", None)
     if get_state_provider is None:
         raise ValueError("get_state is required")

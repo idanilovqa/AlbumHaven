@@ -417,13 +417,21 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /Boolean\(state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
+    /Boolean\(button\.dataset\.libraryWide === '1' && state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
+  );
+  assert.match(
+    galleryMainInteractionsSource,
+    /typeAnchor[\s\S]*?openGalleryMainSurface\('album-types'[\s\S]*?hydrateDeferredNonAlbumTracks\(\{ libraryWide: true \}\)/,
+  );
+  assert.match(
+    galleryMainCssSource,
+    /\.gallery-menu-action:is\(:disabled, \[aria-disabled="true"\]\)[^}]*opacity:\s*\.55[^}]*cursor:\s*not-allowed/,
   );
   const context = loadRuntime();
   const hasGalleryNonAlbumTracks = requireContract(context, 'hasGalleryNonAlbumTracks');
   assert.equal(hasGalleryNonAlbumTracks({ non_album_tracks: [] }), false);
   assert.equal(hasGalleryNonAlbumTracks({ non_album_tracks: [{ title: 'Loose' }] }), true);
-  assert.equal(hasGalleryNonAlbumTracks({ non_album_tracks: [], non_album_tracks_deferred: true }), true);
+  assert.equal(hasGalleryNonAlbumTracks({ non_album_tracks: [], non_album_tracks_deferred: true }), false);
 });
 
 test('artist info triggers use a larger plain information glyph with neutral envelope styling', () => {

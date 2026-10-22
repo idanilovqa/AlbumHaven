@@ -338,6 +338,7 @@ test('background lookup marks its trigger busy before the start request settles'
 test('gallery responses cannot overwrite another album or a newer gallery request', async () => {
   const requests = [], applied = [];
   const context = vm.createContext({
+    document: { getElementById: () => null },
     state: { coverLookup: { modal: { album: { key: 'first' } } } }, console,
     fetch: () => new Promise(resolve => requests.push(resolve)),
     showToast: () => { throw new Error('Stale requests must not notify'); },

@@ -45,6 +45,8 @@ def database_urls():
 def ownership(database_urls):
     setup_url, runtime_url = database_urls
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}
+    created_account_id = None
+    created_library_id = None
     with isolatedPostgres._connect(setup_url) as connection:
         row = connection.execute("""
             select libraries.id from library.libraries libraries
@@ -52,7 +54,39 @@ def ownership(database_urls):
             where owners.owner_key = 'local-bootstrap-owner'
               and libraries.name = 'Local Library' and libraries.library_kind = 'local'
         """).fetchone()
-        assert row is not None, "prepare the isolated migrated bootstrap library before running ownership tests"
+        if row is None:
+            owner = connection.execute("""
+                select account_id from app.bootstrap_owners
+                where owner_key = 'local-bootstrap-owner'
+            """).fetchone()
+            if owner is None:
+                identity = f"library-operation-{uuid4().hex}"
+                created_account_id = connection.execute("""
+                    insert into app.accounts (
+                        display_name, username_display, username_normalized,
+                        contact_email, contact_email_normalized
+                    ) values (%s, %s, %s, %s, %s)
+                    returning id
+                """, (
+                    identity,
+                    identity,
+                    identity,
+                    f"{identity}@example.test",
+                    f"{identity}@example.test",
+                )).fetchone()["id"]
+                connection.execute("""
+                    insert into app.bootstrap_owners (account_id, owner_key)
+                    values (%s, 'local-bootstrap-owner')
+                """, (created_account_id,))
+                account_id = created_account_id
+            else:
+                account_id = owner["account_id"]
+            created_library_id = connection.execute("""
+                insert into library.libraries (owner_account_id, name, library_kind)
+                values (%s, 'Local Library', 'local')
+                returning id
+            """, (account_id,)).fetchone()["id"]
+            row = {"id": created_library_id}
         library_id = row["id"]
         existing = connection.execute("""
             select id from ops.cover_lookup_tasks
@@ -69,6 +103,16 @@ def ownership(database_urls):
                 where library_id = %s and metadata->>'source_family' = %s
                   and task_key = %s and metadata->>'owner_token' = any(%s)
             """, (library_id, FAMILY, TASK_KEY, tokens))
+            if created_library_id is not None:
+                connection.execute(
+                    "delete from library.libraries where id = %s",
+                    (created_library_id,),
+                )
+            if created_account_id is not None:
+                connection.execute(
+                    "delete from app.accounts where id = %s",
+                    (created_account_id,),
+                )
 
 
 def claim(repo, token):

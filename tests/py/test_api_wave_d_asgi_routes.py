@@ -1831,6 +1831,15 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     outside_delete_image = outside_image.parent / "delete-outside.jpg"
     outside_delete_image.write_bytes(_jpeg_bytes((80, 80, 80)))
     missing_image = track_path.parent / "missing.jpg"
+    managed_preview = (
+        track_path.parent
+        / ".album-haven"
+        / "cover_variants"
+        / "aa"
+        / "aabb.jpg"
+    )
+    managed_preview.parent.mkdir(parents=True)
+    managed_preview.write_bytes(_jpeg_bytes((80, 80, 80)))
     _seed_album_state(app.library_state, track_path)
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.flask_app = _FatalFlaskBridge()
@@ -1893,6 +1902,18 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
         "/utilities/cover-lookup/local-delete",
         json_body={"album": _album_payload(track_path), "source_path": str(outside_delete_image)},
     )
+    managed_select_status, _managed_select_headers, managed_select_body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/local-select",
+        json_body={"album": _album_payload(track_path), "source_path": str(managed_preview)},
+    )
+    managed_delete_status, _managed_delete_headers, managed_delete_body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/local-delete",
+        json_body={"album": _album_payload(track_path), "source_path": str(managed_preview)},
+    )
     pasted_status, _pasted_headers, pasted_body = _run_asgi_request(
         asgi_app,
         "POST",
@@ -1943,6 +1964,17 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     assert _decode_json(delete_body) == {"ok": False, "error": "Selected image was not found"}
     assert delete_outside_status == 400
     assert _decode_json(delete_outside_body) == {"ok": False, "error": "Selected image is outside the album folder"}
+    assert managed_select_status == 400
+    assert _decode_json(managed_select_body) == {
+        "ok": False,
+        "error": "Selected image is an internal managed preview",
+    }
+    assert managed_delete_status == 400
+    assert _decode_json(managed_delete_body) == {
+        "ok": False,
+        "error": "Selected image is an internal managed preview",
+    }
+    assert managed_preview.is_file()
     assert pasted_status == 400
     assert _decode_json(pasted_body) == {"ok": False, "error": "Clipboard image format is invalid."}
 

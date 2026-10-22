@@ -13,6 +13,7 @@ from typing import Callable
 
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
 from music_app.services.covers import Image, reserve_existing_cover_variant
+from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
@@ -199,6 +200,8 @@ def validate_local_cover_source(config: dict[str, object], album_root: Path, sou
         raise ValueError("Selected image is outside the album folder") from exc
     if not resolved.is_file():
         raise FileNotFoundError("Selected image was not found")
+    if is_managed_preview_path(resolved):
+        raise ValueError("Selected image is an internal managed preview")
     return resolved
 
 
@@ -677,7 +680,11 @@ def choose_best_remaining_local_cover(
     score_image,
 ) -> Path | None:
     candidates = [
-        path for path in album_root.rglob("*") if path.is_file() and path.suffix.lower() in image_extensions
+        path
+        for path in album_root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in image_extensions
+        and not is_managed_preview_path(path)
     ]
     if not candidates:
         return None

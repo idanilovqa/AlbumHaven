@@ -21,6 +21,37 @@ def _write_jpeg(path: Path, color: tuple[int, int, int], *, size: tuple[int, int
     path.write_bytes(buffer.getvalue())
 
 
+def test_cover_gallery_excludes_managed_preview_files(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    cover_path = album_root / "cover.jpg"
+    managed_previews = (
+        album_root / ".album-haven" / "cover_variants" / "aa" / "legacy.jpg",
+        album_root / ".album-haven" / "v1" / "cover_variants" / "bb" / "current.jpg",
+    )
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(cover_path, (220, 40, 40))
+    for managed_preview in managed_previews:
+        _write_jpeg(managed_preview, (40, 40, 220), size=(480, 480))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={
+            str(track_path): {
+                "cover_path": str(cover_path),
+                "remote_cover_url": "https://images.example/cover.jpg",
+            }
+        },
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert [item["path"] for item in payload["local_covers"]] == [str(cover_path)]
+
+
 def test_serialize_cover_gallery_payload_prefers_saved_remote_cover(tmp_path: Path):
     album_root = (tmp_path / "Artist" / "Album").resolve()
     track_path = (album_root / "song.mp3").resolve()

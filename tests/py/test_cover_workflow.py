@@ -848,6 +848,46 @@ def test_validate_local_cover_source_rejects_outside_path(config, tmp_path: Path
         validate_local_cover_source(config, album_root, str(outside_cover))
 
 
+def test_validate_local_cover_source_rejects_managed_preview(config, tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    managed_preview = (
+        album_root / ".album-haven" / "v1" / "cover_variants" / "aa" / "aabb.jpg"
+    )
+    managed_preview.parent.mkdir(parents=True)
+    managed_preview.write_bytes(b"preview")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [
+                {"id": "main-1", "path": str(tmp_path), "layout_mode": "artist"}
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="managed preview"):
+        validate_local_cover_source(config, album_root, str(managed_preview))
+
+
+def test_best_remaining_local_cover_ignores_managed_preview(tmp_path: Path):
+    album_root = tmp_path / "Artist" / "Album"
+    regular = album_root / "booklet.jpg"
+    managed_preview = (
+        album_root / ".album-haven" / "cover_variants" / "aa" / "aabb.jpg"
+    )
+    _write_jpeg(regular, (220, 40, 40), size=(32, 20))
+    _write_jpeg(managed_preview, (40, 40, 220), size=(480, 480))
+
+    chosen = cover_workflow.choose_best_remaining_local_cover(
+        album_root,
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+        score_image=score_image,
+    )
+
+    assert chosen == regular
+
+
 def test_validate_local_cover_source_requires_configured_library_root(config, tmp_path: Path):
     configured_root = (tmp_path / "configured").resolve()
     album_root = (tmp_path / "unconfigured" / "Artist" / "Album").resolve()

@@ -238,6 +238,79 @@ def test_separate_edition_records_cross_reference_all_duplicate_sources():
         assert len(album.tracks) == 1, "Linking duplicate copies must preserve the album's own queue"
 
 
+def test_release_type_misfiled_as_edition_does_not_create_a_second_card():
+    tracks = [
+        _track("main/original", number, album="Edge of Eternity")
+        for number in range(1, 3)
+    ] + [
+        _track("hoard/copy", number, album="Edge of Eternity", edition="EP")
+        for number in range(1, 3)
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert albums[0].edition is None
+    assert len(albums[0].tracks) == 4
+    assert albums[0].total_duration_seconds == 720
+    assert len(get_album_duplicate_sources(albums[0])) == 2
+
+
+def test_optional_leading_article_variant_does_not_create_a_second_card():
+    tracks = [
+        _track("main/original", number, album="The Serpent's Egg")
+        for number in range(1, 3)
+    ] + [
+        _track("hoard/copy", number, album="Serpent's Egg")
+        for number in range(1, 3)
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert albums[0].name == "The Serpent's Egg"
+    assert len(get_album_duplicate_sources(albums[0])) == 2
+
+
+def test_article_variant_joins_an_existing_multi_source_duplicate_card():
+    tracks = [
+        _track(folder, number, album=album)
+        for folder, album in (
+            ("main/original", "The Serpent's Egg"),
+            ("hoard/exact-copy", "The Serpent's Egg"),
+            ("arrivals/article-variant", "Serpent's Egg"),
+        )
+        for number in range(1, 3)
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert len(get_album_duplicate_sources(albums[0])) == 3
+
+
+def test_leading_article_variant_with_different_track_evidence_stays_separate():
+    tracks = [
+        _track("main/original", album="The Serpent's Egg"),
+        _track("hoard/copy", album="Serpent's Egg", duration_seconds=240),
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 2
+
+
+def test_leading_article_variant_with_conflicting_release_dates_stays_separate():
+    tracks = [
+        _track("main/original", album="The Serpent's Egg", release_date="1988-10-24"),
+        _track("hoard/reissue", album="Serpent's Egg", release_date="2008-06-02"),
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 2
+
+
 def test_postgres_projection_uses_album_identity_not_repeated_track_ids():
     from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
 
@@ -253,6 +326,30 @@ def test_postgres_projection_uses_album_identity_not_repeated_track_ids():
     assert sources["original"]["has_duplicate_files"] is True
     rows[1]["file_entry"]["year"] = 2002
     assert all(not item["has_duplicate_files"] for item in _duplicate_sources_from_rows(rows).values())
+
+
+def test_postgres_projection_keeps_article_variant_sources_on_the_canonical_card():
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    rows = [
+        {
+            "album_key": "canonical",
+            "album_title": "The Serpent's Egg",
+            "album_metadata": {"album_artist": "Artist One"},
+            "file_private_path": str(track.path),
+            "file_entry": asdict(track),
+            "duration_seconds": track.duration_seconds,
+        }
+        for track in (
+            _track("main/original", album="The Serpent's Egg"),
+            _track("hoard/article-variant", album="Serpent's Egg"),
+        )
+    ]
+
+    result = _duplicate_sources_from_rows(rows)["canonical"]
+
+    assert result["has_duplicate_files"] is True
+    assert len(result["duplicate_sources"]) == 2
 
 
 def test_duplicate_projection_excludes_rejected_sources_without_changing_diagnostic_rows():

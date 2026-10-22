@@ -1245,6 +1245,29 @@ def get_album_duplicate_sources(album: Album) -> list[dict[str, object]]:
 def _ordered_album_duplicate_track_groups(
     tracks: list[Track],
 ) -> list[tuple[str, list[Track]]]:
+    ordered_groups = _ordered_album_track_groups(tracks)
+    if len(ordered_groups) <= 1:
+        return []
+    identities = [_duplicate_album_identity(group) for _, group in ordered_groups]
+    counts = Counter(identities)
+    qualifying_indexes = {
+        index
+        for index, identity in enumerate(identities)
+        if identity is not None and counts[identity] > 1
+    }
+    for index, (_, tracks) in enumerate(ordered_groups):
+        if index in qualifying_indexes:
+            continue
+        if any(
+            _equivalent_duplicate_track_groups(tracks, other_tracks)
+            for other_index, (_, other_tracks) in enumerate(ordered_groups)
+            if other_index != index
+        ):
+            qualifying_indexes.add(index)
+    return [group for index, group in enumerate(ordered_groups) if index in qualifying_indexes]
+
+
+def _ordered_album_track_groups(tracks: list[Track]) -> list[tuple[str, list[Track]]]:
     grouped_tracks: dict[str, list[Track]] = {}
     folder_paths: dict[str, str] = {}
     containers = _contextual_album_containers([
@@ -1263,16 +1286,10 @@ def _ordered_album_duplicate_track_groups(
         folder_paths.setdefault(key, container)
         grouped_tracks.setdefault(key, []).append(track)
 
-    if len(grouped_tracks) <= 1:
-        return []
-
-    ordered_groups = sorted(
+    return sorted(
         ((folder_paths[key], group) for key, group in grouped_tracks.items()),
         key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold()),
     )
-    identities = [_duplicate_album_identity(group) for _, group in ordered_groups]
-    counts = Counter(identities)
-    return [group for group, identity in zip(ordered_groups, identities) if identity is not None and counts[identity] > 1]
 
 
 def _duplicate_album_identity(tracks: list[Track]) -> tuple[str, str, int] | None:
@@ -1295,6 +1312,149 @@ def _duplicate_track_coverage_identity(track: Track) -> tuple[object, ...]:
         return ("position", disc_number, track_number)
     title = " ".join(unicodedata.normalize("NFC", str(track.title or "")).casefold().split())
     return ("title", title)
+
+
+_RELEASE_TYPE_EDITIONS = {"ep", "single", "maxi single", "maxi-single"}
+
+
+def _duplicate_card_track_signature(tracks: list[Track]) -> tuple[tuple[object, ...], ...] | None:
+    signatures = set()
+    for _, group in _ordered_album_track_groups(tracks):
+        signature = []
+        for track in group:
+            track_number = safe_int(track.track_number)
+            duration = safe_int(track.duration_seconds)
+            title = " ".join(unicodedata.normalize("NFC", str(track.title or "")).casefold().split())
+            if track_number is None or duration is None or duration <= 0 or not title:
+                return None
+            signature.append((safe_int(track.disc_number) or 1, track_number, title, duration))
+        signatures.add(tuple(sorted(signature)))
+    return next(iter(signatures)) if len(signatures) == 1 else None
+
+
+def _duplicate_card_album_identity(album: Album) -> tuple[str, str, int, str, str] | None:
+    artist = " ".join(unicodedata.normalize("NFC", str(album.album_artist or "")).casefold().split())
+    title = " ".join(unicodedata.normalize("NFC", str(album.name or "")).casefold().split())
+    year = safe_int(album.year)
+    if not artist or not title or year is None or not 1000 <= year <= 9999:
+        return None
+    edition = " ".join(unicodedata.normalize("NFC", str(album.edition or "")).casefold().split())
+    release_date = str(album.release_date or "").strip()
+    return artist, title, year, edition, release_date
+
+
+def _duplicate_card_editions_are_compatible(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    editions = {left, right}
+    return "" in editions and bool((editions - {""}) & _RELEASE_TYPE_EDITIONS)
+
+
+def _duplicate_track_group_card_identity(tracks: list[Track]) -> tuple[str, str, int, str, str] | None:
+    album_identity = _duplicate_album_identity(tracks)
+    if album_identity is None:
+        return None
+    editions = {
+        " ".join(unicodedata.normalize("NFC", str(track.edition or "")).casefold().split())
+        for track in tracks
+    }
+    release_dates = {str(track.release_date or "").strip() for track in tracks}
+    if len(editions) != 1 or len(release_dates) != 1:
+        return None
+    artist, title, year = album_identity
+    return artist, title, year, next(iter(editions)), next(iter(release_dates))
+
+
+def _equivalent_duplicate_track_groups(left: list[Track], right: list[Track]) -> bool:
+    left_identity = _duplicate_track_group_card_identity(left)
+    right_identity = _duplicate_track_group_card_identity(right)
+    if left_identity is None or right_identity is None:
+        return False
+    left_artist, left_title, left_year, left_edition, left_release_date = left_identity
+    right_artist, right_title, right_year, right_edition, right_release_date = right_identity
+    if left_artist != right_artist or left_year != right_year:
+        return False
+    if left_title.removeprefix("the ") != right_title.removeprefix("the "):
+        return False
+    if not _duplicate_card_editions_are_compatible(left_edition, right_edition):
+        return False
+    if left_release_date and right_release_date and left_release_date != right_release_date:
+        return False
+    return _duplicate_card_track_signature(left) == _duplicate_card_track_signature(right) is not None
+
+
+def _collapse_equivalent_duplicate_album_cards(albums: list[Album]) -> list[Album]:
+    collapsed: list[Album] = []
+    candidates: dict[tuple[object, ...], list[tuple[int, Album, str, str]]] = {}
+    for album in albums:
+        identity = _duplicate_card_album_identity(album)
+        signature = _duplicate_card_track_signature(album.tracks)
+        if identity is None or signature is None:
+            collapsed.append(album)
+            continue
+        artist, title, year, edition, release_date = identity
+        key = (artist, title.removeprefix("the "), year, signature)
+        bucket = candidates.setdefault(key, [])
+        match_index = next(
+            (
+                index
+                for index, (_, _, candidate_edition, candidate_release_date) in enumerate(bucket)
+                if _duplicate_card_editions_are_compatible(candidate_edition, edition)
+                and (
+                    not candidate_release_date
+                    or not release_date
+                    or candidate_release_date == release_date
+                )
+            ),
+            None,
+        )
+        if match_index is None:
+            collapsed.append(album)
+            bucket.append((len(collapsed) - 1, album, edition, release_date))
+            continue
+        collapsed_index, match, _, candidate_release_date = bucket[match_index]
+        canonical, duplicate = sorted(
+            (match, album),
+            key=lambda candidate: (
+                not bool(str(candidate.edition or "").strip()),
+                str(candidate.name or "").casefold().startswith("the "),
+                len(str(candidate.name or "")),
+            ),
+            reverse=True,
+        )
+        canonical.tracks.extend(duplicate.tracks)
+        canonical.total_duration_seconds += duplicate.total_duration_seconds
+        canonical.artists = list(dict.fromkeys([*canonical.artists, *duplicate.artists]))
+        canonical.is_compilation = canonical.is_compilation or duplicate.is_compilation
+        canonical.release_date = canonical.release_date or duplicate.release_date
+        canonical.tracks.sort(key=lambda track: (
+            safe_int(track.disc_number) or 999,
+            safe_int(track.track_number) or 999,
+            str(track.title or "").casefold(),
+            str(track.path).casefold(),
+        ))
+        source_groups = _ordered_album_track_groups(canonical.tracks)
+        canonical._cached_duplicate_sources = (
+            _build_duplicate_source_payloads(source_groups)
+            if len(source_groups) > 1
+            else []
+        )
+        canonical.root_provenance = summarize_root_provenance_payloads([
+            track.root_provenance or build_root_provenance_payload(
+                track.library_root_id,
+                track.library_root_category,
+            )
+            for track in canonical.tracks
+        ])
+        collapsed[collapsed_index] = canonical
+        canonical_identity = _duplicate_card_album_identity(canonical)
+        bucket[match_index] = (
+            collapsed_index,
+            canonical,
+            canonical_identity[3],
+            candidate_release_date or release_date,
+        )
+    return collapsed
 
 
 def _summarize_duplicate_album_provenance(
@@ -1404,23 +1564,45 @@ def _link_duplicate_album_sources(
         if duplicate_identities:
             linked_tracks = [track for tracks in source_track_groups for track in tracks]
             album.root_provenance = _summarize_duplicate_album_provenance(album.tracks, linked_tracks)
+        fallback_groups = [] if duplicate_identities else _ordered_album_duplicate_track_groups(album.tracks)
+
         if defer_source_payloads:
             album._cached_duplicate_sources = []
 
             def deferred_materializer(
                 duplicate_identities=duplicate_identities,
+                fallback_groups=fallback_groups,
             ) -> list[dict[str, object]]:
+                if fallback_groups:
+                    return _build_duplicate_source_payloads(fallback_groups)
                 return materialize_sources(duplicate_identities)
 
             contexts.append({
-                "has_duplicate_files": bool(duplicate_identities),
-                "linked_tracks": linked_tracks,
+                "has_duplicate_files": bool(duplicate_identities or fallback_groups),
+                "linked_tracks": linked_tracks or [track for _, tracks in fallback_groups for track in tracks],
                 "materialize_sources": deferred_materializer,
-                "source_track_groups": source_track_groups,
+                "source_track_groups": source_track_groups or [tracks for _, tracks in fallback_groups],
             })
         else:
-            album._cached_duplicate_sources = materialize_sources(duplicate_identities)
+            album._cached_duplicate_sources = (
+                _build_duplicate_source_payloads(fallback_groups)
+                if fallback_groups
+                else materialize_sources(duplicate_identities)
+            )
     return contexts
+
+
+def _build_duplicate_source_payloads(
+    groups: list[tuple[str, list[Track]]],
+) -> list[dict[str, object]]:
+    return [
+        _build_album_duplicate_source_payload(
+            index=index,
+            folder_path=folder,
+            tracks=tracks,
+        )
+        for index, (folder, tracks) in enumerate(groups)
+    ]
 
 
 def _build_album_duplicate_source_payload(
@@ -1795,8 +1977,9 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             t.title.lower(),
         ))
         _cooperative_album_build_yield(finalization_count, enabled=cooperative_yields_enabled)
-    album_list.sort(key=album_sort_key)
     _link_duplicate_album_sources(album_list)
+    album_list = _collapse_equivalent_duplicate_album_cards(album_list)
+    album_list.sort(key=album_sort_key)
     return album_list
 
 

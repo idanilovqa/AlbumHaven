@@ -42,6 +42,7 @@ from music_app.services.cover_lookup_tasks import (
     cancel_cover_lookup_task_payload,
     cover_lookup_result,
     create_cover_lookup_task,
+    get_cover_lookup_task_summary,
     serialize_cover_lookup_task_payload,
     update_cover_lookup_task,
 )
@@ -315,6 +316,9 @@ def _task_matches_album_context(
 @router.get("/utilities/cover-lookup/tasks")
 async def utilities_cover_lookup_tasks(request: Request) -> JSONResponse:
     config = _app_config(request)
+    if request.query_params.get("summary") == "1":
+        summary = await run_in_threadpool(get_cover_lookup_task_summary, config=config)
+        return JSONResponse({"ok": True, "summary": summary})
     return JSONResponse({"ok": True, "tasks": list_cover_lookup_tasks(config=config)})
 
 

@@ -13,6 +13,7 @@ from music_app.services.cover_provider_candidates import (
 )
 from music_app.services.cover_lookup_notifications import (
     delete_cover_lookup_notifications,
+    load_cover_lookup_notification_summaries,
     load_cover_lookup_notifications,
     save_cover_lookup_notifications,
     upsert_cover_lookup_notification,
@@ -312,6 +313,54 @@ def list_cover_lookup_tasks(*, config: Mapping[str, object] | None = None) -> li
             merged_items.append(merged)
     merged_items.sort(key=_sort_cover_lookup_task_key, reverse=True)
     return merged_items
+
+
+def get_cover_lookup_task_summary(*, config: Mapping[str, object] | None = None) -> dict[str, int]:
+    with _COVER_LOOKUP_TASKS_LOCK:
+        live_items = [
+            {
+                "id": str(task.get("id") or "").strip(),
+                "status": str(task.get("status") or "").strip().casefold(),
+                "notification_action_taken": bool(task.get("notification_action_taken")),
+            }
+            for task in _COVER_LOOKUP_TASKS.values()
+            if str(task.get("id") or "").strip() and not bool(task.get("internal"))
+        ]
+    persisted_items = (
+        load_cover_lookup_notification_summaries(config)
+        if config is not None
+        else []
+    )
+    merged_by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in persisted_items
+        if str(item.get("id") or "").strip()
+    }
+    for item in live_items:
+        task_id = str(item["id"])
+        persisted = merged_by_id.get(task_id, {})
+        merged_by_id[task_id] = {
+            **persisted,
+            **item,
+            "notification_action_taken": bool(
+                item.get("notification_action_taken")
+                or persisted.get("notification_action_taken")
+            ),
+        }
+    active_count = sum(
+        str(item.get("status") or "").casefold() in {"pending", "running"}
+        for item in merged_by_id.values()
+    )
+    pending_notification_count = sum(
+        str(item.get("status") or "").casefold() in _TERMINAL_COVER_LOOKUP_STATUSES
+        and not bool(item.get("notification_action_taken"))
+        for item in merged_by_id.values()
+    )
+    return {
+        "active_count": active_count,
+        "pending_notification_count": pending_notification_count,
+        "badge_count": active_count + pending_notification_count,
+    }
 
 
 def update_cover_lookup_task(

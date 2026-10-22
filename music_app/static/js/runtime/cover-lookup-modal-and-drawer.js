@@ -1279,7 +1279,20 @@ function hasPendingCoverLookupDrawerTerminalPublication(tasks) {
   });
 }
 
+let coverLookupTaskBadgeRevision = 0;
+
+function renderCoverLookupTaskBadgeCount(badgeCount) {
+  const badge = document.getElementById('cover-lookup-drawer-badge');
+  const button = document.getElementById('cover-lookup-drawer-button');
+  if (!badge || !button) return;
+  const normalizedCount = Math.max(0, Number(badgeCount) || 0);
+  badge.hidden = normalizedCount <= 0;
+  badge.textContent = String(normalizedCount || '');
+  button.classList.toggle('has-active-lookups', normalizedCount > 0);
+}
+
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
+  coverLookupTaskBadgeRevision += 1;
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
   const badge = document.getElementById('cover-lookup-drawer-badge');
@@ -1313,9 +1326,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       terminalCount ? `${terminalCount} finished` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
   }
-  badge.hidden = badgeCount <= 0;
-  badge.textContent = String(badgeCount || '');
-  button.classList.toggle('has-active-lookups', badgeCount > 0);
+  renderCoverLookupTaskBadgeCount(badgeCount);
   if (clearButton) {
     clearButton.hidden = false;
     clearButton.disabled = terminalCount <= 0;
@@ -1845,6 +1856,27 @@ function renderCoverLookupModal() {
 }
 
 let coverLookupTasksRequestSequence = 0;
+
+async function loadCoverLookupTaskSummary() {
+  const allows = window.AlbumHavenCapabilities?.allows;
+  if (typeof allows === 'function'
+      && !allows.call(window.AlbumHavenCapabilities, 'library.covers.tasks.read')) return false;
+  const tasksRequestSequence = coverLookupTasksRequestSequence;
+  const badgeRevision = coverLookupTaskBadgeRevision;
+  try {
+    const response = await fetch('/utilities/cover-lookup/tasks?summary=1', {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (tasksRequestSequence !== coverLookupTasksRequestSequence
+        || badgeRevision !== coverLookupTaskBadgeRevision) return false;
+    if (!response.ok || !data.ok) return false;
+    renderCoverLookupTaskBadgeCount(data.summary?.badge_count);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
 
 async function loadCoverLookupTasks(options = {}) {
   const requestSequence = ++coverLookupTasksRequestSequence;

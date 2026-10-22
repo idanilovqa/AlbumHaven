@@ -50,6 +50,23 @@ class CoverLookupTasksPostgresAdapter:
         tasks = [_task_from_row(row) for row in rows]
         return [task for task in tasks if str(task.get("id") or "").strip()]
 
+    def load_notification_summaries(self) -> list[dict[str, object]]:
+        with self._connect_to_database() as connection:
+            _ensure_bootstrap_context(connection)
+            rows = list(connection.execute(_load_notification_summaries_sql()).fetchall())
+        summaries = []
+        for row in rows:
+            values = _row_mapping(row)
+            task_id = _text(values.get("task_key"))
+            if not task_id:
+                continue
+            summaries.append({
+                "id": task_id,
+                "status": _text(values.get("status")),
+                "notification_action_taken": bool(values.get("notification_action_taken")),
+            })
+        return summaries
+
     def save_notifications(self, tasks: list[dict[str, object]]) -> None:
         normalized_tasks = [
             task
@@ -432,6 +449,26 @@ def _load_notifications_sql() -> str:
           coalesce(ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
           ops.cover_lookup_tasks.task_key desc;
     """
+    ).replace("%s::text[]", f"array[{', '.join(repr(item) for item in _SOURCE_FAMILIES)}]::text[]")
+
+
+def _load_notification_summaries_sql() -> str:
+    return (
+        _bootstrap_context_sql()
+        + f"""
+        select
+          ops.cover_lookup_tasks.task_key,
+          ops.cover_lookup_tasks.status,
+          coalesce((ops.cover_lookup_tasks.metadata ->> 'notification_action_taken') = 'true', false)
+            as notification_action_taken
+        from ops.cover_lookup_tasks
+        join bootstrap_context
+          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
+        where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
+        order by
+          coalesce(ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
+          ops.cover_lookup_tasks.task_key desc;
+        """
     ).replace("%s::text[]", f"array[{', '.join(repr(item) for item in _SOURCE_FAMILIES)}]::text[]")
 
 

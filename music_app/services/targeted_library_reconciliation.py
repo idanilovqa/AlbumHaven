@@ -11,6 +11,7 @@ from typing import Any
 
 from music_app.services.library_event_coordinator import _stat_signature
 from music_app.services.library_indexing import enrich_library_file_entry
+from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.library_roots import get_library_roots
 from music_app.services.metadata import read_metadata_for_file
 from music_app.services.save_tasks import structural_tag_edit_resource_keys
@@ -265,6 +266,7 @@ class TargetedLibraryReconciler:
                 )
                 active_entries[str(path)] = enriched
 
+            clear_ambiguous_folder_covers(active_entries)
             if self._stop_event.is_set():
                 return TargetedReconciliationResult(0, (), "cancelled")
             effective_publication_guard = (

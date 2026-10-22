@@ -60,3 +60,76 @@ def test_uncontaminated_album_rebuild_does_not_inspect_cover_files(tmp_path, mon
     integrity.apply_scoped_local_cover(album, cache, {unrelated})
     assert album.cover_path == cover
     assert not hasattr(album, "cover_selection_repair_previous")
+
+
+@pytest.mark.parametrize("origin", [None, "automatic"])
+def test_ambiguous_loose_folder_drops_non_user_local_cover(tmp_path, origin):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    folder = tmp_path / "Loose tracks"
+    cover = folder / "AlbumArt_{GUID}_Large.jpg"
+    first = folder / "first.mp3"
+    second = folder / "second.mp3"
+    cache = {
+        str(first): {
+            "path": str(first), "album": "First Album", "album_artist": "First Artist",
+            "cover_path": str(cover), "cover_revision": "wrong", "cover_selection_origin": origin,
+            "local_cover_width": 200, "local_cover_height": 200,
+        },
+        str(second): {
+            "path": str(second), "album": "Second Album", "album_artist": "Second Artist",
+            "cover_path": str(cover), "cover_revision": "wrong", "cover_selection_origin": origin,
+            "local_cover_width": 200, "local_cover_height": 200,
+        },
+    }
+
+    changed = clear_ambiguous_folder_covers(cache)
+
+    assert set(changed) == set(cache)
+    assert all(entry["cover_path"] is None for entry in cache.values())
+    assert all(entry["cover_selection_origin"] is None for entry in cache.values())
+
+
+@pytest.mark.parametrize("authority", [("user", None), (None, "explicit")])
+def test_ambiguous_loose_folder_preserves_user_local_cover(tmp_path, authority):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    folder = tmp_path / "Loose tracks"
+    cover = folder / "cover.jpg"
+    first = folder / "first.mp3"
+    second = folder / "second.mp3"
+    origin, provenance = authority
+    cache = {
+        str(first): {
+            "path": str(first), "album": "First Album", "album_artist": "First Artist",
+            "cover_path": str(cover), "cover_selection_origin": origin,
+            "cover_selection_provenance": provenance,
+        },
+        str(second): {
+            "path": str(second), "album": "Second Album", "album_artist": "Second Artist",
+            "cover_path": str(cover), "cover_selection_origin": origin,
+            "cover_selection_provenance": provenance,
+        },
+    }
+
+    assert clear_ambiguous_folder_covers(cache) == {}
+    assert all(entry["cover_path"] == str(cover) for entry in cache.values())
+
+
+def test_same_album_folder_keeps_art_across_track_artist_and_year_variation(tmp_path):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    folder = tmp_path / "Compilation"
+    cover = folder / "front.jpg"
+    cache = {
+        str(folder / "first.mp3"): {
+            "album": "Shared Album", "album_artist": "Various Artists", "year": 2000,
+            "cover_path": str(cover),
+        },
+        str(folder / "second.mp3"): {
+            "album": "Shared Album", "album_artist": "Guest Artist", "year": None,
+            "cover_path": str(cover),
+        },
+    }
+
+    assert clear_ambiguous_folder_covers(cache) == {}

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from music_app.services import library
 from music_app.services import library_indexing
@@ -1805,3 +1806,32 @@ def test_cache_aware_scan_resolves_root_provenance_once_per_track_folder(
         entry["library_root_id"]
         for entry in updated_file_cache.values()
     } == {"main-1", "arrivals-1"}
+def test_scan_rejects_shared_art_for_multiple_releases_in_one_folder(tmp_path: Path, monkeypatch):
+    folder = tmp_path / "Loose tracks"
+    folder.mkdir()
+    first = folder / "first.mp3"
+    second = folder / "second.mp3"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    Image.new("RGB", (200, 200), "blue").save(folder / "AlbumArt_{GUID}_Large.jpg")
+
+    monkeypatch.setattr(
+        library_indexing,
+        "read_metadata_for_file",
+        lambda path: {
+            "path": str(path), "album": f"{path.stem} album",
+            "album_artist": f"{path.stem} artist", "artist": f"{path.stem} artist",
+            "title": path.stem, "mtime": path.stat().st_mtime, "size": path.stat().st_size,
+        },
+    )
+
+    updated, _ = library_indexing.scan_library_file_cache(
+        {}, roots=[folder], supported_extensions={".mp3"}, image_extensions={".jpg"},
+        exception_overrides={},
+        root_definitions=[{"id": "loose", "path": str(folder), "category": "hoard_roots"}],
+    )
+
+    assert set(updated) == {str(first), str(second)}
+    assert all(entry["cover_path"] is None for entry in updated.values())
+
+

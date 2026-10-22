@@ -1455,3 +1455,33 @@ def test_unreadable_reconciliation_subtree_never_publishes_partial_deletion(tmp_
         reconciler.reconcile(request)
 
     assert repository.calls == []
+def test_targeted_reconciliation_rejects_shared_art_for_multiple_releases_in_one_folder(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    folder = root / "Loose tracks"
+    folder.mkdir(parents=True)
+    first = folder / "first.mp3"
+    second = folder / "second.mp3"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    (folder / "AlbumArt_{GUID}_Large.jpg").write_bytes(b"image")
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".mp3"}, "IMAGE_EXTENSIONS": {".jpg"}},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root, "category": "main_library_roots"}],
+        metadata_reader=lambda path: {
+            "path": str(path), "album": f"{path.stem} album",
+            "album_artist": f"{path.stem} artist", "artist": f"{path.stem} artist",
+            "title": path.stem, "mtime": path.stat().st_mtime, "size": path.stat().st_size,
+        },
+    )
+
+    reconciler.reconcile(_request(paths=(first,)))
+
+    entries = repository.calls[0]["active_file_entries"]
+    assert set(entries) == {str(first), str(second)}
+    assert all(entry["cover_path"] is None for entry in entries.values())
+
+

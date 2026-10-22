@@ -395,6 +395,44 @@ def _browse_album_row(*, artist: str, album_id: int, album_key: str, title: str)
     }
 
 
+def test_root_and_search_artist_groups_ignore_leading_punctuation_for_sorting():
+    from music_app.services import library_browse_postgres as browse
+
+    names = ["IZZ", "'Til Tuesday", "I'm with Her", "!Air"]
+    rows = [
+        _browse_album_row(
+            artist=artist,
+            album_id=index,
+            album_key=f"album-{index}",
+            title=f"Album {index}",
+        )
+        for index, artist in enumerate(names, start=1)
+    ]
+    expected = ["!Air", "I'm with Her", "IZZ", "'Til Tuesday"]
+
+    groups = browse._root_album_browse_artist_groups(rows)
+    search_names = ["'Bravo", "Alpha"]
+    search_order = sorted(
+        search_names,
+        key=lambda artist: browse._search_artist_group_sort_key(artist, query=""),
+    )
+
+    assert [group["artist"] for group in groups] == expected
+    assert search_order == ["Alpha", "'Bravo"]
+
+
+def test_root_startup_sql_ignores_leading_punctuation_before_artist_limits():
+    from music_app.services import library_browse_postgres as browse
+
+    candidate_sql = browse._root_startup_preview_artist_names_sql(8)
+    payload_sql = browse._root_startup_payload_sql(6)
+
+    for sql in (candidate_sql, payload_sql):
+        normalized = " ".join(sql.casefold().split())
+        assert "regexp_replace(" in normalized
+        assert "'^[[:punct:][:space:]]+'" in normalized
+
+
 @pytest.mark.parametrize("guest_name", ["Guest", "Guest Alias"])
 def test_exact_artist_search_recanonicalization_keeps_guest_role_and_source_identity(guest_name):
     from music_app.services import library_browse_postgres as browse
@@ -3863,7 +3901,7 @@ def test_root_startup_preview_selects_the_canonical_sidebar_prefix(monkeypatch, 
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     names = ["東京", "Élan", "[Stömb]", "2Cellos", "10 Years", "...And Oceans", "-", "(Sandy) Alex G", "& Co", "#4", "#2"]
-    expected = sorted(names, key=lambda name: (name.casefold(), name.casefold()))
+    expected = sorted(names, key=browse.artist_collation_key)
     aliases = {"Alias Number": "#2"} if with_alias else {}
     if with_alias:
         names.append("Alias Number")
@@ -3890,7 +3928,12 @@ def test_root_startup_preview_selects_the_canonical_sidebar_prefix(monkeypatch, 
     monkeypatch.setattr(repository, "_apply_private_album_rating_overlays", lambda *_args, **_kwargs: None)
 
     payload = repository.build_root_startup_preview_payload()
-    assert requested == [["#2", "Alias Number", *expected[1:6]] if with_alias else expected[:6]]
+    expected_requested = []
+    for artist in expected[:6]:
+        expected_requested.append(artist)
+        if with_alias and artist == "#2":
+            expected_requested.append("Alias Number")
+    assert requested == [expected_requested]
     assert [item["artist"] for item in payload["artists_sidebar"]] == expected
     assert [group["artist"] for group in payload["artist_groups"]] == expected[:6]
     full_groups = browse._root_album_browse_artist_groups(browse._canonicalize_artist_rows(rows, aliases))

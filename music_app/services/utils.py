@@ -3,6 +3,14 @@ from functools import lru_cache
 import re
 import unicodedata
 
+
+def artist_collation_key(value: object) -> tuple[str, str]:
+    folded = str(value or "").strip().casefold()
+    text = folded
+    while text and unicodedata.category(text[0]).startswith("P"):
+        text = text[1:].lstrip()
+    return text, folded
+
 _QUESTIONABLE_MARKERS = {"??", "�"}
 _SUSPICIOUS_MOJIBAKE_SEQUENCES = (
     "Ð", "Ñ", "Ã", "Â", "ÄÄ", "ÄÅ", "ÄÆ", "ÄÇ", "ÄÈ", "ÄÉ", "ÄÊ", "ÄË", "ÄÌ", "ÄÍ", "ÄÎ", "ÄÏ", "ÄÒ", "ÄÓ",

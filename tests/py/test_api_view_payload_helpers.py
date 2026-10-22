@@ -82,6 +82,28 @@ def test_build_artists_sidebar_collapses_case_only_shared_artist_variants():
     ]
 
 
+def test_build_artists_sidebar_sorts_by_name_without_leading_punctuation():
+    albums = [
+        SimpleNamespace(album_artist=artist, artists=[artist], is_compilation=False)
+        for artist in ("IZZ", "'Til Tuesday", "I'm with Her", "!Air")
+    ]
+
+    sidebar = build_artists_sidebar(albums)
+
+    assert [item["artist"] for item in sidebar] == [
+        "!Air",
+        "I'm with Her",
+        "IZZ",
+        "'Til Tuesday",
+    ]
+    assert [item["artist_display"] for item in sidebar] == [
+        "!Air",
+        "I'm with Her",
+        "IZZ",
+        "'Til Tuesday",
+    ]
+
+
 def test_selected_artist_family_artists_is_owned_by_selected_artist_membership_service():
     assert (
         api_view_payload_helpers._selected_artist_family_artists

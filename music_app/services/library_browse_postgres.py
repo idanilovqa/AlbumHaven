@@ -75,6 +75,7 @@ from music_app.services.utility_rule_fallbacks import fallback_version_album_pay
 from music_app.services.utils import (
     MOJIBAKE_CANDIDATE_PATTERN,
     MOJIBAKE_ENCODING_CANDIDATE_CHARS,
+    artist_collation_key,
     format_duration,
 )
 from version import RELEASE_VERSION
@@ -615,8 +616,10 @@ class PostgresLibraryBrowseRepository:
         ordered_artist_keys = sorted(
             artist_counts,
             key=lambda key: (
-                artist_sort_values.get(key, artist_displays.get(key, key)).casefold(),
-                artist_displays.get(key, key).casefold(),
+                artist_collation_key(
+                    artist_sort_values.get(key, artist_displays.get(key, key))
+                ),
+                artist_collation_key(artist_displays.get(key, key)),
             ),
         )
         artists_sidebar = [
@@ -820,8 +823,10 @@ class PostgresLibraryBrowseRepository:
                 ordered_sidebar_keys = sorted(
                     sidebar_counts,
                     key=lambda key: (
-                        sidebar_sort_values.get(key, sidebar_displays[key]).casefold(),
-                        sidebar_displays[key].casefold(),
+                        artist_collation_key(
+                            sidebar_sort_values.get(key, sidebar_displays[key])
+                        ),
+                        artist_collation_key(sidebar_displays[key]),
                     ),
                 )
                 preview_artists = _expanded_artist_name_list(
@@ -3623,7 +3628,8 @@ def _prepare_root_gallery_snapshot(
         ):
             occurrences[occurrence_key] = row
     ordered = sorted(occurrences.values(), key=lambda row: (
-        row["artist_sort_name"].casefold(), str(row["artist_name"]).casefold(), str(row["artist_id"]),
+        artist_collation_key(row["artist_sort_name"]),
+        artist_collation_key(row["artist_name"]), str(row["artist_id"]),
         _coerce_int(row.get("album_release_year")) if row.get("album_release_year") else 9999,
         str(row.get("album_title") or "").casefold(), row["album_key"]))
     # Membership and order are the revision authority. Cover/rating changes do not
@@ -6282,8 +6288,15 @@ def _group_rows_by_artist_identity(rows: list[object]) -> list[tuple[str, list[o
     ordered_artist_ids = sorted(
         rows_by_artist,
         key=lambda artist_identity: (
-            artist_sort_values.get(artist_identity, artist_displays.get(artist_identity, artist_identity)).casefold(),
-            artist_displays.get(artist_identity, artist_identity).casefold(),
+            artist_collation_key(
+                artist_sort_values.get(
+                    artist_identity,
+                    artist_displays.get(artist_identity, artist_identity),
+                )
+            ),
+            artist_collation_key(
+                artist_displays.get(artist_identity, artist_identity)
+            ),
         ),
     )
     return [
@@ -7277,7 +7290,9 @@ def _merge_missing_albums_into_artist_groups(
                     str(item.get("name") or "").casefold(),
                 )
             )
-    artist_groups.sort(key=lambda group: str(group.get("artist") or "").casefold())
+    artist_groups.sort(
+        key=lambda group: artist_collation_key(group.get("artist") or "")
+    )
 
 
 def _replace_active_albums_with_missing(
@@ -8072,9 +8087,13 @@ from library.local_artists
             and library.local_album_featured_artists.artist_id = library.local_artists.id
         )
         order by
-          lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)),
+          regexp_replace(
+            lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)),
+            '^[[:punct:][:space:]]+',
+            ''
+          ),
           coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name),
-          lower(library.local_artists.name),
+          regexp_replace(lower(library.local_artists.name), '^[[:punct:][:space:]]+', ''),
           library.local_artists.name
         limit {normalized_candidate_limit};
     """
@@ -8207,9 +8226,17 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             canonical_artist_sort_values.*,
             dense_rank() over (
               order by
-                lower(canonical_artist_sort_values.canonical_sort_name),
+                regexp_replace(
+                  lower(canonical_artist_sort_values.canonical_sort_name),
+                  '^[[:punct:][:space:]]+',
+                  ''
+                ),
                 canonical_artist_sort_values.canonical_sort_name,
-                lower(canonical_artist_sort_values.canonical_artist_name),
+                regexp_replace(
+                  lower(canonical_artist_sort_values.canonical_artist_name),
+                  '^[[:punct:][:space:]]+',
+                  ''
+                ),
                 canonical_artist_sort_values.canonical_artist_name
             ) as canonical_artist_rank
           from canonical_artist_sort_values

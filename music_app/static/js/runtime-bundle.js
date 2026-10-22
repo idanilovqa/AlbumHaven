@@ -11638,6 +11638,10 @@ function closeNonAlbumModal() {
   }
 }
 
+const OPEN_ALBUM_LOCATION_SUCCESS_COOLDOWN_MS = 750;
+const openAlbumLocationRequestsInFlight = new Set();
+const openAlbumLocationRecentSuccesses = new Map();
+
 async function openAlbumInExplorer(album) {
   if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
     && !window.AlbumHavenCapabilities.allows('library.files.open_location')) return;
@@ -11645,19 +11649,32 @@ async function openAlbumInExplorer(album) {
     showToast('No album payload found for File Explorer action.', 'error', 3200);
     return;
   }
+  const requestBody = JSON.stringify({ album });
+  const now = Date.now();
+  for (const [key, openedAt] of openAlbumLocationRecentSuccesses) {
+    if (now - openedAt >= OPEN_ALBUM_LOCATION_SUCCESS_COOLDOWN_MS) {
+      openAlbumLocationRecentSuccesses.delete(key);
+    }
+  }
+  if (openAlbumLocationRequestsInFlight.has(requestBody)
+      || openAlbumLocationRecentSuccesses.has(requestBody)) return;
+  openAlbumLocationRequestsInFlight.add(requestBody);
   try {
     const response = await fetch('/open-album-location', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album }),
+      body: requestBody,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || 'Failed to open album location');
     }
+    openAlbumLocationRecentSuccesses.set(requestBody, Date.now());
   } catch (error) {
     console.error(`${ALBUM_MENU_LOG_PREFIX} Open in File Explorer failed:`, error);
     showToast(error.message || 'Failed to open album location.', 'error', 3200);
+  } finally {
+    openAlbumLocationRequestsInFlight.delete(requestBody);
   }
 }
 
@@ -13135,9 +13152,12 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
   if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= duplicateSources.length) {
     return album;
   }
+  const source = duplicateSources[sourceIndex];
+  const folderPath = String(source?.folder_path || '').trim();
   return {
     ...album,
-    tracks: Array.isArray(duplicateSources[sourceIndex]?.tracks) ? duplicateSources[sourceIndex].tracks : [],
+    tracks: Array.isArray(source?.tracks) ? source.tracks : [],
+    open_directory_paths: folderPath ? [folderPath] : [],
   };
 }
 

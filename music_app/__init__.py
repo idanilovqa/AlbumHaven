@@ -387,6 +387,10 @@ def create_asgi_app():
     from music_app.services.generated_preview_relocation import (
         GeneratedPreviewRelocationWorker,
     )
+    from music_app.services.generated_preview_storage import (
+        preview_storage_policy_from_mapping,
+        record_generated_preview,
+    )
     from music_app.services.generated_preview_storage_postgres import (
         PostgresGeneratedPreviewStorageRepository,
         is_generated_preview_storage_postgres_available,
@@ -433,16 +437,63 @@ def create_asgi_app():
         from music_app.services.log_history import resolve_media_host_history_scope
         host_scope = resolve_media_host_history_scope(runtime.config)
         _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
+        preview_storage_repository = None
+        if is_generated_preview_storage_postgres_available(runtime.config):
+            preview_storage_repository = PostgresGeneratedPreviewStorageRepository(
+                runtime.config
+            )
+        _app.state.generated_preview_storage_repository = preview_storage_repository
+        preview_inventory_recorder = None
+        if preview_storage_repository is not None:
+            recorded_preview_paths: set[str] = set()
+            recorded_preview_paths_lock = threading.Lock()
+
+            def preview_inventory_recorder(source_path, preview_path) -> None:
+                inventory_key = str(
+                    Path(preview_path).resolve(strict=False)
+                ).casefold()
+                with recorded_preview_paths_lock:
+                    if inventory_key in recorded_preview_paths:
+                        return
+                    recorded_preview_paths.add(inventory_key)
+                try:
+                    record_generated_preview(
+                        preview_storage_repository, source_path, preview_path
+                    )
+                except Exception:
+                    with recorded_preview_paths_lock:
+                        recorded_preview_paths.discard(inventory_key)
+                    runtime.logger.exception(
+                        "Generated preview inventory record failed for %s.",
+                        preview_path,
+                    )
+
+        _app.state.generated_preview_inventory_recorder = preview_inventory_recorder
+        runtime.config["_GENERATED_PREVIEW_INVENTORY_RECORDER"] = (
+            preview_inventory_recorder
+        )
+        _app.state.generated_preview_storage_policy = (
+            preview_storage_policy_from_mapping(None)
+        )
+        runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = (
+            _app.state.generated_preview_storage_policy
+        )
         _app.state.cover_preview_backfill = CoverPreviewBackfill(
             runtime.config,
             logger=runtime.logger,
         )
         _app.state.cover_preview_backfill.start()
         _app.state.generated_preview_relocation = None
-        if is_generated_preview_storage_postgres_available(runtime.config):
+        if preview_storage_repository is not None:
+            def update_preview_storage_policy(state) -> None:
+                policy = preview_storage_policy_from_mapping(state)
+                _app.state.generated_preview_storage_policy = policy
+                runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = policy
+
             _app.state.generated_preview_relocation = GeneratedPreviewRelocationWorker(
-                PostgresGeneratedPreviewStorageRepository(runtime.config),
+                preview_storage_repository,
                 logger=runtime.logger,
+                on_state=update_preview_storage_policy,
             )
             _app.state.generated_preview_relocation.start()
         _app.state.library_warmup_thread = _start_library_warmup(

@@ -79,12 +79,8 @@ class PostgresGeneratedPreviewStorageRepository:
         self,
         *,
         operation_id: str,
-        total_count: int,
-        total_bytes: int,
     ) -> dict[str, object]:
         normalized_operation_id = str(UUID(str(operation_id)))
-        if total_count < 0 or total_bytes < 0:
-            raise ValueError("Preview relocation counters cannot be negative.")
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 row = _first_row(
@@ -92,13 +88,39 @@ class PostgresGeneratedPreviewStorageRepository:
                         _begin_operation_sql(),
                         {
                             "operation_id": normalized_operation_id,
-                            "total_count": total_count,
-                            "total_bytes": total_bytes,
                         },
                     )
                 )
         if row is None:
             raise PreviewStorageConflict("A preview relocation is already active.")
+        return _row_mapping(row)
+
+    def record_inventory(
+        self,
+        *,
+        album_preview_path: str,
+        managed_relative_path: str,
+        byte_count: int,
+        sha256: str,
+    ) -> dict[str, object]:
+        normalized_sha256 = str(sha256).strip().casefold()
+        if byte_count < 0 or len(normalized_sha256) != 64:
+            raise ValueError("Generated preview inventory checksum is invalid.")
+        with self._connect_to_database() as connection:
+            with _transaction(connection):
+                row = _first_row(
+                    connection.execute(
+                        _record_inventory_sql(),
+                        {
+                            "album_preview_path": str(album_preview_path),
+                            "managed_relative_path": str(managed_relative_path),
+                            "byte_count": int(byte_count),
+                            "sha256": normalized_sha256,
+                        },
+                    )
+                )
+        if row is None:
+            raise RuntimeError("Generated preview inventory was not recorded.")
         return _row_mapping(row)
 
     def claim_batch(self, *, operation_id: str, limit: int) -> list[dict[str, object]]:
@@ -249,33 +271,94 @@ def _request_location_sql() -> str:
         where storage_key = 1
           and revision = %(expected_revision)s
           and operation_state not in ('queued', 'running', 'cancel_requested')
+          and operation_state <> 'canceled'
         returning *;
     """
 
 
 def _begin_operation_sql() -> str:
     return """
-        update app.generated_preview_storage
-        set operation_id = %(operation_id)s::uuid,
-            operation_state = 'queued',
-            total_count = %(total_count)s,
-            completed_count = 0,
-            failed_count = 0,
-            total_bytes = %(total_bytes)s,
-            completed_bytes = 0,
-            cancel_requested = false,
-            failure_summary = '[]'::jsonb,
+        with activated as (
+          update app.generated_preview_storage
+          set operation_id = %(operation_id)s::uuid,
+              operation_state = 'queued',
+              total_count = (
+                select count(*) from app.generated_preview_inventory
+              ),
+              completed_count = 0,
+              failed_count = 0,
+              total_bytes = (
+                select coalesce(sum(byte_count), 0)
+                from app.generated_preview_inventory
+              ),
+              completed_bytes = 0,
+              cancel_requested = false,
+              failure_summary = '[]'::jsonb,
+              updated_at = now()
+          where storage_key = 1
+            and requested_mode is not null
+            and operation_state not in ('queued', 'running', 'cancel_requested')
+          returning *
+        ), staged as (
+          insert into app.generated_preview_relocation_items (
+            storage_key, operation_id, inventory_id, source_path, target_path,
+            expected_bytes, expected_sha256
+          )
+          select activated.storage_key,
+                 activated.operation_id,
+                 inventory.id,
+                 paths.source_path,
+                 paths.target_path,
+                 inventory.byte_count,
+                 inventory.sha256
+          from app.generated_preview_inventory inventory
+          cross join activated
+          cross join lateral (
+            select
+              case when activated.mode = 'custom'
+                then activated.active_root || '/' || inventory.managed_relative_path
+                else inventory.album_preview_path
+              end as source_path,
+              case when activated.requested_mode = 'custom'
+                then activated.requested_root || '/' || inventory.managed_relative_path
+                else inventory.album_preview_path
+              end as target_path
+          ) paths
+          where paths.source_path <> paths.target_path
+          on conflict (operation_id, inventory_id) do nothing
+          returning id
+        )
+        select activated.* from activated;
+    """
+
+
+def _record_inventory_sql() -> str:
+    return """
+        insert into app.generated_preview_inventory (
+          album_preview_path, managed_relative_path, byte_count, sha256
+        ) values (
+          %(album_preview_path)s, %(managed_relative_path)s,
+          %(byte_count)s, %(sha256)s
+        )
+        on conflict (managed_relative_path) do update
+        set album_preview_path = excluded.album_preview_path,
+            byte_count = excluded.byte_count,
+            sha256 = excluded.sha256,
             updated_at = now()
-        where storage_key = 1
-          and requested_mode is not null
-          and operation_state not in ('queued', 'running', 'cancel_requested')
         returning *;
     """
 
 
 def _claim_batch_sql() -> str:
     return """
-        with claimed as (
+        with activated as (
+          update app.generated_preview_storage
+          set operation_state = 'running', updated_at = now()
+          where storage_key = 1
+            and operation_id = %(operation_id)s::uuid
+            and operation_state = 'queued'
+          returning storage_key
+        ), claimed as (
           select id
           from app.generated_preview_relocation_items
           where operation_id = %(operation_id)s::uuid and status = 'pending'
@@ -325,11 +408,34 @@ def _complete_item_sql() -> str:
 
 def _finish_operation_sql() -> str:
     return """
+        with skipped as (
+          update app.generated_preview_relocation_items item
+          set status = 'skipped', finished_at = now()
+          from app.generated_preview_storage storage
+          where item.operation_id = %(operation_id)s::uuid
+            and item.status = 'pending'
+            and storage.storage_key = 1
+            and storage.operation_id = item.operation_id
+            and storage.cancel_requested
+          returning item.id
+        )
         update app.generated_preview_storage
-        set mode = case when failed_count = 0 then requested_mode else mode end,
-            active_root = case when failed_count = 0 then requested_root else active_root end,
-            requested_mode = case when failed_count = 0 then null else requested_mode end,
-            requested_root = case when failed_count = 0 then null else requested_root end,
+        set mode = case
+              when not cancel_requested and failed_count = 0 then requested_mode
+              else mode
+            end,
+            active_root = case
+              when not cancel_requested and failed_count = 0 then requested_root
+              else active_root
+            end,
+            requested_mode = case
+              when not cancel_requested and failed_count = 0 then null
+              else requested_mode
+            end,
+            requested_root = case
+              when not cancel_requested and failed_count = 0 then null
+              else requested_root
+            end,
             operation_state = case
               when cancel_requested then 'canceled'
               when failed_count > 0 then 'completed_with_failures'
@@ -343,7 +449,15 @@ def _finish_operation_sql() -> str:
           and not exists (
             select 1 from app.generated_preview_relocation_items
             where operation_id = %(operation_id)s::uuid
-              and status in ('pending', 'running')
+              and status = 'running'
+          )
+          and (
+            cancel_requested
+            or not exists (
+              select 1 from app.generated_preview_relocation_items
+              where operation_id = %(operation_id)s::uuid
+                and status = 'pending'
+            )
           )
         returning *;
     """

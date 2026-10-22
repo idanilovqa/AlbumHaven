@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from music_app.services import generated_preview_storage as storage_module
 from music_app.services.generated_preview_storage import (
     PreviewStoragePolicy,
     PreviewStorageSnapshot,
@@ -21,6 +22,44 @@ def snapshot(**overrides):
     }
     values.update(overrides)
     return PreviewStorageSnapshot(**values)
+
+
+def test_record_generated_preview_uses_canonical_album_path_and_content_hash(tmp_path):
+    source_path = tmp_path / "Music" / "Artist" / "Album" / "cover.jpg"
+    preview_path = (
+        tmp_path
+        / "Generated Previews"
+        / "v1"
+        / "cover_variants"
+        / "aa"
+        / "aabb.jpg"
+    )
+    preview_path.parent.mkdir(parents=True)
+    preview_path.write_bytes(b"published-preview")
+    recorded = []
+
+    class Repository:
+        def record_inventory(self, **metadata):
+            recorded.append(metadata)
+
+    storage_module.record_generated_preview(
+        Repository(), source_path, preview_path
+    )
+
+    assert recorded == [
+        {
+            "album_preview_path": str(
+                source_path.parent
+                / ".album-haven"
+                / "cover_variants"
+                / "aa"
+                / "aabb.jpg"
+            ),
+            "managed_relative_path": "v1/cover_variants/aa/aabb.jpg",
+            "byte_count": len(b"published-preview"),
+            "sha256": "c4b34f40b6f92d609dfbc4acb89544dc769d2c81bee2ec34d79256104f2bd9a9",
+        }
+    ]
 
 
 def test_album_folder_policy_preserves_existing_cache_layout(tmp_path):
@@ -65,6 +104,25 @@ def test_relocation_reads_target_before_source(
 
     assert policy.write_cache_root(source) == expected_roots[0]
     assert policy.read_cache_roots(source) == expected_roots
+
+
+def test_canceled_relocation_reads_partial_target_but_writes_active_location(tmp_path):
+    source = tmp_path / "Music" / "Artist" / "Album" / "cover.jpg"
+    custom_root = tmp_path / "Generated Previews"
+    policy = PreviewStoragePolicy(
+        snapshot(
+            mode="album_folders",
+            requested_mode="custom",
+            requested_root=custom_root,
+            operation_state="canceled",
+        )
+    )
+
+    assert policy.write_cache_root(source) == source.parent / ".album-haven"
+    assert policy.read_cache_roots(source) == (
+        custom_root / "v1",
+        source.parent / ".album-haven",
+    )
 
 
 def test_managed_relative_path_normalizes_legacy_and_versioned_layouts(tmp_path):

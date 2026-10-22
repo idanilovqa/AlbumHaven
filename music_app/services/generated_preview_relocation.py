@@ -12,10 +12,18 @@ from typing import Mapping
 
 
 class GeneratedPreviewRelocationWorker:
-    def __init__(self, repository, *, batch_size: int = 20, logger=None) -> None:
+    def __init__(
+        self,
+        repository,
+        *,
+        batch_size: int = 20,
+        logger=None,
+        on_state=None,
+    ) -> None:
         self._repository = repository
         self._batch_size = max(1, min(int(batch_size), 100))
         self._logger = logger or logging.getLogger("music_app")
+        self._on_state = on_state
         self._wake_requested = threading.Event()
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
@@ -56,6 +64,8 @@ class GeneratedPreviewRelocationWorker:
 
     def _drain(self) -> None:
         state = self._repository.load()
+        if self._on_state is not None:
+            self._on_state(state)
         operation_id = str(state.get("operation_id") or "").strip()
         operation_state = str(state.get("operation_state") or "idle")
         if not operation_id or operation_state not in {
@@ -65,7 +75,9 @@ class GeneratedPreviewRelocationWorker:
         }:
             return
         if state.get("cancel_requested") or operation_state == "cancel_requested":
-            self._repository.finish_operation(operation_id)
+            state = self._repository.finish_operation(operation_id)
+            if self._on_state is not None:
+                self._on_state(state)
             return
         while not self._stop_requested.is_set():
             items = self._repository.claim_batch(
@@ -73,7 +85,9 @@ class GeneratedPreviewRelocationWorker:
                 limit=self._batch_size,
             )
             if not items:
-                self._repository.finish_operation(operation_id)
+                state = self._repository.finish_operation(operation_id)
+                if self._on_state is not None:
+                    self._on_state(state)
                 return
             for item in items:
                 result = _relocate_item(item, operation_id=operation_id)
@@ -89,7 +103,9 @@ class GeneratedPreviewRelocationWorker:
                     return
             state = self._repository.load()
             if state.get("cancel_requested"):
-                self._repository.finish_operation(operation_id)
+                state = self._repository.finish_operation(operation_id)
+                if self._on_state is not None:
+                    self._on_state(state)
                 return
 
 

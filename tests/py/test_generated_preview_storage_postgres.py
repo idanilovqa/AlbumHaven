@@ -106,6 +106,7 @@ def test_request_location_is_revision_guarded_and_records_requested_target():
     sql, params = connection.calls[0]
     assert "revision = revision + 1" in sql
     assert "revision = %(expected_revision)s" in sql
+    assert "operation_state <> 'canceled'" in sql
     assert params == {
         "requested_mode": "custom",
         "requested_root": "D:/previews",
@@ -134,15 +135,48 @@ def test_begin_operation_has_identity_and_bounded_counters():
 
     state = repository_for(connection).begin_operation(
         operation_id=operation_id,
-        total_count=12,
-        total_bytes=44,
     )
 
     UUID(str(state["operation_id"]))
     sql, params = connection.calls[0]
     assert "operation_state = 'queued'" in sql
-    assert params["total_count"] == 12
-    assert params["total_bytes"] == 44
+    assert "insert into app.generated_preview_relocation_items" in sql
+    assert "from app.generated_preview_inventory inventory" in sql
+    assert "requested_mode = 'custom'" in sql
+    assert "mode = 'custom'" in sql
+    assert "select count(*) from app.generated_preview_inventory" in sql
+    assert "select coalesce(sum(byte_count), 0)" in sql
+    assert params == {"operation_id": operation_id}
+
+
+def test_record_inventory_upserts_only_published_preview_metadata():
+    connection = FakeConnection(
+        [
+            FakeCursor(
+                row={
+                    "id": 9,
+                    "album_preview_path": "D:/Music/Album/.album-haven/cover_variants/aa/aabb.jpg",
+                    "managed_relative_path": "v1/cover_variants/aa/aabb.jpg",
+                    "byte_count": 123,
+                    "sha256": "a" * 64,
+                }
+            )
+        ]
+    )
+
+    record = repository_for(connection).record_inventory(
+        album_preview_path="D:/Music/Album/.album-haven/cover_variants/aa/aabb.jpg",
+        managed_relative_path="v1/cover_variants/aa/aabb.jpg",
+        byte_count=123,
+        sha256="a" * 64,
+    )
+
+    sql, params = connection.calls[0]
+    assert "insert into app.generated_preview_inventory" in sql
+    assert "on conflict (managed_relative_path) do update" in sql
+    assert params["byte_count"] == 123
+    assert params["sha256"] == "a" * 64
+    assert record["id"] == 9
 
 
 def test_claim_batch_uses_skip_locked_and_returns_item_checkpoints():
@@ -172,6 +206,7 @@ def test_claim_batch_uses_skip_locked_and_returns_item_checkpoints():
     sql, params = connection.calls[0]
     assert "for update skip locked" in sql
     assert "status = 'running'" in sql
+    assert "operation_state = 'running'" in sql
     assert params["limit"] == 10
     assert items[0]["expected_sha256"] == "a" * 64
 
@@ -193,6 +228,29 @@ def test_complete_item_records_one_terminal_checkpoint(status):
     assert "update app.generated_preview_relocation_items" in sql
     assert "finished_at = now()" in sql
     assert params["status"] == status
+
+
+def test_finish_operation_marks_pending_items_skipped_when_canceling():
+    operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
+    connection = FakeConnection(
+        [
+            FakeCursor(
+                row=storage_row(
+                    operation_id=operation_id,
+                    operation_state="canceled",
+                    cancel_requested=True,
+                )
+            )
+        ]
+    )
+
+    state = repository_for(connection).finish_operation(operation_id)
+
+    sql, _params = connection.calls[0]
+    assert "set status = 'skipped'" in sql
+    assert "status = 'pending'" in sql
+    assert "when cancel_requested then 'canceled'" in sql
+    assert state["operation_state"] == "canceled"
 
 
 def test_cancel_and_retry_are_idempotent_state_transitions():

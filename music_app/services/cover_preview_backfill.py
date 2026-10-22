@@ -41,6 +41,7 @@ class CoverPreviewBackfill:
         self._database_url = str(
             config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
         ).strip()
+        self._config = config
         self._data_dir = config.get("DATA_DIR")
         self._connect = connect
         self._generate = generate
@@ -94,15 +95,23 @@ class CoverPreviewBackfill:
         for source_path, cover_revision in self._load_cover_paths():
             if not self._wait_until_idle():
                 break
+            generation_options = {}
+            recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
+            if recorder is not None:
+                generation_options["on_published"] = recorder
             self._generate(
                 source_path,
                 cache_root=display_cover_variant_cache_root(
                     source_path,
                     data_dir=self._data_dir if cover_revision else None,
+                    storage_policy=self._config.get(
+                        "_GENERATED_PREVIEW_STORAGE_POLICY"
+                    ),
                 ),
                 max_size=_DISPLAY_COVER_SIZE,
                 priority="background",
                 revision=cover_revision,
+                **generation_options,
             )
             generated += 1
             if self._stop_requested.wait(self._throttle_seconds):

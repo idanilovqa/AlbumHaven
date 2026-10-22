@@ -592,6 +592,69 @@ def test_create_asgi_app_lifespan_starts_and_stops_cover_preview_backfill(
     assert calls[0][2] is asgi_app.state.logger
 
 
+def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
+    monkeypatch, tmp_path
+):
+    import music_app
+    from music_app.services import generated_preview_relocation
+    from music_app.services import generated_preview_storage_postgres
+
+    recorded = []
+
+    class FakeRepository:
+        def __init__(self, config):
+            self.config = config
+
+        def record_inventory(self, **metadata):
+            recorded.append(metadata)
+
+    class FakeWorker:
+        def __init__(self, repository, *, logger, on_state):
+            self.on_state = on_state
+
+        def start(self):
+            self.on_state({"mode": "album_folders", "operation_state": "idle"})
+
+        async def stop(self, *, timeout_seconds=30.0):
+            return None
+
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "is_generated_preview_storage_postgres_available",
+        lambda _config: True,
+    )
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "PostgresGeneratedPreviewStorageRepository",
+        FakeRepository,
+    )
+    monkeypatch.setattr(
+        generated_preview_relocation,
+        "GeneratedPreviewRelocationWorker",
+        FakeWorker,
+    )
+
+    asgi_app = music_app.create_asgi_app()
+    messages = _run_asgi_lifespan(asgi_app)
+    source_path = tmp_path / "Music" / "Artist" / "Album" / "cover.jpg"
+    preview_path = (
+        tmp_path / "Generated" / "v1" / "cover_variants" / "aa" / "aabb.jpg"
+    )
+    preview_path.parent.mkdir(parents=True)
+    preview_path.write_bytes(b"preview")
+
+    asgi_app.state.config["_GENERATED_PREVIEW_INVENTORY_RECORDER"](
+        source_path, preview_path
+    )
+    asgi_app.state.config["_GENERATED_PREVIEW_INVENTORY_RECORDER"](
+        source_path, preview_path
+    )
+
+    assert messages[-1] == {"type": "lifespan.shutdown.complete"}
+    assert len(recorded) == 1
+    assert recorded[0]["managed_relative_path"] == "v1/cover_variants/aa/aabb.jpg"
+
+
 def test_status_poll_does_not_interrupt_cover_preview_backfill(monkeypatch):
     import music_app
 

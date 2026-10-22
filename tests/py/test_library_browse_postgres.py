@@ -8828,16 +8828,26 @@ def test_postgres_cover_variant_queue_uses_preview_and_full_card_sizes(monkeypat
     from music_app.services.library_browse_postgres import _queue_display_cover_variants_for_groups
 
     queued_covers: list[tuple[str, str, int]] = []
+    queued_recorders = []
+    recorder = object()
+
+    def queue_variant(source_path, *, cache_root, max_size, on_published=None):
+        queued_covers.append(
+            (Path(source_path).as_posix(), str(cache_root), max_size)
+        )
+        queued_recorders.append(on_published)
+
     monkeypatch.setattr(
         covers_module,
         "queue_cover_display_variant_generation",
-        lambda source_path, *, cache_root, max_size: queued_covers.append(
-            (Path(source_path).as_posix(), str(cache_root), max_size)
-        ),
+        queue_variant,
     )
 
     _queue_display_cover_variants_for_groups(
-        {"DATA_DIR": r"C:\AlbumHavenData"},
+        {
+            "DATA_DIR": r"C:\AlbumHavenData",
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": recorder,
+        },
         [
             {
                 "albums": [
@@ -8852,6 +8862,7 @@ def test_postgres_cover_variant_queue_uses_preview_and_full_card_sizes(monkeypat
         ("covers/preview.jpg", str(Path("covers") / ".album-haven"), 480),
         ("covers/full.jpg", str(Path("covers") / ".album-haven"), 480),
     ]
+    assert queued_recorders == [recorder, recorder]
 
 
 def test_postgres_cover_variant_queue_deduplicates_without_consuming_limit(monkeypatch):

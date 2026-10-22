@@ -678,7 +678,8 @@ def test_generated_preview_storage_migration_is_durable_and_least_privileged():
     assert "revision bigint not null default 0" in sql
     assert "managed_relative_path text not null unique" in sql
     assert "expected_sha256 text not null" in sql
-    assert "foreign key (operation_id)" in sql
+    assert "foreign key (operation_id)" not in sql
+    assert "unique (operation_id, inventory_id)" in sql
     assert "grant select, insert, update, delete on table" in sql
     assert "to album_haven_app" in sql
     assert "album_haven_readonly" not in sql

@@ -82,10 +82,6 @@ create table if not exists app.generated_preview_relocation_items (
   started_at timestamptz,
   finished_at timestamptz,
   attempt_count integer not null default 0,
-  constraint generated_preview_relocation_operation_fk
-    foreign key (operation_id)
-    references app.generated_preview_storage(operation_id)
-    on update cascade on delete cascade,
   constraint generated_preview_relocation_identity_unique
     unique (operation_id, inventory_id),
   constraint generated_preview_relocation_status_check check (

@@ -7038,15 +7038,23 @@ def _queue_display_cover_variants_for_groups(
                 revision_options = (
                     {"revision": cover_revision} if cover_revision else {}
                 )
+                inventory_options = {}
+                recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
+                if recorder is not None:
+                    inventory_options["on_published"] = recorder
                 queue_cover_display_variant_generation(
                     source_path,
                     cache_root=display_cover_variant_cache_root(
                         source_path,
                         data_dir=config.get("DATA_DIR") if cover_revision else None,
+                        storage_policy=config.get(
+                            "_GENERATED_PREVIEW_STORAGE_POLICY"
+                        ),
                     ),
                     max_size=_DISPLAY_COVER_VARIANT_SIZE,
                     **revision_options,
                     **priority_options,
+                    **inventory_options,
                 )
             except Exception:
                 continue

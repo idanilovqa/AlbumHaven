@@ -23,7 +23,7 @@ from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.services.app_logging import log_app_event
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
-    display_cover_variant_cache_root,
+    display_cover_variant_cache_roots,
     find_existing_cover_display_variant,
     normalize_cover_variant_priority,
     normalize_cover_variant_revision,
@@ -1287,7 +1287,13 @@ def _cover_response(
     requested_size = normalize_cover_variant_size(size)
     normalized_revision = normalize_cover_variant_revision(revision)
 
-    cache_root: Path | None = None
+    cache_roots: tuple[Path, ...] = ()
+    storage_policy = getattr(
+        request.app.state, "generated_preview_storage_policy", None
+    )
+    inventory_recorder = getattr(
+        request.app.state, "generated_preview_inventory_recorder", None
+    )
     if requested_size > 0 and normalized_revision:
         candidate = resolve_configured_media_path(
             config,
@@ -1298,18 +1304,22 @@ def _cover_response(
         )
         if candidate is None:
             return _not_found()
-        cache_root = display_cover_variant_cache_root(
+        cache_roots = display_cover_variant_cache_roots(
             candidate,
             data_dir=config.get("DATA_DIR"),
+            storage_policy=storage_policy,
         )
-        cached_variant = find_existing_cover_display_variant(
-            candidate,
-            cache_root=cache_root,
-            max_size=requested_size,
-            revision=normalized_revision,
-        )
-        if cached_variant is not None:
-            return _conditional_file_response(request, cached_variant, max_age=31536000)
+        for cache_root in cache_roots:
+            cached_variant = find_existing_cover_display_variant(
+                candidate,
+                cache_root=cache_root,
+                max_size=requested_size,
+                revision=normalized_revision,
+            )
+            if cached_variant is not None:
+                return _conditional_file_response(
+                    request, cached_variant, max_age=31536000
+                )
 
     resolved = resolve_configured_media_path(
         config,
@@ -1319,8 +1329,11 @@ def _cover_response(
     if resolved is None:
         return _not_found()
     if requested_size > 0:
-        if cache_root is None:
-            cache_root = display_cover_variant_cache_root(resolved)
+        if not cache_roots:
+            cache_roots = display_cover_variant_cache_roots(
+                resolved,
+                storage_policy=storage_policy,
+            )
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )
@@ -1328,21 +1341,29 @@ def _cover_response(
             {"revision": normalized_revision} if normalized_revision else {}
         )
         try:
-            cached_variant = find_existing_cover_display_variant(
-                resolved,
-                cache_root=cache_root,
-                max_size=requested_size,
-                **revision_options,
-            )
-            if cached_variant is not None:
-                resolved = cached_variant
-            elif config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
-                resolved = resolve_cover_display_variant(
+            cached_variant = None
+            for cache_root in cache_roots:
+                cached_variant = find_existing_cover_display_variant(
                     resolved,
                     cache_root=cache_root,
                     max_size=requested_size,
+                    **revision_options,
+                )
+                if cached_variant is not None:
+                    break
+            if cached_variant is not None:
+                resolved = cached_variant
+            elif config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
+                generation_options = {}
+                if inventory_recorder is not None:
+                    generation_options["on_published"] = inventory_recorder
+                resolved = resolve_cover_display_variant(
+                    resolved,
+                    cache_root=cache_roots[0],
+                    max_size=requested_size,
                     priority=request_priority,
                     **revision_options,
+                    **generation_options,
                 )
         except Exception:
             _app_logger(request).exception(

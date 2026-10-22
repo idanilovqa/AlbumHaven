@@ -144,3 +144,40 @@ def test_backfill_uses_configured_data_dir_and_cover_revision(tmp_path):
         (source, data_dir / "display-cover-cache", "cover-sha256")
     ]
     assert "metadata ->> 'cover_revision'" in connection.executed[0]
+
+
+def test_backfill_writes_to_requested_preview_storage_during_relocation(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    custom_root = tmp_path / "Generated Previews"
+    connection = _Connection([{"cover_path": str(source)}])
+    generated = []
+    recorder = object()
+    policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(
+            mode="album_folders",
+            requested_mode="custom",
+            requested_root=custom_root,
+            operation_state="running",
+        )
+    )
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": recorder,
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda source_path, **kwargs: generated.append(
+            (source_path, kwargs["cache_root"], kwargs["on_published"])
+        ),
+        throttle_seconds=0,
+    )
+
+    assert worker.run_once() == 1
+    assert generated == [(source, custom_root / "v1", recorder)]

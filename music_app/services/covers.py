@@ -338,11 +338,28 @@ def display_cover_variant_cache_root(
     source_path: Path,
     *,
     data_dir: object | None = None,
+    storage_policy=None,
 ) -> Path:
     """Return display-preview storage, preferring fast app-local data."""
+    if storage_policy is not None:
+        return storage_policy.write_cache_root(source_path)
     if data_dir:
         return Path(str(data_dir)) / "display-cover-cache"
     return Path(source_path).parent / ".album-haven"
+
+
+def display_cover_variant_cache_roots(
+    source_path: Path,
+    *,
+    data_dir: object | None = None,
+    storage_policy=None,
+) -> tuple[Path, ...]:
+    if storage_policy is not None:
+        roots = list(storage_policy.read_cache_roots(source_path))
+        if data_dir:
+            roots.append(Path(str(data_dir)) / "display-cover-cache")
+        return tuple(dict.fromkeys(roots))
+    return (display_cover_variant_cache_root(source_path, data_dir=data_dir),)
 
 
 def build_cover_variant_base_path(
@@ -427,6 +444,7 @@ def _queue_cover_variant_generation(
     variant_base_path: Path,
     normalized_size: int,
     priority: str = _COVER_VARIANT_PRIORITY_BACKGROUND,
+    on_published=None,
 ) -> Future[Path | None] | None:
     normalized_priority = normalize_cover_variant_priority(priority)
     inflight_key = str(variant_base_path)
@@ -435,18 +453,25 @@ def _queue_cover_variant_generation(
         try:
             existing_variant = _find_existing_cover_variant(variant_base_path)
             if existing_variant is not None:
+                if on_published is not None:
+                    on_published(source_path, existing_variant)
                 return existing_variant
             if not source_path.exists() or not source_path.is_file():
                 return None
             variant_base_path.parent.mkdir(parents=True, exist_ok=True)
             existing_variant = _find_existing_cover_variant(variant_base_path)
             if existing_variant is not None:
+                if on_published is not None:
+                    on_published(source_path, existing_variant)
                 return existing_variant
-            return _render_cover_variant(
+            generated_variant = _render_cover_variant(
                 source_path,
                 variant_base_path=variant_base_path,
                 normalized_size=normalized_size,
             )
+            if generated_variant is not None and on_published is not None:
+                on_published(source_path, generated_variant)
+            return generated_variant
         except Exception:
             return None
 
@@ -575,6 +600,7 @@ def resolve_cover_display_variant(
     max_size: int,
     priority: str = _COVER_VARIANT_PRIORITY_FOREGROUND,
     revision: str | None = None,
+    on_published=None,
 ) -> Path:
     normalized_size = normalize_cover_variant_size(max_size)
     if (
@@ -592,6 +618,8 @@ def resolve_cover_display_variant(
         revision=revision,
     )
     if existing_variant is not None:
+        if on_published is not None:
+            on_published(source_path, existing_variant)
         return existing_variant
 
     variant_base_path = build_cover_variant_base_path(
@@ -606,6 +634,7 @@ def resolve_cover_display_variant(
         variant_base_path=variant_base_path,
         normalized_size=normalized_size,
         priority=priority,
+        on_published=on_published,
     )
     if inflight is not None:
         try:
@@ -624,6 +653,7 @@ def _admit_cover_display_variant_generation(
     normalized_size: int,
     normalized_priority: str,
     revision: str = "",
+    on_published=None,
 ) -> Future[Path | None] | None:
     variant_base_path = build_cover_variant_base_path(
         source_path,
@@ -639,6 +669,7 @@ def _admit_cover_display_variant_generation(
         variant_base_path=variant_base_path,
         normalized_size=normalized_size,
         priority=normalized_priority,
+        on_published=on_published,
     )
 
 
@@ -741,6 +772,7 @@ def queue_cover_display_variant_generation(
     max_size: int,
     priority: str = _COVER_VARIANT_PRIORITY_BACKGROUND,
     revision: str | None = None,
+    on_published=None,
 ) -> None:
     normalized_size = normalize_cover_variant_size(max_size)
     normalized_priority = normalize_cover_variant_priority(priority)
@@ -757,6 +789,8 @@ def queue_cover_display_variant_generation(
         "normalized_priority": normalized_priority,
         "revision": normalized_revision,
     }
+    if on_published is not None:
+        admission_kwargs["on_published"] = on_published
     if normalized_priority == _COVER_VARIANT_PRIORITY_BACKGROUND:
         admission_key = (
             os.path.normcase(os.path.abspath(os.fspath(source_path))),

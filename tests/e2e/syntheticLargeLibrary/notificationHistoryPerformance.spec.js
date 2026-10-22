@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 
 import { expect, test } from '../support/performanceFixtures.js';
 import {
+  defineTimingBudget,
   expectTimingBudget,
   measureInteractionToPaint,
   performanceTimingBudget,
@@ -32,7 +33,7 @@ const COVER_LOOKUP_PHASE_BUDGETS = Object.freeze(Object.fromEntries([
 const COVER_LOOKUP_TARGET = COVER_LOOKUP_TEST_TARGETS.performanceInteractions;
 const TREE_SELECTION_ARTIST = 'Cosmic Cathedral';
 const MAX_MOUNTED_NOTIFICATION_CARDS = 60;
-const MAX_INTERACTION_LONG_TASK_MS = 200;
+const INTERACTION_LONG_TASK_BUDGET = defineTimingBudget({ targetMaximum: 0, graceMs: 200 });
 const MAX_RETAINED_HEAP_GROWTH_BYTES = 32 * 1024 * 1024;
 const MAX_RETAINED_DOM_NODE_GROWTH = 1_500;
 
@@ -147,7 +148,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
         )
       ));
       expectTimingBudget(expect, drawerOpen.durationMs, DRAWER_BUDGET);
-      expect(drawerOpen.maxLongTaskMs).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+      expectTimingBudget(expect, drawerOpen.maxLongTaskMs, INTERACTION_LONG_TASK_BUDGET, 'notification drawer long task');
 
       const drawerBody = coverLookupActions.coverLookup.drawerBody;
       await drawerBody.hover();
@@ -199,7 +200,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
           }
         }),
       );
-      expect(historyScroll.maxLongTaskMs).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+      expectTimingBudget(expect, historyScroll.maxLongTaskMs, INTERACTION_LONG_TASK_BUDGET, 'notification history scroll long task');
       samples.push(await sampleRenderer(coverLookupActions.coverLookup, cdp, 'long-scroll-complete'));
 
       await coverLookupActions.coverLookup.drawerCloseButton.click();
@@ -229,7 +230,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
         )
       ));
       expectTimingBudget(expect, search.durationMs, SEARCH_BUDGET);
-      expect(search.maxLongTaskMs).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+      expectTimingBudget(expect, search.maxLongTaskMs, INTERACTION_LONG_TASK_BUDGET, 'post-notification search long task');
 
       await stepLogger.step('Clear search before direct Artist Tree selection', async () => {
         await searchToolbarActions.clearSearchAndObserveStableGallery({
@@ -252,7 +253,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
         ),
       );
       expectTimingBudget(expect, treeSelection.durationMs, TREE_BUDGET);
-      expect(treeSelection.maxLongTaskMs).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+      expectTimingBudget(expect, treeSelection.maxLongTaskMs, INTERACTION_LONG_TASK_BUDGET, 'post-notification tree selection long task');
 
       await stepLogger.step('Locate the actionable Cover Lookup notification', async () => {
         await coverLookupActions.openDrawer();
@@ -309,8 +310,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
         ),
       );
       expectTimingBudget(expect, notificationCoverLookup.durationMs, COVER_LOOKUP_BUDGET);
-      expect(notificationCoverLookup.maxLongTaskMs)
-        .toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+      expectTimingBudget(expect, notificationCoverLookup.maxLongTaskMs, INTERACTION_LONG_TASK_BUDGET, 'notification Cover Lookup long task');
       await coverLookupActions.closeModal();
 
       await stepLogger.step('Locate the Cover Lookup performance target', async () => {
@@ -337,7 +337,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
         ),
       );
       expectTimingBudget(expect, coverLookup.durationMs, COVER_LOOKUP_BUDGET);
-      expect(coverLookup.maxLongTaskMs).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+      expectTimingBudget(expect, coverLookup.maxLongTaskMs, INTERACTION_LONG_TASK_BUDGET, 'gallery Cover Lookup long task');
       await coverLookupActions.closeModal();
       await trackModalActions.close();
 
@@ -369,7 +369,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
         ),
       );
       expectTimingBudget(expect, galleryScroll.durationMs, GALLERY_SCROLL_BUDGET);
-      expect(galleryScroll.maxLongTaskMs).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+      expectTimingBudget(expect, galleryScroll.maxLongTaskMs, INTERACTION_LONG_TASK_BUDGET, 'post-notification gallery scroll long task');
 
       const paginationMaximumMs = Math.max(...paginationTimings);
       const metrics = {

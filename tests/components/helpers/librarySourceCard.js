@@ -11,6 +11,7 @@ async function mountLibrarySourceCard(page, { icons = true, colors = false, outl
     await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
   }
   await page.addScriptTag({ content: 'function escapeHtml(value) { return String(value); } function buildGalleryCardInfoHtml() { return "<div class=album-body>Album metadata</div>"; }' });
+  await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/gallery-main-components.js') });
   await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/gallery-card-component.js') });
   await page.evaluate(() => {
     document.querySelector('main').innerHTML = buildGalleryCardHtml({

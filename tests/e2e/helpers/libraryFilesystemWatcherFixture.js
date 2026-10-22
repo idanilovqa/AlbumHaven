@@ -14,6 +14,7 @@ const WATCHER_FIXTURE_DIRECTORIES = new Set([
   'watcher-punctuation-identity',
   'watcher-possessive-identity',
   'watcher-featured-ownership',
+  'watcher-local-cover-ranking',
   'watcher-numeric-discs',
   'watcher-year-distinct-releases',
   'watcher-offline-deletion',
@@ -43,6 +44,16 @@ tags.add(TPOS(encoding=3, text=[sys.argv[9]]))
 tags.save(track)
 if sys.argv[8] == "1" and ID3(track).getall("APIC"):
     raise RuntimeError("Watcher cover fixture still contains embedded artwork")
+`;
+
+const CREATE_LOCAL_ART_SCRIPT = `
+import sys
+from pathlib import Path
+from PIL import Image
+
+album = Path(sys.argv[1])
+Image.new("RGB", (1200, 1200), "navy").save(album / "front-scan.jpg", format="JPEG")
+Image.new("RGB", (2400, 2400), "red").save(album / "booklet-page.jpg", format="JPEG")
 `;
 
 const REMOVE_SCAN_SOURCE_SCRIPT = `
@@ -169,6 +180,7 @@ async function buildWatchedAlbumFixture({
   trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
   trackArtists = null,
   discNumbers = null,
+  localArtworkCandidates = false,
   removeEmbeddedArtwork = false,
   fixtureDirectory = 'watcher-reconciliation',
 } = {}) {
@@ -188,6 +200,12 @@ async function buildWatchedAlbumFixture({
   }) => {
     const directory = assertOwnedPath(mediaRoot, path.join(ownedRoot, artist, folderName));
     fs.mkdirSync(directory, { recursive: true });
+    if (localArtworkCandidates) {
+      await execFileAsync(resolvePlaywrightPython(process.env), ['-c', CREATE_LOCAL_ART_SCRIPT, directory], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+    }
     const createdTracks = [];
     const discTotal = albumDiscNumbers ? Math.max(...albumDiscNumbers) : 1;
     for (const [index, title] of titles.entries()) {

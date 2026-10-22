@@ -16,6 +16,77 @@ const WATCHER_COVER_TARGET = Object.freeze({
   album: 'Watcher Automatic Cover Album',
   year: '2006',
 });
+const WATCHER_LOCAL_COVER_TARGET = Object.freeze({
+  artist: 'Watcher Local Cover Artist',
+  album: 'Watcher Local Cover Album',
+  year: '2007',
+});
+
+test('FTC-COVERS-034 watcher prefers front-named local art over a larger booklet image', {
+  tag: '@area:cover-providers',
+}, async ({
+  context,
+  coverLookupActions,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(180000);
+  let fixture;
+  let originalFailure;
+
+  try {
+    await stepLogger.step('Add watched album with front and booklet images', async () => {
+      await coverLookupActions.setProviderFixtureMode('automatic-coverless');
+      await coverLookupActions.resetProviderFixtureEvidence();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      fixture = await createWatchedAlbumFixture({
+        ...WATCHER_LOCAL_COVER_TARGET,
+        year: Number(WATCHER_LOCAL_COVER_TARGET.year),
+        fixtureDirectory: 'watcher-local-cover-ranking',
+        localArtworkCandidates: true,
+        removeEmbeddedArtwork: true,
+        context,
+        managedAppLifecycle,
+      });
+
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+    });
+
+    await stepLogger.step('Show the front-named image without remote lookup', async () => {
+      let opened;
+      await expect(async () => {
+        await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(WATCHER_LOCAL_COVER_TARGET.artist)}`);
+        await galleryActions.waitForGalleryReady();
+        opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(
+          WATCHER_LOCAL_COVER_TARGET,
+          60000,
+        );
+        expect(opened.album.cover_path).toMatch(/[\\/]front-scan\.jpg$/i);
+      }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
+
+      await trackModalActions.waitForLoadedSummary();
+      await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
+      await trackModalActions.close();
+
+      const evidence = await coverLookupActions.readProviderFixtureEvidence();
+      expect(evidence.apple_search_requests).toBe(0);
+      expect(evidence.apple_artwork_requests).toBe(0);
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
 const PUNCTUATION_BAND_TARGET = Object.freeze({
   artist: 'Fire',
   trackArtist: 'Fire & Ash',

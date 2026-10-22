@@ -5,6 +5,7 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import re
 from threading import Lock, RLock
 
 from music_app.services.library_watch_suppression import suppress_library_watch_events
@@ -840,6 +841,11 @@ def score_image(path: Path) -> tuple[float, int, int]:
     area = width * height
     return (ratio_delta, -area, len(path.name))
 
+def _local_cover_name_rank(path: Path) -> int:
+    tokens = set(re.split(r"[^a-z0-9]+", cover_stem(path)))
+    return 0 if tokens & {"cover", "front"} else 1
+
+
 def find_cover_image(folder: Path, image_extensions: set[str]) -> Path | None:
     if folder is None or not folder.exists() or not folder.is_dir():
         return None
@@ -854,4 +860,4 @@ def find_cover_image(folder: Path, image_extensions: set[str]) -> Path | None:
         return None
     if not candidates:
         return None
-    return min(candidates, key=score_image)
+    return min(candidates, key=lambda path: (_local_cover_name_rank(path), *score_image(path)))

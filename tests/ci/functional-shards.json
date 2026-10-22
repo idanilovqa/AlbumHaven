@@ -1040,6 +1040,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-034 watcher prefers front-named local art over a larger booklet image",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
               "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
               "area": "album-details"

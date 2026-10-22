@@ -367,7 +367,7 @@ def test_queue_cover_lookup_task_registers_background_future(config, logger, lib
     monkeypatch.setattr(
         cover_lookup_runtime,
         "create_cover_lookup_task",
-        lambda album, track_paths, manual_urls=None: (
+        lambda album, track_paths, manual_urls=None, *, config=None: (
             queue_events.append("create-task") or ("task-123", cancel_event)
         ),
     )

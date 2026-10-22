@@ -230,7 +230,12 @@ def queue_cover_lookup_task(
     logger,
     user_agent: str | None = None,
 ) -> str:
-    task_id, cancel_event = create_cover_lookup_task(album, requested_track_paths, manual_urls)
+    task_id, cancel_event = create_cover_lookup_task(
+        album,
+        requested_track_paths,
+        manual_urls,
+        config=config,
+    )
     resolved_user_agent = str(user_agent or config["MUSICBRAINZ_USER_AGENT"])
     runtime_job = CoverLookupRuntimeJob(
         task_id,

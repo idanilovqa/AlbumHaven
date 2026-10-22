@@ -141,6 +141,45 @@ def _install_fake_notification_adapter(monkeypatch, config, initial_tasks=None):
     return persisted_tasks
 
 
+def test_repeated_lookup_reuses_completed_notification_for_same_files(config, monkeypatch):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    other_track_path = track_path.with_name("different.mp3")
+    completed_id = "completed-same-album"
+    _install_fake_notification_adapter(monkeypatch, config, [
+        {
+            "id": completed_id,
+            "status": "completed",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "track_paths": [str(track_path).swapcase()],
+            "created_at": "2026-05-17T00:00:00+00:00",
+            "finished_at": "2026-05-17T00:01:00+00:00",
+        },
+        {
+            "id": "different-files-same-labels",
+            "status": "completed",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "track_paths": [str(other_track_path)],
+            "created_at": "2026-05-18T00:00:00+00:00",
+            "finished_at": "2026-05-18T00:01:00+00:00",
+        },
+    ])
+
+    task_id, _cancel_event = create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+        config=config,
+    )
+
+    assert task_id == completed_id
+    assert cover_lookup_result(task_id)["status"] == "pending"
+    assert {task["id"] for task in list_cover_lookup_tasks(config=config)} == {
+        completed_id,
+        "different-files-same-labels",
+    }
+
+
 def test_cover_lookup_tasks_list_serializes_without_raw_bytes(config, monkeypatch):
     _install_fake_notification_adapter(monkeypatch, config)
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()

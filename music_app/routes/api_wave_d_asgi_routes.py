@@ -1191,7 +1191,11 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
     if not matches:
         return _json_response(({"ok": False, "error": "No usable cover art could be extracted from those links"}, 400))
     if not task_id:
-        task_id, _cancel_event = create_cover_lookup_task(album or {}, album_context.track_paths)
+        task_id, _cancel_event = create_cover_lookup_task(
+            album or {},
+            album_context.track_paths,
+            config=config,
+        )
     task_payload = cover_lookup_result(task_id)
     merged_matches = merge_lookup_matches(
         task_payload.get("possible_matches") if isinstance(task_payload.get("possible_matches"), list) else [],

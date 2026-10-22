@@ -4,6 +4,8 @@ from concurrent.futures import Future
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import json
+import os
+from pathlib import Path
 from threading import Event, Lock
 import uuid
 
@@ -429,18 +431,64 @@ def _reclaim_terminal_internal_cover_lookup_task(
     _reclaim_cleared_cover_lookup_task_state(task_id)
 
 
+def _reusable_cover_lookup_task_id(
+    requested_track_paths: set[str],
+    *,
+    config: Mapping[str, object] | None,
+) -> str:
+    def path_key(value: object) -> str:
+        text = str(value or "").strip()
+        return os.path.normcase(str(Path(text).resolve(strict=False))) if text else ""
+
+    normalized_paths = sorted(filter(None, (path_key(path) for path in requested_track_paths)))
+    if not normalized_paths:
+        return ""
+    persisted_tasks = load_cover_lookup_notifications(config) if config is not None else []
+    with _COVER_LOOKUP_TASKS_LOCK:
+        busy_ids = {task_id for task_id, futures in _COVER_LOOKUP_FUTURES.items() if futures}
+        tasks_by_id = {
+            str(task.get("id") or ""): task
+            for task in persisted_tasks
+            if str(task.get("id") or "")
+        }
+        tasks_by_id.update({
+            str(task.get("id") or ""): dict(task)
+            for task in _COVER_LOOKUP_TASKS.values()
+            if str(task.get("id") or "")
+        })
+    for task in sorted(tasks_by_id.values(), key=_sort_cover_lookup_task_key, reverse=True):
+        task_id = str(task.get("id") or "")
+        if (
+            task_id not in busy_ids
+            and not bool(task.get("internal"))
+            and is_terminal_cover_lookup_task(task)
+            and sorted(filter(None, (path_key(path) for path in (task.get("track_paths") or [])))) == normalized_paths
+        ):
+            return task_id
+    return ""
+
+
 def create_cover_lookup_task(
     album: dict[str, object],
     requested_track_paths: set[str],
     manual_urls: list[str] | None = None,
     *,
     internal: bool = False,
+    config: Mapping[str, object] | None = None,
 ) -> tuple[str, Event]:
-    task_id = uuid.uuid4().hex
+    task_id = "" if internal else _reusable_cover_lookup_task_id(
+        requested_track_paths,
+        config=config,
+    )
+    task_id = task_id or uuid.uuid4().hex
     cancel_event = Event()
-    _COVER_LOOKUP_CANCEL_EVENTS[task_id] = cancel_event
+    with _COVER_LOOKUP_TASKS_LOCK:
+        if task_id in _COVER_LOOKUP_TASKS:
+            _COVER_LOOKUP_TASKS[task_id] = {"id": task_id, "status": "pending"}
+        _COVER_LOOKUP_CANCEL_EVENTS[task_id] = cancel_event
     update_cover_lookup_task(
         task_id,
+        config=config,
         id=task_id,
         status="pending",
         type="cover-art-lookup",

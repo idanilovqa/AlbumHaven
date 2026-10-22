@@ -21,7 +21,7 @@ jobs:
       contents: write
     services:
       postgres:
-        image: postgres:18
+        image: postgres:17
         env:
           POSTGRES_PASSWORD: isolated-mobile-admin
         ports: [5432:5432]

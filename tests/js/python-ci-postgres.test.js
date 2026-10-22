@@ -18,7 +18,7 @@ function jobSource(jobName, nextJobName) {
   return workflow.slice(start, end);
 }
 
-test('Python CI installs, provisions, and tears down an exact disposable PostgreSQL 18 database', () => {
+test('Python CI provisions and tears down an exact disposable PostgreSQL 17 database', () => {
   const job = jobSource('test_python', 'e2e_production_parity');
   assert.match(job, /runs-on:\s*windows-2025/);
   assert.match(job, /needs:\s*[\s\S]*?- review_scope[\s\S]*?- review_prerequisites[\s\S]*?- pr_agent_review[\s\S]*?- codex_review/);
@@ -28,10 +28,7 @@ test('Python CI installs, provisions, and tears down an exact disposable Postgre
   assert.match(job, /-Mode\s+Teardown/);
   assert.equal((job.match(/album-haven-python-postgres\.state\.json/g) || []).length, 2);
   assert.match(job, /-DatabaseSuffix\s+["']py_\$\{\{\s*github\.run_id\s*\}\}_\$\{\{\s*github\.run_attempt\s*\}\}["']/);
-  assert.match(workflow, /POSTGRES_CHOCOLATEY_VERSION:\s*["']18\.6\.5["']/);
-  assert.match(job, /choco install postgresql18[^\r\n]*--version=\$env:POSTGRES_CHOCOLATEY_VERSION/);
-  assert.match(job, /GITHUB_PATH/);
-  assert.match(job, /-ExpectedMajorVersion\s+18/);
+  assert.match(job, /-ExpectedMajorVersion\s+17/);
   assert.match(job, /-Pgbin\s+\$env:PGBIN/);
   assert.equal((job.match(/-HostName\s+127\.0\.0\.1/g) || []).length, 4);
   assert.match(job, /-SkipFixtureLoad/);

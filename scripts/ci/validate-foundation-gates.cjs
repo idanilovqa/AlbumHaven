@@ -119,7 +119,7 @@ function validateWorkflowContract(workflow) {
     errors.push('foundation workflow must remain pull-request-only');
   }
   requirePatterns(workflow, [
-    [/ExpectedMajorVersion\s+18/, 'PostgreSQL 18'],
+    [/ExpectedMajorVersion\s+17/, 'PostgreSQL 17'],
     [/7\.1-essentials_build-www\.gyan\.dev/, 'FFmpeg 7.1-essentials_build-www.gyan.dev'],
   ], 'foundation workflow', errors);
 

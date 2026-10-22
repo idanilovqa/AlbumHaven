@@ -18,7 +18,7 @@ function fingerprint(environment, overrides = {}) {
     chromeVersion: '151.0.7922.138',
     fixtureRelease: 'fixtures-v1.0.22',
     fixtureSchemaVersion: 1,
-    postgresMajor: 18,
+    postgresMajor: environment === 'ci' ? 17 : 18,
     measurementContract: 'performance-v1',
     ...overrides,
   };

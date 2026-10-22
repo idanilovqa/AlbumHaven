@@ -10,7 +10,7 @@ param(
     [string]$GeneratorCommit = '',
     [int]$VariantCount = 0,
     [int]$SourceMaxEdge = 0,
-    [ValidatePattern('^\d+$')][string]$ExpectedPostgresMajor = '18',
+    [ValidatePattern('^\d+$')][string]$ExpectedPostgresMajor = '17',
     [ValidateRange(1, 65535)][int]$PostgresPort = 5432,
     [string]$RepositoryRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
     [string]$RunnerTemp = $env:RUNNER_TEMP,

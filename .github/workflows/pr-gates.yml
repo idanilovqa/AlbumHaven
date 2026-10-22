@@ -15,7 +15,6 @@ permissions:
 
 env:
   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
-  POSTGRES_CHOCOLATEY_VERSION: "18.6.5"
 
 concurrency:
   group: pr-gates-${{ github.event.pull_request.number || github.ref }}
@@ -183,17 +182,11 @@ jobs:
         with:
           chrome-version: "151.0.7922.138"
 
-      - name: Install PostgreSQL 18
-        run: |
-          choco install postgresql18 --version=$env:POSTGRES_CHOCOLATEY_VERSION --params="'/Password:root'" --yes --no-progress
-          "PGBIN=C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
       - name: Provision isolated PostgreSQL for Windows Node tests
         run: |
           .\scripts\ci\bootstrap-windows-postgres.ps1 `
             -Mode Provision `
-            -ExpectedMajorVersion 18 `
+            -ExpectedMajorVersion 17 `
             -Pgbin $env:PGBIN `
             -HostName 127.0.0.1 `
             -DatabaseSuffix "jsw_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -223,7 +216,7 @@ jobs:
           if (Test-Path -LiteralPath $statePath -PathType Leaf) {
             .\scripts\ci\bootstrap-windows-postgres.ps1 `
               -Mode Teardown `
-              -ExpectedMajorVersion 18 `
+              -ExpectedMajorVersion 17 `
               -Pgbin $env:PGBIN `
               -HostName 127.0.0.1 `
               -DatabaseSuffix "jsw_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -283,17 +276,11 @@ jobs:
         with:
           chrome-version: "151.0.7922.138"
 
-      - name: Install PostgreSQL 18
-        run: |
-          choco install postgresql18 --version=$env:POSTGRES_CHOCOLATEY_VERSION --params="'/Password:root'" --yes --no-progress
-          "PGBIN=C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
       - name: Provision isolated PostgreSQL for Python tests
         run: |
           .\scripts\ci\bootstrap-windows-postgres.ps1 `
             -Mode Provision `
-            -ExpectedMajorVersion 18 `
+            -ExpectedMajorVersion 17 `
             -Pgbin $env:PGBIN `
             -HostName 127.0.0.1 `
             -DatabaseSuffix "py_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -311,7 +298,7 @@ jobs:
         run: |
           .\scripts\ci\bootstrap-windows-postgres.ps1 `
             -Mode Provision `
-            -ExpectedMajorVersion 18 `
+            -ExpectedMajorVersion 17 `
             -Pgbin $env:PGBIN `
             -HostName 127.0.0.1 `
             -DatabaseSuffix "py_contract_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -370,7 +357,7 @@ jobs:
           if (Test-Path -LiteralPath $statePath -PathType Leaf) {
             .\scripts\ci\bootstrap-windows-postgres.ps1 `
               -Mode Teardown `
-              -ExpectedMajorVersion 18 `
+              -ExpectedMajorVersion 17 `
               -Pgbin $env:PGBIN `
               -HostName 127.0.0.1 `
               -DatabaseSuffix "py_contract_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -384,7 +371,7 @@ jobs:
           if (Test-Path -LiteralPath $statePath -PathType Leaf) {
             .\scripts\ci\bootstrap-windows-postgres.ps1 `
               -Mode Teardown `
-              -ExpectedMajorVersion 18 `
+              -ExpectedMajorVersion 17 `
               -Pgbin $env:PGBIN `
               -HostName 127.0.0.1 `
               -DatabaseSuffix "py_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -481,17 +468,11 @@ jobs:
         with:
           chrome-version: "151.0.7922.138"
 
-      - name: Install PostgreSQL 18
-        run: |
-          choco install postgresql18 --version=$env:POSTGRES_CHOCOLATEY_VERSION --params="'/Password:root'" --yes --no-progress
-          "PGBIN=C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
       - name: Provision isolated PostgreSQL
         run: |
           .\scripts\ci\bootstrap-windows-postgres.ps1 `
             -Mode Provision `
-            -ExpectedMajorVersion 18 `
+            -ExpectedMajorVersion 17 `
             -Pgbin $env:PGBIN `
             -HostName 127.0.0.1 `
             -DatabaseSuffix "p7a_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -525,7 +506,7 @@ jobs:
           if (Test-Path -LiteralPath $statePath -PathType Leaf) {
             .\scripts\ci\bootstrap-windows-postgres.ps1 `
               -Mode Teardown `
-              -ExpectedMajorVersion 18 `
+              -ExpectedMajorVersion 17 `
               -Pgbin $env:PGBIN `
               -HostName 127.0.0.1 `
               -DatabaseSuffix "p7a_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -582,17 +563,11 @@ jobs:
         with:
           chrome-version: "151.0.7922.138"
 
-      - name: Install PostgreSQL 18
-        run: |
-          choco install postgresql18 --version=$env:POSTGRES_CHOCOLATEY_VERSION --params="'/Password:root'" --yes --no-progress
-          "PGBIN=C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
       - name: Provision isolated PostgreSQL
         run: |
           .\scripts\ci\bootstrap-windows-postgres.ps1 `
             -Mode Provision `
-            -ExpectedMajorVersion 18 `
+            -ExpectedMajorVersion 17 `
             -Pgbin $env:PGBIN `
             -HostName 127.0.0.1 `
             -DatabaseSuffix "p7m_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -626,7 +601,7 @@ jobs:
           if (Test-Path -LiteralPath $statePath -PathType Leaf) {
             .\scripts\ci\bootstrap-windows-postgres.ps1 `
               -Mode Teardown `
-              -ExpectedMajorVersion 18 `
+              -ExpectedMajorVersion 17 `
               -Pgbin $env:PGBIN `
               -HostName 127.0.0.1 `
               -DatabaseSuffix "p7m_${{ github.run_id }}_${{ github.run_attempt }}" `
@@ -711,12 +686,6 @@ jobs:
         with:
           chrome-version: "151.0.7922.138"
 
-      - name: Install PostgreSQL 18
-        run: |
-          choco install postgresql18 --version=$env:POSTGRES_CHOCOLATEY_VERSION --params="'/Password:root'" --yes --no-progress
-          "PGBIN=C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
       - name: Prepare writable functional fixture
         run: |
           $sourceRoot = [IO.Path]::GetFullPath($env:ALBUM_HAVEN_FIXTURE_ROOT)
@@ -755,7 +724,7 @@ jobs:
           $env:PLAYWRIGHT_PROVIDER_PORT = ([int]"${{ steps.shard.outputs.port_base }}" + 2).ToString()
           .\scripts\ci\bootstrap-windows-postgres.ps1 `
             -Mode Provision `
-            -ExpectedMajorVersion 18 `
+            -ExpectedMajorVersion 17 `
             -Pgbin $env:PGBIN `
             -HostName 127.0.0.1 `
             -DatabaseSuffix "f_${{ github.run_id }}_${{ github.run_attempt }}_${{ strategy.job-index }}" `
@@ -799,7 +768,7 @@ jobs:
           if (Test-Path -LiteralPath $statePath -PathType Leaf) {
             .\scripts\ci\bootstrap-windows-postgres.ps1 `
               -Mode Teardown `
-              -ExpectedMajorVersion 18 `
+              -ExpectedMajorVersion 17 `
               -Pgbin $env:PGBIN `
               -HostName 127.0.0.1 `
               -DatabaseSuffix "f_${{ github.run_id }}_${{ github.run_attempt }}_${{ strategy.job-index }}" `
@@ -940,12 +909,6 @@ jobs:
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: "151.0.7922.138"
-
-      - name: Install PostgreSQL 18
-        run: |
-          choco install postgresql18 --version=$env:POSTGRES_CHOCOLATEY_VERSION --params="'/Password:root'" --yes --no-progress
-          "PGBIN=C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "C:\Program Files\PostgreSQL\18\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Validate performance matrix ownership
         run: node scripts/ci/validate-performance-matrix.cjs --list

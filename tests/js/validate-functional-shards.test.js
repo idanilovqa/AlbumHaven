@@ -1125,7 +1125,7 @@ test('functional workflow pins fixture and toolchain safety before one-worker ex
   const { workflow, job } = functionalJobSource();
   assert.match(job, new RegExp(FIXTURE_RELEASE.replaceAll('.', '\\.')));
   assert.match(job, new RegExp(FIXTURE_MANIFEST_SHA256));
-  assert.match(job, /ExpectedMajorVersion(?:\s+|:\s*)18\b/);
+  assert.match(job, /ExpectedMajorVersion(?:\s+|:\s*)17\b/);
   assert.match(job, /bootstrap-windows-postgres\.ps1[\s\S]*?(?:Provision|-Mode\s+Provision)/i);
   assert.match(
     job,

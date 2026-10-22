@@ -29,7 +29,7 @@ function fakeExecutor(tools) {
         ? `${chromeVersion}\n`
         : `Google Chrome for Testing ${chromeVersion}\n`;
     }
-    const postgresMajor = tools.postgresMajor || 18;
+    const postgresMajor = tools.postgresMajor || 17;
     if (args.includes('--version')) return `psql (PostgreSQL) ${postgresMajor}.7\n`;
     if (args.includes('show server_version_num')) return `${postgresMajor}0007\n`;
     const script = args.at(-1);
@@ -79,8 +79,8 @@ test('Windows manifest verifies the complete pinned CI toolchain and FFmpeg prov
 
   assert.equal(manifest.chrome, EXPECTED.windowsChrome);
   assert.equal(manifest.python, EXPECTED.python);
-  assert.match(manifest.postgresClient, /^psql \(PostgreSQL\) 18\./);
-  assert.equal(manifest.postgresServerVersionNumber, 180007);
+  assert.match(manifest.postgresClient, /^psql \(PostgreSQL\) 17\./);
+  assert.equal(manifest.postgresServerVersionNumber, 170007);
   assert.equal(manifest.imageioFfmpeg, EXPECTED.imageioFfmpeg);
   assert.equal(manifest.ffmpeg, EXPECTED.ffmpeg);
   assert.equal(manifest.ffmpegExecutable, tools.ffmpegPath);
@@ -91,18 +91,18 @@ test('Windows manifest validates the caller-selected local PostgreSQL major', (t
   t.after(() => fs.rmSync(tools.root, { recursive: true, force: true }));
 
   const manifest = collectVersions('windows', {
-    expectedPostgresMajor: 17,
+    expectedPostgresMajor: 18,
     env: {
       PLAYWRIGHT_CHROME_EXECUTABLE: tools.chromePath,
       PLAYWRIGHT_PYTHON: 'python-for-tests',
       PGBIN: path.join(tools.root, 'postgres-bin'),
       DATABASE_APP_URL: 'postgresql://local.invalid/app',
     },
-    execFileSyncFn: fakeExecutor({ ...tools, postgresMajor: 17 }),
+    execFileSyncFn: fakeExecutor({ ...tools, postgresMajor: 18 }),
   });
 
-  assert.match(manifest.postgresClient, /^psql \(PostgreSQL\) 17\./);
-  assert.equal(manifest.postgresServerVersionNumber, 170007);
+  assert.match(manifest.postgresClient, /^psql \(PostgreSQL\) 18\./);
+  assert.equal(manifest.postgresServerVersionNumber, 180007);
 });
 
 test('Windows manifest rejects a Chrome build outside the exact provisioned contract', (t) => {

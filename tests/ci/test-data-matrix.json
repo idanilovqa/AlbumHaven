@@ -2801,6 +2801,28 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
+    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Stale projection keeps selected startup and superseding Home responsive",
+    "profile": "synthetic-large-library",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "large-library:stale-relation-projection"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "cold-selected-artist-startup-responsiveness",
+      "cold-home-supersession-responsiveness",
+      "background-relation-projection-rebuild"
+    ],
+    "globalMutationReason": "The isolated invocation deliberately marks the complete relation projection stale, restarts its owned app, and waits for the background rebuild before teardown; it does not use a shared database or app process.",
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilitiesResponsiveness.spec.js",
@@ -9052,6 +9074,7 @@
       "databaseIdentity": "case:ftc-preview-storage-001-002",
       "filesystemCopy": "media/cases/generated-preview-storage"
     },
+    "globalMutationReason": "The case changes the server-wide generated-preview policy and files only in its isolated database, app process, and owned media copy, then verifies reverse relocation and cleans that owned state during teardown.",
     "ownerApproval": "approved"
   }
 ]

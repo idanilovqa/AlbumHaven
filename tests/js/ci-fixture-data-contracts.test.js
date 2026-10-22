@@ -518,7 +518,7 @@ test('matrix validation accepts isolated database-only mutation ownership', () =
   assert.deepEqual(errors, []);
 });
 
-test('functional shard contract owns all 132 browser-functional cases exactly once', () => {
+test('functional shard contract owns all 133 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -534,14 +534,14 @@ test('functional shard contract owns all 132 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 132);
+  assert.equal(expectedCases.size, 133);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 4);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 59 performance cases across 29 targets', () => {
+test('performance target contract owns all 60 performance cases across 29 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -586,7 +586,7 @@ test('performance target contract owns all 59 performance cases across 29 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 59);
+  assert.equal(expectedCases.size, 60);
   assert.deepEqual(errors, []);
   assert.equal(contract.targets.length, 29);
   assert.equal(contract.targets.filter((target) => target.defaultMember).length, 29);
@@ -746,15 +746,15 @@ test('read-only inventory command reports complete discovery and ownership total
 
   assert.equal(inventory.configuredSurfaces, 12);
   assert.deepEqual(inventory.categories, {
-      browserFunctional: 132,
+      browserFunctional: 133,
       component: 214,
       mobile: 76,
-      performance: 59,
-      total: 481,
+      performance: 60,
+      total: 483,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 481,
-      functionalShards: 132,
-    performanceTargets: 59,
+    testDataMatrix: 483,
+      functionalShards: 133,
+    performanceTargets: 60,
   });
 });

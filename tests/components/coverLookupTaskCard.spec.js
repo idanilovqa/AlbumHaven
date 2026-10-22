@@ -134,7 +134,8 @@ test(refreshWhilePressed
   const titleBox = await card.locator('.cover-lookup-task-title').boundingBox();
   const elapsedBox = await card.locator('.cover-lookup-task-elapsed').boundingBox();
   const metadataBox = await card.locator('.cover-lookup-task-meta').boundingBox();
-  const progressBox = await card.locator('.cover-lookup-task-progress').boundingBox();
+  const taskCard = page.locator('.cover-lookup-task-card').filter({ has: card });
+  const progressBox = await taskCard.locator('.cover-lookup-task-progress').boundingBox();
   expect(titleBox).not.toBeNull();
   expect(elapsedBox).not.toBeNull();
   expect(metadataBox).not.toBeNull();

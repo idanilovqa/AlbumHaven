@@ -239,6 +239,7 @@
 }
 .cover-lookup-task-card {
   position: relative;
+  flex: 0 0 auto;
   gap: 4px;
   overflow: hidden;
   padding: 0;

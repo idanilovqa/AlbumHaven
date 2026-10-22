@@ -180,7 +180,8 @@ def read_tags(path: Path) -> dict[str, object]:
             and getattr(audio_full.info, "length", None)
         ):
             data["duration_seconds"] = int(audio_full.info.length)
-        data.update(read_apev2_tags(path))
+        for key, value in read_apev2_tags(path).items():
+            data.setdefault(key, value)
         return data
     except Exception:
         return read_apev2_tags(path)

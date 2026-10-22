@@ -277,6 +277,38 @@ def test_read_tags_opens_mutagen_once_and_normalizes_full_mp4_tags(monkeypatch):
     assert tags["duration_seconds"] == 183
 
 
+def test_read_tags_prefers_current_id3_values_over_legacy_ape_tags(monkeypatch, tmp_path):
+    track_path = tmp_path / "fixture.mp3"
+    track_path.touch()
+    audio = SimpleNamespace(
+        tags={
+            "TALB": SimpleNamespace(text=["Approved Album"]),
+            "TPE2": SimpleNamespace(text=["Approved Album Artist"]),
+            "TPE1": SimpleNamespace(text=["Approved Track Artist"]),
+            "TIT2": SimpleNamespace(text=["Approved Track"]),
+        },
+        info=SimpleNamespace(length=180.0),
+    )
+    monkeypatch.setattr(metadata, "MutagenFile", lambda _path: audio)
+    monkeypatch.setattr(
+        metadata,
+        "read_apev2_tags",
+        lambda _path: {
+            "album": ["Legacy Album"],
+            "albumartist": ["Legacy Album Artist"],
+            "artist": ["Legacy Track Artist"],
+            "title": ["Legacy Track"],
+        },
+    )
+
+    entry = metadata.read_metadata_for_file(track_path)
+
+    assert entry["album"] == "Approved Album"
+    assert entry["album_artist"] == "Approved Album Artist"
+    assert entry["artist"] == "Approved Track Artist"
+    assert entry["title"] == "Approved Track"
+
+
 def test_full_tag_aliases_preserve_easy_id3_names_used_by_metadata_extraction():
     frames = {
         "talb": SimpleNamespace(text=["Fixture Album"]),

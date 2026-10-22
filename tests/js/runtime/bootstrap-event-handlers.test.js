@@ -13,12 +13,16 @@ function createContext({
   drawerHandled = false,
   searchMouseDownHandled = false,
   longPressClickConsumed = false,
+  albumLongPressClickConsumed = false,
 } = {}) {
   const listeners = {};
   const calls = [];
   const context = {
     consumeArtistTreeLongPressClick() {
       return longPressClickConsumed;
+    },
+    consumeAlbumCardLongPressClick() {
+      return albumLongPressClickConsumed;
     },
     document: {
       addEventListener(name, callback) {
@@ -72,6 +76,14 @@ function createContext({
 
 test('document click stops after consuming artist tree long-press synthetic click', () => {
   const { calls, listeners } = createContext({ longPressClickConsumed: true });
+
+  listeners.click({ defaultPrevented: false, target: {} });
+
+  assert.deepEqual(calls, []);
+});
+
+test('document click stops after consuming album card long-press synthetic click', () => {
+  const { calls, listeners } = createContext({ albumLongPressClickConsumed: true });
 
   listeners.click({ defaultPrevented: false, target: {} });
 

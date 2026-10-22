@@ -28,6 +28,24 @@ const helperPath = path.join(
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
   + '\n' + fs.readFileSync(helperPath, 'utf8');
 
+test('openTagEditor hydrates an album on mobile', () => {
+  const pending = new Map();
+  const context = vm.createContext({
+    isMobileClient: () => true,
+    getTagEditorElements: () => ({ overlay: {} }),
+    bindOverlayPointerOrigin() {},
+    albumRequiresHydration: album => album.preview_only === true,
+    getAlbumRequestKey: album => album.key,
+    loadTrackModalAlbumDetails: key => new Promise(resolve => pending.set(key, resolve)),
+    showRepairAlert() {},
+  });
+  vm.runInContext(helperSource, context);
+
+  context.openTagEditor({ key: 'mobile', preview_only: true }, { tracksMode: 'all' });
+
+  assert.equal(pending.has('mobile'), true);
+});
+
 test('summary tag editor hydrates only the latest requested album and preserves permission', async () => {
   const pending = new Map();
   const opened = [];

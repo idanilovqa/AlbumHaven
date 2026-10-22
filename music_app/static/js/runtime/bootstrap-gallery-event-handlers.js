@@ -866,9 +866,91 @@ function consumeArtistTreeLongPressClick(event) {
   return true;
 }
 
+let albumCardLongPressGesture = null;
+let albumCardLongPressClickGuard = null;
+
+function getAlbumCardLongPressTarget(target) {
+  const card = target?.closest?.('.album-card');
+  const trigger = card?.querySelector?.('[data-album-key]');
+  const key = String(trigger?.getAttribute?.('data-album-key') || '').trim();
+  const album = key && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  return album ? { key } : null;
+}
+
+function clearAlbumCardLongPressGesture() {
+  if (albumCardLongPressGesture?.timeoutId) {
+    clearBrowserTimeout(albumCardLongPressGesture.timeoutId);
+  }
+  albumCardLongPressGesture = null;
+}
+
+function beginAlbumCardLongPress(event) {
+  if (String(event?.pointerType || '').toLowerCase() !== 'touch' || event?.isPrimary === false) return false;
+  const target = getAlbumCardLongPressTarget(event.target);
+  if (!target) return false;
+  clearAlbumCardLongPressGesture();
+  const gesture = {
+    ...target,
+    pointerId: event.pointerId,
+    x: Number(event.clientX || 0),
+    y: Number(event.clientY || 0),
+    opened: false,
+    timeoutId: 0,
+  };
+  albumCardLongPressGesture = gesture;
+  gesture.timeoutId = scheduleBrowserTimeout(() => {
+    if (albumCardLongPressGesture !== gesture) return;
+    const currentAlbum = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(gesture.key) : null;
+    if (!currentAlbum) {
+      clearAlbumCardLongPressGesture();
+      return;
+    }
+    gesture.opened = true;
+    gesture.timeoutId = 0;
+    if (albumCardLongPressClickGuard?.timeoutId) clearBrowserTimeout(albumCardLongPressClickGuard.timeoutId);
+    albumCardLongPressClickGuard = { key: gesture.key, timeoutId: 0 };
+    albumCardLongPressClickGuard.timeoutId = scheduleBrowserTimeout(() => {
+      if (albumCardLongPressClickGuard?.key === gesture.key) albumCardLongPressClickGuard = null;
+    }, ARTIST_TREE_LONG_PRESS_CLICK_GUARD_MS);
+    showAlbumCardContextMenu(gesture.x, gesture.y, currentAlbum);
+  }, ARTIST_TREE_LONG_PRESS_DELAY_MS);
+  return true;
+}
+
+function updateAlbumCardLongPress(event) {
+  const gesture = albumCardLongPressGesture;
+  if (!gesture || gesture.pointerId !== event.pointerId || gesture.opened) return;
+  const deltaX = Number(event.clientX || 0) - gesture.x;
+  const deltaY = Number(event.clientY || 0) - gesture.y;
+  if (Math.hypot(deltaX, deltaY) > ARTIST_TREE_LONG_PRESS_MOVE_TOLERANCE_PX) {
+    clearAlbumCardLongPressGesture();
+  }
+}
+
+function finishAlbumCardLongPress(event) {
+  const gesture = albumCardLongPressGesture;
+  if (!gesture || gesture.pointerId !== event.pointerId) return false;
+  const opened = gesture.opened;
+  clearAlbumCardLongPressGesture();
+  if (opened) event.preventDefault?.();
+  return opened;
+}
+
+function consumeAlbumCardLongPressClick(event) {
+  const guard = albumCardLongPressClickGuard;
+  if (!guard) return false;
+  if (getAlbumCardLongPressTarget(event.target)?.key !== guard.key) return false;
+  if (guard.timeoutId) clearBrowserTimeout(guard.timeoutId);
+  albumCardLongPressClickGuard = null;
+  event.preventDefault?.();
+  event.stopPropagation?.();
+  return true;
+}
+
 function handleGalleryBootstrapPointerDown(event) {
   if (event.target?.closest?.('#albums-scroll')) cancelRootGalleryArtistAlignment();
   beginArtistTreeLongPress(event);
+  beginAlbumCardLongPress(event);
   const lightboxImage = event.target.closest('#image-lightbox-image');
   if (!lightboxImage || state.lightbox.zoom <= 1) return;
   event.preventDefault();
@@ -878,6 +960,7 @@ function handleGalleryBootstrapPointerDown(event) {
 
 function handleGalleryBootstrapPointerMove(event) {
   updateArtistTreeLongPress(event);
+  updateAlbumCardLongPress(event);
   updateLightboxDrag(event);
   if (String(event?.pointerType || '').toLowerCase() !== 'mouse') return;
   const albumCard = event.target?.closest?.('.album-card');
@@ -893,11 +976,13 @@ function handleGalleryBootstrapPointerMove(event) {
 
 function handleGalleryBootstrapPointerUp(event) {
   finishArtistTreeLongPress(event);
+  finishAlbumCardLongPress(event);
   stopLightboxDrag();
 }
 
 function handleGalleryBootstrapPointerCancel() {
   clearArtistTreeLongPressGesture();
+  clearAlbumCardLongPressGesture();
   stopLightboxDrag();
 }
 

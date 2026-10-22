@@ -442,6 +442,55 @@ test('touch long press opens the artist tree context menu and consumes the synth
   assert.equal(clickStopped, true);
 });
 
+test('touch long press opens the album card context menu and consumes the synthetic click', () => {
+  const { context, calls } = createContext();
+  const album = { key: 'broadcast::tender-buttons' };
+  const opened = [];
+  const trigger = {
+    getAttribute(name) {
+      return name === 'data-album-key' ? album.key : null;
+    },
+  };
+  const card = { querySelector: () => trigger };
+  const target = {
+    closest(selector) {
+      return selector === '.album-card' ? card : null;
+    },
+  };
+  context.getIndexedAlbum = key => (key === album.key ? album : null);
+  context.showAlbumCardContextMenu = (...args) => opened.push(args);
+
+  context.handleGalleryBootstrapPointerDown({
+    pointerType: 'touch',
+    isPrimary: true,
+    pointerId: 8,
+    clientX: 21,
+    clientY: 63,
+    target,
+  });
+  const longPressTimer = calls.scheduledSearchCommits.find(({ delay }) => delay === 500);
+  assert.ok(longPressTimer);
+  longPressTimer.callback();
+  assert.deepEqual(opened, [[21, 63, album]]);
+
+  let pointerUpPrevented = false;
+  context.handleGalleryBootstrapPointerUp({
+    pointerId: 8,
+    preventDefault() { pointerUpPrevented = true; },
+  });
+  assert.equal(pointerUpPrevented, true);
+
+  let clickPrevented = false;
+  let clickStopped = false;
+  assert.equal(context.consumeAlbumCardLongPressClick({
+    target,
+    preventDefault() { clickPrevented = true; },
+    stopPropagation() { clickStopped = true; },
+  }), true);
+  assert.equal(clickPrevented, true);
+  assert.equal(clickStopped, true);
+});
+
 test('scroll movement cancels an artist tree long press before the menu opens', () => {
   const { context, calls } = createContext();
   const opened = [];

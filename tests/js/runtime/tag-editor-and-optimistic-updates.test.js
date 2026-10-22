@@ -2590,6 +2590,7 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   const persistedEntries = [];
   const mutationClaim = { id: 'failed-tag-edit-claim' };
   const releasedClaims = [];
+  const restoredDrafts = [];
   const logEntry = {
     id: 'tag-edit-failure-42',
     action: 'Tag edit failed',
@@ -2616,6 +2617,7 @@ test('manual tag edit does not restore its previous snapshot after navigation du
     showRepairAlert(...args) { alerts.push(args); },
     claimTagEditViewMutation() { return mutationClaim; },
     releaseFailedTagEditViewMutation(claim) { releasedClaims.push(claim); },
+    restoreTagEditorDraftAfterFailedSave(draft) { restoredDrafts.push(draft); },
     async prependUtilityLogHistoryEntry(entry) { persistedEntries.push(entry); },
     async fetch() {
       return {
@@ -2642,7 +2644,7 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   assert.strictEqual(context.state.view, navigatedView);
   assert.deepEqual(persistedEntries, [logEntry]);
   assert.equal(persistedEntries[0].error, logEntry.error);
-  assert.equal(alerts.at(-1)[0], 'Failed to edit tags.');
+  assert.equal(alerts.at(-1)[0], logEntry.error);
   assert.equal(alerts.at(-1)[1], 'error');
   assert.equal(alerts.at(-1)[2], null);
   assert.equal(alerts.at(-1)[3].logHistoryEntryId, logEntry.id);
@@ -2652,7 +2654,84 @@ test('manual tag edit does not restore its previous snapshot after navigation du
     [mutationClaim],
     'a failed POST must release its optimistic mutation claim even after navigation',
   );
-  assert.doesNotMatch(alerts.at(-1)[0], /Immediate tag write failed/);
+  assert.deepEqual(restoredDrafts, [], 'navigation must not reopen a stale editor draft');
+});
+
+test('manual tag edit preserves the editor draft for retry after a failed POST', async () => {
+  const trackPath = 'C:\\Music\\Axxis\\Black Edition\\01 - Kingdom.mp3';
+  const album = {
+    key: 'axxis::kingdom::black',
+    name: 'Kingdom of the Night II (Black Edition)',
+    album_artist: 'Axxis',
+    tracks: [{ path: trackPath, album: 'Kingdom of the Night II (Black Edition)' }],
+  };
+  const values = {
+    [trackPath]: {
+      album: 'Kingdom of the Night II',
+      edition: 'Black Edition',
+    },
+  };
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { album: values[trackPath].album, edition: values[trackPath].edition } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    scheduleBrowserAnimationFrame() {},
+    async fetch() {
+      return {
+        ok: false,
+        async json() {
+          return { ok: false, error: 'Source changed during the tag edit. Retry with the preserved values.' };
+        },
+      };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values };
+  const originalDraft = context.state.tagEditor;
+
+  await context.confirmManualTagEdit();
+
+  assert.strictEqual(context.state.tagEditor, originalDraft);
+  assert.strictEqual(context.state.tagEditor.values, values);
+  assert.equal(closedModal.hidden, false);
+  assert.equal(
+    alerts.at(-1)[0],
+    'Source changed during the tag edit. Retry with the preserved values.',
+  );
+});
+
+test('failed tag save does not replace a newer tag editor session', () => {
+  const originalDraft = { album: { key: 'original' }, sessionMutationClaim: null };
+  const newerDraft = { album: { key: 'newer' }, sessionMutationClaim: null };
+  const overlay = { hidden: true, setAttribute() {} };
+  const context = loadHelper([], {
+    document: {
+      body: { classList: { add() {} } },
+    },
+    getTagEditorElements() { return { overlay }; },
+    claimTagEditViewMutation() { return { id: 'stale-claim' }; },
+    scheduleBrowserAnimationFrame() {},
+  });
+  context.state.tagEditor = newerDraft;
+
+  context.restoreTagEditorDraftAfterFailedSave(originalDraft);
+
+  assert.strictEqual(context.state.tagEditor, newerDraft);
+  assert.equal(overlay.hidden, true);
 });
 
 test('repair POST does not apply origin albums after navigation and passes its revision to the save task', async () => {

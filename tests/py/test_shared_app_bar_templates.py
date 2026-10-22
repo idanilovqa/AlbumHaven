@@ -186,7 +186,7 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
         "studio", "ep", "live", "demo", "compilation", "single",
     ]
     selected = [choice.attrs["data-gallery-album-type"] for choice in choices if choice.attrs.get("aria-pressed") == "true"]
-    assert selected == ["studio", "ep"]
+    assert selected == ["studio", "ep", "compilation"]
     choices_by_type = {choice.attrs["data-gallery-album-type"]: choice for choice in choices}
     for release_type in ("studio", "ep", "live", "demo", "compilation", "single"):
         assert "disabled" in choices_by_type[release_type].attrs

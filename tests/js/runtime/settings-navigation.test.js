@@ -25,13 +25,21 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
     focus() {}, cloneNode() { return this; },
   });
   const users = attributes({ href: '/admin/members', 'data-settings-section': 'users', 'data-navigation-tree-key': 'users', 'data-navigation-tree-item': 'settings' });
+  const server = attributes({ href: '/admin/server', 'data-settings-section': 'server', 'data-navigation-tree-key': 'server', 'data-navigation-tree-item': 'settings' });
   const account = attributes({ href: '/account', 'data-settings-section': 'account', 'data-navigation-tree-key': 'account', 'data-navigation-tree-item': 'settings' });
   users.dataset.settingsSection = 'users';
+  server.dataset.settingsSection = 'server';
   account.dataset.settingsSection = 'account';
   const nav = attributes();
-  nav.querySelectorAll = () => [users, account];
+  nav.querySelectorAll = () => [users, server, account];
   const outlet = attributes();
   outlet.innerHTML = 'initial';
+  outlet.querySelector = selector => (
+    selector === '[data-admin-server]'
+    && outlet.childNodes.some(node => node.textContent === 'Server settings content')
+      ? outlet.childNodes[0]
+      : null
+  );
   const host = attributes();
   host.hidden = library;
   host.querySelector = (selector) => selector === '[data-settings-nav]' ? nav : selector === '[data-settings-outlet]' ? outlet : null;
@@ -58,6 +66,7 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
   const historyEntries = [{ url: location.href, state: { galleryMarker: 'initial' } }];
   let historyIndex = 0;
   const galleryPops = [];
+  let serverMounts = 0;
   const window = {
     document, location, URL, AbortController,
     history: {
@@ -90,6 +99,7 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
     },
     addEventListener(name, fn) { listeners.set(`window:${name}`, fn); },
     removeEventListener() {}, scrollTo() {},
+    AlbumHavenMountAdminServer() { serverMounts += 1; return () => {}; },
   };
   const responses = [];
   const requests = [];
@@ -122,7 +132,7 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/browser-navigation-helpers.js'), 'utf8'), context);
   historyCalls.length = 0;
   const respond = (html, url = 'http://localhost:5000/account', status = 200) => responses.push({ ok: status >= 200 && status < 300, status, url, redirected: false, headers: { get: () => 'text/html' }, text: async () => html });
-  return { navigation, respond, responses, requests, historyCalls, historyEntries, galleryPops, window, get historyIndex() { return historyIndex; }, pushLibraryView: context.pushBrowserViewState, nav, outlet, host, shell, users, account, listeners, location, document };
+  return { navigation, respond, responses, requests, historyCalls, historyEntries, galleryPops, window, get historyIndex() { return historyIndex; }, pushLibraryView: context.pushBrowserViewState, nav, outlet, host, shell, users, server, account, listeners, location, document, serverMounts: () => serverMounts };
 }
 
 const settleNavigation = () => new Promise(resolve => setImmediate(resolve));
@@ -141,6 +151,15 @@ test('content navigation preserves the shared sidebar and updates history only a
   assert.equal(app.document.title, 'My account content');
   assert.equal(app.account.getAttribute('aria-current'), 'page');
   assert.equal(app.users.getAttribute('aria-current'), null);
+});
+
+test('server settings stays in the shared shell and mounts its controller', async () => {
+  const app = harness({ initialPath: '/account' });
+  app.respond('Server settings content', 'http://localhost:5000/admin/server');
+
+  assert.equal(await app.navigation.navigate('/admin/server'), true);
+  assert.equal(app.server.getAttribute('aria-current'), 'page');
+  assert.equal(app.serverMounts(), 1);
 });
 
 test('external, logout, API and unrelated routes are not fetched as settings content', async () => {

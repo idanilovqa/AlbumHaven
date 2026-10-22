@@ -270,6 +270,7 @@ def _request_location_sql() -> str:
             updated_at = now()
         where storage_key = 1
           and revision = %(expected_revision)s
+          and requested_mode is null
           and operation_state not in ('queued', 'running', 'cancel_requested')
           and operation_state <> 'canceled'
         returning *;
@@ -479,11 +480,16 @@ def _cancel_sql() -> str:
 def _retry_failed_sql() -> str:
     return """
         with retried as (
-          update app.generated_preview_relocation_items
+          update app.generated_preview_relocation_items item
           set status = 'pending', actual_bytes = null, actual_sha256 = null,
               last_error = null, started_at = null, finished_at = null
-          where operation_id = %(operation_id)s::uuid and status = 'failed'
-          returning id
+          from app.generated_preview_storage storage
+          where item.operation_id = %(operation_id)s::uuid
+            and item.status in ('failed', 'skipped')
+            and storage.storage_key = 1
+            and storage.operation_id = item.operation_id
+            and storage.operation_state in ('completed_with_failures', 'failed', 'canceled')
+          returning item.id
         )
         update app.generated_preview_storage storage
         set operation_state = 'queued', failed_count = 0,
@@ -491,6 +497,10 @@ def _retry_failed_sql() -> str:
             updated_at = now()
         where storage.storage_key = 1
           and storage.operation_id = %(operation_id)s::uuid
-          and exists (select 1 from retried)
+          and storage.operation_state in ('completed_with_failures', 'failed', 'canceled')
+          and (
+            exists (select 1 from retried)
+            or storage.operation_state = 'canceled'
+          )
         returning storage.*;
     """

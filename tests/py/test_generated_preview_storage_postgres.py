@@ -106,6 +106,7 @@ def test_request_location_is_revision_guarded_and_records_requested_target():
     sql, params = connection.calls[0]
     assert "revision = revision + 1" in sql
     assert "revision = %(expected_revision)s" in sql
+    assert "requested_mode is null" in sql
     assert "operation_state <> 'canceled'" in sql
     assert params == {
         "requested_mode": "custom",
@@ -271,7 +272,33 @@ def test_cancel_and_retry_are_idempotent_state_transitions():
     assert canceled["cancel_requested"] is True
     assert retried["operation_state"] == "queued"
     assert "in ('queued', 'running', 'cancel_requested')" in cancel_connection.calls[0][0]
-    assert "status = 'failed'" in retry_connection.calls[0][0]
+    assert "item.status in ('failed', 'skipped')" in retry_connection.calls[0][0]
+
+
+def test_retry_resumes_canceled_items_before_another_destination_can_replace_them():
+    operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
+    connection = FakeConnection(
+        [FakeCursor(row=storage_row(operation_id=operation_id, operation_state="queued"))]
+    )
+
+    state = repository_for(connection).retry_failed(operation_id)
+
+    sql, _params = connection.calls[0]
+    assert "item.status in ('failed', 'skipped')" in sql
+    assert "operation_state in ('completed_with_failures', 'failed', 'canceled')" in sql
+    assert state["operation_state"] == "queued"
+
+
+def test_retry_can_finalize_canceled_operation_after_last_item_completed():
+    operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
+    connection = FakeConnection(
+        [FakeCursor(row=storage_row(operation_id=operation_id, operation_state="queued"))]
+    )
+
+    repository_for(connection).retry_failed(operation_id)
+
+    sql, _params = connection.calls[0]
+    assert "or storage.operation_state = 'canceled'" in sql
 
 
 def test_non_owner_serialization_never_exposes_server_paths():

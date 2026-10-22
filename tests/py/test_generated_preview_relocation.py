@@ -168,3 +168,33 @@ def test_cancellation_stops_at_file_boundary_without_claiming(tmp_path):
     assert repository.completed == []
     assert source.read_bytes() == content
     assert not target.exists()
+
+
+def test_worker_recovers_requested_location_left_before_operation_start():
+    class InterruptedRequestRepository(FakeRepository):
+        def __init__(self):
+            super().__init__([], operation_state="idle")
+            self.operation_id = None
+            self.started = []
+
+        def load(self):
+            return {
+                "operation_id": self.operation_id,
+                "operation_state": self.operation_state,
+                "requested_mode": "custom",
+                "requested_root": "C:/previews",
+                "cancel_requested": False,
+            }
+
+        def begin_operation(self, *, operation_id):
+            self.started.append(operation_id)
+            self.operation_id = operation_id
+            self.operation_state = "queued"
+            return self.load()
+
+    repository = InterruptedRequestRepository()
+
+    run_worker(repository)
+
+    assert len(repository.started) == 1
+    assert repository.finished == [repository.operation_id]

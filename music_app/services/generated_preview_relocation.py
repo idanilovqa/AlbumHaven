@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import threading
 from typing import Mapping
+from uuid import uuid4
 
 
 class GeneratedPreviewRelocationWorker:
@@ -68,6 +69,16 @@ class GeneratedPreviewRelocationWorker:
             self._on_state(state)
         operation_id = str(state.get("operation_id") or "").strip()
         operation_state = str(state.get("operation_state") or "idle")
+        if (
+            not operation_id
+            and state.get("requested_mode")
+            and operation_state == "idle"
+        ):
+            state = self._repository.begin_operation(operation_id=str(uuid4()))
+            if self._on_state is not None:
+                self._on_state(state)
+            operation_id = str(state.get("operation_id") or "").strip()
+            operation_state = str(state.get("operation_state") or "idle")
         if not operation_id or operation_state not in {
             "queued",
             "running",

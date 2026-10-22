@@ -135,3 +135,59 @@ test(
     });
   },
 );
+
+test(
+  'FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan',
+  { tag: ['@area:library-roots', '@area:album-details'] },
+  async ({
+    galleryActions,
+    libraryFilesystemWatcherActions,
+    stepLogger,
+    trackModalActions,
+  }) => {
+    test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+    test.setTimeout(180000);
+
+    const status = await libraryFilesystemWatcherActions.readStatus();
+    expect(status.scan_in_progress).toBe(false);
+
+    await stepLogger.step('Remove explicit editions and wait for watcher publication', async () => {
+      await clearTrackSubtitleProjectionEditions(ownedFixture);
+      const committed = await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+      expect(committed.scan_in_progress).toBe(false);
+      expect(committed.scan_generation).toBe(status.scan_generation);
+    });
+
+    for (const album of ownedFixture.albums) {
+      await stepLogger.step(`Project ${album.artist} / ${album.album} as one release`, async () => {
+        const identity = {
+          artist: album.artist,
+          album: album.album,
+          year: album.year,
+        };
+        await expect.poll(async () => {
+          const persisted = await queryPersistedAlbumIdentity(identity);
+          return persisted.track_counts;
+        }, { timeout: 60000, intervals: [250, 500, 1000] }).toEqual([album.tracks.length]);
+
+        await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(album.artist)}`);
+        await galleryActions.waitForGalleryReady();
+        expect(await galleryActions.readAlbumIdentityCardCount(identity)).toBe(1);
+        await galleryActions.selectAlbumDetailsByIdentity(identity);
+        expect((await trackModalActions.waitForInteractiveSummary()).trackRows)
+          .toBe(album.tracks.length);
+        expect(await trackModalActions.readReleaseTabLabels()).toEqual([]);
+        expect(await trackModalActions.readTrackTitles()).toEqual(
+          album.tracks.map((track) => track.title),
+        );
+        await trackModalActions.close();
+      });
+    }
+
+    const finalStatus = await libraryFilesystemWatcherActions.readStatus();
+    expect(finalStatus.scan_in_progress).toBe(false);
+    expect(finalStatus.scan_generation).toBe(status.scan_generation);
+  },
+);

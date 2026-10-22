@@ -20,7 +20,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 57],
   ['cover-providers', 28],
   ['metadata-mutations', 14],
-  ['playback-utilities', 47],
+  ['playback-utilities', 48],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 146-case assignment', () => {
+test('functional shard contract pins the approved four-way 147-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 146-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 146);
+  assert.equal(total, 147);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -865,7 +865,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     (invocation) => invocation.config === 'playwright.config.js'
       && invocation.baselineMode === 'owned-mutation',
   );
-  assert.equal(waves[3].invocations.length, 6);
+  assert.equal(waves[3].invocations.length, 7);
   const globalMutation = waves[3].invocations.find(
     (invocation) => invocation.baselineMode === 'global-mutation',
   );
@@ -883,6 +883,13 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     'FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On',
     'FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan',
     'FTC-COVERS-034 watcher prefers front-named local art over a larger booklet image',
+  ]);
+  const subtitleWatcher = waves[3].invocations.find((invocation) => (
+    invocation.baselineMode === 'isolated-app-process'
+      && invocation.cases.some(({ case: name }) => name.startsWith('FTC-LIBROOTS-020 '))
+  ));
+  assert.deepEqual(subtitleWatcher.cases.map(({ case: name }) => name), [
+    'FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan',
   ]);
   const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 5 } : row);
   assert.throws(() => validator.executionWavesForShard(shard, overflow), /executionWave 1 through 4/);
@@ -946,7 +953,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
     ['gallery-search-visual', { cases: 57, waves: [1, 2] }],
     ['cover-providers', { cases: 28, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 47, waves: [1, 2, 3, 4] }],
+    ['playback-utilities', { cases: 48, waves: [1, 2, 3, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

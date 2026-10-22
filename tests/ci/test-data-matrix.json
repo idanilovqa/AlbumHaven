@@ -154,6 +154,35 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
+    "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "watcher:track-subtitle-edition-reconciliation"
+    ],
+    "filesystemScenarios": [
+      "media-copy:track-subtitle-edition-boundary"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "track-subtitles-remain-track-metadata",
+      "single-release-gallery-and-album-details"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-track-subtitle-edition-reconciliation",
+      "filesystemCopy": "media/cases/watcher-track-subtitle-edition-boundary"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
     "case": "FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and advances beyond the first full-page boundary",
     "profile": "functional-core",

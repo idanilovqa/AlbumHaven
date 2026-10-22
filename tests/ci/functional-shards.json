@@ -1047,6 +1047,16 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
+              "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
+              "area": "library-roots",
+              "relatedAreas": [
+                "album-details"
+              ]
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
               "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
               "area": "album-details"

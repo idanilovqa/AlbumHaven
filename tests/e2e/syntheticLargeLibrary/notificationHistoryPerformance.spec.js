@@ -36,33 +36,38 @@ const MAX_INTERACTION_LONG_TASK_MS = 200;
 const MAX_RETAINED_HEAP_GROWTH_BYTES = 32 * 1024 * 1024;
 const MAX_RETAINED_DOM_NODE_GROWTH = 1_500;
 
-async function readNotificationState(page) {
+async function readNotificationState(coverLookup) {
   // parity-check: allow-read-only-measurement-evaluate -- inspect production notification state and mounted window
-  return page.evaluate(() => {
-    const body = document.querySelector('#cover-lookup-drawer-body');
+  return coverLookup.page.evaluate((selectors) => {
+    const body = document.querySelector(selectors.drawerBody);
     const tasks = Array.isArray(state.coverLookup?.tasks) ? state.coverLookup.tasks : [];
     return {
       loadedTasks: tasks.length,
-      mountedCards: body?.querySelectorAll('.cover-lookup-task-card').length || 0,
+      mountedCards: body?.querySelectorAll(selectors.taskCard).length || 0,
       nextCursor: state.coverLookup?.tasksNextCursor ?? null,
       scrollHeight: body?.scrollHeight || 0,
       scrollTop: body?.scrollTop || 0,
       clientHeight: body?.clientHeight || 0,
-      spacerCount: body?.querySelectorAll('.cover-lookup-task-spacer').length || 0,
+      spacerCount: body?.querySelectorAll(selectors.taskSpacer).length || 0,
       totalCount: Number(state.coverLookup?.notificationCounts?.total_count || 0),
-      visibleTitles: [...(body?.querySelectorAll('.cover-lookup-task-title') || [])]
+      visibleTitles: [...(body?.querySelectorAll(selectors.taskTitle) || [])]
         .map(element => element.textContent?.trim() || ''),
     };
+  }, {
+    drawerBody: coverLookup.drawerBodySelector,
+    taskCard: coverLookup.taskCardWithinDrawerSelector,
+    taskSpacer: coverLookup.taskSpacerWithinDrawerSelector,
+    taskTitle: coverLookup.taskTitleWithinCardSelector,
   });
 }
 
-async function sampleRenderer(page, cdp, phase) {
+async function sampleRenderer(coverLookup, cdp, phase) {
   await cdp.send('HeapProfiler.enable');
   await cdp.send('HeapProfiler.collectGarbage');
   const [heap, dom, notification] = await Promise.all([
     cdp.send('Runtime.getHeapUsage'),
     cdp.send('Memory.getDOMCounters'),
-    readNotificationState(page),
+    readNotificationState(coverLookup),
   ]);
   return { phase, heap, dom, notification };
 }
@@ -71,7 +76,7 @@ async function scrollDrawer(page, deltaY) {
   await page.mouse.wheel(0, deltaY);
 }
 
-async function scrollDrawerToNextPage(page, notification) {
+async function scrollDrawerToNextPage(page, coverLookup, notification) {
   const remaining = Math.max(
     0,
     notification.scrollHeight - notification.scrollTop - notification.clientHeight,
@@ -83,10 +88,10 @@ async function scrollDrawerToNextPage(page, notification) {
   }
 }
 
-async function scrollDrawerToBoundary(page, direction) {
+async function scrollDrawerToBoundary(page, coverLookup, direction) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const current = await readNotificationState(page);
+    const current = await readNotificationState(coverLookup);
     const atBoundary = direction < 0
       ? current.scrollTop <= 2
       : current.scrollTop + current.clientHeight >= current.scrollHeight - 2;
@@ -127,7 +132,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
         );
       });
 
-      samples.push(await sampleRenderer(page, cdp, 'baseline'));
+      samples.push(await sampleRenderer(coverLookupActions.coverLookup, cdp, 'baseline'));
       const drawerOpen = await stepLogger.step('Open the first 50-row history page', async () => (
         measureInteractionToPaint(
           page,
@@ -135,7 +140,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
           async () => {
             await coverLookupActions.coverLookup.waitForDrawerState(true);
             await expect.poll(
-              async () => (await readNotificationState(page)).loadedTasks,
+              async () => (await readNotificationState(coverLookupActions.coverLookup)).loadedTasks,
               { timeout: DRAWER_BUDGET.hardCeiling },
             ).toBeGreaterThan(0);
           },
@@ -146,7 +151,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
 
       const drawerBody = coverLookupActions.coverLookup.drawerBody;
       await drawerBody.hover();
-      let notification = await readNotificationState(page);
+      let notification = await readNotificationState(coverLookupActions.coverLookup);
       expect(notification.loadedTasks).toBe(50);
       expect(notification.mountedCards).toBeLessThanOrEqual(MAX_MOUNTED_NOTIFICATION_CARDS);
 
@@ -161,17 +166,17 @@ test.describe(`${CASE_ID} large notification history`, () => {
               && url.searchParams.has('cursor');
           }, { timeout: PAGE_BUDGET.hardCeiling });
           const startedAt = performance.now();
-          await scrollDrawerToNextPage(page, notification);
+          await scrollDrawerToNextPage(page, coverLookupActions.coverLookup, notification);
           await responsePromise;
           await expect.poll(
-            async () => (await readNotificationState(page)).loadedTasks,
+            async () => (await readNotificationState(coverLookupActions.coverLookup)).loadedTasks,
             { timeout: PAGE_BUDGET.hardCeiling },
           ).toBeGreaterThan(previousCount);
           const durationMs = performance.now() - startedAt;
           paginationTimings.push(durationMs);
           expectTimingBudget(expect, durationMs, PAGE_BUDGET);
 
-          notification = await readNotificationState(page);
+          notification = await readNotificationState(coverLookupActions.coverLookup);
           expect(notification.mountedCards).toBeLessThanOrEqual(MAX_MOUNTED_NOTIFICATION_CARDS);
           expect(notification.spacerCount).toBe(2);
         }
@@ -180,26 +185,26 @@ test.describe(`${CASE_ID} large notification history`, () => {
       expect(notification.loadedTasks).toBe(NOTIFICATION_HISTORY_SIZE);
       expect(notification.totalCount).toBe(NOTIFICATION_HISTORY_SIZE);
       expect(notification.visibleTitles).toContain('Notification Album 0528');
-      samples.push(await sampleRenderer(page, cdp, 'history-loaded'));
+      samples.push(await sampleRenderer(coverLookupActions.coverLookup, cdp, 'history-loaded'));
 
       const historyScroll = await stepLogger.step(
         'Exercise repeated long-scroll window replacement',
         async () => measureInteractionToPaint(page, async () => {
           for (let cycle = 0; cycle < 3; cycle += 1) {
-            notification = await scrollDrawerToBoundary(page, -1);
+          notification = await scrollDrawerToBoundary(page, coverLookupActions.coverLookup, -1);
             expect(notification.mountedCards).toBeLessThanOrEqual(MAX_MOUNTED_NOTIFICATION_CARDS);
 
-            notification = await scrollDrawerToBoundary(page, 1);
+          notification = await scrollDrawerToBoundary(page, coverLookupActions.coverLookup, 1);
             expect(notification.mountedCards).toBeLessThanOrEqual(MAX_MOUNTED_NOTIFICATION_CARDS);
           }
         }),
       );
       expect(historyScroll.maxLongTaskMs).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
-      samples.push(await sampleRenderer(page, cdp, 'long-scroll-complete'));
+      samples.push(await sampleRenderer(coverLookupActions.coverLookup, cdp, 'long-scroll-complete'));
 
       await coverLookupActions.coverLookup.drawerCloseButton.click();
       await coverLookupActions.coverLookup.waitForDrawerState(false);
-      samples.push(await sampleRenderer(page, cdp, 'drawer-closed'));
+      samples.push(await sampleRenderer(coverLookupActions.coverLookup, cdp, 'drawer-closed'));
 
       const baseline = samples[0];
       const closed = samples.at(-1);

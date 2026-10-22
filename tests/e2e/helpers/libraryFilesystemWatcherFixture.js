@@ -124,13 +124,13 @@ export async function materializeTaggedTrack({
   retagTrack = retag,
 }) {
   const stagedPath = `${destination}.pending`;
-  fs.rmSync(stagedPath, { force: true });
+  if (fs.existsSync(stagedPath)) fs.rmSync(stagedPath);
   try {
     fs.copyFileSync(source, stagedPath);
     await retagTrack(stagedPath, metadata);
     fs.renameSync(stagedPath, destination);
   } catch (error) {
-    fs.rmSync(stagedPath, { force: true });
+    if (fs.existsSync(stagedPath)) fs.rmSync(stagedPath);
     throw error;
   }
 }
@@ -144,7 +144,7 @@ export async function materializeTaggedAlbum({ stagingParent, destination, build
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.renameSync(stagedAlbum, destination);
   } finally {
-    fs.rmSync(stagingRoot, { recursive: true, force: true });
+    if (fs.existsSync(stagingRoot)) fs.rmSync(stagingRoot, { recursive: true });
   }
 }
 
@@ -223,7 +223,7 @@ async function buildWatchedAlbumFixture({
         },
       });
     } finally {
-      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      if (fs.existsSync(sourceRoot)) fs.rmSync(sourceRoot, { recursive: true });
     }
     return { album: albumName, year: albumYear, albumDirectory: directory, tracks: createdTracks };
   };

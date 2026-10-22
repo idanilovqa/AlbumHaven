@@ -673,6 +673,7 @@ export class CoverLookupActions {
       image,
       `Expected remote cover candidate ${expectedCandidateId} image to be visible.`,
     ).toBeVisible({ timeout: options.timeout || 30000 });
+    // parity-check: allow-read-only-measurement-evaluate -- wait for the rendered candidate image to decode
     return image.evaluate(waitForDisplayedImageDecode);
   }
 

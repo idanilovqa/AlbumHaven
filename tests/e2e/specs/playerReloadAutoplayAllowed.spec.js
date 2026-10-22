@@ -94,6 +94,7 @@ test(`${CASE_ID} allowed Chrome policy automatically continues playback after re
     expect(Math.abs(restoredTiming.currentTime - pausedOffset)).toBeLessThan(1);
 
     const explicitPlayMark = await playbackEvidence.playbackMark();
+    // parity-check: allow-read-only-measurement-evaluate -- use the browser monotonic clock for playback latency
     const explicitPlayStartedAtMs = await page.evaluate(() => performance.now());
     await globalPlayerActions.resumeIfPaused();
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({

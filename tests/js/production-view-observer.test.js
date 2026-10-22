@@ -517,7 +517,7 @@ test('topology authority separates append activity, replacement, and canonical s
   await deliver('http://localhost/view-data?surface=albums&payload_tier=sidebar', { artist_groups: [] });
   assert.ok(observer.read().topologyRevision > saved.topologyRevision);
   assert.equal(observer.read().latestFullPayload, null, 'A replacement cannot retain pre-save full authority');
-  assert.equal(observer.read().allowBootstrapFallback, false);
+ assert.equal(observer.read().bootstrapPresenceEligible, false);
   const replaced = observer.read().topologyRevision;
   page.emit('documentcommitted');
   assert.ok(observer.read().topologyRevision > replaced);
@@ -557,7 +557,7 @@ for (const required of [false, true]) {
     const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
     const events = new FakePage();
     const observer = new ProductionViewObserver(events, events);
-    assert.equal(observer.read().allowBootstrapFallback, false, 'uncommitted documents have no authority');
+ assert.equal(observer.read().bootstrapPresenceEligible, false, 'uncommitted documents have no authority');
     events.emit('documentcommitted');
     const gallery = Object.create(GalleryPage.prototype);
     gallery.productionViewObserver = observer;
@@ -693,13 +693,13 @@ for (const endpoint of ['/view-data', '/view-data?payload_tier=sidebar', '/home-
     const page = new FakePage();
     const observer = new ProductionViewObserver(page, page);
     page.emit('documentcommitted');
-    assert.equal(observer.read().allowBootstrapFallback, true);
+ assert.equal(observer.read().bootstrapPresenceEligible, true);
     const current = request(`http://localhost${endpoint}`);
     page.emit('request', current);
-    assert.equal(observer.read().allowBootstrapFallback, false);
+ assert.equal(observer.read().bootstrapPresenceEligible, false);
     assert.equal(observer.read().activeRequestCount, 1);
     page.emit('requestfinished', current);
-    assert.equal(observer.read().allowBootstrapFallback, false, 'request completion cannot revive inline state');
+ assert.equal(observer.read().bootstrapPresenceEligible, false, 'request completion cannot revive inline state');
   });
 }
 
@@ -715,7 +715,7 @@ test('late outgoing payload reads cannot become current bootstrap document autho
   resolveBody({ payload_tier: 'full', query: 'Outgoing', artist_groups: [{ artist: 'Outgoing', albums: [] }] });
   page.emit('requestfinished', outgoing);
   await flushPromises();
-  assert.equal(observer.read().allowBootstrapFallback, true);
+ assert.equal(observer.read().bootstrapPresenceEligible, true);
   assert.equal(observer.read().latestFullPayload, null);
   assert.deepEqual(observer.read().observedGalleryGroups, []);
   assert.equal(observer.read().latestFullPayloadError, null);
@@ -739,7 +739,7 @@ for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
       page.emit('requestfinished', current);
     }
     await flushPromises();
-    assert.equal(observer.read().allowBootstrapFallback, false);
+ assert.equal(observer.read().bootstrapPresenceEligible, false);
     assert.equal(observer.read().latestFullPayload, null);
     assert.match(observer.read().latestFullPayloadError, failure === 'requestfailed' ? /Request failed/ : new RegExp(failure));
   });

@@ -227,10 +227,12 @@ export class GalleryRegressions {
     return this.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve())));
   }
   async waitForNativeScrollSettled({ stableFrames = 2, maximumFrames = 60 } = {}) {
+    // parity-check: allow-read-only-measurement-evaluate -- read native scroll position until it stabilizes
     let previous = await this.galleryScroll.evaluate(scroll => Number(scroll.scrollTop || 0));
     let stable = 0;
     for (let frame = 0; frame < maximumFrames; frame += 1) {
       await this.waitForAnimationFrame();
+      // parity-check: allow-read-only-measurement-evaluate -- read native scroll position until it stabilizes
       const current = await this.galleryScroll.evaluate(scroll => Number(scroll.scrollTop || 0));
       if (current === previous) {
         stable += 1;

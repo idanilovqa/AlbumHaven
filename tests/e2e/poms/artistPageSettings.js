@@ -113,6 +113,10 @@ export class ArtistPageSettings extends BasePage {
       .filter({ has: this.page.getByText(title, { exact: true }) });
   }
 
+  nonAlbumSectionSummaryByTitle(title) {
+    return this.nonAlbumSectionByTitle(title).locator('summary');
+  }
+
   nonAlbumTrackCellByTitle(trackTitle) {
     return this.nonAlbumTrackRowByTitle(trackTitle).locator('[data-cdt-column="title"]');
   }

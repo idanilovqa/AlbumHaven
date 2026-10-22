@@ -19,6 +19,76 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     this.statusPageBar = page.locator('#library-status-gallery-bar');
     this.statusBack = this.statusPageBar.getByRole('button', { name: 'Back to previous library view' });
   }
+
+  galleryCardByKey(albumKey) {
+    return this.galleryCards.filter({
+      has: this.page.locator(
+        `[data-open-tracklist="1"][data-album-key=${JSON.stringify(String(albumKey))}]`,
+      ),
+    }).first();
+  }
+
+  async readVisibleGalleryAnchor() {
+    // parity-check: allow-read-only-measurement-evaluate -- identify the first visible production album card
+    return this.galleryScroll.evaluate((scroll) => {
+      const viewport = scroll.getBoundingClientRect();
+      const cards = [...scroll.getElementsByClassName('album-card')];
+      const card = cards.find(candidate => candidate.getBoundingClientRect().bottom > viewport.top + 8);
+      const trigger = card?.querySelector('[data-open-tracklist="1"][data-album-key]');
+      if (!card || !trigger) throw new Error('No visible album card found after Artist Tree navigation.');
+      return {
+        albumKey: trigger.getAttribute('data-album-key'),
+        offsetTop: card.getBoundingClientRect().top - viewport.top,
+        scrollTop: scroll.scrollTop,
+      };
+    });
+  }
+
+  async readGalleryScrollSample(albumKey) {
+    // parity-check: allow-read-only-measurement-evaluate -- sample native scroll geometry without changing it
+    return this.galleryScroll.evaluate((scroll, key) => {
+      const trigger = [...scroll.querySelectorAll('[data-open-tracklist="1"][data-album-key]')]
+        .find(candidate => candidate.getAttribute('data-album-key') === key);
+      const card = trigger?.closest('.album-card');
+      const viewport = scroll.getBoundingClientRect();
+      return {
+        scrollTop: scroll.scrollTop,
+        cardOffsetTop: card ? card.getBoundingClientRect().top - viewport.top : null,
+        anchorCoordinate: card
+          ? card.getBoundingClientRect().top - viewport.top + scroll.scrollTop
+          : null,
+      };
+    }, albumKey);
+  }
+
+  async observeGalleryStability(albumKey, durationMs) {
+    // parity-check: allow-read-only-measurement-evaluate -- sample restored gallery geometry across animation frames
+    return this.galleryScroll.evaluate(async (scroll, options) => {
+      const samples = [];
+      const startedAt = performance.now();
+      await new Promise(resolve => {
+        const sample = now => {
+          const trigger = [...scroll.querySelectorAll('[data-open-tracklist="1"][data-album-key]')]
+            .find(candidate => candidate.getAttribute('data-album-key') === options.albumKey);
+          const card = trigger?.closest('.album-card');
+          const viewport = scroll.getBoundingClientRect();
+          samples.push({
+            elapsedMs: now - startedAt,
+            scrollTop: scroll.scrollTop,
+            cardOffsetTop: card ? card.getBoundingClientRect().top - viewport.top : null,
+          });
+          if (now - startedAt >= options.durationMs) resolve();
+          else requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+      return samples;
+    }, { albumKey, durationMs });
+  }
+
+  async openAlbumFromGalleryAnchor(albumKey) {
+    await this.galleryCardByKey(albumKey).locator('.album-meta-row').click();
+  }
   async readScroll(region) {
     // parity-check: allow-read-only-measurement-evaluate -- read actual native scroll owners.
     return region.evaluate(node => [node, ...node.querySelectorAll('*')].reduce((total, item) => total + item.scrollTop, 0));

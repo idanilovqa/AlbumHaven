@@ -130,7 +130,7 @@ export function readVisibleGalleryCoverReadiness(selectors) {
     ).trim();
     const coverImage = card.querySelector(selectors.coverImageSelector);
     const placeholder = card.querySelector(selectors.coverPlaceholderSelector)
-      || (selectors.allowEmptyArtwork ? card.querySelector('[data-album-artbox-state="empty"]') : null);
+      || (selectors.allowEmptyArtwork ? card.querySelector(selectors.emptyArtboxSelector) : null);
     const visual = coverImage instanceof HTMLImageElement
       ? coverImage
       : (placeholder instanceof HTMLElement ? placeholder : null);
@@ -396,6 +396,7 @@ export class GalleryActions {
       albumCardSelector: this.galleryPage.albumCard.cardSelector,
       coverImageSelector: this.galleryPage.albumCard.coverImageWithinCardSelector,
       coverPlaceholderSelector: this.galleryPage.albumCard.coverPlaceholderWithinCardSelector,
+      emptyArtboxSelector: this.galleryPage.albumCard.emptyArtboxWithinCardSelector,
       titleSelector: this.galleryPage.albumCard.titleButtonSelector,
       galleryScrollSelector: this.galleryPage.galleryScrollSelector,
       minimumCount,
@@ -405,6 +406,7 @@ export class GalleryActions {
       requireLocalImage,
     };
     try {
+      // parity-check: allow-read-only-measurement-evaluate -- wait for visible decoded cover evidence
       await this.galleryPage.waitForPageCondition(readVisibleGalleryCoverReadiness, {
         timeout: options.timeout || 60000,
       }, selectors);

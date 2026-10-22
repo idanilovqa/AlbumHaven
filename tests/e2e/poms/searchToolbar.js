@@ -787,7 +787,7 @@ export class SearchToolbar extends BasePage {
       }
       const initiallyBusy = initialObservation.activeRequestCount > 0
         || initialObservation.pendingPayloadReadCount > 0;
-      let bootstrapPayload = initialObservation.allowBootstrapFallback !== false
+ let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
         && !initialObservation.latestFullPayload && !initiallyBusy
         ? await this.readProductionBootstrapPayload()
         : null;

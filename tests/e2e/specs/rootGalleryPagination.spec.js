@@ -189,6 +189,7 @@ test('FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and adv
   await galleryActions.waitForGalleryReady();
   await galleryActions.waitForInitialRefreshCompleted();
 
+  // parity-check: allow-read-only-measurement-evaluate -- read the production gallery pagination state
   const readLoaded = () => page.evaluate(() => ({
     count: state.view.artist_groups.reduce((total, group) => total + group.albums.length, 0),
     groups: state.view.artist_groups.map(group => ({
@@ -264,7 +265,7 @@ test('FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and adv
     .toBeGreaterThan(oldExtent.maxScrollTop + 2);
   const appendedKeys = new Set(occurrences(secondPage).map(item => item.split('\u0000')[1]));
   // parity-check: allow-read-only-measurement-evaluate -- prove newly appended production cards reached the mobile viewport
-  const mountedKeys = await page.locator('.album-card[data-gallery-card-key]')
+  const mountedKeys = await galleryActions.galleryPage.albumCard.cards
     .evaluateAll(cards => cards.map(card => card.getAttribute('data-gallery-card-key')));
   expect(mountedKeys.some(key => appendedKeys.has(key))).toBe(true);
 

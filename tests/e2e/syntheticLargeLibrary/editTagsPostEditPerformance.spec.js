@@ -595,6 +595,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         treeArtist = TREE_ARTIST;
       });
 
+      // parity-check: allow-read-only-measurement-evaluate -- inspect click-suppression state before the real tree action
       const refocusGuardBeforeTreeClick = await page.evaluate(() => {
         const now = Date.now();
         const suppressClickSequenceUntil = Number(state.ui?.suppressClickSequenceUntil || 0);

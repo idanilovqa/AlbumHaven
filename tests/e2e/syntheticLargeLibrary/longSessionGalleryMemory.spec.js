@@ -76,7 +76,7 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
       page.evaluate(({ cardSelector, scrollSelector }) => {
         const groups = Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : [];
         const cards = document.querySelectorAll(cardSelector);
-        const images = [...cards].flatMap(card => [...card.querySelectorAll('img')]);
+        const images = [...cards].flatMap(card => [...card.getElementsByTagName('img')]);
         const scroll = document.querySelector(scrollSelector);
         const cover = globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__;
         const scheduler = globalThis.__ALBUM_HAVEN_GALLERY_COVER_SCHEDULER__;
@@ -89,9 +89,10 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
           const roots = new Set(detached.map(card => card.getRootNode()));
           let nodes = 0, retainedCards = 0, retainedImages = 0, decodedImages = 0, decodedPixels = 0;
           for (const root of roots) {
-            nodes += 1 + root.querySelectorAll('*').length;
-            retainedCards += Number(root.matches?.('.album-card') || false) + root.querySelectorAll('.album-card').length;
-            const images = [...root.querySelectorAll('img')];
+            nodes += 1 + root.getElementsByTagName('*').length;
+            retainedCards += Number(root.classList?.contains('album-card') || false)
+              + root.getElementsByClassName('album-card').length;
+            const images = [...root.getElementsByTagName('img')];
             if (root instanceof HTMLImageElement) images.push(root);
             retainedImages += images.length;
             for (const image of images) {

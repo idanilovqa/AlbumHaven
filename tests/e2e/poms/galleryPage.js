@@ -884,7 +884,7 @@ export class GalleryPage extends BasePage {
     const location = observation.onlyRootContinuationsPending ? new URL(this.page.url()) : null;
     const rootContinuation = location && !['q', 'artist', 'playlist'].some(key => location.searchParams.get(key))
       && (!location.searchParams.get('surface') || location.searchParams.get('surface') === 'albums');
-    if (idle && observation.allowBootstrapFallback === false && !rootContinuation) return null;
+ if (idle && observation.bootstrapPresenceEligible === false && !rootContinuation) return null;
     if (idle || rootContinuation) {
       const bootstrap = await this.readProductionBootstrapPayload();
       const payload = bootstrap?.startup_payload?.first_paint_view || bootstrap?.initial_view;
@@ -904,7 +904,7 @@ export class GalleryPage extends BasePage {
     }
     const initiallyBusy = initialObservation.activeRequestCount > 0
       || initialObservation.pendingPayloadReadCount > 0;
-    let bootstrapPayload = initialObservation.allowBootstrapFallback !== false
+ let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
       && !initialObservation.latestFullPayload && !initiallyBusy
       ? await this.readProductionBootstrapPayload()
       : null;

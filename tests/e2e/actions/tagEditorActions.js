@@ -209,7 +209,7 @@ export class TagEditorActions {
       'aria-label',
       'Load all files from this folder',
     );
-    await expect(this.tagEditor.folderLoadButton.locator('svg')).toHaveCount(1);
+    await expect(this.tagEditor.folderLoadButtonIcon).toHaveCount(1);
     await this.tagEditor.folderLoadButton.click();
     if (expectedTrackCount !== undefined) {
       await expect(this.tagEditor.trackButtons).toHaveCount(Number(expectedTrackCount), { timeout });

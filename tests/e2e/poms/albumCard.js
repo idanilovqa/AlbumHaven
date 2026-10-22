@@ -70,6 +70,10 @@ export class AlbumCard extends BasePage {
     return '.cover-placeholder';
   }
 
+  get emptyArtboxWithinCardSelector() {
+    return '[data-album-artbox-state="empty"]';
+  }
+
   get subtitleWithinCardSelector() {
     return '.album-subtitle';
   }

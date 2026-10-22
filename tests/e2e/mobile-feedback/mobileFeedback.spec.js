@@ -4,30 +4,6 @@ import { GlobalPlayer } from '../poms/globalPlayer.js';
 import { UtilityAppearanceTab } from '../poms/utilityAppearanceTab.js';
 import { UtilityIntegrationsTab } from '../poms/utilityIntegrationsTab.js';
 
-async function observeGalleryStability(page, albumKey, durationMs) {
-  return page.locator('#albums-scroll').evaluate(async (scroll, options) => {
-    const samples = [];
-    const startedAt = performance.now();
-    await new Promise(resolve => {
-      const sample = now => {
-        const trigger = [...scroll.querySelectorAll('[data-open-tracklist="1"][data-album-key]')]
-          .find(candidate => candidate.getAttribute('data-album-key') === options.albumKey);
-        const card = trigger?.closest('.album-card');
-        const viewport = scroll.getBoundingClientRect();
-        samples.push({
-          elapsedMs: now - startedAt,
-          scrollTop: scroll.scrollTop,
-          cardOffsetTop: card ? card.getBoundingClientRect().top - viewport.top : null,
-        });
-        if (now - startedAt >= options.durationMs) resolve();
-        else requestAnimationFrame(sample);
-      };
-      requestAnimationFrame(sample);
-    });
-    return samples;
-  }, { albumKey, durationMs });
-}
-
 test('Artist Tree album Back keeps the restored mobile gallery position stable', async ({ page, app }) => {
   await app.libraryButton.click();
   await app.artist('Northlight').click();
@@ -35,30 +11,15 @@ test('Artist Tree album Back keeps the restored mobile gallery position stable',
   await expect(app.galleryCards.first()).toBeVisible();
   await app.scrollRegion('gallery', 700);
 
-  const before = await app.galleryScroll.evaluate(scroll => {
-    const viewport = scroll.getBoundingClientRect();
-    const cards = [...scroll.querySelectorAll('.album-card')];
-    const card = cards.find(candidate => candidate.getBoundingClientRect().bottom > viewport.top + 8);
-    const trigger = card?.querySelector('[data-open-tracklist="1"][data-album-key]');
-    if (!card || !trigger) throw new Error('No visible album card found after Artist Tree navigation.');
-    return {
-      albumKey: trigger.getAttribute('data-album-key'),
-      offsetTop: card.getBoundingClientRect().top - viewport.top,
-      scrollTop: scroll.scrollTop,
-    };
-  });
+  const before = await app.readVisibleGalleryAnchor();
   expect(before.scrollTop).toBeGreaterThan(0);
 
-  await app.galleryScroll.evaluate((scroll, albumKey) => {
-    const trigger = [...scroll.querySelectorAll('[data-open-tracklist="1"][data-album-key]')]
-      .find(candidate => candidate.getAttribute('data-album-key') === albumKey);
-    trigger?.closest('.album-card')?.querySelector('.album-meta-row')?.click();
-  }, before.albumKey);
+  await app.openAlbumFromGalleryAnchor(before.albumKey);
   await expect(app.albumPage).toBeVisible();
   await app.backButton.click();
   await expect(app.albumPage).not.toBeVisible();
 
-  const samples = await observeGalleryStability(page, before.albumKey, 2500);
+  const samples = await app.observeGalleryStability(before.albumKey, 2500);
   expect(samples.length).toBeGreaterThan(30);
   for (const sample of samples) {
     expect(sample.scrollTop).toBeCloseTo(before.scrollTop, 0);
@@ -74,23 +35,8 @@ test('mobile touch scrolling moves the gallery monotonically without layout jitt
 
   const scrollBox = await app.galleryScroll.boundingBox();
   if (!scrollBox) throw new Error('Gallery scroll surface is not visible.');
-  await page.evaluate(() => {
-    const scroll = document.getElementById('albums-scroll');
-    window.__mobileGalleryScrollSamples = [];
-    const anchor = scroll.querySelector('[data-open-tracklist="1"][data-album-key]')?.closest('.album-card');
-    const sample = () => {
-      if (!window.__mobileGalleryScrollSamples) return;
-      const viewport = scroll.getBoundingClientRect();
-      window.__mobileGalleryScrollSamples.push({
-        scrollTop: scroll.scrollTop,
-        anchorCoordinate: anchor
-          ? anchor.getBoundingClientRect().top - viewport.top + scroll.scrollTop
-          : null,
-      });
-      requestAnimationFrame(sample);
-    };
-    requestAnimationFrame(sample);
-  });
+  const anchor = await app.readVisibleGalleryAnchor();
+  const samples = [];
   const cdp = await page.context().newCDPSession(page);
   try {
     const x = Math.round(scrollBox.x + scrollBox.width / 2);
@@ -108,18 +54,14 @@ test('mobile touch scrolling moves the gallery monotonically without layout jitt
         touchPoints: [point(y)],
       });
       await page.waitForTimeout(12);
+      samples.push(await app.readGalleryScrollSample(anchor.albumKey));
     }
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   } finally {
     await cdp.detach();
   }
-  await expect.poll(() => app.galleryScroll.evaluate(scroll => scroll.scrollTop)).toBeGreaterThan(250);
+  await expect.poll(() => app.readScroll(app.galleryScroll)).toBeGreaterThan(250);
   await page.waitForTimeout(250);
-  const samples = await page.evaluate(() => {
-    const values = window.__mobileGalleryScrollSamples || [];
-    delete window.__mobileGalleryScrollSamples;
-    return values;
-  });
   const moving = samples.filter((sample, index) => (
     index === 0 || sample.scrollTop !== samples[index - 1].scrollTop
   ));

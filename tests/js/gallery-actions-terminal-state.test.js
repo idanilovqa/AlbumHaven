@@ -74,7 +74,7 @@ test('gallery generation distinguishes activity from authority and surfaces obse
 test('gallery target state does not resurrect bootstrap authority after a view request', async () => {
   const { GalleryPage } = await import(galleryPageUrl);
   const page = Object.create(GalleryPage.prototype);
-  page.productionViewObserver = { read: () => ({ allowBootstrapFallback: false, activeRequestCount: 0, pendingPayloadReadCount: 0, stateRevision: 1 }) };
+ page.productionViewObserver = { read: () => ({ bootstrapPresenceEligible: false, activeRequestCount: 0, pendingPayloadReadCount: 0, stateRevision: 1 }) };
   page.readProductionBootstrapPayload = async () => assert.fail('Old bootstrap must not become fresh authority');
   page.page = {
     locator: () => ({ count: async () => 0 }),

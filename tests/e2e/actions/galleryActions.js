@@ -131,7 +131,7 @@ export function readVisibleGalleryCoverReadiness(selectors) {
     const coverImage = card.querySelector(selectors.coverImageSelector);
     const placeholder = card.querySelector(selectors.coverPlaceholderSelector)
       || (selectors.allowEmptyArtwork
-        ? card.querySelector(selectors.emptyArtboxSelector || '[data-album-artbox-state="empty"]')
+        ? card.querySelector(selectors.emptyArtboxSelector)
         : null);
     const visual = coverImage instanceof HTMLImageElement
       ? coverImage

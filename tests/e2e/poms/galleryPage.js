@@ -224,7 +224,26 @@ function readDecodedProductionCardWindow(args = {}) {
         && windowState.decodedCards.length + windowState.terminalCount === windowState.candidateCount);
 }
 
-export { readDecodedProductionCardWindow };
+function hasFirstDecodedVisibleGalleryCover(args = {}) {
+  const galleryScroll = document.querySelector(args.galleryScrollSelector);
+  if (!(galleryScroll instanceof HTMLElement)) return false;
+  const galleryBounds = galleryScroll.getBoundingClientRect();
+  return [...document.querySelectorAll(args.cardSelector)].some((card) => {
+    const bounds = card.getBoundingClientRect();
+    const image = card.querySelector(args.coverImageSelector);
+    return image instanceof HTMLImageElement
+      && image.complete
+      && image.naturalWidth > 0
+      && bounds.width > 0
+      && bounds.height > 0
+      && bounds.right > galleryBounds.left
+      && bounds.left < galleryBounds.right
+      && bounds.bottom > galleryBounds.top
+      && bounds.top < galleryBounds.bottom;
+  });
+}
+
+export { hasFirstDecodedVisibleGalleryCover, readDecodedProductionCardWindow };
 
 export class GalleryPage extends BasePage {
   constructor(page, testInfo = null) {
@@ -1146,21 +1165,33 @@ export class GalleryPage extends BasePage {
     });
   }
 
+  async waitForFirstDecodedVisibleCover(options = {}) {
+    await this.waitForPageCondition(hasFirstDecodedVisibleGalleryCover, {
+      timeout: options.timeout || 10000,
+    }, {
+      cardSelector: this.albumCard.cardSelector,
+      coverImageSelector: this.albumCard.coverImageWithinCardSelector,
+      galleryScrollSelector: this.galleryScrollSelector,
+    });
+  }
+
   async waitForRootGalleryBoundaryProgress(previous, options = {}) {
     const timeout = Math.min(5000, (options.deadline ?? Date.now() + 5000) - Date.now());
     if (timeout <= 0) throw new Error('Root gallery boundary exceeded its original deadline.');
-    await this.waitForPageCondition(({ galleryScrollSelector, previousMaxScrollTop, cursor }) => {
+    await this.waitForPageCondition(({ galleryScrollSelector, previousMaxScrollTop, cursor, revision }) => {
       const gallery = document.querySelector(galleryScrollSelector);
       const page = state.view?.gallery_page;
       return Boolean(gallery) && (
         Math.max(0, gallery.scrollHeight - gallery.clientHeight) > previousMaxScrollTop + 2
         || !page?.has_more
         || String(page.next_cursor || '') !== cursor
+        || String(page.revision || '') !== revision
       );
     }, { timeout }, {
       galleryScrollSelector: this.galleryScrollSelector,
       previousMaxScrollTop: previous.maxScrollTop,
       cursor: previous.pageCursor,
+      revision: previous.pageRevision,
     });
   }
 
@@ -1210,14 +1241,20 @@ export class GalleryPage extends BasePage {
     return this.page.evaluate(async (url) => {
       const diagnostics = globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__;
       const cache = await globalThis.caches.open(String(diagnostics?.cacheName || ''));
-      const response = await cache.match(url);
+      const cacheKey = new URL(url);
+      cacheKey.searchParams.delete('v');
+      const response = await cache.match(cacheKey.href);
+      const cachedProductionUrl = String(
+        response?.headers?.get?.('X-Album-Haven-Cover-Production-Url') || '',
+      );
+      const exactResponse = cachedProductionUrl === url ? response : null;
       return {
         active: Array.isArray(diagnostics?.activeProductionUrls)
           && diagnostics.activeProductionUrls.includes(url),
         activeCount: Number(diagnostics?.activeCount || 0),
-        cached: Boolean(response),
-        cachedStatus: Number(response?.status || 0),
-        cachedType: String(response?.headers?.get?.('content-type') || ''),
+        cached: Boolean(exactResponse),
+        cachedStatus: Number(exactResponse?.status || 0),
+        cachedType: String(exactResponse?.headers?.get?.('content-type') || ''),
       };
     }, productionUrl);
   }

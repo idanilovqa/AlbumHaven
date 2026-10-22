@@ -223,17 +223,20 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
     const firstVisibleDecodedStartedAt = performance.now();
     await galleryActions.goto('/?surface=albums');
     origin = new URL(page.url()).origin;
-    const baselineWindow = await galleryActions.galleryPage.waitForDecodedProductionCardWindow({
-      allowIntentionalNoCoverWindow: true,
-      requireEveryExpectedCoverDecoded: true,
+    await galleryActions.galleryPage.waitForFirstDecodedVisibleCover({
+      timeout: FIRST_VISIBLE_DECODED_BUDGET.hardCeiling,
     });
     firstVisibleDecodedTiming = evaluateTimingBudget(
       performance.now() - firstVisibleDecodedStartedAt,
       FIRST_VISIBLE_DECODED_BUDGET,
     );
-    recordWindowEvidence(baselineWindow);
     await navigationPanelActions.waitForSidebarFullyHydrated({ timeout: 120000 });
     await galleryActions.waitForInitialAllArtistsSections({ timeout: 120000 });
+    const baselineWindow = await galleryActions.galleryPage.waitForDecodedProductionCardWindow({
+      allowIntentionalNoCoverWindow: true,
+      requireEveryExpectedCoverDecoded: true,
+    });
+    recordWindowEvidence(baselineWindow);
     const baseline = await checkpoint('baseline', 0, baselineWindow);
     await waitForPostgresBrowseWarmRoot(page, galleryActions, navigationPanelActions);
     for (let cycle = 1; cycle <= TRAVERSAL_CYCLES; cycle += 1) {

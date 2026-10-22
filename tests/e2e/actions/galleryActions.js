@@ -1829,6 +1829,7 @@ export class GalleryActions {
       maxScrollTop: Math.max(0, galleryScroll.scrollHeight - galleryScroll.clientHeight),
       hasMore: Boolean(state.view?.gallery_page?.has_more),
       pageCursor: String(state.view?.gallery_page?.next_cursor || ''),
+      pageRevision: String(state.view?.gallery_page?.revision || ''),
     }));
     const observation = this.galleryPage.productionViewObserver.read();
     if (observation.latestGalleryPageError) {

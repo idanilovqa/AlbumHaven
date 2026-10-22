@@ -8,6 +8,65 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.join(__dirname, '..', '..');
 
+test('cover cache diagnostics inspect the production unversioned key and exact stored epoch', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href);
+  const productionUrl = 'http://127.0.0.1:4173/cover?path=album-cover&size=480&v=revision';
+  const matchedKeys = [];
+  let storedProductionUrl = productionUrl;
+  const page = {
+    async evaluate(callback, url) {
+      const context = {
+        URL,
+        globalThis: {
+          __ALBUM_HAVEN_GALLERY_COVER_CACHE__: {
+            activeCount: 48,
+            activeProductionUrls: [],
+            cacheName: 'gallery-covers',
+          },
+          caches: {
+            async open(name) {
+              assert.equal(name, 'gallery-covers');
+              return {
+                async match(key) {
+                  matchedKeys.push(String(key));
+                  return {
+                    status: 200,
+                    headers: {
+                      get(header) {
+                        if (String(header).toLowerCase() === 'content-type') return 'image/jpeg';
+                        if (header === 'X-Album-Haven-Cover-Production-Url') return storedProductionUrl;
+                        return '';
+                      },
+                    },
+                  };
+                },
+              };
+            },
+          },
+        },
+      };
+      return require('node:vm').runInNewContext(
+        `(${callback.toString()})(url)`,
+        { ...context, url },
+      );
+    },
+  };
+
+  const state = await GalleryPage.prototype.readCoverCacheState.call({ page }, productionUrl);
+
+  assert.deepEqual(matchedKeys, ['http://127.0.0.1:4173/cover?path=album-cover&size=480']);
+  assert.equal(state.cached, true);
+  assert.equal(state.cachedStatus, 200);
+  assert.equal(state.cachedType, 'image/jpeg');
+
+  storedProductionUrl = productionUrl.replace('revision', 'stale');
+  assert.equal(
+    (await GalleryPage.prototype.readCoverCacheState.call({ page }, productionUrl)).cached,
+    false,
+    'an entry for an older cover revision must not satisfy the diagnostic contract',
+  );
+});
+
 test('gallery readiness does not confuse absence-blocking membership with applied target proof', async () => {
   const { classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
   const snapshot = { canonicalApplied: true, canonicalInventoryComplete: true,
@@ -3239,7 +3298,10 @@ test('album-details selection supports production prewarming without a click-tim
 
 test('decoded gallery window ignores offscreen native-lazy cards until real traversal brings them into view', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href;
-  const { readDecodedProductionCardWindow } = await import(moduleUrl);
+  const {
+    hasFirstDecodedVisibleGalleryCover,
+    readDecodedProductionCardWindow,
+  } = await import(moduleUrl);
   class FakeElement {
     constructor(bounds = {}) {
       this.bounds = {
@@ -3339,8 +3401,15 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
       true,
       'background-only cover work must not block a settled visible card window',
     );
+    visibleImage.attributes.set('data-production-cover-src', '');
+    assert.equal(
+      hasFirstDecodedVisibleGalleryCover(args),
+      true,
+      'first-cover paint accepts decoded server markup before hydration metadata arrives',
+    );
     visibleImage.complete = false;
     visibleImage.naturalWidth = 0;
+    assert.equal(hasFirstDecodedVisibleGalleryCover(args), false);
     assert.equal(readDecodedProductionCardWindow(args), false, 'one positive intersecting candidate is required and must settle');
     cards[0].getBoundingClientRect = () => ({
       left: 20, top: 20, right: 20, bottom: 320, width: 0, height: 300,
@@ -3428,7 +3497,7 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
     productionSrc: '/cover?path=second',
   });
   const cards = [
-    card('first', firstDecodedCover),
+    card('first', firstDecodedCover, { cover_path: 'C:/covers/first.jpg' }),
     card('second', secondDecodedCover),
     card('legitimate-no-art'),
   ];
@@ -3470,6 +3539,7 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
     );
     cards.pop();
     secondDecodedCover.naturalWidth = 0;
+    secondDecodedCover.complete = false;
     assert.equal(
       readDecodedProductionCardWindow(args),
       false,
@@ -6235,9 +6305,12 @@ test('root gallery boundary settlement keeps its original bounded timeout and ob
     async waitForPageCondition(callback, options, args) {
       assert.equal(options.timeout, 5000);
       const gallery = { scrollHeight: 1200, clientHeight: 600 };
-      const context = { document: { querySelector: () => gallery }, state: { view: { gallery_page: { has_more: true, next_cursor: 'next-page' } } } };
+      const context = { document: { querySelector: () => gallery }, state: { view: { gallery_page: { has_more: true, next_cursor: 'next-page', revision: 'r1' } } } };
       const predicate = require('node:vm').runInNewContext(`(${callback.toString()})`, context);
       assert.equal(predicate(args), false);
+      context.state.view.gallery_page.revision = 'r2';
+      assert.equal(predicate(args), true);
+      context.state.view.gallery_page.revision = 'r1';
       context.state.view.gallery_page.next_cursor = 'following-page';
       assert.equal(predicate(args), true);
       context.state.view.gallery_page.next_cursor = 'next-page';
@@ -6248,7 +6321,9 @@ test('root gallery boundary settlement keeps its original bounded timeout and ob
       assert.equal(predicate(args), true);
     },
   };
-  await GalleryPage.prototype.waitForRootGalleryBoundaryProgress.call(owner, { maxScrollTop: 600, pageCursor: 'next-page' });
+  await GalleryPage.prototype.waitForRootGalleryBoundaryProgress.call(owner, {
+    maxScrollTop: 600, pageCursor: 'next-page', pageRevision: 'r1',
+  });
 });
 
 

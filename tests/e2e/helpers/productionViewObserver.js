@@ -461,11 +461,14 @@ export class ProductionViewObserver {
             this.stateRevision += 1;
           }
         };
-        if (response.status() === 503) {
+        if (response.status() === 503 || (response.status() === 409 && detail.append)) {
           this.pendingPayloadReads.set(detail.sequence, detail);
           Promise.resolve(response.json())
             .then(payload => {
-              if (!['search_projection_pending', 'gallery_projection_pending'].includes(payload?.code)) recordHttpFailure();
+              const recoverable = response.status() === 409
+                ? payload?.restart_required === true
+                : ['search_projection_pending', 'gallery_projection_pending'].includes(payload?.code);
+              if (!recoverable) recordHttpFailure();
             })
             .catch(recordHttpFailure)
             .finally(() => {

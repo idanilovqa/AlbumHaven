@@ -449,6 +449,41 @@ for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
   });
 }
 
+test('stale cursor conflict stays recoverable until the anchor reload settles', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const stale = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar&gallery_cursor=stale');
+  page.emit('request', stale);
+  page.emit('response', response(stale, { restart_required: true }, { ok: false, status: 409 }));
+  page.emit('requestfinished', stale);
+  await flushPromises();
+  assert.equal(observer.read().latestGalleryPageError, null);
+
+  const recovery = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar&gallery_anchor_artist=Artist');
+  page.emit('request', recovery);
+  page.emit('response', response(recovery, {
+    artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'Album' }] }],
+    gallery_page: { revision: 'fresh', has_more: false, next_cursor: null },
+  }));
+  page.emit('requestfinished', recovery);
+  await flushPromises();
+  assert.equal(observer.read().latestGalleryPageError, null);
+  assert.equal(observer.read().latestGalleryPage?.revision, 'fresh');
+});
+
+test('stale cursor anchor recovery still surfaces a repeated conflict', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const recovery = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar&gallery_anchor_artist=Artist');
+  page.emit('request', recovery);
+  page.emit('response', response(recovery, { restart_required: true }, { ok: false, status: 409 }));
+  page.emit('requestfinished', recovery);
+  await flushPromises();
+  assert.match(observer.read().latestGalleryPageError, /HTTP 409/);
+});
+
 test('topology authority separates append activity, replacement, and canonical saves', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();

@@ -51,11 +51,27 @@ test('PR gallery traversal gates first cover and memory while soak gates every d
   const firstStart = spec.indexOf('const firstVisibleDecodedStartedAt = performance.now();');
   const navigation = spec.indexOf("await galleryActions.goto('/?surface=albums');");
   const firstElapsed = spec.indexOf('performance.now() - firstVisibleDecodedStartedAt');
+  const firstWindow = spec.indexOf(
+    'await galleryActions.galleryPage.waitForFirstDecodedVisibleCover',
+    firstStart,
+  );
+  const fullyHydrated = spec.indexOf('await navigationPanelActions.waitForSidebarFullyHydrated');
+  const baselineWindow = spec.indexOf('const baselineWindow = await galleryActions.galleryPage.waitForDecodedProductionCardWindow');
   const baselineCheckpoint = spec.indexOf("checkpoint('baseline'");
   assert.ok(firstStart < navigation, 'first decoded artwork timing must begin before navigation');
-  assert.ok(navigation < firstElapsed, 'first decoded artwork timing must include navigation');
+  assert.ok(navigation < firstWindow, 'first decoded artwork wait must follow navigation');
+  assert.ok(firstWindow < firstElapsed,
+    'first decoded artwork timing must include its decoded-cover wait');
   assert.ok(firstElapsed < baselineCheckpoint,
     'first decoded artwork timing must stop before diagnostic sampling');
+  assert.ok(firstElapsed < fullyHydrated,
+    'first decoded artwork timing must stop before full startup hydration');
+  assert.ok(fullyHydrated < baselineWindow,
+    'the memory baseline must wait for the fully hydrated gallery');
+  const firstWindowSource = spec.slice(firstWindow, firstElapsed);
+  const baselineWindowSource = spec.slice(baselineWindow, baselineCheckpoint);
+  assert.doesNotMatch(firstWindowSource, /waitForDecodedProductionCardWindow/);
+  assert.match(baselineWindowSource, /requireEveryExpectedCoverDecoded:\s*true/);
 
   const traversalStart = spec.indexOf('const traverse = async');
   const traversalEnd = spec.indexOf('\n  try {', traversalStart);
@@ -539,8 +555,15 @@ test('artist-family benchmark keeps browser mechanics outside the scenario spec'
   assert.doesNotMatch(spec, /page\.(?:addInitScript|locator|waitForFunction)\s*\(/);
   assert.match(
     spec,
-    /const searchGalleryReadyMs[\s\S]*?measureActionTime\(\s*async \(\) => \{\},[\s\S]*?await galleryActions\.waitForAlbumVisibleUnderHeading\(\s*EXPECTED_FAMILY\.resonance,\s*RESONANCE_ALBUM/,
+    /recordSubmissionBoundary:[\s\S]*?searchSubmittedAt = Date\.now\(\)[\s\S]*?const searchGalleryReadyMs[\s\S]*?await searchToolbarActions\.waitForQuery\(SEARCH_QUERY[\s\S]*?await artistFamilyActions\.waitForViewReady\(EXPECTED_FAMILY\.primary[\s\S]*?await artistFamilyActions\.waitForVisible[\s\S]*?await galleryActions\.waitForAlbumVisibleUnderHeading\(\s*EXPECTED_FAMILY\.resonance,\s*RESONANCE_ALBUM[\s\S]*?return Date\.now\(\) - searchSubmittedAt/,
   );
+  const searchGalleryTimingStart = spec.indexOf('const searchGalleryReadyMs');
+  const searchGalleryTimingEnd = spec.indexOf(
+    "await stepLogger.step('Capture the Neal Morse runtime snapshot",
+    searchGalleryTimingStart,
+  );
+  assert.ok(searchGalleryTimingStart >= 0 && searchGalleryTimingEnd > searchGalleryTimingStart);
+  assert.doesNotMatch(spec.slice(searchGalleryTimingStart, searchGalleryTimingEnd), /measureActionTime/);
   assert.doesNotMatch(spec, /\b(?:localStorage|sessionStorage)\b/);
   assert.match(artistFamilyActions, /async waitForViewReady\(/);
   assert.match(artistFamilyActions, /async waitForPrimaryAndRelatedFilterActive\(/);
@@ -777,7 +800,7 @@ test('focused selected-artist and root browse reports own complete terminal timi
   ]) {
     assert.match(`${selectedArtist}\n${rootBrowse}\n${fixtures}`, new RegExp(metricId.replaceAll('.', '\\.')));
   }
-  assert.equal((selectedArtist.match(/recordTerminalTimingOutcome\(/g) || []).length, 3);
+  assert.equal((selectedArtist.match(/recordTerminalTimingOutcome\(/g) || []).length, 4);
   assert.match(selectedArtist, /measureInteractionToPaint/);
   assert.match(selectedArtist, /maxLongTaskMs/);
   assert.match(selectedArtist, /recordContractCompletion\(\)/);

@@ -6666,6 +6666,7 @@ test('Problematic Files excludes library-wide warnings from album rows and count
         selectedProblematicKey: '',
         selectedProblemFilters: [],
         searchQuery: '',
+      loaded: true,
         loading: false,
       },
     },
@@ -6683,6 +6684,46 @@ test('Problematic Files excludes library-wide warnings from album rows and count
   assert.doesNotMatch(elements.list.innerHTML, /Some library changes may have been missed|data-status-action/);
   assert.match(elements.list.innerHTML, /No matching problematic albums found\./);
   assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
+});
+
+test('Problematic Files renders load failure instead of a successful empty state', () => {
+  const elements = {
+    overlay: {},
+    list: { innerHTML: '', scrollTop: 0 },
+    detail: { innerHTML: '', removeAttribute() {} },
+    count: { textContent: '' },
+    sidebarLabel: { textContent: '' },
+    search: { disabled: false, placeholder: '', value: '' },
+  };
+  const context = {
+    console,
+    escapeHtml(value) { return String(value ?? ''); },
+    state: { utility: {
+      problematicFiles: [],
+      libraryWatchHealthProblems: [],
+      selectedProblematicKey: '',
+      selectedProblemFilters: [],
+      searchQuery: '',
+      loaded: false,
+      loading: false,
+      problematicLoadError: 'Access denied.',
+    } },
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return []; },
+    renderProblemFilterControls() {},
+    buildOnPageAlertHtml({ title, message }) {
+      return `<div role="alert">${title}: ${message}</div>`;
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  vm.runInContext(utilityRendererSource, context, { filename: utilityRendererPath });
+
+  context.renderProblematicFiles();
+
+  assert.match(elements.list.innerHTML, /Unable to load problematic albums/);
+  assert.match(elements.detail.innerHTML, /Problematic Files unavailable/);
+  assert.doesNotMatch(`${elements.list.innerHTML}${elements.detail.innerHTML}`, /No matching/);
 });
 
 test('watcher warning retains title copy while the status icon stays green beside the separate warning control', () => {

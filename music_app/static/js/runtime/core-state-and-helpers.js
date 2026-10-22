@@ -146,6 +146,7 @@ const state = {
   utility: {
     activeTab: 'problematic-files',
     problematicFiles: [],
+    problematicLoadError: '',
     libraryWatchHealthProblems: [],
     selectedProblematicKey: '',
     pendingRepairKey: '',

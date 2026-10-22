@@ -97,7 +97,8 @@ async function loadProblematicFiles(force = false, options = {}) {
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
         previousSummaryItems = summaryItems;
-        state.utility.loaded = true;
+      state.utility.loaded = true;
+      state.utility.problematicLoadError = '';
         stateCommitMs += roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
         return { selectedKey, selectedDetail,
           selectedSummary: (continuation && unchangedSelection) ? null : selectedSummary,
@@ -151,6 +152,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
       state.utility.loaded = false;
       state.utility.problematicFilesComplete = false;
+      state.utility.problematicLoadError = loadError;
       showToast('Unable to load problematic files.', 'error', 3200);
       return null;
     } finally {

@@ -1771,6 +1771,7 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "password-recovery.js",
         "account.js",
         "admin-members.js",
+        "admin-server.js",
         "appearance-backgrounds.js",
         "appearance-palettes.js",
         "appearance-device-profiles.js",

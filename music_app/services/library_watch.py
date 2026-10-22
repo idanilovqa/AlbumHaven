@@ -11,6 +11,7 @@ import sys
 from threading import Event, Lock
 from typing import Protocol
 
+from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_watch_suppression import (
     is_library_watch_event_suppressed,
 )
@@ -205,14 +206,7 @@ def publish_watchdog_event(
     )
     if normalized is not None:
         def is_derived_cover(path: Path) -> bool:
-            root = _root_for_path(path, _resolved_roots(root_definitions))
-            if root is None:
-                return False
-            parts = path.relative_to(root[1]).parts
-            return any(
-                Path(*parts[index:index + 2]) == Path(".album-haven", "cover_variants")
-                for index in range(len(parts) - 1)
-            )
+            return is_managed_preview_path(path)
 
         source_derived = is_derived_cover(normalized.path)
         if normalized.kind is LibraryEventKind.MOVED and normalized.destination is not None:

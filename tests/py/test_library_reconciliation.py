@@ -933,6 +933,28 @@ def test_derived_cover_preview_events_do_not_enter_reconciliation(tmp_path, even
     assert events == []
 
 
+def test_watcher_uses_shared_managed_preview_classifier(tmp_path, monkeypatch):
+    from music_app.services import library_watch
+
+    root = tmp_path / "Music"
+    source = root / "Album" / "generated.bin"
+    events = []
+    monkeypatch.setattr(
+        library_watch,
+        "is_managed_preview_path",
+        lambda path: path == source.resolve(strict=False),
+    )
+
+    library_watch.publish_watchdog_event(
+        SimpleNamespace(event_type="modified", src_path=str(source), is_directory=False),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=events.append,
+        clock=lambda: 1.0,
+    )
+
+    assert events == []
+
+
 @pytest.mark.parametrize("relative", ["Album/track.flac", "Album/cover.jpg", "Album/.album-haven/track.flac", "Album/cover_variants/track.flac"])
 def test_source_files_outside_derived_cover_storage_still_publish(tmp_path, relative):
     from music_app.services.library_watch import publish_watchdog_event

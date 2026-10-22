@@ -575,3 +575,33 @@ def test_read_editable_tag_values_returns_exact_blanks_and_requested_fields(monk
         "track_number": "03/12",
         "album_rating": "9",
     }
+
+
+def test_apply_text_repairs_round_trips_release_structure_fields(tmp_path: Path):
+    track_path = tmp_path / "release-fields.mp3"
+    _generate_tagged_mp3(track_path, album_rating=4)
+
+    repairs = {
+        "disc_number": "3",
+        "total_discs": "4",
+        "disc_subtitle": "Act III",
+        "album_type": "Compilation",
+        "label": "Decca Records",
+        "catalog_number": "452 496-2",
+        "barcode": "028945249629",
+        "musicbrainz_release_id": "52c82ec2-c9e1-4906-bcce-47451d5b4519",
+        "musicbrainz_release_group_id": "4724dbc4-9f8a-3050-863f-5d12e871dc4b",
+        "composer": "Wolfgang Amadeus Mozart",
+    }
+
+    changed, changed_fields = metadata.apply_text_repairs_to_file(track_path, repairs)
+
+    assert changed is True
+    assert set(changed_fields) == set(repairs)
+    assert metadata.read_editable_tag_values(track_path, set(repairs)) == repairs
+
+    from mutagen.id3 import ID3
+
+    physical_tags = ID3(track_path)
+    assert [str(value) for value in physical_tags.getall("TPOS")[0].text] == ["3/4"]
+    assert [str(value) for value in physical_tags.getall("TSST")[0].text] == ["Act III"]

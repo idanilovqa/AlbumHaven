@@ -392,16 +392,46 @@ def apply_text_repairs_to_file(path: Path, repairs: dict[str, str]) -> tuple[boo
         "genre": "genre",
         "year": "date",
         "track_number": "tracknumber",
-        "disc_number": "discnumber",
         "edition": "albumedition",
         "album_rating": "albumrating",
+        "disc_subtitle": "discsubtitle",
+        "album_type": "musicbrainz_albumtype",
+        "label": "organization",
+        "catalog_number": "catalognumber",
+        "barcode": "barcode",
+        "musicbrainz_release_id": "musicbrainz_albumid",
+        "musicbrainz_release_group_id": "musicbrainz_releasegroupid",
+        "composer": "composer",
     }
 
     changed_fields: list[str] = []
     requested_standard_fields: list[str] = []
     standard_fields_changed = False
+    requested_disc_fields = [
+        field for field in ("disc_number", "total_discs") if field in repairs
+    ]
+    if requested_disc_fields:
+        existing_values = audio.get("discnumber", [])
+        existing_disc, _, existing_total = (
+            str(existing_values[0]).strip() if existing_values else ""
+        ).partition("/")
+        expected_disc = str(repairs.get("disc_number", existing_disc) or "").strip()
+        expected_total = str(repairs.get("total_discs", existing_total) or "").strip()
+        expected_value = (
+            f"{expected_disc}/{expected_total}" if expected_total else expected_disc
+        )
+        if (str(existing_values[0]).strip() if existing_values else "") != expected_value:
+            if expected_value:
+                audio["discnumber"] = [expected_value]
+            else:
+                try:
+                    del audio["discnumber"]
+                except KeyError:
+                    pass
+            standard_fields_changed = True
+        requested_standard_fields.extend(requested_disc_fields)
     for field, value in repairs.items():
-        if field == "exception_type":
+        if field == "exception_type" or field in requested_disc_fields:
             continue
         tag_name = tag_map.get(field)
         if not tag_name:
@@ -441,11 +471,19 @@ def apply_text_repairs_to_file(path: Path, repairs: dict[str, str]) -> tuple[boo
             raise RuntimeError(f"Could not reopen tags for {path}")
         mismatches: list[str] = []
         for field in requested_standard_fields:
-            tag_name = tag_map[field]
             expected_value = str(repairs.get(field) or "").strip()
             try:
-                actual = verified_audio.get(tag_name, [])
-                actual_value = str(actual[0]).strip() if actual else ""
+                if field in ("disc_number", "total_discs"):
+                    actual = verified_audio.get("discnumber", [])
+                    actual_disc, _, actual_total = (
+                        str(actual[0]).strip() if actual else ""
+                    ).partition("/")
+                    actual_value = (
+                        actual_disc if field == "disc_number" else actual_total
+                    )
+                else:
+                    actual = verified_audio.get(tag_map[field], [])
+                    actual_value = str(actual[0]).strip() if actual else ""
             except Exception as exc:
                 raise RuntimeError(
                     f"Could not read back {field} tag for {path}: {exc}"
@@ -525,12 +563,21 @@ def read_editable_tag_values(path: Path, fields: set[str]) -> dict[str, str]:
         "genre": "genre",
         "year": "date",
         "track_number": "tracknumber",
-        "disc_number": "discnumber",
         "edition": "albumedition",
         "album_rating": "albumrating",
+        "disc_subtitle": "discsubtitle",
+        "album_type": "musicbrainz_albumtype",
+        "label": "organization",
+        "catalog_number": "catalognumber",
+        "barcode": "barcode",
+        "musicbrainz_release_id": "musicbrainz_albumid",
+        "musicbrainz_release_group_id": "musicbrainz_releasegroupid",
+        "composer": "composer",
     }
     requested_fields = {str(field) for field in fields}
-    unsupported = requested_fields.difference(tag_map)
+    unsupported = requested_fields.difference(tag_map).difference(
+        {"disc_number", "total_discs"}
+    )
     if unsupported:
         raise ValueError(
             "Unsupported editable physical fields: " + ", ".join(sorted(unsupported))
@@ -544,8 +591,17 @@ def read_editable_tag_values(path: Path, fields: set[str]) -> dict[str, str]:
     values: dict[str, str] = {}
     for field in requested_fields:
         try:
-            raw_values = audio.get(tag_map[field], [])
-            values[field] = str(raw_values[0]).strip() if raw_values else ""
+            if field in ("disc_number", "total_discs"):
+                raw_values = audio.get("discnumber", [])
+                disc_number, _, total_discs = (
+                    str(raw_values[0]).strip() if raw_values else ""
+                ).partition("/")
+                values[field] = (
+                    disc_number if field == "disc_number" else total_discs
+                )
+            else:
+                raw_values = audio.get(tag_map[field], [])
+                values[field] = str(raw_values[0]).strip() if raw_values else ""
         except Exception as exc:
             raise RuntimeError(f"Could not read {field} tag for {path}: {exc}") from exc
     return values

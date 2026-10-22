@@ -535,11 +535,11 @@ def test_generated_performance_profiles_skip_unrelated_provider_storage_policy_s
 
 
 @pytest.mark.parametrize(
-    ("include_performance_target", "expected_target"),
+    ("fixture_profile", "expected_target"),
     [
-        (False, ("Mastodon", "Crack The Skye", 2009)),
+        ("functional-core", ("Mastodon", "Crack The Skye", 2009)),
         (
-            True,
+            "synthetic-large-library",
             (
                 isolatedLibraryApp.DDT_STUDIO_RECORDS_FIXTURE_ARTIST,
                 isolatedLibraryApp.DDT_REMIXES_FIXTURE_ALBUM,
@@ -550,7 +550,7 @@ def test_generated_performance_profiles_skip_unrelated_provider_storage_policy_s
 )
 def test_provider_storage_policy_seed_gates_the_owned_performance_album(
     monkeypatch,
-    include_performance_target,
+    fixture_profile,
     expected_target,
 ):
     recorded = {}
@@ -577,7 +577,7 @@ def test_provider_storage_policy_seed_gates_the_owned_performance_album(
         "postgresql://fixture",
         4175,
         {"cover_id": "provider-storage-policy-cover"},
-        include_performance_target=include_performance_target,
+        fixture_profile=fixture_profile,
     )
 
     candidates = json.loads(recorded["params"][0])
@@ -589,7 +589,7 @@ def test_provider_storage_policy_seed_gates_the_owned_performance_album(
     assert recorded["params"][2:] == expected_target
 
 
-def test_provider_storage_policy_seed_targets_only_the_calibration_album(monkeypatch):
+def test_provider_storage_policy_seed_targets_only_the_synthetic_fixture_album(monkeypatch):
     recorded = {}
 
     class FakeConnection:
@@ -614,10 +614,9 @@ def test_provider_storage_policy_seed_targets_only_the_calibration_album(monkeyp
         "postgresql://fixture",
         4175,
         {"cover_id": "provider-storage-policy-cover"},
-        include_performance_target=True,
+        fixture_profile="synthetic-large-library",
     )
 
-    assert "Mastodon" not in recorded["sql"]
     assert recorded["params"][2:] == (
         isolatedLibraryApp.DDT_STUDIO_RECORDS_FIXTURE_ARTIST,
         isolatedLibraryApp.DDT_REMIXES_FIXTURE_ALBUM,
@@ -653,8 +652,8 @@ def test_preloaded_fixture_profiles_use_normal_postgres_rows_and_bypass_runtime_
     assert "fixture_media_root = library_root if is_preloaded_fixture else None" in main_source
     assert 'if fixture_profile == "functional-core":' in main_source
     assert "seed_functional_cover_search_cache(" in main_source
-    assert 'os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET")' in main_source
-    assert '== "production-calibration"' in main_source
+    assert "fixture_profile=fixture_profile" in main_source
+    assert 'os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET")' not in main_source
     assert "if not is_preloaded_fixture and not reuse_state:" in main_source
     assert "if database_preparation_started and not preserve_on_shutdown:" in main_source
 

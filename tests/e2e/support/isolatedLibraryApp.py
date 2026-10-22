@@ -3047,7 +3047,7 @@ def persist_provider_storage_policy_candidates(
     provider_port: int,
     provider_spec: dict[str, object] | None,
     *,
-    include_performance_target: bool = False,
+    fixture_profile: str,
 ) -> None:
     if provider_spec is None:
         raise RuntimeError("The provider storage-policy fixture requires a cover spec.")
@@ -3125,7 +3125,7 @@ def persist_provider_storage_policy_candidates(
             for index, (source, source_label, album_url) in enumerate(provider_contracts)
         ]
 
-    if include_performance_target:
+    if fixture_profile == "synthetic-large-library":
         target_artist = DDT_STUDIO_RECORDS_FIXTURE_ARTIST
         target_album = DDT_REMIXES_FIXTURE_ALBUM
         target_year = DDT_REMIXES_FIXTURE_YEAR
@@ -5345,11 +5345,7 @@ def main() -> None:
                 setup_database_url,
                 provider_port,
                 provider_storage_policy_spec,
-                include_performance_target=(
-                    fixture_profile == "synthetic-large-library"
-                    and os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET")
-                    == "production-calibration"
-                ),
+                fixture_profile=fixture_profile,
             )
 
         configure_performance_auth_environment(args.port)

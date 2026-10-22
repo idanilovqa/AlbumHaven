@@ -176,6 +176,40 @@ def test_build_albums_reclassifies_stale_local_membership_marker(tmp_path):
     assert {str(track.path) for track in albums[0].tracks} == set(entries)
 
 
+def test_track_level_variation_does_not_create_album_or_edition_buckets(tmp_path):
+    album_folder = tmp_path / "Artist" / "Album"
+    entries = {}
+    for index, (track_number, artist, title) in enumerate(
+        [
+            ("1", "Artist", "1. Opening"),
+            ("2/5", "Guest One", "002 Middle"),
+            ("03", "Artist feat. Guest Two", "17 - Interlude"),
+            ("4/5", "Guest Three", "Track Four"),
+            ("5/5", "Artist", "0005 Finale"),
+        ],
+        start=1,
+    ):
+        path = str(album_folder / f"{index:02}.mp3")
+        entries[path] = {
+            **_entry(
+                path=path,
+                title=title,
+                artist=artist,
+                album_artist="Artist",
+                album="Album",
+                track_number=index,
+            ),
+            "track_number": track_number,
+            "cover_path": str(album_folder / f"track-{index}.jpg"),
+        }
+
+    albums = build_albums_from_file_cache(entries)
+
+    assert len(albums) == 1
+    assert albums[0].edition is None
+    assert {str(track.path) for track in albums[0].tracks} == set(entries)
+
+
 def test_build_albums_from_file_cache_keeps_dominant_artist_for_one_off_guest_album():
     album_artist = "Howard Shore / Billy Boyd"
     album_name = "The Hobbit: The Desolation of Smaug"

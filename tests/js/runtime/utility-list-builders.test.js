@@ -5364,6 +5364,8 @@ test('watchSaveTask keeps default callers on ordinary anchor preservation', asyn
 
 test('watchSaveTask persists a failed tag edit and exposes Log History', async () => {
   const context = loadHelpers();
+  const originalAlbum = { key: 'artist::album', name: 'Album', tracks: [] };
+  const tagEditorDraft = { album: originalAlbum, values: {} };
   const logEntry = {
     id: 'failed-tag-edit-1',
     action: 'Tag edit failed',
@@ -5371,6 +5373,7 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   };
   const persistedEntries = [];
   const alerts = [];
+  const restoredDrafts = [];
   context.fetch = async () => ({
     ok: true,
     async json() {
@@ -5384,10 +5387,12 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   });
   context.prependUtilityLogHistoryEntry = async (entry) => persistedEntries.push(entry);
   context.showRepairAlert = (...args) => alerts.push(args);
+  context.restoreTagEditorDraftAfterFailedSave = (draft) => restoredDrafts.push(draft);
 
-  await context.watchSaveTask('failed-tag-task');
+  await context.watchSaveTask('failed-tag-task', { originalAlbum, tagEditorDraft });
 
   assert.deepEqual(persistedEntries, [logEntry]);
+  assert.deepEqual(restoredDrafts, [tagEditorDraft]);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0][0], logEntry.error);
   assert.equal(alerts[0][1], 'error');
@@ -5599,6 +5604,8 @@ test('watchSaveTask does not restore origin-bound album state after navigation b
   };
   const localMutations = [];
   const alerts = [];
+  const restoredDrafts = [];
+  const tagEditorDraft = { album: originalAlbum, values: {} };
   context.state.ui = { viewStateRevision: 7 };
   context.console = { warn() {} };
   context.document.getElementById = (id) => (
@@ -5623,13 +5630,16 @@ test('watchSaveTask does not restore origin-bound album state after navigation b
   context.renderView = (...args) => localMutations.push(['render', ...args]);
   context.updateOpenTrackModalAfterTagEdit = (...args) => localMutations.push(['modal', ...args]);
   context.showRepairAlert = (...args) => alerts.push(args);
+  context.restoreTagEditorDraftAfterFailedSave = (draft) => restoredDrafts.push(draft);
 
   await context.watchSaveTask('navigated-failed-tag-task', {
     originalAlbum,
     originatingViewStateRevision: 7,
+    tagEditorDraft,
   });
 
   assert.deepEqual(localMutations, []);
+  assert.deepEqual(restoredDrafts, []);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0][0], 'Structural persistence failed after media compensation.');
 });

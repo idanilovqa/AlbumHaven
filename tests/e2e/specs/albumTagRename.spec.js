@@ -367,8 +367,8 @@ test('FTC-TAGS-008 keeps an accepted terminal failure readable without false suc
       await tagEditorActions.setAlbumName('Rejected Album Rename Fixture');
       const failure = await tagEditorActions.applyAndWaitForAsyncFailure();
       expect(failure.task.error).toContain('ignored_versions');
-      expect(failure.alertText).toBe('Failed to edit tags.');
-      await tagEditorActions.expectTerminalFailureRemainsReadable('Failed to edit tags.');
+      expect(failure.alertText).toContain('ignored_versions');
+      await tagEditorActions.expectTerminalFailureRemainsReadable(failure.task.error);
       await tagEditorActions.openLogHistoryFromFailure();
       await utilityLogHistoryActions.waitForReady();
       expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failure.task.error);

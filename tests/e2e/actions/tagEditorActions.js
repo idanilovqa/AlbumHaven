@@ -726,7 +726,7 @@ export class TagEditorActions {
         timeout,
         intervals: [250, 500, 750, 1000],
       }).toBe('failed');
-      await expect(this.tagEditor.overlay).toBeHidden({ timeout });
+      await expect(this.tagEditor.overlay).toBeVisible({ timeout });
       await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
       await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
       const failedTaskError = String(failedTask?.error || '').trim();
@@ -761,11 +761,11 @@ export class TagEditorActions {
         `Tag edit was not terminally failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
       );
     }
-    await expect(this.tagEditor.overlay).toBeHidden({ timeout });
+    await expect(this.tagEditor.overlay).toBeVisible({ timeout });
     await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
     await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
-    await expect(this.tagEditor.repairAlertMessage).toHaveText(
-      'Failed to edit tags.',
+    await expect(this.tagEditor.repairAlertMessage).toContainText(
+      failureError,
       { timeout },
     );
     return {

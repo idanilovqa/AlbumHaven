@@ -2331,6 +2331,13 @@ async function watchSaveTask(taskId, context = {}) {
             preserveHydratedModalAfterFailedSave: true,
           });
         }
+        if (
+          context.tagEditorDraft
+          && canReconcileOriginView()
+          && typeof restoreTagEditorDraftAfterFailedSave === 'function'
+        ) {
+          restoreTagEditorDraftAfterFailedSave(context.tagEditorDraft);
+        }
         if (data.log_entry) {
           try {
             await prependUtilityLogHistoryEntry(data.log_entry);

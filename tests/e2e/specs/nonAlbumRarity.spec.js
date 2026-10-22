@@ -250,7 +250,9 @@ test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful r
       await tagEditorActions.setAlbumName(destinationAlbum);
       const failure = await tagEditorActions.applyAndWaitForAsyncFailure();
       expect(failure.task.error).toContain('ignored_versions');
-      expect(failure.alertText).toBe('Failed to edit tags.');
+      expect(failure.alertText).toContain('ignored_versions');
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+      await tagEditorActions.expectAlbumName(destinationAlbum);
       await trackModalActions.waitForExactAlbumDetails({
         title: initialSummary.title,
         trackTitles: initialTitles,
@@ -264,10 +266,8 @@ test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful r
   let successfulMoveCompleted = false;
   try {
     await stepLogger.step('Retry the same edit and remove only the moved track from the source modal', async () => {
-      await trackModalActions.openTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
-      await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
-      await tagEditorActions.setAlbumName(destinationAlbum);
+      await tagEditorActions.expectAlbumName(destinationAlbum);
       await tagEditorActions.applyAndWaitForSavedFiles({
         onSaveTaskCompleted: () => {
           successfulMoveCompleted = true;

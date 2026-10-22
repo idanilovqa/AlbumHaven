@@ -399,6 +399,28 @@ function closeTagEditor() {
   }
 }
 
+function restoreTagEditorDraftAfterFailedSave(tagEditor) {
+  if (
+    !tagEditor
+    || state.tagEditor !== tagEditor
+    || typeof getTagEditorElements !== 'function'
+  ) return;
+  const els = getTagEditorElements();
+  if (!els.overlay) return;
+  settleTagEditorSessionMutationClaim(tagEditor);
+  tagEditor.sessionMutationClaim = claimTagEditViewMutation(tagEditor.album);
+  state.tagEditor = tagEditor;
+  if (els.list) els.list.hidden = true;
+  if (els.form) els.form.hidden = true;
+  if (els.applyButton) els.applyButton.disabled = true;
+  els.overlay.setAttribute?.('aria-busy', 'true');
+  els.overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  if (typeof renderTagEditor === 'function') {
+    scheduleTagEditorRenderAfterPaint(tagEditor, els);
+  }
+}
+
 function openTagEditConfirmModal() {
   const els = getTagEditConfirmElements();
   if (!els.overlay) return;
@@ -777,7 +799,8 @@ function buildTagEditAlertCopy(album, editedTrackCount) {
 }
 
 async function confirmManualTagEdit() {
-  const album = state.tagEditor.album;
+  const tagEditorDraft = state.tagEditor;
+  const album = tagEditorDraft.album;
   const updates = buildChangedTagEditorUpdates(album, state.tagEditor.tracks || [], state.tagEditor.values || {});
   const editedPaths = Object.keys(updates).filter(Boolean);
   if (!album || !editedPaths.length) {
@@ -918,6 +941,7 @@ async function confirmManualTagEdit() {
     }
     const saveTaskWatchOptions = {
       originalAlbum: album,
+      tagEditorDraft,
       originatingViewStateRevision,
       originatingViewRequestUrl,
       originatingSearchContext,
@@ -1006,9 +1030,10 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
+      restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
     }
     showRepairAlert(
-      'Failed to edit tags.',
+      String(error?.message || '').trim() || 'Failed to edit tags.',
       'error',
       null,
       {

@@ -2538,7 +2538,7 @@ test('terminal tag-save contracts keep one pending POST authoritative without st
   assert.doesNotMatch(optimisticMethod, /Library view updated from saved files\./);
 });
 
-test('FTC-TAGS-008 keeps terminal failure copy compact and opens the exact raw Log History detail', () => {
+test('FTC-TAGS-008 keeps terminal failure actionable and opens the exact Log History detail', () => {
   const spec = read('tests/e2e/specs/albumTagRename.spec.js');
   const caseStart = spec.indexOf("test('FTC-TAGS-008 keeps an accepted terminal failure");
   const caseEnd = spec.indexOf("test('FTC-TAGS-009", caseStart);
@@ -2547,12 +2547,11 @@ test('FTC-TAGS-008 keeps terminal failure copy compact and opens the exact raw L
   assert.ok(caseStart >= 0 && caseEnd > caseStart);
   assert.match(caseSource, /utilityLogHistoryActions/);
   assert.match(caseSource, /expect\(failure\.task\.error\)\.toContain\('ignored_versions'\)/);
-  assert.match(caseSource, /expect\(failure\.alertText\)\.toBe\('Failed to edit tags\.'\)/);
+  assert.match(caseSource, /expect\(failure\.alertText\)\.toContain\('ignored_versions'\)/);
   assert.match(
     caseSource,
-    /expectTerminalFailureRemainsReadable\('Failed to edit tags\.'\)[\s\S]*?openLogHistoryFromFailure\(\)[\s\S]*?utilityLogHistoryActions\.waitForReady\(\)[\s\S]*?readVisibleHistoryText\(\)[\s\S]*?toContain\(failure\.task\.error\)/,
+    /expectTerminalFailureRemainsReadable\(failure\.task\.error\)[\s\S]*?openLogHistoryFromFailure\(\)[\s\S]*?utilityLogHistoryActions\.waitForReady\(\)[\s\S]*?readVisibleHistoryText\(\)[\s\S]*?toContain\(failure\.task\.error\)/,
   );
-  assert.doesNotMatch(caseSource, /failure\.alertText\)\.toContain\('ignored_versions'\)/);
 });
 
 test('FTC-TAGS-020 completion observation uses the authoritative edit POST without save-task polling', () => {
@@ -3060,7 +3059,9 @@ test('terminal tag-edit failure waits for the failure notification before readin
     _apiName: 'Locator',
     async _expect(expression) {
       events.push(expression);
-      if (expression === 'to.have.text') alertText = 'Failed to edit tags.';
+      if (expression === 'to.have.text') {
+        alertText = 'permission denied table ignored_versions';
+      }
       return { matches: true, received: { value: alertText }, log: [] };
     },
     async textContent() {
@@ -3088,7 +3089,7 @@ test('terminal tag-edit failure waits for the failure notification before readin
   });
 
   assert.ok(events.includes('to.have.text'));
-  assert.equal(result.alertText, 'Failed to edit tags.');
+  assert.equal(result.alertText, 'permission denied table ignored_versions');
 });
 
 test('tag-editor summary treats an absent transient repair alert as empty', async () => {

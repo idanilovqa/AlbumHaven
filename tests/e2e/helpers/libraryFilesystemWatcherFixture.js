@@ -13,6 +13,7 @@ const WATCHER_FIXTURE_PROFILES = ['functional-core', 'synthetic-large-library'];
 const WATCHER_FIXTURE_DIRECTORIES = [
   'watcher-reconciliation',
   'gallery-native-response-overlap',
+  'generated-preview-storage',
 ];
 
 function resolveWatcherFixtureMediaRoot(environment = process.env) {
@@ -233,6 +234,7 @@ async function buildWatchedAlbumFixture({
   });
   const tracks = target.tracks;
   return {
+    mediaRoot,
     artist,
     album,
     year,

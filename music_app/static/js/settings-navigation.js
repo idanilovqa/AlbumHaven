@@ -126,10 +126,10 @@
       const token = incoming.querySelector('[name="csrf_token"]');
       const currentToken = nav.querySelector('[name="csrf_token"]');
       if (token && currentToken) currentToken.value = token.value;
-    const section = url.pathname === '/account'
-      ? 'account'
-      : url.pathname === '/admin/server' ? 'server' : 'users';
-    window.NavigationTree.setSelection(nav, section);
+      const section = url.pathname === '/account'
+        ? 'account'
+        : url.pathname === '/admin/server' ? 'server' : 'users';
+      window.NavigationTree.setSelection(nav, section);
     };
 
     async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false, hierarchy = false } = {}) {

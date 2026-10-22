@@ -85,6 +85,8 @@ class GeneratedPreviewRelocationWorker:
             "cancel_requested",
         }:
             return
+        if operation_state == "running":
+            self._repository.recover_interrupted_items(operation_id=operation_id)
         if state.get("cancel_requested") or operation_state == "cancel_requested":
             state = self._repository.finish_operation(operation_id)
             if self._on_state is not None:

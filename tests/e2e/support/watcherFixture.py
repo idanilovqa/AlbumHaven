@@ -9,7 +9,7 @@ from tests.e2e.support import isolatedPostgres
 def remove_watched_inventory(owned_root: Path) -> dict[str, int]:
     owned_root = Path(owned_root).resolve()
     if (
-        owned_root.name not in {"watcher-reconciliation", "gallery-native-response-overlap"}
+        owned_root.name not in {"watcher-reconciliation", "gallery-native-response-overlap", "generated-preview-storage"}
         or owned_root.parent.name != "cases"
     ):
         raise ValueError("Watcher cleanup requires its exact owned directory.")

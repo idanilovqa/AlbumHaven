@@ -31,6 +31,7 @@ class FakeRepository:
         self.operation_state = operation_state
         self.completed = []
         self.finished = []
+        self.recovered = []
         self.claims = 0
 
     def load(self):
@@ -45,6 +46,10 @@ class FakeRepository:
         self.claims += 1
         claimed, self.items = self.items[:limit], self.items[limit:]
         return claimed
+
+    def recover_interrupted_items(self, *, operation_id):
+        assert operation_id == self.operation_id
+        self.recovered.append(operation_id)
 
     def complete_item(self, **result):
         self.completed.append(result)
@@ -168,6 +173,14 @@ def test_cancellation_stops_at_file_boundary_without_claiming(tmp_path):
     assert repository.completed == []
     assert source.read_bytes() == content
     assert not target.exists()
+
+
+def test_worker_recovers_interrupted_claims_before_resuming():
+    repository = FakeRepository([])
+
+    run_worker(repository)
+
+    assert repository.recovered == [repository.operation_id]
 
 
 def test_worker_recovers_requested_location_left_before_operation_start():

@@ -20,7 +20,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 53],
   ['cover-providers', 24],
   ['metadata-mutations', 14],
-  ['playback-utilities', 41],
+  ['playback-utilities', 42],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 132-case assignment', () => {
+test('functional shard contract pins the approved four-way 133-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 132-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 132);
+  assert.equal(total, 133);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -834,7 +834,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     invocation.cases.some((ownedCase) => matrixByCase.get(ownedCase.case).setupGroup === setupGroup)
   ));
 
-  assert.deepEqual(waves.map((wave) => wave.wave), [1, 2, 3, 4]);
+  assert.deepEqual(waves.map((wave) => wave.wave), [1, 2, 3, 4, 5]);
   assert.deepEqual(
     waves[0].invocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
     [
@@ -864,8 +864,13 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
   assert.deepEqual(waves[3].invocations[0].cases.map(({ case: name }) => name), [
     'FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership',
   ]);
-  const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 5 } : row);
-  assert.throws(() => validator.executionWavesForShard(shard, overflow), /executionWave 1 through 4/);
+  assert.equal(waves[4].invocations.length, 1);
+  assert.equal(waves[4].invocations[0].baselineMode, 'global-mutation');
+  assert.deepEqual(waves[4].invocations[0].cases.map(({ case: name }) => name), [
+    'FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access',
+  ]);
+  const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 6 } : row);
+  assert.throws(() => validator.executionWavesForShard(shard, overflow), /executionWave 1 through 5/);
   const expiryInvocationIndex = waves[1].invocations.findIndex(
     (invocation) => invocation.config === 'playwright.config.js'
       && invocation.baselineMode === 'isolated-app-process'
@@ -926,7 +931,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
     ['gallery-search-visual', { cases: 53, waves: [1, 2] }],
     ['cover-providers', { cases: 24, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 41, waves: [1, 2, 3, 4] }],
+    ['playback-utilities', { cases: 42, waves: [1, 2, 3, 4, 5] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

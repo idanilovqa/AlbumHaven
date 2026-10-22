@@ -1846,6 +1846,7 @@ def test_loader_reset_targets_only_application_tables_and_preserves_migration_au
     assert "accounts" in reset_statement
     assert "local_tracks" in reset_statement
     assert "client_surface_classes" not in reset_statement
+    assert "generated_preview_storage" not in reset_statement
     assert "schema_migrations" not in reset_statement
 
 

@@ -136,6 +136,15 @@ class PostgresGeneratedPreviewStorageRepository:
                 )
         return [_row_mapping(row) for row in rows]
 
+    def recover_interrupted_items(self, *, operation_id: str) -> int:
+        with self._connect_to_database() as connection:
+            with _transaction(connection):
+                cursor = connection.execute(
+                    _recover_interrupted_items_sql(),
+                    {"operation_id": str(UUID(str(operation_id)))},
+                )
+        return int(cursor.rowcount)
+
     def complete_item(
         self,
         *,
@@ -372,6 +381,15 @@ def _claim_batch_sql() -> str:
         from claimed
         where item.id = claimed.id
         returning item.*;
+    """
+
+
+def _recover_interrupted_items_sql() -> str:
+    return """
+    update app.generated_preview_relocation_items
+    set status = 'pending', started_at = null
+    where operation_id = %(operation_id)s::uuid
+      and status = 'running';
     """
 
 

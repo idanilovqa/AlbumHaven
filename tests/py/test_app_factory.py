@@ -600,7 +600,6 @@ def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
     from music_app.services import generated_preview_storage_postgres
 
     recorded = []
-
     class FakeRepository:
         def __init__(self, config):
             self.config = config

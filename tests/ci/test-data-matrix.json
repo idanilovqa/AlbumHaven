@@ -9027,5 +9027,31 @@
       "album-details-matching-track-highlight-timing"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/generatedPreviewStorage.functional.spec.js",
+    "case": "FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "executionWave": 5,
+    "databaseScenarios": ["functional-core:generated-preview-storage"],
+    "filesystemScenarios": ["media:functional-core", "media-copy:generated-preview-storage"],
+    "expectedContracts": [
+      "generated-preview-storage-byte-identity",
+      "generated-preview-relocation-restart-recovery",
+      "managed-preview-cover-lookup-exclusion",
+      "owner-only-server-preview-storage",
+      "relocation-foreground-responsiveness"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-preview-storage-001-002",
+      "filesystemCopy": "media/cases/generated-preview-storage"
+    },
+    "ownerApproval": "approved"
   }
 ]

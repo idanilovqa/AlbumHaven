@@ -75,6 +75,28 @@ function runtime(initial = {}) {
   return { context, form, albumFolders, custom, pathInput, save, cancel, retry, status, error, progress, fetches, polls };
 }
 
+const settleController = () => new Promise(resolve => setImmediate(resolve));
+
+async function mount(ui, options) {
+  const cleanup = ui.context.window.AlbumHavenMountAdminServer(ui.context.document, options);
+  assert.equal(typeof cleanup, 'function');
+  await settleController();
+  return cleanup;
+}
+
+test('save stays disabled until initial server state loads', async () => {
+  const ui = runtime({
+    mode: 'album_folders', revision: 4, operation_state: 'idle',
+    total_count: 0, completed_count: 0, failed_count: 0, total_bytes: 0,
+  });
+
+  const cleanup = ui.context.window.AlbumHavenMountAdminServer(ui.context.document);
+  assert.equal(ui.save.disabled, true);
+  await settleController();
+  assert.equal(ui.save.disabled, false);
+  cleanup();
+});
+
 test('mode choice controls the server-path field and save payload', async () => {
   const ui = runtime({
     mode: 'album_folders', active_root: null, revision: 4,
@@ -82,7 +104,7 @@ test('mode choice controls the server-path field and save payload', async () => 
     failed_count: 0, total_bytes: 2048, completed_bytes: 0,
     suggested_path: 'C:\\Users\\Owner\\Documents\\Album Haven\\Generated Previews',
   });
-  await ui.context.window.AlbumHavenMountAdminServer(ui.context.document);
+  await mount(ui);
 
   assert.equal(ui.pathInput.disabled, true);
   ui.albumFolders.checked = false;
@@ -117,7 +139,7 @@ test('active relocation polls a bounded status request and exposes cancel', asyn
     failed_count: 0, total_bytes: 1000, completed_bytes: 400,
     suggested_path: 'C:\\Previews',
   });
-  const cleanup = await ui.context.window.AlbumHavenMountAdminServer(ui.context.document);
+  const cleanup = await mount(ui);
 
   assert.equal(ui.cancel.hidden, false);
   assert.equal(ui.retry.hidden, true);
@@ -141,7 +163,7 @@ test('failed terminal relocation exposes retry without continued polling', async
     failure_summary: [{ item_id: 4, error: 'Target disk is full' }],
     suggested_path: 'C:\\Previews',
   });
-  await ui.context.window.AlbumHavenMountAdminServer(ui.context.document);
+  await mount(ui);
 
   assert.equal(ui.retry.hidden, false);
   assert.equal(ui.cancel.hidden, true);
@@ -160,11 +182,33 @@ test('canceled relocation offers resume so moved bytes can be reconciled', async
     total_count: 10, completed_count: 4, failed_count: 0,
     total_bytes: 1000, completed_bytes: 400, suggested_path: 'C:\\Previews',
   });
-  await ui.context.window.AlbumHavenMountAdminServer(ui.context.document);
+  await mount(ui);
 
   assert.equal(ui.retry.hidden, false);
   assert.equal(ui.retry.textContent, 'Resume move');
   assert.equal(ui.save.disabled, true);
   assert.equal(ui.custom.disabled, true);
   assert.equal(ui.polls.length, 0);
+});
+
+test('active relocation retries polling after a transient status failure', async () => {
+  const state = {
+    mode: 'album_folders', revision: 7, operation_state: 'running',
+    operation_id: 'operation-1', total_count: 10, completed_count: 4,
+    failed_count: 0, total_bytes: 1000, completed_bytes: 400,
+    suggested_path: 'C:\\Previews',
+  };
+  const ui = runtime(state);
+  let requests = 0;
+  const request = async () => {
+    requests += 1;
+    if (requests === 2) throw new Error('Temporary network failure');
+    return { ok: true, status: 200, json: async () => state };
+  };
+  const cleanup = await mount(ui, { request });
+
+  assert.equal(ui.polls.length, 1);
+  await ui.polls[0].callback();
+  assert.equal(ui.polls.length, 2);
+  cleanup();
 });

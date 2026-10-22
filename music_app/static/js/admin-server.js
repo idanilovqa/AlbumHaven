@@ -23,7 +23,7 @@
     return data;
   }
 
-  window.AlbumHavenMountAdminServer = async function mountAdminServer(root = document, options = {}) {
+  window.AlbumHavenMountAdminServer = function mountAdminServer(root = document, options = {}) {
     const form = root.querySelector('[data-admin-server]');
     if (!form) return () => {};
     const modes = [...form.querySelectorAll('[data-preview-mode]')];
@@ -103,6 +103,7 @@
         showAlert(error);
       } catch (failure) {
         showAlert(error, failure.message);
+        schedulePoll();
       }
     }
 
@@ -162,7 +163,8 @@
       }
     });
 
-    await load();
+    save.disabled = true;
+    void load();
     return () => {
       disposed = true;
       if (pollTimer !== null) unschedule(pollTimer);

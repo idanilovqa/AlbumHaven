@@ -212,6 +212,22 @@ def test_claim_batch_uses_skip_locked_and_returns_item_checkpoints():
     assert items[0]["expected_sha256"] == "a" * 64
 
 
+def test_recover_interrupted_items_returns_claims_to_pending():
+    operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
+    connection = FakeConnection([FakeCursor(rowcount=10)])
+
+    recovered = repository_for(connection).recover_interrupted_items(
+        operation_id=operation_id,
+    )
+
+    sql, params = connection.calls[0]
+    assert "update app.generated_preview_relocation_items" in sql
+    assert "set status = 'pending'" in sql
+    assert "status = 'running'" in sql
+    assert params == {"operation_id": operation_id}
+    assert recovered == 10
+
+
 @pytest.mark.parametrize("status", ["completed", "failed", "skipped"])
 def test_complete_item_records_one_terminal_checkpoint(status):
     connection = FakeConnection([FakeCursor(row={"id": 7})])

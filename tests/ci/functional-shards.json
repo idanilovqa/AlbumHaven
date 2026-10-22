@@ -1022,6 +1022,13 @@
               "test": "tests/e2e/specs/playerArtworkSearchContext.spec.js",
               "case": "FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/generatedPreviewStorage.functional.spec.js",
+              "case": "FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access",
+              "area": "settings"
             }
           ]
         },

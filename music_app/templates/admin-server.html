@@ -29,7 +29,7 @@
     <div class="settings-outlet" data-settings-outlet>
       <section class="settings-main server-settings-main">
         {{ page_gallery_bar('Server', 'Settings that apply to everyone', settings_navigation=true) }}
-        <form class="server-preview-settings" data-admin-server data-csrf-token="{{ csrf_token }}">
+        <form class="server-preview-settings" data-admin-server data-csrf-token="{{ csrf_token }}" aria-labelledby="album-previews-title">
           <section class="account-section" aria-labelledby="album-previews-title">
             <div class="server-setting-heading">
               <div>

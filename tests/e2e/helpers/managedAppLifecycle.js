@@ -235,7 +235,7 @@ export function createManagedAppLifecycle(options = {}) {
     },
     cleanupWatcherFixture(ownedDirectoryName = 'watcher-reconciliation') {
       const normalizedName = String(ownedDirectoryName || '').trim();
-      if (!['watcher-reconciliation', 'gallery-native-response-overlap'].includes(normalizedName)) {
+      if (!['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(normalizedName)) {
         return Promise.reject(new Error('Watcher cleanup requires a runner-owned directory identity.'));
       }
       return scheduleRestart('watcher-cleanup', { ownedDirectoryName: normalizedName });

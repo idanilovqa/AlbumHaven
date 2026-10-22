@@ -124,7 +124,7 @@
         this.outstanding -= 1;
         this.inFlight[message.bufferId - 1] = false;
         this.credits.push({ buffer: message.buffer, id: message.bufferId });
-        this.flush();
+        this.flush(false);
         return;
       }
       if (message.type === 'capture-disable') { this.flush(); this.enabled = false; return; }
@@ -252,7 +252,7 @@
       if (this.count === 256) this.flush();
     }
 
-    flush() {
+    flush(force = true) {
       if (!this.owner) return;
       if (!this.safe(this.packet + 1, 1)) { this.enabled = false; return; }
       let hasControl = Boolean(this.probe);
@@ -260,6 +260,9 @@
         const slot = this.slots[index];
         if (slot.lost || slot.serial && slot.pending && !this.live(slot)) hasControl = true;
       }
+      // A credit restores capacity, not a cadence. Retry deferred controls or a
+      // due batch; explicit flushes and disabled-owner tails remain immediate.
+      if (!force && this.enabled && !hasControl && currentFrame - this.lastFlush < 12000) return;
       if (!this.count && !hasControl || !this.acquire()) return;
       const data = this.view;
       data[0] = 1094927184; data[1] = this.packetVersion; data[2] = this.owner;

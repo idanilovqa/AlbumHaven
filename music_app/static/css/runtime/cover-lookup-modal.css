@@ -13,6 +13,7 @@
 }
 .cover-lookup-modal-dialog {
   width: min(1080px, calc(100vw - 32px));
+  height: min(90vh, 940px);
   max-height: min(90vh, 940px);
   overflow: hidden;
   display: flex;
@@ -51,6 +52,8 @@
   text-align: center;
 }
 .cover-lookup-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: 16px;
   display: grid;

@@ -17,6 +17,16 @@ function cssRule(selector, stylesheet = css) {
   return stylesheet.match(new RegExp(`${escaped.replace(/\r?\n/g, '\\r?\\n')}\\s*\\{([^}]*)\\}`, 's'))?.[1] || '';
 }
 
+test('desktop Cover Lookup keeps stable shell geometry while body content changes', () => {
+  const dialogRule = cssRule('.cover-lookup-modal-dialog');
+  const bodyRule = cssRule('.cover-lookup-modal-body');
+
+  assert.match(dialogRule, /(?:^|;)\s*height\s*:\s*min\(90vh,\s*940px\)/);
+  assert.match(dialogRule, /max-height\s*:\s*min\(90vh,\s*940px\)/);
+  assert.match(bodyRule, /flex\s*:\s*1\s+1\s+auto/);
+  assert.match(bodyRule, /min-height\s*:\s*0/);
+});
+
 test('cover source entry is compact, supports picker and drop, and omits redundant helper copy', () => {
   assert.match(source, /data-cover-lookup-file-input/);
   assert.match(source, /accept="image\/\*"[^>]*multiple/);

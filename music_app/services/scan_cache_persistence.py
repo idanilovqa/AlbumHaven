@@ -21,6 +21,7 @@ from music_app.services.cache import (
     serialize_relation_views,
 )
 from music_app.services.library import (
+    _is_various_artist,
     album_separate_release_key,
     build_albums_from_file_cache,
     safe_int,
@@ -2607,11 +2608,18 @@ def _inventory_rows_from_albums(
 
     for album in albums:
         owner_name = album_owner_name(album)
-        album_artist_key = ensure_artist(owner_name)
         member_artist_names = _deduped_artist_names(getattr(album, "artists", []) or [])
         if not member_artist_names:
             if owner_name is not None:
                 member_artist_names = [owner_name]
+        member_artist_keys = {_key(name) for name in member_artist_names}
+        has_structured_shared_credit = bool(
+            owner_name
+            and len(member_artist_keys) >= 2
+            and _key(owner_name) not in member_artist_keys
+            and not _is_various_artist(owner_name)
+        )
+        album_artist_key = None if has_structured_shared_credit else ensure_artist(owner_name)
         album_key = str(getattr(album, "key", "") or "").strip()
         if not album_key:
             continue

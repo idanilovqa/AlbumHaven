@@ -315,6 +315,56 @@ def test_punctuation_and_diacritic_variants_do_not_create_a_second_card():
     assert len(get_album_duplicate_sources(albums[0])) == 2
 
 
+def test_incomplete_copy_uses_complete_source_for_card_and_keeps_both_sources():
+    tracks = [
+        _track(
+            "main/complete",
+            number,
+            album="Touch the Sky: Volume II",
+            title=f"Movement {number}",
+        )
+        for number in range(1, 12)
+    ] + [
+        _track(
+            "hoard/incomplete",
+            number,
+            album="Touch The Sky - Volume II",
+            title=f"Movement {number}",
+        )
+        for number in range(1, 12)
+        if number != 6
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert albums[0].name == "Touch the Sky: Volume II"
+    assert len(albums[0].tracks) == 11
+    assert {Path(track.path).parent for track in albums[0].tracks} == {Path("main/complete")}
+    assert sorted(source["track_count"] for source in get_album_duplicate_sources(albums[0])) == [10, 11]
+
+
+def test_multiple_incomplete_copies_remain_visible_without_entering_the_card_queue():
+    tracks = [
+        _track("main/complete", number, album="Touch the Sky: Volume II")
+        for number in range(1, 12)
+    ] + [
+        _track(folder, number, album=album)
+        for folder, album, missing in (
+            ("hoard/incomplete-a", "Touch The Sky - Volume II", 6),
+            ("arrivals/incomplete-b", "Touch The Sky — Volume II", 7),
+        )
+        for number in range(1, 12)
+        if number != missing
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert len(albums[0].tracks) == 11
+    assert sorted(source["track_count"] for source in get_album_duplicate_sources(albums[0])) == [10, 10, 11]
+
+
 def test_leading_article_variant_with_different_track_evidence_stays_separate():
     tracks = [
         _track("main/original", album="The Serpent's Egg"),

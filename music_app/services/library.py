@@ -1359,6 +1359,20 @@ def _duplicate_card_editions_are_compatible(left: str, right: str) -> bool:
     return "" in editions and bool((editions - {""}) & _RELEASE_TYPE_EDITIONS)
 
 
+def _one_track_incomplete_duplicate(
+    left: tuple[tuple[object, ...], ...],
+    right: tuple[tuple[object, ...], ...],
+) -> bool:
+    shorter, longer = sorted((left, right), key=len)
+    # shortcut: recognize one missing track only, broaden after stronger source evidence exists.
+    return (
+        len(longer) == len(shorter) + 1
+        and len(shorter) >= 2
+        and len(set(longer)) == len(longer)
+        and set(shorter).issubset(longer)
+    )
+
+
 def _duplicate_track_group_card_identity(tracks: list[Track]) -> tuple[str, str, int, str, str] | None:
     album_identity = _duplicate_album_identity(tracks)
     if album_identity is None:
@@ -1400,7 +1414,19 @@ def _equivalent_duplicate_track_groups(left: list[Track], right: list[Track]) ->
 
 def _collapse_equivalent_duplicate_album_cards(albums: list[Album]) -> list[Album]:
     collapsed: list[Album] = []
-    candidates: dict[tuple[object, ...], list[tuple[int, Album, str, str]]] = {}
+    candidates: dict[
+        tuple[object, ...],
+        list[
+            tuple[
+                int,
+                Album,
+                str,
+                str,
+                tuple[tuple[object, ...], ...],
+                list[Track],
+            ]
+        ],
+    ] = {}
     for album in albums:
         identity = _duplicate_card_album_identity(album)
         signature = _duplicate_card_track_signature(album.tracks)
@@ -1408,38 +1434,73 @@ def _collapse_equivalent_duplicate_album_cards(albums: list[Album]) -> list[Albu
             collapsed.append(album)
             continue
         artist, title, year, edition, release_date = identity
-        key = (artist, title.removeprefix("the "), year, signature)
+        key = (artist, title.removeprefix("the "), year)
         bucket = candidates.setdefault(key, [])
         match_index = next(
             (
                 index
-                for index, (_, _, candidate_edition, candidate_release_date) in enumerate(bucket)
+                for index, (
+                    _,
+                    _,
+                    candidate_edition,
+                    candidate_release_date,
+                    candidate_signature,
+                    _,
+                ) in enumerate(bucket)
                 if _duplicate_card_editions_are_compatible(candidate_edition, edition)
                 and (
                     not candidate_release_date
                     or not release_date
                     or candidate_release_date == release_date
                 )
+                and (
+                    candidate_signature == signature
+                    or _one_track_incomplete_duplicate(candidate_signature, signature)
+                )
             ),
             None,
         )
         if match_index is None:
             collapsed.append(album)
-            bucket.append((len(collapsed) - 1, album, edition, release_date))
+            bucket.append((
+                len(collapsed) - 1,
+                album,
+                edition,
+                release_date,
+                signature,
+                list(album.tracks),
+            ))
             continue
-        collapsed_index, match, _, candidate_release_date = bucket[match_index]
-        canonical, duplicate = sorted(
-            (match, album),
-            key=lambda candidate: (
-                not bool(str(candidate.edition or "").strip()),
-                str(candidate.name or "").casefold().startswith("the "),
-                not bool(re.search(r"[-–—:]\s*$", str(candidate.name or ""))),
-                len(str(candidate.name or "")),
-            ),
-            reverse=True,
-        )
-        canonical.tracks.extend(duplicate.tracks)
-        canonical.total_duration_seconds += duplicate.total_duration_seconds
+        (
+            collapsed_index,
+            match,
+            _,
+            candidate_release_date,
+            candidate_signature,
+            candidate_source_tracks,
+        ) = bucket[match_index]
+        incoming_tracks = list(album.tracks)
+        is_incomplete_copy = candidate_signature != signature
+        if is_incomplete_copy:
+            canonical, duplicate = (
+                (match, album)
+                if len(candidate_signature) > len(signature)
+                else (album, match)
+            )
+        else:
+            canonical, duplicate = sorted(
+                (match, album),
+                key=lambda candidate: (
+                    not bool(str(candidate.edition or "").strip()),
+                    str(candidate.name or "").casefold().startswith("the "),
+                    not bool(re.search(r"[-–—:]\s*$", str(candidate.name or ""))),
+                    len(str(candidate.name or "")),
+                ),
+                reverse=True,
+            )
+            canonical.tracks.extend(duplicate.tracks)
+            canonical.total_duration_seconds += duplicate.total_duration_seconds
+        source_tracks = [*candidate_source_tracks, *incoming_tracks]
         canonical.artists = list(dict.fromkeys([*canonical.artists, *duplicate.artists]))
         canonical.is_compilation = canonical.is_compilation or duplicate.is_compilation
         canonical.release_date = canonical.release_date or duplicate.release_date
@@ -1449,7 +1510,7 @@ def _collapse_equivalent_duplicate_album_cards(albums: list[Album]) -> list[Albu
             str(track.title or "").casefold(),
             str(track.path).casefold(),
         ))
-        source_groups = _ordered_album_track_groups(canonical.tracks)
+        source_groups = _ordered_album_track_groups(source_tracks)
         canonical._cached_duplicate_sources = (
             _build_duplicate_source_payloads(source_groups)
             if len(source_groups) > 1
@@ -1460,7 +1521,7 @@ def _collapse_equivalent_duplicate_album_cards(albums: list[Album]) -> list[Albu
                 track.library_root_id,
                 track.library_root_category,
             )
-            for track in canonical.tracks
+            for track in source_tracks
         ])
         collapsed[collapsed_index] = canonical
         canonical_identity = _duplicate_card_album_identity(canonical)
@@ -1469,6 +1530,8 @@ def _collapse_equivalent_duplicate_album_cards(albums: list[Album]) -> list[Albu
             canonical,
             canonical_identity[3],
             candidate_release_date or release_date,
+            max((candidate_signature, signature), key=len),
+            source_tracks,
         )
     return collapsed
 

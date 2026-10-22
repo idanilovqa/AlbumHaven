@@ -71,9 +71,11 @@ function Get-MigrationContract {
         $arguments += @('-f', $_.Name)
         $requiredValidIndexes = @()
         $indexDefinitionVerifier = $null
+        $prerequisite = $null
         if ($isNontransactional) {
             $requiredValidIndexes = @('library.local_albums_normalized_raw_artists_trgm_idx')
             $indexDefinitionVerifier = 'scripts\postgres\verify_0083_album_raw_artist_index.sql'
+            $prerequisite = 'scripts\postgres\prepare_0083_pg_trgm_schema.sql'
         }
         [ordered]@{
             name = $_.Name
@@ -82,6 +84,7 @@ function Get-MigrationContract {
             arguments = $arguments
             requiredValidIndexes = $requiredValidIndexes
             indexDefinitionVerifier = $indexDefinitionVerifier
+            prerequisite = $prerequisite
             recordChecksumAfterSuccess = $true
         }
     })
@@ -322,6 +325,13 @@ commit;
         Invoke-PsqlText $psql $AdminRole 'postgres' $roleSql
         Invoke-PsqlText $psql $AdminRole 'postgres' "create database $($names.Database) owner $($names.Roles.migrator);"
         Invoke-PsqlText $psql $AdminRole $names.Database "revoke all on database $($names.Database) from public; grant connect on database $($names.Database) to album_haven_app, album_haven_readonly, $($names.Roles.app); grant temporary on database $($names.Database) to album_haven_app, $($names.Roles.app);"
+        $pgTrgmPrerequisitePath = Join-Path $RepositoryRoot 'scripts\postgres\prepare_0083_pg_trgm_schema.sql'
+        $pgTrgmPrerequisiteArguments = @(
+            '-X', '-w', '-v', 'ON_ERROR_STOP=1', '-1',
+            '-h', $HostName, '-p', $Port, '-U', $AdminRole,
+            '-d', $names.Database, '-f', $pgTrgmPrerequisitePath
+        )
+        Invoke-Checked $psql $pgTrgmPrerequisiteArguments
     } finally {
         Clear-AdminAuthentication
     }
@@ -337,6 +347,18 @@ commit;
     $migrationRoot = Join-Path $RepositoryRoot 'migrations\postgres'
     foreach ($migration in $Contract.migrations) {
         $path = Join-Path $migrationRoot $migration.name
+        if ($migration.prerequisite) {
+            $prerequisitePath = Join-Path $RepositoryRoot $migration.prerequisite
+            $prerequisiteArguments = @(
+                '-X', '-w', '-v', 'ON_ERROR_STOP=1', '-1',
+                '-h', $HostName, '-p', $Port, '-U', $names.Roles.migrator,
+                '-d', $names.Database, '-f', $prerequisitePath
+            )
+            & $psql @prerequisiteArguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "Migration prerequisite failed: $($migration.prerequisite)"
+            }
+        }
         $migrationArguments = @('-X', '-w', '-v', 'ON_ERROR_STOP=1')
         if ($migration.transactional) { $migrationArguments += '-1' }
         $migrationArguments += @('-h', $HostName, '-p', "$Port", '-U', $names.Roles.migrator, '-d', $names.Database, '-f', $path)

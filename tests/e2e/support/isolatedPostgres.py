@@ -32,6 +32,9 @@ _EXACT_NONTRANSACTIONAL_INDEX = (
 _EXACT_NONTRANSACTIONAL_INDEX_VERIFIER = Path(
     "scripts/postgres/verify_0083_album_raw_artist_index.sql"
 )
+_EXACT_NONTRANSACTIONAL_PREREQUISITE = Path(
+    "scripts/postgres/prepare_0083_pg_trgm_schema.sql"
+)
 DATABASE_NAME = "album_haven_fake_e2e"
 SETUP_DATABASE_ENV = "ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"
 RUNTIME_DATABASE_ENV = "ALBUM_HAVEN_FAKE_E2E_DATABASE_URL"
@@ -552,6 +555,14 @@ def _exact_nontransactional_index_state(connection: Any) -> str:
     return state
 
 
+def _prepare_exact_nontransactional_migration(connection: Any) -> None:
+    root = ROOT.resolve()
+    prerequisite_path = (root / _EXACT_NONTRANSACTIONAL_PREREQUISITE).resolve()
+    if not prerequisite_path.is_relative_to(root) or not prerequisite_path.is_file():
+        raise RuntimeError("The 0083 pg_trgm prerequisite is missing or unsafe.")
+    connection.execute(prerequisite_path.read_text(encoding="utf-8"))
+
+
 def _drop_mismatched_exact_nontransactional_index(connection: Any) -> str:
     state = _exact_nontransactional_index_state(connection)
     if state == "mismatched":
@@ -575,6 +586,7 @@ def _apply_nontransactional_migration(
     connection.autocommit = True
     try:
         if migration_name == _EXACT_NONTRANSACTIONAL_MIGRATION:
+            _prepare_exact_nontransactional_migration(connection)
             _drop_mismatched_exact_nontransactional_index(connection)
             try:
                 connection.execute(migration_sql)

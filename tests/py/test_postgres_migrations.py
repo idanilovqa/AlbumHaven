@@ -508,6 +508,28 @@ def test_album_raw_artist_search_index_matches_search_preview_expression():
     assert "gin_trgm_ops" in sql
 
 
+def test_album_raw_artist_search_index_prerequisite_relocates_pg_trgm_without_rewriting_0083():
+    migration_path = MIGRATIONS_DIR / "0083_add_album_raw_artist_search_index.sql"
+    migration_source = migration_path.read_text(encoding="utf-8")
+    migration_sql = _normalized_sql(migration_source)
+    prerequisite_path = (
+        REPO_ROOT / "scripts" / "postgres" / "prepare_0083_pg_trgm_schema.sql"
+    )
+    prerequisite_source = prerequisite_path.read_text(encoding="utf-8")
+    prerequisite_sql = _normalized_sql(prerequisite_source)
+
+    assert hashlib.sha256(migration_path.read_bytes()).hexdigest() == (
+        "6531983a2ca6020cef9df58f968c855f160993fdd82582b81fed1b04af69c1f4"
+    )
+    assert "library.gin_trgm_ops" in migration_sql
+    assert "album_haven_0083_pg_trgm_schema_v1" in prerequisite_source
+    assert "create extension if not exists pg_trgm with schema library" in prerequisite_sql
+    assert "from pg_catalog.pg_extension" in prerequisite_sql
+    assert "alter extension pg_trgm set schema library" in prerequisite_sql
+    assert "namespace.nspname = 'library'" in prerequisite_sql
+    assert "operator_class.opcname = 'gin_trgm_ops'" in prerequisite_sql
+
+
 def test_gallery_projection_featured_role_migration_extends_field_allowlist():
     assert GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION.is_file()
     sql = _normalized_sql(

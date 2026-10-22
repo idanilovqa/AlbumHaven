@@ -1987,6 +1987,9 @@ def test_bootstrap_contract_classifies_only_0083_as_nontransactional(tmp_path: P
     assert concurrent["indexDefinitionVerifier"] == (
         "scripts\\postgres\\verify_0083_album_raw_artist_index.sql"
     )
+    assert concurrent["prerequisite"] == (
+        "scripts\\postgres\\prepare_0083_pg_trgm_schema.sql"
+    )
 
     transactional = [
         migration
@@ -1997,6 +2000,7 @@ def test_bootstrap_contract_classifies_only_0083_as_nontransactional(tmp_path: P
     assert all("-1" in migration["arguments"] for migration in transactional)
     assert all(migration["requiredValidIndexes"] == [] for migration in transactional)
     assert all(migration["indexDefinitionVerifier"] is None for migration in transactional)
+    assert all(migration["prerequisite"] is None for migration in transactional)
 
 
 def test_bootstrap_validates_nontransactional_index_before_ledger_write() -> None:
@@ -2007,9 +2011,23 @@ def test_bootstrap_validates_nontransactional_index_before_ledger_write() -> Non
         )
     ]
 
+    assert migration_loop.index("if ($migration.prerequisite)") < migration_loop.index(
+        "invoke-checked $psql $migrationarguments"
+    )
     assert "get-migrationindexstate" in migration_loop
     assert "-cne 'ready'" in migration_loop
     assert migration_loop.index("-cne 'ready'") < migration_loop.index("$ledgersql")
+
+
+def test_bootstrap_prepares_pg_trgm_with_admin_before_disabling_admin_authentication() -> None:
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
+    provision = source[
+        source.index("function invoke-provision") : source.index("function invoke-teardown")
+    ]
+
+    prepare = provision.index("prepare_0083_pg_trgm_schema.sql")
+    assert "$adminrole" in provision[prepare : prepare + 500]
+    assert prepare < provision.index("clear-adminauthentication")
 
 
 def test_bootstrap_cleans_only_named_invalid_concurrent_indexes_before_rethrow() -> None:

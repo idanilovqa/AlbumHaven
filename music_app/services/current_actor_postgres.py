@@ -23,6 +23,9 @@ from music_app.services.current_actor import (
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 
 
+from music_app.services.current_library_selector import canonical_library_selector_sql
+
+
 class PostgresCurrentActorResolver:
     """Resolve one safe actor snapshot after the session authority succeeds."""
 
@@ -55,7 +58,7 @@ class PostgresCurrentActorResolver:
 
         with self._connect(self._database_url) as connection:
             rows = connection.execute(
-                """
+                f"""
                 select app.accounts.id as account_id,
                        app.accounts.username_display,
                        app.accounts.display_name,
@@ -68,14 +71,7 @@ class PostgresCurrentActorResolver:
                            and app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
                        ) as is_bootstrap_owner,
                        (
-                         select library.libraries.id
-                         from app.bootstrap_owners as runtime_owner
-                         join library.libraries
-                           on library.libraries.owner_account_id = runtime_owner.account_id
-                         where runtime_owner.owner_key = 'local-bootstrap-owner'
-                           and library.libraries.library_kind = 'local'
-                         order by library.libraries.id
-                         limit 1
+                         {canonical_library_selector_sql()}
                        ) as current_library_id,
                        coalesce((
                          select jsonb_agg(
@@ -129,10 +125,14 @@ class PostgresCurrentActorResolver:
                 authenticated_at=session.authenticated_at,
             )
         relationships = _library_relationships(payload.get("library_relationships"))
-        current_library_id = _positive_integer(
-            payload.get("current_library_id"), "current library id"
+        if "current_library_id" not in payload:
+            raise RuntimeError("Current actor current library id is invalid.")
+        library_value = payload["current_library_id"]
+        current_library_id = (
+            None if library_value is None
+            else _positive_integer(library_value, "current library id")
         )
-        if not any(
+        if current_library_id is not None and not any(
             item.library_id == current_library_id for item in relationships
         ):
             if payload.get("is_bootstrap_owner") is True:

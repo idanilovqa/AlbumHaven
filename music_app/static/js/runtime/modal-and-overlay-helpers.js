@@ -1,44 +1,71 @@
-﻿function ensureAlbumCardContextMenu() {
-  let menu = document.getElementById('album-card-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'album-card-context-menu';
-  menu.className = 'album-card-context-menu';
-  menu.hidden = true;
-  menu.innerHTML = '';
-  document.body.appendChild(menu);
-  return menu;
-}
-
+let nonAlbumSampleOwner = null, nonAlbumSampleSuspension = null;
+// The existing shared React/native Choice owner renders every Album action.
+// Native code retains source authority; there is no second menu DOM renderer.
+let albumCardContextMenuOwner = null;
+let albumCardContextActionSequence = 0;
 function hideAlbumCardContextMenu() {
-  const menu = document.getElementById('album-card-context-menu');
-  if (!menu) return;
-  menu.hidden = true;
-  menu.dataset.albumKey = '';
+  albumCardContextMenuOwner?.close({restoreFocus: false});
+  albumCardContextMenuOwner = null;
 }
-
-function showAlbumCardContextMenu(x, y, album) {
-  if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
-  const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  menu.dataset.albumKey = getAlbumIdentity(album);
-  const albumKey = String(album?.key || '');
-  const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
-    ? state.view.manual_version_links
-    : {};
-  const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
-  const moveActions = getAvailableAlbumMoveActions(album);
-  menu.innerHTML = [
-    '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
-    ...moveActions.map((item) => (
-      `<button type="button" class="album-card-context-menu-item" data-album-card-action="${escapeHtml(item.action)}">${escapeHtml(getAlbumMoveActionLabel(item))}</button>`
-    )),
-    isMarkedVersion
-      ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
-      : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
-  ].join('');
-  menu.hidden = false;
+function albumCardContextActions(album, {canQueue = true} = {}) {
+  const links = state.view?.manual_version_links || {};
+  const marked = Boolean(album?.key && links[album.key]);
+  const allowed = capability => !window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows(capability) === true;
+  return [
+    {value: 'open-explorer', label: 'Open in File Explorer'},
+    ...getAvailableAlbumMoveActions(album).map(item => ({value: item.action, label: getAlbumMoveActionLabel(item)})),
+    {value: marked ? 'unmark-version' : 'mark-version', label: marked ? 'Unmark as a version' : 'Mark as a version'},
+  ].filter(item => allowed(item.value === 'open-explorer' ? 'library.files.open_location'
+    : item.value.startsWith('move_') ? 'library.files.move' : 'library.versions.manage')).concat(
+    (window.AlbumHavenExplicitQueue?.timingOptions() || []).map(option => ({value: `queue:${option.value}`,
+      label: option.value === 'end' ? 'Add to queue at end' : option.label + (option.reason ? ` · ${option.reason}` : ''),
+      disabled: !canQueue || option.enabled !== true})),
+  );
+}
+function showAlbumCardContextMenu(_x, _y, album, anchor = document.activeElement, sourceCurrent = () => true) {
+  hideAlbumCardContextMenu();
+  if (isMobileClient() || usesMobilePageLayout() || !album || !anchor?.isConnected
+    || typeof window.AlbumHavenPlaytableUI?.actions !== 'function') return false;
+  const view = state.view, scope = TrackActionsRuntime.scope().token, sequence = ++albumCardContextActionSequence;
+  let selectedAction = false;
+  const current = () => {try {return sequence === albumCardContextActionSequence && state.view === view
+    && scope === TrackActionsRuntime.scope().token && anchor.isConnected && sourceCurrent() === true;} catch {return false;}};
+  const canQueue = () => current() && album.source_readable !== false && album.allowed_actions?.can_play_album !== false
+    && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read') === true);
+  albumCardContextMenuOwner = window.AlbumHavenPlaytableUI.actions(anchor, {
+    formats: albumCardContextActions(album, {canQueue: canQueue()}), label: 'Album actions',
+    onSelect: async action => {
+      if (!current() || selectedAction) return false;
+      const choice = albumCardContextActions(album, {canQueue: canQueue()}).find(item => item.value === action);
+      if (!choice || choice.disabled) return false;
+      selectedAction = true;
+      if (action === 'open-explorer') {openAlbumInExplorer(album); return true;}
+      if (action === 'move_to_hoard' || action === 'move_to_library') {performAlbumMove(album, action); return true;}
+      if (action === 'mark-version') {openVersionPickerModal(album); return true;}
+      if (action === 'unmark-version') {unmarkAlbumVersion(album.key || ''); return true;}
+      if (!action.startsWith('queue:')) return false;
+      const request = new AbortController();
+      try {
+        const fresh = await fetchTrackModalAlbumDetails(getAlbumPlaybackQueueRef(album), {signal: request.signal,
+          isCurrent: () => current() && canQueue()});
+        if (!current() || !canQueue() || getAlbumPlaybackQueueRef(fresh) !== getAlbumPlaybackQueueRef(album)) return false;
+        const rows = Array.isArray(fresh.track_rows) ? fresh.track_rows : [];
+        const ordered = groupAlbumTracks(fresh.tracks || []).groups.flatMap(group => group.tracks || []);
+        const selected = ordered.map(track => rows.filter(row => row.path === track.path))
+          .filter(matches => matches.length === 1 && matches[0].source_readable !== false
+            && matches[0].playback_state?.can_start_here === true && !['missing', 'unknown', 'unresolved'].includes(matches[0].availability))
+          .map(([row]) => row);
+        const captures = captureNativeAlbumQueueSources(fresh, selected);
+        if (!captures?.length || !current()) return false;
+        await window.AlbumHavenExplicitQueue.enqueue(captures, action.slice(6), {signal: request.signal, isCurrent: current});
+        return true;
+      } catch (error) {
+        if (current() && error.name !== 'AbortError') showToast('The Album could not be added to the Queue.', 'error', 3200);
+        return false;
+      }
+    },
+  });
+  return Boolean(albumCardContextMenuOwner);
 }
 
 function ensureVersionPickerModal() {
@@ -129,6 +156,7 @@ function renderVersionPickerModal() {
   saveButton.textContent = state.versionPicker.saving ? 'Saving...' : 'Save';
 }
 
+let versionPickerSheetLayer = null;
 function openVersionPickerModal(album) {
   const sourceAlbum = album || null;
   if (!sourceAlbum) return;
@@ -137,6 +165,9 @@ function openVersionPickerModal(album) {
   state.versionPicker.selectedTargetKey = '';
   const modal = ensureVersionPickerModal();
   renderVersionPickerModal();
+  versionPickerSheetLayer?.();
+  const parent = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  versionPickerSheetLayer = window.AlbumHavenBottomSheet?.acquireChildLayer(modal, parent) || null;
   modal.hidden = false;
   document.body.classList.add('modal-open');
 }
@@ -145,6 +176,7 @@ function closeVersionPickerModal() {
   const modal = document.getElementById('version-picker-modal');
   if (!modal) return;
   modal.hidden = true;
+  const layer = versionPickerSheetLayer; versionPickerSheetLayer = null; layer?.();
   state.versionPicker.album = null;
   state.versionPicker.selectedTargetKey = '';
   state.versionPicker.saving = false;
@@ -204,8 +236,9 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
-function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
+function buildNonAlbumTrackRowsMarkup(items, startingIndex, privateRows = []) {
   return items.map((item, offset) => {
+    privateRows.push(item);
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
@@ -245,6 +278,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
+  const privateRows = [], sourceView = state.view;
   const sectionDefinitions = [
     { key: 'non-album-rarity', title: 'Non-album rarity', exceptionType: 'Non-album rarity' },
     { key: 'interview', title: 'Interviews', exceptionType: 'Interview' },
@@ -260,14 +294,22 @@ function buildNonAlbumTrackSectionsMarkup(items) {
       ).trim() === section.exceptionType
     ));
     if (!sectionItems.length) return null;
-    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex, privateRows);
     runningIndex += sectionItems.length;
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
   const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+  const tableConfig = {groups, showPath: true, showProblem: true};
+  if (typeof NativePlaytables !== 'undefined') nonAlbumSampleOwner = NativePlaytables.prepare('loose-tracks', sourceView, groups, privateRows, () => {
+    const overlay = document.getElementById('non-album-modal');
+    const retained = typeof mobilePageState !== 'undefined' && mobilePageState.pages.some(page => page.kind === 'non-album');
+    return Boolean(overlay?.isConnected && (!overlay.hidden || retained || nonAlbumSampleSuspension?.preparedOwner === nonAlbumSampleOwner) && state.view === sourceView);
+  }, undefined, {columns: albumTrackTableColumns(tableConfig)});
   return buildAlbumTrackTableHtml({
-    groups,
-    showPath: true,
+    ...tableConfig,
+    selection: 'multiple', sectionActions: true,
+    // Shared presentation does not confer preference authority. Love remains
+    // unavailable until Loose browse responses have admitted scoped receipts.
     forceGroupLabels: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
@@ -357,6 +399,7 @@ function hideGalleryOptionsMenu() {
 }
 
 function openNonAlbumModal() {
+  if (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(openNonAlbumModal)) return;
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
@@ -371,7 +414,8 @@ function openNonAlbumModal() {
       subtitle,
       titleId: 'non-album-modal-title',
       subtitleId: 'non-album-modal-subtitle',
-      actionsHtml: buildLooseTracksHeaderActionsHtml(),
+      actionsHtml: buildLooseTracksHeaderActionsHtml({sampleDisabled:!sampleDetailsBrowseAllowed()
+        || !sampleDetailsTrackRefs(looseTracks, TrackActionsRuntime.scope().library)}),
     });
   }
   if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
@@ -380,6 +424,17 @@ function openNonAlbumModal() {
     : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof NativePlaytables !== 'undefined') {
+    if (looseTracks.length) NativePlaytables.mount('loose-tracks', els.table);
+    else NativePlaytables.retire('loose-tracks');
+  }
+  const sampleButton = els.header?.querySelector('[data-create-non-album-sample-playlist="1"]');
+  if (sampleButton) sampleButton.addEventListener('click', event => {
+    event.preventDefault(); event.stopPropagation();
+    const lease = captureNonAlbumSampleOrigin({libraryRef:TrackActionsRuntime.scope().library});
+    if (lease) {const originNavigation = captureSampleModalNavigation(els.overlay, lease, () => nonAlbumSampleSuspension, value => {nonAlbumSampleSuspension = value ? Object.assign(value, {preparedOwner:nonAlbumSampleOwner}) : null;});
+      if (originNavigation) window.AlbumHavenPlaylistUI?.openSamplePlaylist({originOwner:lease, originNavigation});}
+  });
   attachSharedPlayer();
 }
 
@@ -464,7 +519,10 @@ function getGalleryFocusGlowMetrics(card, viewport) {
 }
 
 function positionGalleryFocusGlow(card, glowMetrics = null) {
-  const { glow, viewport, scroll } = getGalleryFocusGlowElements();
+  applyGalleryFocusGlow(card, getGalleryFocusGlowElements(), state.gallery, glowMetrics);
+}
+
+function applyGalleryFocusGlow(card, {glow, viewport, scroll}, owner, glowMetrics = null) {
   if (!(glow instanceof HTMLElement) || !(viewport instanceof HTMLElement) || !(scroll instanceof HTMLElement) || !(card instanceof HTMLElement)) {
     return;
   }
@@ -475,17 +533,99 @@ function positionGalleryFocusGlow(card, glowMetrics = null) {
   if (!nextGlowKey) return;
   const nextLeft = `${metrics.left}px`;
   const nextTop = `${metrics.top}px`;
-  if (state.gallery.focusGlowKey !== nextGlowKey || glow.style.left !== nextLeft) {
+  if (owner.focusGlowKey !== nextGlowKey || glow.style.left !== nextLeft) {
     glow.style.left = nextLeft;
   }
-  if (state.gallery.focusGlowKey !== nextGlowKey || glow.style.top !== nextTop) {
+  if (owner.focusGlowKey !== nextGlowKey || glow.style.top !== nextTop) {
     glow.style.top = nextTop;
   }
   glow.hidden = false;
   glow.classList.add('is-visible');
-  state.gallery.focusedAlbumGlowCard = card;
-  state.gallery.focusGlowKey = nextGlowKey;
-  state.gallery.focusGlowVisible = true;
+  owner.focusedAlbumGlowCard = card;
+  owner.focusGlowKey = nextGlowKey;
+  owner.focusGlowVisible = true;
+}
+
+const resourceGalleryGlowOwners = new WeakMap();
+const resourceGalleryGlowNodeOwners = new WeakMap();
+function createGalleryFocusGlowOwner({viewport, scroll, glow, isCurrent}) {
+  if (!(viewport instanceof HTMLElement) || !(scroll instanceof HTMLElement)
+    || !(glow instanceof HTMLElement) || !viewport.contains(glow) || !scroll.contains(viewport)
+    || typeof isCurrent !== 'function') throw new TypeError('A scoped native Gallery glow host is required.');
+  const local = {focusedAlbumGlowCard: null, focusGlowKey: '', focusGlowVisible: false};
+  let disposed = false, frame = 0, timer = 0, pending = null;
+  const current = () => !disposed && resourceGalleryGlowOwners.get(viewport) === owner
+    && resourceGalleryGlowNodeOwners.get(glow) === owner && viewport.contains(glow)
+    && isCurrent() === true && !disposed && resourceGalleryGlowOwners.get(viewport) === owner
+    && resourceGalleryGlowNodeOwners.get(glow) === owner && viewport.contains(glow);
+  const cancel = () => {
+    if (frame) cancelBrowserAnimationFrame(frame);
+    if (timer) clearBrowserTimeout(timer);
+    frame = 0; timer = 0; pending = null;
+  };
+  const hide = () => {
+    if (!current()) {owner.dispose(); return;}
+    cancel(); glow.classList.remove('is-visible');
+    local.focusedAlbumGlowCard = null; local.focusGlowKey = ''; local.focusGlowVisible = false;
+    timer = scheduleBrowserTimeout(() => {
+      timer = 0;
+      if (!current()) {owner.dispose(); return;}
+      if (!glow.classList.contains('is-visible')) glow.hidden = true;
+    }, 260);
+  };
+  const schedule = (card, force = false) => {
+    if (!current()) {owner.dispose(); return;}
+    if (!(card instanceof HTMLElement) || !viewport.contains(card)) {hide(); return;}
+    if (!force && local.focusedAlbumGlowCard === card && !frame && local.focusGlowVisible) return;
+    pending = card;
+    if (timer) {clearBrowserTimeout(timer); timer = 0;}
+    if (frame) return;
+    frame = scheduleBrowserAnimationFrame(() => {
+      frame = 0;
+      if (!current()) {owner.dispose(); return;}
+      const next = pending; pending = null;
+      if (!next || !viewport.contains(next)) {hide(); return;}
+      const metrics = getGalleryFocusGlowMetrics(next, viewport);
+      if (!current()) {owner.dispose(); return;}
+      applyGalleryFocusGlow(next, {glow, viewport, scroll}, local, metrics);
+    });
+  };
+  const enter = event => schedule(event.target.closest?.('.album-card'));
+  const leave = event => {
+    const next = event.relatedTarget?.closest?.('.album-card');
+    if (next && viewport.contains(next)) schedule(next); else hide();
+  };
+  const refresh = () => {
+    if (!current()) {owner.dispose(); return;}
+    if (local.focusedAlbumGlowCard) schedule(local.focusedAlbumGlowCard, true);
+  };
+  const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(refresh) : null;
+  const owner = {refresh, dispose() {
+    if (disposed) return;
+    disposed = true; cancel(); observer?.disconnect();
+    for (const name of ['pointerover', 'focusin']) viewport.removeEventListener(name, enter);
+    for (const name of ['pointerout', 'focusout']) viewport.removeEventListener(name, leave);
+    scroll.removeEventListener('scroll', refresh); window.removeEventListener('resize', refresh);
+    if (resourceGalleryGlowOwners.get(viewport) === owner) {
+      resourceGalleryGlowOwners.delete(viewport);
+    }
+    if (resourceGalleryGlowNodeOwners.get(glow) === owner) {
+      resourceGalleryGlowNodeOwners.delete(glow); glow.classList.remove('is-visible'); glow.hidden = true;
+    }
+  }};
+  const previous = resourceGalleryGlowOwners.get(viewport);
+  const previousGlow = resourceGalleryGlowNodeOwners.get(glow);
+  resourceGalleryGlowOwners.set(viewport, owner);
+  resourceGalleryGlowNodeOwners.set(glow, owner);
+  previous?.dispose();
+  if (previousGlow !== previous) previousGlow?.dispose();
+  if (!current()) {owner.dispose(); return owner;}
+  glow.classList.remove('is-visible'); glow.hidden = true;
+  for (const name of ['pointerover', 'focusin']) viewport.addEventListener(name, enter);
+  for (const name of ['pointerout', 'focusout']) viewport.addEventListener(name, leave);
+  scroll.addEventListener('scroll', refresh, {passive: true}); window.addEventListener('resize', refresh);
+  observer?.observe(viewport);
+  return owner;
 }
 
 function scheduleGalleryFocusGlow(card, options = {}) {
@@ -546,6 +686,8 @@ function overlayClickStartedOnOverlay(overlay, event) {
 }
 
 function closeNonAlbumModal() {
+  nonAlbumSampleOwner = null;
+  if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('loose-tracks');
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
   if (!els.overlay) return;
@@ -582,11 +724,12 @@ async function openAlbumInExplorer(album) {
 }
 
 function getTrackModalElements() {
+  const selected = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
   return {
     overlay: document.getElementById('track-modal'),
-    header: typeof document.querySelector === 'function'
+    header: selected?.dialog?.querySelector('.track-modal-header') || (typeof document.querySelector === 'function'
       ? document.querySelector('#track-modal > .track-modal-dialog > .track-modal-header')
-      : null,
+      : null),
     title: document.getElementById('track-modal-title'),
     subtitle: document.getElementById('track-modal-subtitle'),
     cover: document.getElementById('track-modal-cover'),
@@ -1232,3 +1375,27 @@ function getTagEditConfirmElements() {
   };
 }
 
+
+function captureNonAlbumSampleOrigin({libraryRef} = {}) {
+  const surface = getNonAlbumModalElements().overlay;
+  if (nonAlbumSampleSuspension || !surface?.isConnected || surface.hidden) return null;
+  const owner = nonAlbumSampleOwner, sourceView = state.view, scope = TrackActionsRuntime.scope();
+  const refs = sampleDetailsTrackRefs(getVisibleNonAlbumTracks(), libraryRef);
+  if (!owner || !refs || !sampleDetailsBrowseAllowed() || scope.library != null && scope.library !== libraryRef) return null;
+  let retired = false, lease;
+  const current = () => {
+    if (retired) return false;
+    try {
+      const live = TrackActionsRuntime.scope(), next = sampleDetailsTrackRefs(getVisibleNonAlbumTracks(),libraryRef);
+      if (!surface.isConnected || surface.hidden && nonAlbumSampleSuspension?.lease !== lease
+        || nonAlbumSampleOwner !== owner || state.view !== sourceView || live.token !== scope.token
+        || live.library != null && live.library !== libraryRef || !sampleDetailsBrowseAllowed()
+        || !owner.source?.snapshot() || !next || JSON.stringify(next) !== JSON.stringify(refs)) retired = true;
+    } catch {retired = true;}
+    return !retired;
+  };
+  if (!current()) return null;
+  lease = Object.freeze({scopeKey:scope.token,origin:Object.freeze({kind:'album_details',track_refs:refs}),isCurrent:current,
+    back(returnToParent) {return current() && typeof returnToParent === 'function' ? returnToParent() : false;}});
+  return lease;
+}

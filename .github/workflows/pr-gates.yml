@@ -270,6 +270,33 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Accept dormant Windows native rooted-file baseline
+        id: windows_rooted_native
+        timeout-minutes: 6
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          $env:PYTEST_ADDOPTS = $null
+          $env:PYTEST_PLUGINS = $null
+          $env:PYTHONPATH = $null
+          $env:PYTHONHOME = $null
+          $env:PYTHONSTARTUP = $null
+          $env:PYTHONINSPECT = $null
+          python -I -B tests/windows_native/test_rooted_local_file_windows_native.py --ci
+          $nativeExitCode = $LASTEXITCODE
+          if ($nativeExitCode -ne 0) {
+            throw "Windows native rooted-file acceptance failed with exit code $nativeExitCode."
+          }
+
+      - name: Upload dormant Windows native rooted-file evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rooted-native-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\albumhaven-w0-${{ github.run_id }}-${{ github.run_attempt }}\evidence
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Set up pinned Python Chrome for Testing
         id: setup_python_chrome
         uses: browser-actions/setup-chrome@v2
@@ -306,6 +333,11 @@ jobs:
             -AppPrivilegeMode Inherited `
             -SkipFixtureLoad
 
+      - name: Initialize fresh persistent Loved producer bootstrap baseline
+        run: |
+          $env:PGPASSWORD = $null
+          python scripts/ci/initialize-loved-browse-postgres.py
+
       - name: Write Python foundation version manifest
         env:
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_python_chrome.outputs.chrome-path }}
@@ -329,6 +361,8 @@ jobs:
           "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Collect Python test inventory
+        env:
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: favorites_windows17
         run: |
           python -m pytest --collect-only -q 2>&1 | Tee-Object -FilePath "${{ runner.temp }}\pytest-collection.txt"
           $collectionExitCode = $LASTEXITCODE
@@ -340,6 +374,8 @@ jobs:
         run: node scripts/ci/validate-foundation-gates.cjs --pytest-collection=${{ runner.temp }}\pytest-collection.txt
 
       - name: Run Python tests
+        env:
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: favorites_windows17
         run: |
           $env:PGPASSWORD = $null
           python -m pytest -q --junitxml="${{ runner.temp }}\pytest-results.xml" -vv --durations=20 -o faulthandler_timeout=60
@@ -395,6 +431,184 @@ jobs:
             ${{ runner.temp }}\pytest-results.xml
           if-no-files-found: error
           retention-days: 14
+
+  test_tops_linux:
+    name: Focused Tops Backend (Linux, non-authoritative)
+    needs:
+      - review_scope
+      - review_prerequisites
+      - test_js
+      - test_components
+      - test_node_windows
+      - test_python
+      - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
+      - e2e_functional
+      - e2e_performance_ci
+    # Supplemental platform diagnosis, after existing verification has exited.
+    # This never substitutes for or changes the full-suite verification gate.
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == '2026-10-03-album-tops' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          # Synthetic password for this disposable service only; no user secret.
+          POSTGRES_PASSWORD: album-haven-disposable-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install existing Python requirements
+        run: python -m pip install -r requirements.txt
+
+      - name: Provision disposable synthetic PostgreSQL
+        env:
+          CI_POSTGRES_ADMIN_PASSWORD: album-haven-disposable-ci-only
+        run: python scripts/ci/bootstrap-linux-tops-postgres.py --suffix "tops_${{ github.run_id }}_${{ github.run_attempt }}"
+
+      - name: Record exact focused selection
+        run: |
+          mkdir -p "$RUNNER_TEMP/tops-linux-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/tops-linux-evidence/head.txt"
+          python --version > "$RUNNER_TEMP/tops-linux-evidence/python.txt"
+          cat > "$RUNNER_TEMP/tops-linux-evidence/tests.txt" <<'TESTS'
+          tests/py/test_top_artwork_owner_http.py
+          tests/py/test_top_artwork_owner_sources_postgres.py
+          tests/py/test_top_artwork_owner_publication_postgres.py
+          tests/py/test_rooted_cleanup_ownership.py
+          tests/py/test_rooted_windows_cleanup_ownership.py
+          tests/py/test_rooted_windows_operation_context.py
+          tests/py/test_top_artwork_windows_resolution.py
+          tests/py/test_top_artwork_windows_capture.py
+          tests/py/test_top_artwork_windows_proof.py
+          tests/py/test_top_artwork_publication_retention_postgres.py
+          tests/py/test_top_artwork_publication_seals_postgres.py
+          tests/py/test_top_artwork_publication_closure_postgres.py
+          tests/py/test_top_artwork_publication.py
+          tests/py/test_top_artwork_publication_postgres.py
+          tests/py/test_public_album_top_artwork_reader.py
+          tests/py/test_public_album_top_artwork_http.py
+          tests/py/test_public_album_top_artwork_reader_postgres.py
+          tests/py/test_artwork_proof_codec.py
+          tests/py/test_top_artwork_resolution.py
+          tests/py/test_rooted_local_file.py
+          tests/py/test_rooted_local_file_windows.py
+          tests/py/test_public_top_artwork_acquisition.py
+          tests/py/test_artwork_pixels.py
+          tests/py/test_album_top_artwork_preparation_postgres.py
+          tests/py/test_top_artwork_draft_preparation_postgres.py
+          tests/py/test_top_artwork_retention_postgres.py
+          tests/py/test_top_artwork_draft_proof.py
+          tests/py/test_top_artwork_draft_capture_postgres.py
+          tests/py/test_top_artwork_saved_phases_postgres.py
+          tests/py/test_top_artwork_review.py
+          tests/py/test_top_artwork_review_postgres.py
+          tests/py/test_public_metadata_file_invalidation_postgres.py
+          tests/py/test_album_top_remote_identity_lock_postgres.py
+          TESTS
+          mapfile -t selected < "$RUNNER_TEMP/tops-linux-evidence/tests.txt"
+          for test_path in "${selected[@]}"; do test -f "$test_path"; done
+          python -m pytest --collect-only -q "${selected[@]}" 2>&1 | tee "$RUNNER_TEMP/tops-linux-evidence/collection.txt"
+
+      # Observation only: report the first known E failure before the long gate.
+      # Separate bounded invocations never replace or short-circuit the full run.
+      - name: Diagnose first E HTTP failure
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          set +e
+          python -m pytest -q -vv --maxfail=1 --tb=short -o faulthandler_timeout=60 \
+            --junitxml="$RUNNER_TEMP/tops-linux-evidence/e-http-first-failure.xml" \
+            'tests/py/test_top_artwork_owner_http.py::test_exact_fixed_service_dispatch_current_context_and_server_owned_key[state-saved]' \
+            2>&1 | tee "$RUNNER_TEMP/tops-linux-evidence/e-http-first-failure.txt"
+          diagnostic_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${diagnostic_status[0]}" > "$RUNNER_TEMP/tops-linux-evidence/e-http-first-failure.exit-code.txt"
+          if [ "${diagnostic_status[0]}" -ne 0 ]; then exit "${diagnostic_status[0]}"; fi
+          exit "${diagnostic_status[1]}"
+
+      - name: Diagnose first E publication HTTP failure
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          set +e
+          python -m pytest -q -vv --maxfail=1 --tb=short -o faulthandler_timeout=60 \
+            --junitxml="$RUNNER_TEMP/tops-linux-evidence/e-publication-first-failure.xml" \
+            'tests/py/test_top_artwork_owner_publication_postgres.py::test_genuine_http_prepare_review_png_then_separate_explicit_publish[saved]' \
+            2>&1 | tee "$RUNNER_TEMP/tops-linux-evidence/e-publication-first-failure.txt"
+          diagnostic_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${diagnostic_status[0]}" > "$RUNNER_TEMP/tops-linux-evidence/e-publication-first-failure.exit-code.txt"
+          if [ "${diagnostic_status[0]}" -ne 0 ]; then exit "${diagnostic_status[0]}"; fi
+          exit "${diagnostic_status[1]}"
+
+      - name: Diagnose metadata-only HTTP publication regression
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          set +e
+          python -m pytest -q -vv --maxfail=1 --tb=short -o faulthandler_timeout=60 \
+            --junitxml="$RUNNER_TEMP/tops-linux-evidence/e-metadata-only-first-failure.xml" \
+            'tests/py/test_top_artwork_owner_publication_postgres.py::test_existing_metadata_only_http_preview_enable_and_save_keep_v1' \
+            2>&1 | tee "$RUNNER_TEMP/tops-linux-evidence/e-metadata-only-first-failure.txt"
+          diagnostic_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${diagnostic_status[0]}" > "$RUNNER_TEMP/tops-linux-evidence/e-metadata-only-first-failure.exit-code.txt"
+          if [ "${diagnostic_status[0]}" -ne 0 ]; then exit "${diagnostic_status[0]}"; fi
+          exit "${diagnostic_status[1]}"
+
+      - name: Run selected backend contracts sequentially
+        run: |
+          mapfile -t selected < "$RUNNER_TEMP/tops-linux-evidence/tests.txt"
+          python -m pytest -q -vv --durations=20 -o faulthandler_timeout=60 \
+            --junitxml="$RUNNER_TEMP/tops-linux-evidence/results.xml" \
+            "${selected[@]}" 2>&1 | tee "$RUNNER_TEMP/tops-linux-evidence/runtime.txt"
+
+      - name: Explain focused evidence boundary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Focused Linux backend evidence"
+            echo "Exact PR head: ${{ github.event.pull_request.head.sha }}"
+            echo "Selected codec, rooted-file and artwork contracts only."
+            echo "This is supplemental platform evidence, not a full-suite or release result."
+            echo "Unselected, skipped and interrupted cases remain unverified."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload focused logs and results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tops-linux-backend-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tops-linux-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove only this job's temporary password file
+        if: ${{ always() }}
+        run: rm -f -- "$RUNNER_TEMP/album_haven_ci_tops_${{ github.run_id }}_${{ github.run_attempt }}.pgpass"
 
   e2e_production_parity:
     name: "E2E: Production Parity"
@@ -2111,3 +2325,599 @@ jobs:
                 body,
               });
             }
+
+  test_feature_batches_linux:
+    name: Feature ${{ matrix.batch }}${{ matrix.diagnostic && format(' diagnostic {0}', matrix.diagnostic) || '' }} (Linux, non-authoritative)
+    needs:
+      - review_scope
+      - review_prerequisites
+      - test_js
+      - test_components
+      - test_node_windows
+      - test_python
+      - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
+      - e2e_functional
+      - e2e_performance_ci
+    # Supplemental platform diagnosis, after existing verification has exited.
+    # This never substitutes for or changes the full-suite verification gate.
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == '2026-10-03-album-tops' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - batch: d
+            timeout_minutes: 30
+          - batch: e_http
+            timeout_minutes: 20
+          - batch: e_sources
+            timeout_minutes: 30
+          - batch: e_publication
+            timeout_minutes: 45
+          - batch: w1_w2
+            timeout_minutes: 20
+          - batch: loved_backend
+            timeout_minutes: 30
+          - batch: listener_contract_http
+            timeout_minutes: 20
+          - batch: listener_postgres
+            timeout_minutes: 30
+          - batch: popularity_bootstrap
+            timeout_minutes: 30
+          - batch: favorites_backend
+            timeout_minutes: 30
+          - batch: retained_ownership
+            timeout_minutes: 20
+          - batch: capture_backend
+            timeout_minutes: 20
+          - batch: new_top_targets
+            timeout_minutes: 30
+          - batch: new_playlist_preview
+            timeout_minutes: 30
+          - batch: new_top_queue
+            timeout_minutes: 30
+          - batch: new_playlist_preferences
+            timeout_minutes: 30
+          - batch: new_source_import
+            timeout_minutes: 30
+          - batch: new_url_html
+            timeout_minutes: 30
+          - batch: artist_scope_commands
+            timeout_minutes: 45
+          - batch: artist_remote_evidence
+            timeout_minutes: 45
+          - batch: artist_scoped_reads
+            timeout_minutes: 30
+          # Each exact-node diagnostic has a fresh runner/service and the same
+          # owned initializer. Never reuse a quarantined full-batch database.
+          - batch: popularity_bootstrap
+            diagnostic: popularity_inventory_teardown
+            timeout_minutes: 15
+          - batch: favorites_backend
+            diagnostic: favorites_revoked_view_teardown
+            timeout_minutes: 15
+          - batch: favorites_backend
+            diagnostic: favorites_schema_contract
+            timeout_minutes: 15
+          - batch: favorites_backend
+            diagnostic: favorites_durable_view
+            timeout_minutes: 15
+          - batch: favorites_backend
+            diagnostic: favorites_importer_race
+            timeout_minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          # Synthetic password for this disposable service only; no user secret.
+          POSTGRES_PASSWORD: album-haven-disposable-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Capture unreviewed rooted stdlib metadata
+        id: rooted_stdlib_metadata
+        if: ${{ matrix.batch == 'retained_ownership' }}
+        timeout-minutes: 1
+        run: |
+          set -o noclobber
+          python -I -S -B scripts/ci/capture-rooted-stdlib-metadata.py > "${{ runner.temp }}/rooted-stdlib-metadata.json"
+
+      - name: Upload unreviewed rooted stdlib metadata
+        if: ${{ always() && matrix.batch == 'retained_ownership' && steps.rooted_stdlib_metadata.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rooted-stdlib-metadata-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rooted-stdlib-metadata.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Install existing Python requirements
+        run: python -m pip install -r requirements.txt
+
+      - name: Provision disposable synthetic PostgreSQL
+        env:
+          CI_POSTGRES_ADMIN_PASSWORD: album-haven-disposable-ci-only
+        run: python scripts/ci/bootstrap-linux-tops-postgres.py --suffix "tops_${{ github.run_id }}_${{ github.run_attempt }}"
+
+      - name: Initialize fresh personal-album producer bootstrap baseline
+        if: ${{ matrix.batch == 'loved_backend' || matrix.batch == 'favorites_backend' || matrix.batch == 'capture_backend' }}
+        env:
+          FEATURE_BATCH: ${{ matrix.batch }}
+        run: python scripts/ci/initialize-loved-browse-postgres.py
+
+      - name: Initialize fresh popularity bootstrap baseline
+        if: ${{ matrix.batch == 'popularity_bootstrap' }}
+        run: python scripts/ci/initialize-popularity-search-postgres.py
+
+      - name: Record exact allowlisted feature batch
+        id: feature_selection
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          FEATURE_BATCH: ${{ matrix.batch }}
+          FEATURE_DIAGNOSTIC: ${{ matrix.diagnostic }}
+        run: |
+          evidence="$RUNNER_TEMP/feature-batch-evidence"
+          mkdir -p "$evidence"
+          git rev-parse HEAD > "$evidence/head.txt"
+          test "$(cat "$evidence/head.txt")" = "$EXPECTED_HEAD"
+          python --version > "$evidence/python.txt"
+          printf '%s\n' "$FEATURE_BATCH" > "$evidence/batch.txt"
+          case "$FEATURE_BATCH" in
+            d)
+              printf '%s\n' \
+                'tests/py/test_public_album_top_artwork_reader.py' \
+                'tests/py/test_public_album_top_artwork_http.py' \
+                'tests/py/test_public_album_top_artwork_reader_postgres.py' > "$evidence/tests.txt"
+              ;;
+            e_http)
+              printf '%s\n' \
+                'tests/py/test_top_artwork_owner_http.py' > "$evidence/tests.txt"
+              ;;
+            e_sources)
+              printf '%s\n' \
+                'tests/py/test_top_artwork_owner_sources_postgres.py' > "$evidence/tests.txt"
+              ;;
+            e_publication)
+              printf '%s\n' \
+                'tests/py/test_top_artwork_owner_publication_postgres.py' > "$evidence/tests.txt"
+              ;;
+            w1_w2)
+              printf '%s\n' \
+                'tests/py/test_rooted_cleanup_ownership.py' \
+                'tests/py/test_rooted_windows_cleanup_ownership.py' \
+                'tests/py/test_rooted_windows_operation_context.py' \
+                'tests/py/test_top_artwork_windows_resolution.py' \
+                'tests/py/test_top_artwork_windows_capture.py' \
+                'tests/py/test_top_artwork_windows_proof.py' > "$evidence/tests.txt"
+              ;;
+            loved_backend)
+              printf '%s\n' \
+                'tests/py/test_artist_loved_recipe.py' \
+                'tests/py/test_artist_loved_persistence_live.py' \
+                'tests/py/test_artist_loved_routes.py' \
+                'tests/py/test_artist_loved_browse_projection.py' \
+                'tests/py/test_initialize_loved_browse_postgres.py' > "$evidence/tests.txt"
+              ;;
+            listener_contract_http)
+              printf '%s\n' \
+                'tests/py/test_listener_search_contract.py' \
+                'tests/py/test_listener_search_reader_contract.py' \
+                'tests/py/test_listener_search_live_contract.py' \
+                'tests/py/test_listener_search_live_tokens.py' \
+                'tests/py/test_listener_search_live_http.py' > "$evidence/tests.txt"
+              ;;
+            listener_postgres)
+              printf '%s\n' \
+                'tests/py/test_listener_search_love_revision_postgres.py' \
+                'tests/py/test_listener_search_live_postgres.py' \
+                'tests/py/test_listener_search_live_native_postgres.py' > "$evidence/tests.txt"
+              ;;
+            popularity_bootstrap)
+              printf '%s\n' \
+                'tests/py/test_popularity_epoch_ledger.py' \
+                'tests/py/test_private_popularity_search_contract.py' \
+                'tests/py/test_private_popularity_search_inventory.py' \
+                'tests/py/test_private_popularity_search_postgres.py' \
+                'tests/py/test_private_popularity_search_http.py' \
+                'tests/py/test_private_popularity_gallery_contract.py' \
+                'tests/py/test_private_popularity_gallery_postgres.py' \
+                'tests/py/test_private_popularity_gallery_http.py' \
+                'tests/py/test_relation_alias_endpoint_projection_postgres.py' > "$evidence/tests.txt"
+              ;;
+            favorites_backend)
+              printf '%s\n' \
+                'tests/py/test_album_preferences_postgres.py' \
+                'tests/py/test_album_preferences_asgi.py' \
+                'tests/py/test_album_preference_subject_projection.py' \
+                'tests/py/test_album_top_native_queue.py' \
+                'tests/py/test_album_top_native_queue_postgres.py' \
+                'tests/py/test_album_top_native_queue_routes.py' \
+                'tests/py/test_album_top_native_remote_queue_postgres.py' \
+                'tests/py/test_album_top_native_remote_targets_postgres.py' \
+                'tests/py/test_album_top_native_target_routes.py' \
+                'tests/py/test_album_top_native_targets.py' \
+                'tests/py/test_album_top_native_targets_postgres.py' \
+                'tests/py/test_album_top_queue_popularity.py' \
+                'tests/py/test_album_top_queue_popularity_postgres.py' \
+                'tests/py/test_album_top_scoped_creation_metadata_boundaries.py' \
+                'tests/py/test_album_top_scoped_creation_metadata_postgres.py' \
+                'tests/py/test_artist_listen_launch_final_context.py' \
+                'tests/py/test_artist_listen_launch_finalizer.py' \
+                'tests/py/test_artist_listen_launch_postgres.py' \
+                'tests/py/test_artist_listen_launch_projection.py' \
+                'tests/py/test_artist_loved_browse_projection.py' \
+                'tests/py/test_artist_loved_persistence_live.py' \
+                'tests/py/test_artist_loved_recipe.py' \
+                'tests/py/test_artist_loved_routes.py' \
+                'tests/py/test_initialize_loved_browse_postgres.py' > "$evidence/tests.txt"
+              ;;
+            artist_scope_commands)
+              printf '%s\n' \
+                'tests/py/test_album_top_artist_scope_artwork_postgres.py' \
+                'tests/py/test_album_top_artist_scope_commands.py' \
+                'tests/py/test_album_top_artist_scope_postgres.py' \
+                'tests/py/test_album_top_artist_scope_preview_postgres.py' \
+                'tests/py/test_album_top_artist_scope_routes.py' \
+                'tests/py/test_album_top_artwork_preparation_postgres.py' \
+                'tests/py/test_album_top_browse.py' \
+                'tests/py/test_album_top_browse_postgres.py' \
+                'tests/py/test_album_top_catalog.py' \
+                'tests/py/test_album_top_catalog_versions.py' \
+                'tests/py/test_album_top_collaboration_commands.py' \
+                'tests/py/test_album_top_collaboration_postgres.py' \
+                'tests/py/test_album_top_collaboration_routes.py' \
+                'tests/py/test_album_top_copy_postgres.py' \
+                'tests/py/test_album_top_membership.py' \
+                'tests/py/test_album_top_membership_evidence_postgres.py' \
+                'tests/py/test_album_top_membership_postgres.py' \
+                'tests/py/test_album_top_membership_routes.py' \
+                'tests/py/test_album_top_owner_publication_postgres.py' \
+                'tests/py/test_album_top_owner_publication_routes.py' \
+                'tests/py/test_album_top_publication_sources.py' \
+                'tests/py/test_album_top_publication_sources_postgres.py' \
+                'tests/py/test_album_top_requests_postgres.py' \
+                'tests/py/test_album_top_source_finalization.py' \
+                'tests/py/test_album_top_source_finalization_postgres.py' \
+                'tests/py/test_album_top_source_finalization_remote_postgres.py' \
+                'tests/py/test_album_top_source_finalization_routes.py' \
+                'tests/py/test_album_top_source_lock_publication_postgres.py' \
+                'tests/py/test_isolated_postgres_migration_ledger.py' \
+                'tests/py/test_owned_album_top_route_boundary.py' \
+                'tests/py/test_owned_album_tops.py' \
+                'tests/py/test_owned_album_tops_postgres.py' \
+                'tests/py/test_top_artwork_draft_preparation_postgres.py' \
+                'tests/py/test_top_artwork_owner_http.py' \
+                'tests/py/test_top_artwork_owner_publication_postgres.py' \
+                'tests/py/test_top_artwork_owner_sources_postgres.py' \
+                'tests/py/test_top_artwork_publication.py' \
+                'tests/py/test_top_artwork_publication_closure_postgres.py' \
+                'tests/py/test_top_artwork_publication_postgres.py' \
+                'tests/py/test_top_artwork_publication_retention_postgres.py' \
+                'tests/py/test_top_artwork_publication_seals_postgres.py' \
+                'tests/py/test_top_artwork_saved_phases_postgres.py' \
+                'tests/py/test_artist_backend_ci_selection_contract.py' > "$evidence/tests.txt"
+              ;;
+            artist_remote_evidence)
+              printf '%s\n' \
+                'tests/py/test_album_top_private_remote_context_routes.py' \
+                'tests/py/test_album_top_remote_acquisition_lock_order.py' \
+                'tests/py/test_album_top_remote_acquisition_postgres.py' \
+                'tests/py/test_album_top_remote_acquisition_routes.py' \
+                'tests/py/test_album_top_remote_artist_scope_authority_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_bounds_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_fences_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_hook.py' \
+                'tests/py/test_album_top_remote_artist_scope_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_publication_postgres.py' \
+                'tests/py/test_album_top_remote_artist_scope_retained_postgres.py' \
+                'tests/py/test_album_top_remote_consumption_postgres.py' \
+                'tests/py/test_album_top_remote_identity_lock_postgres.py' \
+                'tests/py/test_album_top_remote_membership_digest_vectors.py' \
+                'tests/py/test_album_top_remote_membership_postgres.py' \
+                'tests/py/test_album_top_remote_membership_wire.py' \
+                'tests/py/test_album_top_remote_preparation_routes.py' \
+                'tests/py/test_album_top_remote_preparation_sources.py' \
+                'tests/py/test_album_top_remote_preparations_postgres.py' \
+                'tests/py/test_album_top_remote_retention_postgres.py' \
+                'tests/py/test_album_top_remote_sources.py' \
+                'tests/py/test_album_top_remote_storage_postgres.py' \
+                'tests/py/test_remote_album_catalog_mapper.py' \
+                'tests/py/test_remote_album_credited_admission_shape_postgres.py' \
+                'tests/py/test_remote_album_credited_consumption_postgres.py' \
+                'tests/py/test_remote_album_credited_evidence.py' \
+                'tests/py/test_remote_album_credited_limits_postgres.py' \
+                'tests/py/test_remote_album_credited_parameter_postgres.py' \
+                'tests/py/test_remote_album_credited_retention_postgres.py' \
+                'tests/py/test_remote_album_credited_rows.py' \
+                'tests/py/test_remote_album_credited_storage_postgres.py' \
+                'tests/py/test_remote_album_provider_evidence.py' \
+                'tests/py/test_remote_album_search.py' \
+                'tests/py/test_remote_preparation_cutoff_postgres.py' \
+                'tests/py/test_remote_preparation_storage_postgres.py' > "$evidence/tests.txt"
+              ;;
+            artist_scoped_reads)
+              printf '%s\n' \
+                'tests/py/test_album_top_acquired_artist_preview_display_replay.py' \
+                'tests/py/test_album_top_acquired_artist_preview_fallback.py' \
+                'tests/py/test_album_top_acquired_artist_preview_fences.py' \
+                'tests/py/test_album_top_acquired_artist_preview_postgres.py' \
+                'tests/py/test_album_top_acquired_artist_preview_routes.py' \
+                'tests/py/test_album_top_scoped_remote_search_fences_postgres.py' \
+                'tests/py/test_album_top_scoped_remote_search_final_boundaries_postgres.py' \
+                'tests/py/test_album_top_scoped_remote_search_postgres.py' \
+                'tests/py/test_album_top_scoped_remote_search_routes.py' > "$evidence/tests.txt"
+              ;;
+            retained_ownership)
+              printf '%s\n' \
+                'tests/py/test_current_actor_canonical_selector.py' \
+                'tests/py/test_retained_playback_shared_owner.py' \
+                'tests/py/test_playback_evidence_leases.py' \
+                'tests/py/test_rooted_playback_adapter.py' > "$evidence/tests.txt"
+              ;;
+            capture_backend)
+              printf '%s\n' \
+                'tests/py/test_playback_capture.py' \
+                'tests/py/test_playback_capture_routes.py' \
+                'tests/py/test_playback_capture_postgres.py' \
+                'tests/py/test_playback_capture_migration_postgres.py' \
+                'tests/py/test_private_library_authority_capture_lock_order.py' \
+                'tests/py/test_current_library_selector_contract.py' \
+                'tests/py/test_private_route_boundary.py' \
+                'tests/py/test_app_factory.py::test_app_reported_capture_routes_are_mounted' \
+                'tests/py/test_isolated_postgres_migration_ledger.py' \
+                'tests/py/test_phase7_auth_app.py' \
+                'tests/py/test_initialize_loved_browse_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_top_targets)
+              printf '%s\n' \
+                'tests/py/test_album_top_browse.py' \
+                'tests/py/test_album_top_browse_postgres.py' \
+                'tests/py/test_album_top_native_remote_targets_postgres.py' \
+                'tests/py/test_album_top_native_target_routes.py' \
+                'tests/py/test_album_top_native_targets.py' \
+                'tests/py/test_album_top_native_targets_postgres.py' \
+                'tests/py/test_owned_album_tops_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_playlist_preview)
+              printf '%s\n' \
+                'tests/py/test_playlist_album_top_preview_availability.py' \
+                'tests/py/test_playlist_album_top_preview_editions.py' \
+                'tests/py/test_playlist_album_top_preview_routes.py' \
+                'tests/py/test_playlist_album_top_preview_target_routes.py' \
+                'tests/py/test_playlist_album_top_preview_targets.py' \
+                'tests/py/test_playlist_album_top_previews.py' \
+                'tests/py/test_playlist_album_top_previews_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_top_queue)
+              printf '%s\n' \
+                'tests/py/test_album_top_native_queue.py' \
+                'tests/py/test_album_top_native_queue_postgres.py' \
+                'tests/py/test_album_top_native_queue_routes.py' \
+                'tests/py/test_album_top_native_remote_queue_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_playlist_preferences)
+              printf '%s\n' \
+                'tests/py/test_playlist_filter_preferences.py' \
+                'tests/py/test_playlist_filter_preferences_postgres.py' \
+                'tests/py/test_playlist_filter_preferences_routes.py' > "$evidence/tests.txt"
+              ;;
+            new_source_import)
+              printf '%s\n' \
+                'tests/py/test_album_top_source_import_routes.py' \
+                'tests/py/test_album_top_source_imports_postgres.py' \
+                'tests/py/test_album_top_source_parse.py' \
+                'tests/py/test_album_top_source_finalization.py' \
+                'tests/py/test_album_top_source_finalization_postgres.py' \
+                'tests/py/test_album_top_source_finalization_remote_postgres.py' \
+                'tests/py/test_album_top_source_finalization_routes.py' \
+                'tests/py/test_album_top_source_lock_publication_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_url_html)
+              printf '%s\n' \
+                'tests/py/test_album_top_url_import_routes.py' \
+                'tests/py/test_album_top_url_imports_postgres.py' \
+                'tests/py/test_postgres_pool_call_timeout.py' \
+                'tests/py/test_public_document_acquisition.py' \
+                'tests/py/test_public_document_worker.py' \
+                'tests/py/test_album_top_source_html.py' \
+                'tests/py/test_album_top_source_html_structure_parents.py' > "$evidence/tests.txt"
+              ;;
+            *) echo "Unknown feature batch" >&2; exit 1 ;;
+          esac
+          # Closed diagnostic allowlist, paired with its original admission lane.
+          # Original full-batch selectors above remain unchanged.
+          if [ -n "$FEATURE_DIAGNOSTIC" ]; then
+            cp "$evidence/tests.txt" "$evidence/full-batch-tests.txt"
+            case "$FEATURE_BATCH:$FEATURE_DIAGNOSTIC" in
+              popularity_bootstrap:popularity_inventory_teardown)
+                printf '%s\n' 'tests/py/test_private_popularity_search_inventory.py::test_admission_precedes_every_metadata_facet_and_metric_query' > "$evidence/tests.txt" ;;
+              favorites_backend:favorites_revoked_view_teardown)
+                printf '%s\n' 'tests/py/test_album_preferences_asgi.py::test_revoked_durable_view_grant_is_not_replaced_by_cached_actor' > "$evidence/tests.txt" ;;
+              favorites_backend:favorites_schema_contract)
+                printf '%s\n' 'tests/py/test_album_preferences_postgres.py::test_migrated_schema_defaults_constraints_and_no_new_counter_privilege' > "$evidence/tests.txt" ;;
+              favorites_backend:favorites_durable_view)
+                printf '%s\n' 'tests/py/test_album_preferences_postgres.py::test_durable_denial_prevents_write[view]' > "$evidence/tests.txt" ;;
+              favorites_backend:favorites_importer_race)
+                printf '%s\n' 'tests/py/test_album_preferences_postgres.py::test_actual_importer_wins_absent_row_race_without_stale_patch_overwrite' > "$evidence/tests.txt" ;;
+              *) echo "Unknown diagnostic or mismatched feature lane" >&2; exit 1 ;;
+            esac
+            printf '%s\n' "$FEATURE_DIAGNOSTIC" > "$evidence/diagnostic.txt"
+          fi
+          test -s "$evidence/tests.txt"
+          test -z "$(sort "$evidence/tests.txt" | uniq -d)"
+          mapfile -t selected < "$evidence/tests.txt"
+          for test_path in "${selected[@]}"; do test -f "${test_path%%::*}"; done
+
+      - name: Collect exact feature batch
+        id: feature_collection
+        env:
+          FEATURE_BATCH: ${{ matrix.batch }}
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: ${{ matrix.batch == 'favorites_backend' && 'favorites_linux17' || '' }}
+        run: |
+          evidence="$RUNNER_TEMP/feature-batch-evidence"
+          mapfile -t selected < "$evidence/tests.txt"
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/collection-started-at.txt"
+          set +e
+          python -m pytest --collect-only -q "${selected[@]}" 2>&1 | tee "$evidence/collection.txt"
+          collection_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${collection_status[0]}" > "$evidence/collection.exit-code.txt" || exit 1
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/collection-completed-at.txt" || exit 1
+          if [ "${collection_status[0]}" -ne 0 ]; then exit "${collection_status[0]}"; fi
+          exit "${collection_status[1]}"
+
+      - name: Run complete feature batch sequentially
+        if: ${{ !matrix.diagnostic }}
+        id: feature_runtime
+        env:
+          FEATURE_BATCH: ${{ matrix.batch }}
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: ${{ matrix.batch == 'favorites_backend' && 'favorites_linux17' || '' }}
+        run: |
+          evidence="$RUNNER_TEMP/feature-batch-evidence"
+          mapfile -t selected < "$evidence/tests.txt"
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/runtime-started-at.txt"
+          set +e
+          python -m pytest -q -vv --tb=short --durations=20 -o faulthandler_timeout=60 \
+            --junitxml="$evidence/results.xml" "${selected[@]}" 2>&1 | tee "$evidence/runtime.txt"
+          runtime_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${runtime_status[0]}" > "$evidence/runtime.exit-code.txt" || exit 1
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/runtime-completed-at.txt" || exit 1
+          if [ "${runtime_status[0]}" -ne 0 ]; then exit "${runtime_status[0]}"; fi
+          exit "${runtime_status[1]}"
+
+      - name: Reject missing or skipped capture verification
+        if: ${{ !cancelled() && matrix.batch == 'capture_backend' && steps.feature_runtime.outcome != 'skipped' }}
+        run: |
+          python - <<'PY_CAPTURE_EVIDENCE'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          evidence = Path(os.environ["RUNNER_TEMP"]) / "feature-batch-evidence"
+          selected = evidence.joinpath("tests.txt").read_text().splitlines()
+          expected = {path.split("::", 1)[0][:-3].replace("/", ".") for path in selected}
+          cases = ET.parse(evidence / "results.xml").getroot().findall(".//testcase")
+          observed = {case.get("classname", "") for case in cases}
+          missing = sorted(module for module in expected
+                           if not any(name == module or name.startswith(module + ".") for name in observed))
+          skipped = [case for case in cases if case.find("skipped") is not None]
+          failed = [case for case in cases if case.find("failure") is not None or case.find("error") is not None]
+          if not cases or missing or skipped or failed:
+              raise SystemExit(f"Capture evidence incomplete: cases={len(cases)}, missing={missing}, "
+                               f"skipped={len(skipped)}, failed={len(failed)}")
+          evidence.joinpath("capture-zero-skip.txt").write_text(
+              f"Verified {len(cases)} cases across {len(expected)} selected modules; zero skips.\n")
+          PY_CAPTURE_EVIDENCE
+
+      - name: Require complete new-feature execution evidence
+        if: ${{ !cancelled() && contains(fromJSON('["new_top_targets","new_playlist_preview","new_top_queue","new_playlist_preferences","new_source_import","new_url_html","artist_scope_commands","artist_remote_evidence","artist_scoped_reads","favorites_backend"]'), matrix.batch) && steps.feature_runtime.outcome != 'skipped' }}
+        run: |
+          python - <<'PY_NEW_FEATURE_EVIDENCE'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          evidence = Path(os.environ["RUNNER_TEMP"]) / "feature-batch-evidence"
+          selected = evidence.joinpath("tests.txt").read_text().splitlines()
+          expected = {path.split("::", 1)[0][:-3].replace("/", ".") for path in selected}
+          cases = ET.parse(evidence / "results.xml").getroot().findall(".//testcase")
+          observed = {case.get("classname", "") for case in cases}
+          missing = sorted(module for module in expected
+                           if not any(name == module or name.startswith(module + ".") for name in observed))
+          skipped = [case for case in cases if case.find("skipped") is not None]
+          failed = [case for case in cases if case.find("failure") is not None or case.find("error") is not None]
+          if not cases or missing or skipped or failed:
+              raise SystemExit(f"New-feature evidence incomplete: cases={len(cases)}, missing={missing}, "
+                               f"skipped={len(skipped)}, failed={len(failed)}")
+          evidence.joinpath("new-feature-zero-skip.txt").write_text(
+              f"Verified {len(cases)} cases across {len(expected)} selected modules; zero skips.\n")
+          PY_NEW_FEATURE_EVIDENCE
+
+      - name: Diagnose one exact feature node on its fresh owned baseline
+        if: ${{ matrix.diagnostic != '' }}
+        id: feature_diagnostic_runtime
+        timeout-minutes: 5
+        env:
+          FEATURE_BATCH: ${{ matrix.batch }}
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: ${{ matrix.batch == 'favorites_backend' && 'favorites_linux17' || '' }}
+        run: |
+          evidence="$RUNNER_TEMP/feature-batch-evidence"
+          mapfile -t selected < "$evidence/tests.txt"
+          test "${#selected[@]}" -eq 1
+          test -s "$evidence/diagnostic.txt"
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/diagnostic-runtime-started-at.txt"
+          set +e
+          timeout --signal=TERM --kill-after=30s 180s \
+            python -u -m pytest -q -vv --maxfail=1 --tb=long --show-capture=all -rA \
+            -o faulthandler_timeout=60 --junitxml="$evidence/diagnostic-results.xml" \
+            "${selected[@]}" 2>&1 | tee "$evidence/diagnostic-runtime.txt"
+          diagnostic_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${diagnostic_status[0]}" > "$evidence/diagnostic-runtime.exit-code.txt" || exit 1
+          printf '%s\n' "${diagnostic_status[1]}" > "$evidence/diagnostic-tee.exit-code.txt" || exit 1
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/diagnostic-runtime-completed-at.txt" || exit 1
+          # Timeout 124/137 is interrupted evidence, never a passing test result.
+          # No lock release/reset/retry follows a failed or interrupted fixture.
+          if [ "${diagnostic_status[0]}" -ne 0 ]; then exit "${diagnostic_status[0]}"; fi
+          exit "${diagnostic_status[1]}"
+
+      - name: Explain independent feature evidence boundary
+        if: ${{ always() }}
+        env:
+          FEATURE_BATCH: ${{ matrix.batch }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          SELECTION_OUTCOME: ${{ steps.feature_selection.outcome }}
+          COLLECTION_OUTCOME: ${{ steps.feature_collection.outcome }}
+          RUNTIME_OUTCOME: ${{ steps.feature_runtime.outcome }}
+          DIAGNOSTIC: ${{ matrix.diagnostic }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.feature_diagnostic_runtime.outcome }}
+        run: |
+          evidence="$RUNNER_TEMP/feature-batch-evidence"
+          mkdir -p "$evidence"
+          {
+            printf 'batch=%s\nhead=%s\nselection=%s\ncollection=%s\nruntime=%s\n' \
+              "$FEATURE_BATCH" "$EXPECTED_HEAD" "$SELECTION_OUTCOME" "$COLLECTION_OUTCOME" "$RUNTIME_OUTCOME"
+            if [ -n "$DIAGNOSTIC" ]; then
+              printf 'diagnostic=%s\ndiagnostic_runtime=%s\n' "$DIAGNOSTIC" "$DIAGNOSTIC_OUTCOME"
+              echo "Exact-node diagnostic only; not full-batch acceptance or proof of order independence."
+            fi
+            echo "Independent supplemental evidence; existing full-suite gates are unchanged."
+            echo "Skipped, interrupted, uncollected and unselected cases remain unverified."
+            echo "W1/W2 Linux seam evidence does not replace real-Windows W0 acceptance."
+          } | tee "$evidence/outcome.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload independent feature batch evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-batch-${{ matrix.batch }}${{ matrix.diagnostic && format('-diagnostic-{0}', matrix.diagnostic) || '' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/feature-batch-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove only this job's temporary password file
+        if: ${{ always() }}
+        run: rm -f -- "$RUNNER_TEMP/album_haven_ci_tops_${{ github.run_id }}_${{ github.run_attempt }}.pgpass"

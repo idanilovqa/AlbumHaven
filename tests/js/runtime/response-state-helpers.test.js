@@ -353,7 +353,9 @@ function loadHelpers() {
     initial_view_partial: 1,
   })));
   assert.deepEqual(normalized, {
-    artist_groups: [{ artist: 'Broadcast' }],
+    artist_loved_context_ref: null,
+    artist_listen_through_context_ref: null,
+    artist_groups: [{ artist: 'Broadcast', artist_loved_launch: null, artist_listen_through_launch: null }],
     primary_artist_groups: [],
     family_artist_groups: [],
     artists_sidebar: [],
@@ -644,6 +646,8 @@ function loadHelpers() {
   })));
   assert.deepEqual(normalized, {
     view: {
+      artist_loved_context_ref: null,
+    artist_listen_through_context_ref: null,
       artist_groups: [],
       primary_artist_groups: [],
       family_artist_groups: [],
@@ -1135,7 +1139,7 @@ function loadHelpers() {
   }, { trackSidebarReveal: false });
 
   const cachedAlbum = context.state.gallery.reusableRootBrowseView.artist_groups[0].albums[0];
-  assert.deepEqual(JSON.parse(JSON.stringify(cachedAlbum.album_preference)), { rating: null });
+  assert.equal(Object.hasOwn(cachedAlbum, 'album_preference'), false, 'unbound partial preference cannot survive compaction');
   assert.equal(cachedAlbum.tag_album_rating, 9);
   assert.equal(cachedAlbum.tag_album_rating_source, 'file_tag');
   assert.equal(Object.prototype.hasOwnProperty.call(cachedAlbum, 'gallery_list_block'), false);
@@ -1149,7 +1153,7 @@ function loadHelpers() {
     visible_library_categories: ['main_library'],
   });
   const restoredAlbum = restored.artist_groups[0].albums[0];
-  assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbum.album_preference)), { rating: null });
+  assert.equal(Object.hasOwn(restoredAlbum, 'album_preference'), false, 'unbound partial preference cannot survive compaction');
   assert.equal(restoredAlbum.tag_album_rating, 9);
   assert.equal(restoredAlbum.tag_album_rating_source, 'file_tag');
   assert.equal(Object.prototype.hasOwnProperty.call(restoredAlbum, 'gallery_list_block'), false);
@@ -1769,9 +1773,10 @@ function loadHelpers() {
   assert.deepEqual(nextView.artist_groups, [
     {
       artist: 'Broadcast',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'tender-buttons',
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -1781,9 +1786,10 @@ function loadHelpers() {
     },
     {
       artist: 'Stereolab',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'dots-and-loops',
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -1817,9 +1823,10 @@ function loadHelpers() {
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.gallery.relatedFilterBasePrimaryGroups)), [
     {
       artist: 'Stereolab',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'dots',
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -1831,9 +1838,10 @@ function loadHelpers() {
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.gallery.relatedFilterBaseFamilyGroups)), [
     {
       artist: 'Laetitia Sadier',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'solo-1',
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -1843,9 +1851,10 @@ function loadHelpers() {
     },
     {
       artist: 'Tim Gane',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [
-        { key: 'mc', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
-        { key: 'cm', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
+        { key: 'mc', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
+        { key: 'cm', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
       ],
     },
   ]);
@@ -1915,12 +1924,13 @@ function loadHelpers() {
   assert.deepEqual(nextView.primary_artist_groups, [
     {
       artist: 'Stereolab',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'dots',
         name: 'Dots and Loops',
         year: 1997,
         release_date: '1997-09-22',
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -1932,12 +1942,13 @@ function loadHelpers() {
   assert.deepEqual(nextView.family_artist_groups, [
     {
       artist: 'Laetitia Sadier',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'solo-1',
         name: 'The Trip',
         year: 2007,
         release_date: '2007-09-24',
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -1947,13 +1958,14 @@ function loadHelpers() {
     },
     {
       artist: 'Tim Gane',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [
         {
           key: 'mc',
           name: 'Margerine Eclipse',
           year: 2004,
           release_date: '2004-01-27',
-          tracks: [],
+          tracks: [], track_rows: [],
           duplicate_sources: [],
           has_duplicate_files: false,
           track_count_preview: 0,
@@ -1965,7 +1977,7 @@ function loadHelpers() {
           name: 'Chemical Chords',
           year: 2008,
           release_date: '2008-08-19',
-          tracks: [],
+          tracks: [], track_rows: [],
           duplicate_sources: [],
           has_duplicate_files: false,
           track_count_preview: 0,
@@ -1978,6 +1990,7 @@ function loadHelpers() {
   assert.deepEqual(nextView.artist_groups, [
     {
       artist: 'Chronological',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       artist_display: 'Chronological',
       albums: [
         {
@@ -1985,7 +1998,7 @@ function loadHelpers() {
           name: 'Dots and Loops',
           year: 1997,
           release_date: '1997-09-22',
-          tracks: [],
+          tracks: [], track_rows: [],
           duplicate_sources: [],
           has_duplicate_files: false,
           track_count_preview: 0,
@@ -1997,7 +2010,7 @@ function loadHelpers() {
           name: 'Margerine Eclipse',
           year: 2004,
           release_date: '2004-01-27',
-          tracks: [],
+          tracks: [], track_rows: [],
           duplicate_sources: [],
           has_duplicate_files: false,
           track_count_preview: 0,
@@ -2009,7 +2022,7 @@ function loadHelpers() {
           name: 'The Trip',
           year: 2007,
           release_date: '2007-09-24',
-          tracks: [],
+          tracks: [], track_rows: [],
           duplicate_sources: [],
           has_duplicate_files: false,
           track_count_preview: 0,
@@ -2021,7 +2034,7 @@ function loadHelpers() {
           name: 'Chemical Chords',
           year: 2008,
           release_date: '2008-08-19',
-          tracks: [],
+          tracks: [], track_rows: [],
           duplicate_sources: [],
           has_duplicate_files: false,
           track_count_preview: 0,
@@ -2036,12 +2049,13 @@ function loadHelpers() {
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.gallery.relatedFilterBaseFamilyGroups)), [
     {
       artist: 'Laetitia Sadier',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'solo-1',
         name: 'The Trip',
         year: 2007,
         release_date: '2007-09-24',
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -2051,13 +2065,14 @@ function loadHelpers() {
     },
     {
       artist: 'Tim Gane',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [
         {
           key: 'mc',
           name: 'Margerine Eclipse',
           year: 2004,
           release_date: '2004-01-27',
-          tracks: [],
+          tracks: [], track_rows: [],
           duplicate_sources: [],
           has_duplicate_files: false,
           track_count_preview: 0,
@@ -2069,7 +2084,7 @@ function loadHelpers() {
           name: 'Chemical Chords',
           year: 2008,
           release_date: '2008-08-19',
-          tracks: [],
+          tracks: [], track_rows: [],
           duplicate_sources: [],
           has_duplicate_files: false,
           track_count_preview: 0,
@@ -2156,10 +2171,11 @@ function loadHelpers() {
   assert.deepEqual(nextView.family_artist_groups, [
     {
       artist: 'IR8 / Sexoturica',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'split-1',
         artists: ['IR8', 'Sexoturica'],
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -2171,10 +2187,11 @@ function loadHelpers() {
   assert.deepEqual(nextView.artist_groups, [
     {
       artist: 'IR8 / Sexoturica',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [{
         key: 'split-1',
         artists: ['IR8', 'Sexoturica'],
-        tracks: [],
+        tracks: [], track_rows: [],
         duplicate_sources: [],
         has_duplicate_files: false,
         track_count_preview: 0,
@@ -2263,36 +2280,42 @@ function loadHelpers() {
   assert.deepEqual(nextView.primary_artist_groups, [
     {
       artist: 'Stereolab',
-      albums: [{ key: 'dots', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true }],
+      artist_loved_launch: null, artist_listen_through_launch: null,
+      albums: [{ key: 'dots', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true }],
     },
   ]);
   assert.deepEqual(nextView.family_artist_groups, [
     {
       artist: 'Laetitia Sadier',
-      albums: [{ key: 'solo-1', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true }],
+      artist_loved_launch: null, artist_listen_through_launch: null,
+      albums: [{ key: 'solo-1', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true }],
     },
     {
       artist: 'Tim Gane',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [
-        { key: 'mc', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
-        { key: 'cm', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
+        { key: 'mc', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
+        { key: 'cm', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
       ],
     },
   ]);
   assert.deepEqual(nextView.artist_groups, [
     {
       artist: 'Stereolab',
-      albums: [{ key: 'dots', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true }],
+      artist_loved_launch: null, artist_listen_through_launch: null,
+      albums: [{ key: 'dots', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true }],
     },
     {
       artist: 'Laetitia Sadier',
-      albums: [{ key: 'solo-1', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true }],
+      artist_loved_launch: null, artist_listen_through_launch: null,
+      albums: [{ key: 'solo-1', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true }],
     },
     {
       artist: 'Tim Gane',
+      artist_loved_launch: null, artist_listen_through_launch: null,
       albums: [
-        { key: 'mc', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
-        { key: 'cm', tracks: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
+        { key: 'mc', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
+        { key: 'cm', tracks: [], track_rows: [], duplicate_sources: [], has_duplicate_files: false, track_count_preview: 0, open_directory_paths: [], preview_only: true },
       ],
     },
   ]);
@@ -2396,8 +2419,8 @@ function loadHelpers() {
   });
 
   const [firstAlbum, secondAlbum] = nextView.artist_groups[0].albums;
-  assert.deepEqual(JSON.parse(JSON.stringify(firstAlbum.album_preference)), { rating: null });
-  assert.deepEqual(JSON.parse(JSON.stringify(secondAlbum.album_preference)), { rating: null });
+  assert.equal(Object.hasOwn(firstAlbum, 'album_preference'), false, 'unbound partial preference cannot survive compaction');
+  assert.equal(Object.hasOwn(secondAlbum, 'album_preference'), false, 'unbound partial preference cannot survive compaction');
   assert.equal(firstAlbum.tag_album_rating, 9);
   assert.equal(firstAlbum.tag_album_rating_source, 'file_tag');
   assert.equal(Object.prototype.hasOwnProperty.call(firstAlbum, 'gallery_list_block'), false);
@@ -2465,7 +2488,7 @@ function loadHelpers() {
     tracks: [{ path: 'C:\\Music\\Artist\\Album\\01 - Track.flac' }],
   });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(compacted.album_preference ?? null)), { rating: 8 });
+  assert.equal(Object.hasOwn(compacted, 'album_preference'), false, 'unbound partial preference cannot survive compaction');
   assert.equal(compacted.tag_album_rating, 3);
   assert.equal(compacted.tag_album_rating_source, 'file_tag_scan');
 }
@@ -2520,7 +2543,7 @@ function loadHelpers() {
     tracks: [],
   });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(compacted.album_preference ?? null)), { rating: null });
+  assert.equal(Object.hasOwn(compacted, 'album_preference'), false, 'unbound partial preference cannot survive compaction');
   assert.equal(compacted.tag_album_rating, 9);
   assert.equal(compacted.tag_album_rating_source, 'file_tag_scan');
 }
@@ -2559,4 +2582,39 @@ test('paged source hydration retains navigation location but captures continuati
   c.applyViewPayload({ ...c.state.view, album_count: 5 });
   assert.equal(c.state.view.gallery_page_scope.gallery_scope, 'all');
   assert.deepEqual(Array.from(c.state.view.gallery_page_scope.visible_library_categories), ['hoard']);
+});
+
+test('retained mounted groups strip launch authority without cloning unrelated groups or mutating prior content', () => {
+  const context = loadHelpers();
+  const launch = {selection_ref: 'old-launch-authority'};
+  const protectedGroup = {artist: 'Signal', albums: [{key: 'signal'}], artist_loved_launch: launch};
+  const plainGroup = {artist: 'Signal Family', albums: [{key: 'family'}]};
+  const clearedGroup = {artist: 'Cleared Family', albums: [], artist_loved_launch: null};
+  const primary = [protectedGroup], family = [plainGroup, clearedGroup], all = [...primary, ...family];
+  context.state.view = {query: 'Signal', selected_artist: 'Signal', primary_artist_groups: primary,
+    family_artist_groups: family, artist_groups: all, related_artists: ['Signal Family']};
+  context.applyViewPayload({query: '', selected_artist: 'Signal', primary_artist_groups: [], family_artist_groups: [], artist_groups: []},
+    {preserveMountedGalleryChildren: true, trackSidebarReveal: false});
+  const next = context.state.view;
+  assert.notEqual(next.primary_artist_groups, primary);assert.notEqual(next.artist_groups, all);
+  assert.notEqual(next.primary_artist_groups[0], protectedGroup);
+  assert.equal(next.primary_artist_groups[0].artist_loved_launch, null);
+  assert.equal(next.artist_groups[0].artist_loved_launch, null);
+  assert.equal(next.primary_artist_groups[0].albums, protectedGroup.albums);
+  assert.equal(next.family_artist_groups, family);
+  assert.equal(next.artist_groups[1], plainGroup);assert.equal(next.artist_groups[2], clearedGroup);
+  assert.equal(protectedGroup.artist_loved_launch, launch);
+  assert.equal(primary[0], protectedGroup);assert.equal(all[0], protectedGroup);
+});
+test('retained groups with already-cleared launch fields keep original array and group identities', () => {
+  const context = loadHelpers();
+  const group = {artist: 'Signal', albums: [{key: 'signal'}], artist_loved_launch: null};
+  const primary = [group], family = [], all = [group];
+  context.state.view = {query: 'Signal', selected_artist: 'Signal', primary_artist_groups: primary,
+    family_artist_groups: family, artist_groups: all, related_artists: []};
+  context.applyViewPayload({query: '', selected_artist: 'Signal', primary_artist_groups: [], family_artist_groups: [], artist_groups: []},
+    {preserveMountedGalleryChildren: true, trackSidebarReveal: false});
+  assert.equal(context.state.view.primary_artist_groups, primary);
+  assert.equal(context.state.view.family_artist_groups, family);assert.equal(context.state.view.artist_groups, all);
+  assert.equal(context.state.view.artist_groups[0], group);assert.equal(group.artist_loved_launch, null);
 });

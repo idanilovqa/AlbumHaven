@@ -8,18 +8,20 @@ The established full-media path is unchanged for already-authorized users.
 
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
 from fastapi import HTTPException
-from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
+
+from music_app.services.artwork_pixels import (
+    IMAGE_FORMATS, ArtworkPixelsUnavailable, sanitize_artwork_pixels,
+)
 
 _MAX_INPUT_BYTES = 32 * 1024 * 1024
 _MAX_PIXELS = 40_000_000
 _MAX_EDGE = 2048
-_IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"})
+_IMAGE_FORMATS = IMAGE_FORMATS
 
 
 def render_browse_artwork(path: Path) -> Response:
@@ -27,23 +29,12 @@ def render_browse_artwork(path: Path) -> Response:
     try:
         with path.open("rb") as source:
             payload = source.read(_MAX_INPUT_BYTES + 1)
-        if len(payload) > _MAX_INPUT_BYTES:
-            raise ValueError("Artwork exceeds the image limit.")
-        with Image.open(BytesIO(payload)) as image:
-            if image.format not in _IMAGE_FORMATS or image.width * image.height > _MAX_PIXELS:
-                raise ValueError("Artwork is not a supported bounded image.")
-            image.thumbnail((_MAX_EDGE, _MAX_EDGE))
-            mode = "RGBA" if "A" in image.getbands() or "transparency" in image.info else "RGB"
-            pixels = image.convert(mode)
-            # A fresh image deliberately omits EXIF, comments and other metadata.
-            sanitized = Image.new(mode, pixels.size)
-            sanitized.paste(pixels)
-            output = BytesIO()
-            sanitized.save(output, format="PNG")
-    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
+        artwork = sanitize_artwork_pixels(payload, max_input_bytes=_MAX_INPUT_BYTES,
+            max_pixels=_MAX_PIXELS, max_edge=_MAX_EDGE)
+    except (OSError, ValueError, ArtworkPixelsUnavailable):
         raise HTTPException(status_code=404, detail="Artwork not found.") from None
     return Response(
-        output.getvalue(), media_type="image/png",
+        artwork.png, media_type="image/png",
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )
 

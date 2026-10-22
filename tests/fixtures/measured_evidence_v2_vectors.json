@@ -1,0 +1,2729 @@
+{
+  "schema": "independent-design-vectors-v1",
+  "provenance": "Literal expectations derived from cumulative R2/R3/R4 specification. Canonical JSON and SHA-256 are independently encoded/hashed from those literal envelopes, never obtained from product execution. No reducer oracle is implemented here.",
+  "binding": {
+    "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+    "process_epoch": "22222222-2222-4222-8222-222222222222",
+    "device_id": "33333333-3333-4333-8333-333333333333",
+    "session_id": "44444444-4444-4444-8444-444444444444",
+    "sample_rate": 48000
+  },
+  "positives": [
+    {
+      "name": "one_second",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 48000,
+          "max_observed_frame": 48000,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              48000
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              48000
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 48000,
+            "render_start_tick": 0,
+            "render_end_tick": 48000,
+            "runs": [
+              [
+                0,
+                48000,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          48000
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,48000]],\"histogram\":[[0,48000]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":48000,\"occurrence_complete\":true,\"rendered_frames\":48000,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":48000,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":48000,\"render_start_tick\":0,\"runs\":[[0,48000,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 48000
+      },
+      "derivation": "R3 vector 1: exactly 48000 consumed frames in bin 0; union [0,48000)."
+    },
+    {
+      "name": "one_frame_tick_one",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 1,
+          "max_observed_frame": 1,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              1
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 1,
+            "render_start_tick": 1,
+            "render_end_tick": 2,
+            "runs": [
+              [
+                0,
+                1,
+                1
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          1
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,1]],\"histogram\":[[0,1]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":1,\"occurrence_complete\":true,\"rendered_frames\":1,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":2,\"render_start_tick\":1,\"runs\":[[0,1,1]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "c16880dbf70931c766bbda7b2a79affb510c2a8f4a5a1af98170fcb03ce84e30",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 2
+      },
+      "derivation": "R3 vector 2: one frame; floor(1000000/48000)=20; floor(2000000/48000)=41."
+    },
+    {
+      "name": "unknown",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 1,
+          "max_observed_frame": 1,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              1
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": false,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": null,
+            "uncertainty_us": null,
+            "quality": "unknown"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                0,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "unknown"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          1
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,1]],\"histogram\":[[0,1]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":1,\"occurrence_complete\":false,\"rendered_frames\":1,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"unknown\",\"uncertainty_us\":null,\"wall_origin_us\":null}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"unknown\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[0,1,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "cd0859ccc44c649e56e2f6498a9ef2219bc5d50a3051d34b583e06113cb3955e",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 1
+      },
+      "derivation": "R3 vector 3: unknown occurrence retains exact position, forces O false."
+    },
+    {
+      "name": "coarsened_initial",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 1,
+          "max_observed_frame": 98304001,
+          "histogram_bin_frames": 96000,
+          "histogram": [
+            [
+              1024,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              98304000,
+              98304001
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "coarsened"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                98304000,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          98304000,
+          98304001
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[98304000,98304001]],\"histogram\":[[1024,1]],\"histogram_bin_frames\":96000,\"instrumentation_complete\":true,\"max_observed_frame\":98304001,\"occurrence_complete\":true,\"rendered_frames\":1,\"resolution_state\":\"coarsened\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[98304000,1,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "1184b91dda9bb457971500771b03014521c92e8a9c42daf850ded835cc31298f",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 1
+      },
+      "derivation": "R3 vector 7: 48000*2048=98304000; next frame needs width 96000 and bin 1024."
+    },
+    {
+      "name": "bin_boundary",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 2,
+          "max_observed_frame": 48001,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              47999,
+              48001
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 2,
+            "render_start_tick": 0,
+            "render_end_tick": 2,
+            "runs": [
+              [
+                47999,
+                2,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          47999,
+          48001
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[47999,48001]],\"histogram\":[[0,1],[1,1]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":48001,\"occurrence_complete\":true,\"rendered_frames\":2,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":2,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":2,\"render_start_tick\":0,\"runs\":[[47999,2,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "f8286bdd8b7eeac8b18bfe7955bcc40306c711904686eef988c2dce874629e70",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 2
+      },
+      "derivation": "Two adjacent source frames straddle the 48000 boundary; one weight in each bin."
+    },
+    {
+      "name": "repeat_seek_gaps",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 5,
+          "max_observed_frame": 12,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              5
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              1
+            ],
+            [
+              10,
+              12
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 5,
+            "render_start_tick": 0,
+            "render_end_tick": 9,
+            "runs": [
+              [
+                10,
+                2,
+                0
+              ],
+              [
+                10,
+                2,
+                4
+              ],
+              [
+                0,
+                1,
+                8
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          1
+        ],
+        [
+          10,
+          12
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,1],[10,12]],\"histogram\":[[0,5]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":12,\"occurrence_complete\":true,\"rendered_frames\":5,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":5,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":9,\"render_start_tick\":0,\"runs\":[[10,2,0],[10,2,4],[0,1,8]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "b028953c010455f0d9631f45dbb38bc286d2149a1167adee080e681f49a85f42",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 9
+      },
+      "derivation": "Two renderings of [10,12) plus [0,1) weigh 5; coverage 3; render gaps weigh zero."
+    },
+    {
+      "name": "coarsen_prior",
+      "previous": "bin_boundary",
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 1,
+        "previous_digest": "f8286bdd8b7eeac8b18bfe7955bcc40306c711904686eef988c2dce874629e70",
+        "cumulative": {
+          "rendered_frames": 3,
+          "max_observed_frame": 98304001,
+          "histogram_bin_frames": 96000,
+          "histogram": [
+            [
+              0,
+              2
+            ],
+            [
+              1024,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              47999,
+              48001
+            ],
+            [
+              98304000,
+              98304001
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "coarsened"
+        },
+        "epochs": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "epoch_id": 0,
+            "first_consumption_frame": 2,
+            "frames": 1,
+            "render_start_tick": 2,
+            "render_end_tick": 3,
+            "runs": [
+              [
+                98304000,
+                1,
+                2
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          47999,
+          48001
+        ],
+        [
+          98304000,
+          98304001
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":1,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[47999,48001],[98304000,98304001]],\"histogram\":[[0,2],[1024,1]],\"histogram_bin_frames\":96000,\"instrumentation_complete\":true,\"max_observed_frame\":98304001,\"occurrence_complete\":true,\"rendered_frames\":3,\"resolution_state\":\"coarsened\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[],\"previous_digest\":\"f8286bdd8b7eeac8b18bfe7955bcc40306c711904686eef988c2dce874629e70\",\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":2,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":3,\"render_start_tick\":2,\"runs\":[[98304000,1,2]],\"slice_id\":1}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "6c52b52cd3d8b37d68304a0c93ce8dc92af14cc1ed9fe37e97b1f8a7e4791863",
+      "expected_cursor": {
+        "last_slice_id": 1,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 3
+      },
+      "derivation": "Coarsen both previous bins into bin 0, then add one frame to bin 1024."
+    },
+    {
+      "name": "occurrence_loss",
+      "previous": "one_second",
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 1,
+        "previous_digest": "ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df",
+        "cumulative": {
+          "rendered_frames": 48000,
+          "max_observed_frame": 48000,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              48000
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              48000
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": false,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [],
+        "slices": [],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          48000
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":1,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,48000]],\"histogram\":[[0,48000]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":48000,\"occurrence_complete\":false,\"rendered_frames\":48000,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[],\"previous_digest\":\"ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df\",\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "387dfa6721a203a6ac080b52880bbb050bb8235d977b6f3a31cc6cf2bc9d0a3a",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 48000
+      },
+      "derivation": "R3 vector 4: empty one-time occurrence loss, unchanged position/numeric state."
+    },
+    {
+      "name": "collection_limited",
+      "previous": "one_second",
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 1,
+        "previous_digest": "ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df",
+        "cumulative": {
+          "rendered_frames": 48000,
+          "max_observed_frame": 48000,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              48000
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              48000
+            ]
+          ],
+          "instrumentation_complete": false,
+          "occurrence_complete": false,
+          "coverage_complete": false,
+          "resolution_state": "one_second"
+        },
+        "epochs": [],
+        "slices": [],
+        "terminal": "collection_limited"
+      },
+      "observed_ranges": [
+        [
+          0,
+          48000
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":1,\"cumulative\":{\"coverage_complete\":false,\"coverage_intervals\":[[0,48000]],\"histogram\":[[0,48000]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":false,\"max_observed_frame\":48000,\"occurrence_complete\":false,\"rendered_frames\":48000,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[],\"previous_digest\":\"ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df\",\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[],\"terminal\":\"collection_limited\",\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "4f3dca0bf4da9b85bd9b5cad164dce85138bcdb00519ececc547af502aab3220",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 48000
+      },
+      "derivation": "R3 vector 5 / R4: terminal-only loss leaves accepted prefix unchanged and can replay."
+    },
+    {
+      "name": "client_stopped",
+      "previous": "one_second",
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 1,
+        "previous_digest": "ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df",
+        "cumulative": {
+          "rendered_frames": 48000,
+          "max_observed_frame": 48000,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              48000
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              48000
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [],
+        "slices": [],
+        "terminal": "client_stopped"
+      },
+      "observed_ranges": [
+        [
+          0,
+          48000
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":1,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,48000]],\"histogram\":[[0,48000]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":48000,\"occurrence_complete\":true,\"rendered_frames\":48000,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[],\"previous_digest\":\"ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df\",\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[],\"terminal\":\"client_stopped\",\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "370e6ac4cd8fb7f0bd8c902a33ed193ec419d64b1240df11ba58e308dba7eed6",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 48000
+      },
+      "derivation": "Empty changed terminal does not imply quality loss."
+    },
+    {
+      "name": "source_exhausted_first",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 1,
+          "max_observed_frame": 1,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              1
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                0,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": "source_exhausted"
+      },
+      "observed_ranges": [
+        [
+          0,
+          1
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,1]],\"histogram\":[[0,1]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":1,\"occurrence_complete\":true,\"rendered_frames\":1,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[0,1,0]],\"slice_id\":0}],\"terminal\":\"source_exhausted\",\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "814402175409ec44f99aceccf7cf926d5168c5b5cc9dacdcf9dd7e5ebea30f2f",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 1
+      },
+      "derivation": "First positive checkpoint may be terminal; means collection closure, not a listen award."
+    },
+    {
+      "name": "unknown_to_known",
+      "previous": "unknown",
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 1,
+        "previous_digest": "cd0859ccc44c649e56e2f6498a9ef2219bc5d50a3051d34b583e06113cb3955e",
+        "cumulative": {
+          "rendered_frames": 2,
+          "max_observed_frame": 2,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              2
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              2
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": false,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 1,
+            "audio_origin_tick": 0,
+            "wall_origin_us": -100,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 1,
+            "epoch_id": 1,
+            "first_consumption_frame": 1,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                1,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          2
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":1,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,2]],\"histogram\":[[0,2]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":2,\"occurrence_complete\":false,\"rendered_frames\":2,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":1,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":-100}],\"previous_digest\":\"cd0859ccc44c649e56e2f6498a9ef2219bc5d50a3051d34b583e06113cb3955e\",\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":1,\"first_consumption_frame\":1,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[1,1,0]],\"slice_id\":1}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "5dd6f1f9e34cba87c211f41a32b98dc0118bf75458739c4bebd4520d02eb39ab",
+      "expected_cursor": {
+        "last_slice_id": 1,
+        "last_epoch_id": 1,
+        "last_render_end_tick": 1
+      },
+      "derivation": "New known epoch may reset ticks and wall time; cumulative O cannot recover."
+    },
+    {
+      "name": "instrumentation_loss",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 1,
+          "max_observed_frame": 1,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              1
+            ]
+          ],
+          "instrumentation_complete": false,
+          "occurrence_complete": false,
+          "coverage_complete": false,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                0,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": false,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          1
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":false,\"coverage_intervals\":[[0,1]],\"histogram\":[[0,1]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":false,\"max_observed_frame\":1,\"occurrence_complete\":false,\"rendered_frames\":1,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":1,\"quality\":{\"instrumentation_complete\":false,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[0,1,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "5e157c376436894b8f79fa296839a177057d0298dc4e299b0e7aeea15630c2c0",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 1
+      },
+      "derivation": "Exact retained run still requires conservative I/O/C false after instrumentation loss."
+    },
+    {
+      "name": "coverage_declaration",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 1,
+          "max_observed_frame": 1,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              1
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": false,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                0,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          1
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":false,\"coverage_intervals\":[[0,1]],\"histogram\":[[0,1]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":1,\"occurrence_complete\":true,\"rendered_frames\":1,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[0,1,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "5f13dd9ec6a84475a9eaaf07bd5464e52fc26b73d5cfee15f4e5b82eb4aa0c0f",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 1
+      },
+      "derivation": "Explicit coverage loss is allowed independently of instrumentation and occurrence."
+    },
+    {
+      "name": "large_tick_small_delta",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 1,
+          "max_observed_frame": 1,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              1
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 9007199254740988,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 1,
+            "render_start_tick": 9007199254740989,
+            "render_end_tick": 9007199254740990,
+            "runs": [
+              [
+                0,
+                1,
+                9007199254740989
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          1
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,1]],\"histogram\":[[0,1]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":1,\"occurrence_complete\":true,\"rendered_frames\":1,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":9007199254740988,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":9007199254740990,\"render_start_tick\":9007199254740989,\"runs\":[[0,1,9007199254740989]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "c2bd4e7fb3eb08cbbffc79f4f85fd2d9528e34b95faef4efe3126c5df72e0932",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 9007199254740990
+      },
+      "derivation": "Safe large ticks have delta 1 and 2; subtract exactly before scaling."
+    },
+    {
+      "name": "large_source_bin_boundary",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 2,
+          "max_observed_frame": 9006546419712001,
+          "histogram_bin_frames": 6442450944000,
+          "histogram": [
+            [
+              1397,
+              1
+            ],
+            [
+              1398,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              9006546419711999,
+              9006546419712001
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "coarsened"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 2,
+            "render_start_tick": 0,
+            "render_end_tick": 2,
+            "runs": [
+              [
+                9006546419711999,
+                2,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          9006546419711999,
+          9006546419712001
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[9006546419711999,9006546419712001]],\"histogram\":[[1397,1],[1398,1]],\"histogram_bin_frames\":6442450944000,\"instrumentation_complete\":true,\"max_observed_frame\":9006546419712001,\"occurrence_complete\":true,\"rendered_frames\":2,\"resolution_state\":\"coarsened\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":2,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":2,\"render_start_tick\":0,\"runs\":[[9006546419711999,2,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "e184709c3c4a69d4c460789dc9f02813d9ba78edab36109976606fed57b4d029",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 2
+      },
+      "derivation": "48000*2^27=6442450944000; exact width*1398=9006546419712000. Two frames straddle this exact integer boundary, one in each adjacent bin."
+    },
+    {
+      "name": "maximum_safe_source_end",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 1,
+          "max_observed_frame": 9007199254740991,
+          "histogram_bin_frames": 6442450944000,
+          "histogram": [
+            [
+              1398,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              9007199254740990,
+              9007199254740991
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "coarsened"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                9007199254740990,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          9007199254740990,
+          9007199254740991
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[9007199254740990,9007199254740991]],\"histogram\":[[1398,1]],\"histogram_bin_frames\":6442450944000,\"instrumentation_complete\":true,\"max_observed_frame\":9007199254740991,\"occurrence_complete\":true,\"rendered_frames\":1,\"resolution_state\":\"coarsened\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[9007199254740990,1,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "c6429dd783e2fce94eb10e89497b83701a886ad0a577eb7c30e09099563b0d70",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 1
+      },
+      "derivation": "Exclusive source end exactly MAX_SAFE_INTEGER remains valid; final bin 1398."
+    },
+    {
+      "name": "known_to_unknown",
+      "previous": "one_second",
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 1,
+        "previous_digest": "ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df",
+        "cumulative": {
+          "rendered_frames": 48001,
+          "max_observed_frame": 48001,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              48000
+            ],
+            [
+              1,
+              1
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              48001
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": false,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 1,
+            "audio_origin_tick": 0,
+            "wall_origin_us": null,
+            "uncertainty_us": null,
+            "quality": "unknown"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 1,
+            "epoch_id": 1,
+            "first_consumption_frame": 48000,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                48000,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "unknown"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          48001
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":1,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,48001]],\"histogram\":[[0,48000],[1,1]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":48001,\"occurrence_complete\":false,\"rendered_frames\":48001,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":1,\"quality\":\"unknown\",\"uncertainty_us\":null,\"wall_origin_us\":null}],\"previous_digest\":\"ee8c97d46479f6b9ac8dca62b41b55d1fb7de78936525f68059685e5d361a2df\",\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":1,\"first_consumption_frame\":48000,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"unknown\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[48000,1,0]],\"slice_id\":1}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "30b3eb922303ed2501f39c74f7c951dcd51d083fb26e2ae708c9776426d685ae",
+      "expected_cursor": {
+        "last_slice_id": 1,
+        "last_epoch_id": 1,
+        "last_render_end_tick": 1
+      },
+      "derivation": "Boundary uncertainty declares a new unknown epoch; time resets, cursor stays contiguous."
+    },
+    {
+      "name": "boundary_known_again",
+      "previous": "known_to_unknown",
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 2,
+        "previous_digest": "30b3eb922303ed2501f39c74f7c951dcd51d083fb26e2ae708c9776426d685ae",
+        "cumulative": {
+          "rendered_frames": 48002,
+          "max_observed_frame": 48002,
+          "histogram_bin_frames": 48000,
+          "histogram": [
+            [
+              0,
+              48000
+            ],
+            [
+              1,
+              2
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              0,
+              48002
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": false,
+          "coverage_complete": true,
+          "resolution_state": "one_second"
+        },
+        "epochs": [
+          {
+            "epoch_id": 2,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 2,
+            "epoch_id": 2,
+            "first_consumption_frame": 48001,
+            "frames": 1,
+            "render_start_tick": 0,
+            "render_end_tick": 1,
+            "runs": [
+              [
+                48001,
+                1,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          0,
+          48002
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":2,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[0,48002]],\"histogram\":[[0,48000],[1,2]],\"histogram_bin_frames\":48000,\"instrumentation_complete\":true,\"max_observed_frame\":48002,\"occurrence_complete\":false,\"rendered_frames\":48002,\"resolution_state\":\"one_second\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":2,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":\"30b3eb922303ed2501f39c74f7c951dcd51d083fb26e2ae708c9776426d685ae\",\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":2,\"first_consumption_frame\":48001,\"frames\":1,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":1,\"render_start_tick\":0,\"runs\":[[48001,1,0]],\"slice_id\":2}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "a225c33acd24bc11575ed4bd837f7b467d3501f44b3bf5dc52757693983fa3e3",
+      "expected_cursor": {
+        "last_slice_id": 2,
+        "last_epoch_id": 2,
+        "last_render_end_tick": 1
+      },
+      "derivation": "A third known epoch cannot upgrade the earlier unknown anchor or recover cumulative O."
+    },
+    {
+      "name": "large_source_near_boundary_same_bin",
+      "previous": null,
+      "envelope": {
+        "version": "rendered-position-slices-v2",
+        "decoder_instance_id": "11111111-1111-4111-8111-111111111111",
+        "process_epoch": "22222222-2222-4222-8222-222222222222",
+        "device_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "sample_rate": 48000,
+        "checkpoint_sequence": 0,
+        "previous_digest": null,
+        "cumulative": {
+          "rendered_frames": 2,
+          "max_observed_frame": 9006546483609601,
+          "histogram_bin_frames": 6442450944000,
+          "histogram": [
+            [
+              1398,
+              2
+            ]
+          ],
+          "coverage_intervals": [
+            [
+              9006546483609599,
+              9006546483609601
+            ]
+          ],
+          "instrumentation_complete": true,
+          "occurrence_complete": true,
+          "coverage_complete": true,
+          "resolution_state": "coarsened"
+        },
+        "epochs": [
+          {
+            "epoch_id": 0,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        ],
+        "slices": [
+          {
+            "slice_id": 0,
+            "epoch_id": 0,
+            "first_consumption_frame": 0,
+            "frames": 2,
+            "render_start_tick": 0,
+            "render_end_tick": 2,
+            "runs": [
+              [
+                9006546483609599,
+                2,
+                0
+              ]
+            ],
+            "quality": {
+              "instrumentation_complete": true,
+              "occurrence_quality": "app_clock_estimate"
+            }
+          }
+        ],
+        "terminal": null
+      },
+      "observed_ranges": [
+        [
+          9006546483609599,
+          9006546483609601
+        ]
+      ],
+      "canonical": "{\"checkpoint_sequence\":0,\"cumulative\":{\"coverage_complete\":true,\"coverage_intervals\":[[9006546483609599,9006546483609601]],\"histogram\":[[1398,2]],\"histogram_bin_frames\":6442450944000,\"instrumentation_complete\":true,\"max_observed_frame\":9006546483609601,\"occurrence_complete\":true,\"rendered_frames\":2,\"resolution_state\":\"coarsened\"},\"decoder_instance_id\":\"11111111-1111-4111-8111-111111111111\",\"device_id\":\"33333333-3333-4333-8333-333333333333\",\"epochs\":[{\"audio_origin_tick\":0,\"epoch_id\":0,\"quality\":\"app_clock_estimate\",\"uncertainty_us\":20,\"wall_origin_us\":1000000}],\"previous_digest\":null,\"process_epoch\":\"22222222-2222-4222-8222-222222222222\",\"sample_rate\":48000,\"session_id\":\"44444444-4444-4444-8444-444444444444\",\"slices\":[{\"epoch_id\":0,\"first_consumption_frame\":0,\"frames\":2,\"quality\":{\"instrumentation_complete\":true,\"occurrence_quality\":\"app_clock_estimate\"},\"render_end_tick\":2,\"render_start_tick\":0,\"runs\":[[9006546483609599,2,0]],\"slice_id\":0}],\"terminal\":null,\"version\":\"rendered-position-slices-v2\"}",
+      "digest": "1ff80536b5ce139219588da465458d6a847c66f6e3133c160247a1e4587150c8",
+      "expected_cursor": {
+        "last_slice_id": 0,
+        "last_epoch_id": 0,
+        "last_render_end_tick": 2
+      },
+      "derivation": "Original large-source positions 9006546483609599 and 9006546483609600 are both in bin 1398 (offsets 63897599 and 63897600), rather than straddling a boundary. Retained as a separate positive same-bin vector."
+    }
+  ],
+  "negative_mutations": [
+    {
+      "name": "empty_initial",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices"
+          ],
+          "value": []
+        },
+        {
+          "op": "set",
+          "path": [
+            "epochs"
+          ],
+          "value": []
+        },
+        {
+          "op": "set",
+          "path": [
+            "cumulative"
+          ],
+          "value": {
+            "rendered_frames": 0,
+            "max_observed_frame": 0,
+            "histogram_bin_frames": 48000,
+            "histogram": [],
+            "coverage_intervals": [],
+            "instrumentation_complete": true,
+            "occurrence_complete": true,
+            "coverage_complete": true,
+            "resolution_state": "one_second"
+          }
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": "empty_initial_checkpoint"
+    },
+    {
+      "name": "unknown_claims_known_quality",
+      "base": "unknown",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "quality",
+            "occurrence_quality"
+          ],
+          "value": "app_clock_estimate"
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "unknown_claims_complete",
+      "base": "unknown",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "occurrence_complete"
+          ],
+          "value": true
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "illegal_instrumentation_flags",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "instrumentation_complete"
+          ],
+          "value": false
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "unused_epoch",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "1"
+          ],
+          "value": {
+            "epoch_id": 1,
+            "audio_origin_tick": 0,
+            "wall_origin_us": 1000000,
+            "uncertainty_us": 20,
+            "quality": "app_clock_estimate"
+          }
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": "unused_epoch"
+    },
+    {
+      "name": "first_epoch_gap",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "epoch_id"
+          ],
+          "value": 1
+        },
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "epoch_id"
+          ],
+          "value": 1
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "epoch_redefinition",
+      "base": "unknown_to_known",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "epoch_id"
+          ],
+          "value": 0
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": "epoch_redefinition"
+    },
+    {
+      "name": "unknown_anchor_nonnull",
+      "base": "unknown",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "wall_origin_us"
+          ],
+          "value": 0
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "known_anchor_null",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "uncertainty_us"
+          ],
+          "value": null
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "quality_extra",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "quality",
+            "extra"
+          ],
+          "value": false
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "envelope_extra",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "extra"
+          ],
+          "value": 0
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "boolean_integer",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "sample_rate"
+          ],
+          "value": true
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "fraction_integer",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "sample_rate"
+          ],
+          "value": 48000.5
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "unsafe_integer",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "audio_origin_tick"
+          ],
+          "value": 9007199254740992
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "uppercase_uuid",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "device_id"
+          ],
+          "value": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "zero_uuid",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "device_id"
+          ],
+          "value": "00000000-0000-0000-0000-000000000000"
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "missing_field",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "delete",
+          "path": [
+            "terminal"
+          ]
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "wrong_version",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "version"
+          ],
+          "value": "rendered-position-histogram-v1"
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "cursor_gap",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "first_consumption_frame"
+          ],
+          "value": 1
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "slice_id_gap",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "slice_id"
+          ],
+          "value": 1
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "source_endpoint_overflow",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "runs",
+            "0",
+            "0"
+          ],
+          "value": 9007199254740991
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "tick_endpoint_overflow",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "runs",
+            "0",
+            "2"
+          ],
+          "value": 9007199254740991
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "zero_run",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "runs",
+            "0",
+            "1"
+          ],
+          "value": 0
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "bad_run_sum",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "frames"
+          ],
+          "value": 47999
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "slice_span_too_long",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "render_end_tick"
+          ],
+          "value": 48001
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "run_overlap",
+      "base": "repeat_seek_gaps",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "runs",
+            "1",
+            "2"
+          ],
+          "value": 1
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "wrong_first_tick",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "render_start_tick"
+          ],
+          "value": 1
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "wrong_end_tick",
+      "base": "one_frame_tick_one",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "render_end_tick"
+          ],
+          "value": 3
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "origin_after_run",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "audio_origin_tick"
+          ],
+          "value": 1
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "utc_overflow",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "wall_origin_us"
+          ],
+          "value": 9007199254740991
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "uncertainty_overflow",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "uncertainty_us"
+          ],
+          "value": 9007199254740991
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "decoded_ahead_extent",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "max_observed_frame"
+          ],
+          "value": 48001
+        },
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "histogram"
+          ],
+          "value": [
+            [
+              0,
+              47999
+            ],
+            [
+              1,
+              1
+            ]
+          ]
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "unexplained_weight",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "rendered_frames"
+          ],
+          "value": 48001
+        },
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "histogram"
+          ],
+          "value": [
+            [
+              0,
+              48001
+            ]
+          ]
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "gap_bridged_coverage",
+      "base": "repeat_seek_gaps",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "coverage_intervals"
+          ],
+          "value": [
+            [
+              0,
+              12
+            ]
+          ]
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "unmerged_adjacent_coverage",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "coverage_intervals"
+          ],
+          "value": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              48000
+            ]
+          ]
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "histogram_duplicate",
+      "base": "bin_boundary",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "histogram"
+          ],
+          "value": [
+            [
+              0,
+              1
+            ],
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "wrong_bin_width",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "histogram_bin_frames"
+          ],
+          "value": 96000
+        },
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "resolution_state"
+          ],
+          "value": "coarsened"
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "sequence_gap",
+      "base": "coarsen_prior",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "checkpoint_sequence"
+          ],
+          "value": 2
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": "sequence_gap"
+    },
+    {
+      "name": "wrong_previous_digest",
+      "base": "coarsen_prior",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "previous_digest"
+          ],
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": "previous_digest_mismatch"
+    },
+    {
+      "name": "reused_slice",
+      "base": "coarsen_prior",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "slice_id"
+          ],
+          "value": 0
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "reused_cursor",
+      "base": "coarsen_prior",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "first_consumption_frame"
+          ],
+          "value": 0
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "same_epoch_overlap",
+      "base": "coarsen_prior",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "render_start_tick"
+          ],
+          "value": 1
+        },
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "render_end_tick"
+          ],
+          "value": 2
+        },
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "runs",
+            "0",
+            "2"
+          ],
+          "value": 1
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": "overlapping_slice"
+    },
+    {
+      "name": "coarsening_lost_prior",
+      "base": "coarsen_prior",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "histogram"
+          ],
+          "value": [
+            [
+              0,
+              1
+            ],
+            [
+              1024,
+              2
+            ]
+          ]
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "quality_recovery",
+      "base": "unknown_to_known",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "occurrence_complete"
+          ],
+          "value": true
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "terminal_limited_claims_complete",
+      "base": "collection_limited",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "instrumentation_complete"
+          ],
+          "value": true
+        },
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "occurrence_complete"
+          ],
+          "value": true
+        },
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "coverage_complete"
+          ],
+          "value": true
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "empty_numeric_change",
+      "base": "occurrence_loss",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "rendered_frames"
+          ],
+          "value": 48001
+        },
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "histogram"
+          ],
+          "value": [
+            [
+              0,
+              48001
+            ]
+          ]
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "unchanged_checkpoint",
+      "base": "occurrence_loss",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "cumulative",
+            "occurrence_complete"
+          ],
+          "value": true
+        }
+      ],
+      "stage": "compare",
+      "previous": "inherit",
+      "code": "unchanged_checkpoint"
+    },
+    {
+      "name": "sequence_limit",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "checkpoint_sequence"
+          ],
+          "value": 720
+        },
+        {
+          "op": "set",
+          "path": [
+            "previous_digest"
+          ],
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "slice_limit",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "slices",
+            "0",
+            "slice_id"
+          ],
+          "value": 7200
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    },
+    {
+      "name": "epoch_limit",
+      "base": "one_second",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "epochs",
+            "0",
+            "epoch_id"
+          ],
+          "value": 64
+        }
+      ],
+      "stage": "normalize",
+      "previous": "inherit",
+      "code": null
+    }
+  ],
+  "mapping": [
+    {
+      "epoch": {
+        "epoch_id": 0,
+        "audio_origin_tick": 0,
+        "wall_origin_us": 1000000,
+        "uncertainty_us": 20,
+        "quality": "app_clock_estimate"
+      },
+      "tick": 0,
+      "rate": 48000,
+      "expected": {
+        "wall_us": 1000000,
+        "uncertainty_us": 21
+      }
+    },
+    {
+      "epoch": {
+        "epoch_id": 0,
+        "audio_origin_tick": 0,
+        "wall_origin_us": 1000000,
+        "uncertainty_us": 20,
+        "quality": "app_clock_estimate"
+      },
+      "tick": 48000,
+      "rate": 48000,
+      "expected": {
+        "wall_us": 2000000,
+        "uncertainty_us": 21
+      }
+    },
+    {
+      "epoch": {
+        "epoch_id": 0,
+        "audio_origin_tick": 0,
+        "wall_origin_us": 1000000,
+        "uncertainty_us": 20,
+        "quality": "app_clock_estimate"
+      },
+      "tick": 1,
+      "rate": 48000,
+      "expected": {
+        "wall_us": 1000020,
+        "uncertainty_us": 21
+      }
+    },
+    {
+      "epoch": {
+        "epoch_id": 0,
+        "audio_origin_tick": 0,
+        "wall_origin_us": 1000000,
+        "uncertainty_us": 20,
+        "quality": "app_clock_estimate"
+      },
+      "tick": 2,
+      "rate": 48000,
+      "expected": {
+        "wall_us": 1000041,
+        "uncertainty_us": 21
+      }
+    },
+    {
+      "epoch": {
+        "epoch_id": 0,
+        "audio_origin_tick": 0,
+        "wall_origin_us": null,
+        "uncertainty_us": null,
+        "quality": "unknown"
+      },
+      "tick": 9007199254740991,
+      "rate": 48000,
+      "expected": {
+        "wall_us": null,
+        "uncertainty_us": null
+      }
+    },
+    {
+      "epoch": {
+        "epoch_id": 0,
+        "audio_origin_tick": 0,
+        "wall_origin_us": -1,
+        "uncertainty_us": 20,
+        "quality": "app_clock_estimate"
+      },
+      "tick": 0,
+      "rate": 48000,
+      "expected": {
+        "wall_us": -1,
+        "uncertainty_us": 21
+      }
+    },
+    {
+      "epoch": {
+        "epoch_id": 0,
+        "audio_origin_tick": 0,
+        "wall_origin_us": 1000000,
+        "uncertainty_us": 20,
+        "quality": "app_clock_estimate"
+      },
+      "tick": 9007199254740,
+      "rate": 48000,
+      "expected": {
+        "wall_us": 187649985473750,
+        "uncertainty_us": 21
+      }
+    },
+    {
+      "epoch": {
+        "epoch_id": 0,
+        "audio_origin_tick": 0,
+        "wall_origin_us": 1000000,
+        "uncertainty_us": 20,
+        "quality": "app_clock_estimate"
+      },
+      "tick": 9007199254741,
+      "rate": 48000,
+      "expected": {
+        "wall_us": 187649985473770,
+        "uncertainty_us": 21
+      }
+    }
+  ]
+}

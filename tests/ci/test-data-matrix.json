@@ -97,7 +97,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -1090,7 +1090,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
-    "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five \u0420\u0435\u043c\u0438\u043a\u0441\u044b rerenders",
+    "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2432,7 +2432,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005A synthetic-large responsiveness \u203a All Artists round-trip reports synthetic-data responsiveness and memory timings",
+    "case": "FTC-GALLERY-STARTUP-005A synthetic-large responsiveness › All Artists round-trip reports synthetic-data responsiveness and memory timings",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2452,7 +2452,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-005 direct-loads a filtered \u0410\u0440\u0438\u044f gallery with the complete Artist Family labels",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-005 direct-loads a filtered Ария gallery with the complete Artist Family labels",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2471,7 +2471,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-026 clears an \u0410\u0440\u0438\u044f search after filtering to \u0412\u0438\u0442\u0430\u043b\u0438\u0439 \u0414\u0443\u0431\u0438\u043d\u0438\u043d without remounting the gallery or reducing Artist Family",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-026 clears an Ария search after filtering to Виталий Дубинин without remounting the gallery or reducing Artist Family",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2491,7 +2491,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists and follow-up tree selection responsive on synthetic data",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists and follow-up tree selection responsive on synthetic data",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2511,7 +2511,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/appOpenAllArtists.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005T synthetic-large app-open All Artists UI \u203a App open renders All Artists UI and explicit full root browse uses library_browse",
+    "case": "FTC-GALLERY-STARTUP-005T synthetic-large app-open All Artists UI › App open renders All Artists UI and explicit full root browse uses library_browse",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2531,7 +2531,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse scrolling keeps each displayed artist heading unique before and after filtering",
+    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse scrolling keeps each displayed artist heading unique before and after filtering",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -2552,7 +2552,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data",
+    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -2573,7 +2573,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/rootAlbumBrowse.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005S synthetic-large root album browse UI \u203a Root album browse UI reports library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005S synthetic-large root album browse UI › Root album browse UI reports library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2592,7 +2592,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005R synthetic-large direct search browse \u203a Search UI reports direct library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005R synthetic-large direct search browse › Search UI reports direct library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2611,7 +2611,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse \u203a Selected artist UI reports library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Selected artist UI reports library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2630,7 +2630,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse \u203a FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family",
+    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2649,7 +2649,7 @@
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilitiesResponsiveness.spec.js",
-    "case": "FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness \u203a FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view",
+    "case": "FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness › FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view",
     "profile": "utility-problematic-files",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2668,7 +2668,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/utilitiesResponsiveness.spec.js",
-    "case": "FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness \u203a FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information",
+    "case": "FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness › FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2687,7 +2687,7 @@
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
-    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI \u203a Problematic Files renders populated Postgres summary and automatic detail",
+    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail",
     "profile": "utility-problematic-files",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2707,7 +2707,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/utilityRules.spec.js",
-    "case": "FTC-UTIL-RULES-002P synthetic-large utility rules and sibling-tab UI \u203a Rules and sibling utility tabs report library_browse telemetry and timing",
+    "case": "FTC-UTIL-RULES-002P synthetic-large utility rules and sibling-tab UI › Rules and sibling utility tabs report library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2835,7 +2835,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-014 cold isolated scan captures loader, browse, and folder-threshold timings",
+    "case": "isolated scan performance benchmarks › FTC-OPS-014 cold isolated scan captures loader, browse, and folder-threshold timings",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2860,7 +2860,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-015 unchanged isolated cached startup stays effectively idle",
+    "case": "isolated scan performance benchmarks › FTC-OPS-015 unchanged isolated cached startup stays effectively idle",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2883,7 +2883,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-016 isolated incremental scan surfaces one new album promptly",
+    "case": "isolated scan performance benchmarks › FTC-OPS-016 isolated incremental scan surfaces one new album promptly",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2906,7 +2906,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-017 isolated incremental scan refreshes changed metadata promptly",
+    "case": "isolated scan performance benchmarks › FTC-OPS-017 isolated incremental scan refreshes changed metadata promptly",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2929,7 +2929,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003C explicit Scan Page preserves and restores browse context through idle",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003C explicit Scan Page preserves and restores browse context through idle",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2952,7 +2952,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -2973,7 +2973,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -7947,7 +7947,7 @@
       "FTC-GALLERY-STARTUP-005U"
     ],
     "ownerApproval": "approved",
-    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration \u203a Devin submit to first expected album visible"
+    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Devin submit to first expected album visible"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -7962,7 +7962,7 @@
       "FTC-GALLERY-STARTUP-005U"
     ],
     "ownerApproval": "approved",
-    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration \u203a Neal Morse submit to first expected album visible"
+    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Neal Morse submit to first expected album visible"
   },
   {
     "config": "playwright.component.config.js",
@@ -8015,6 +8015,466 @@
       "retained-card-scroll-anchor",
       "gallery-sidebar-prefix-order"
     ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-001 keeps explicit Queue on own signed-in Home",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-001"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-001"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-001",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-001"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-002 preserves explicit occurrence order and native queue timing",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-002"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-002"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-002",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-002"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-003 guards queue activation reorder and confirmed Clear",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-003"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-003"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-003",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-003"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-004 retains native Album and Artist inspection across Queue changes",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-004"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-004"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-004",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-004"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-005 preserves canonical selection and subject-owned taste",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-005"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-005"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-005",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-005"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-006 hides playback for readable missing occurrences",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-006"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-006"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-006",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-006"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-007 admits existing Playlist Inspect only for confirmed missing sources",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-007"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-007"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-007",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-007"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-008 preserves compact native responsive Playlist and Inspect composition",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-008"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-008"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-008",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-008"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-009 preserves native Period Choice anchoring keyboard and focus",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-009"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-009"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-009",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-009"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-010 creates selected Playlists only after explicit commit and current authority",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-010"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-010"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-010",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-010"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-013 pins only fresh authorized friend playback without listen credit",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-013"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-013"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-013",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-013"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.native-acceptance.config.js",
+    "project": "native-acceptance-chrome",
+    "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+    "case": "FTC-NATIVE-ACCEPT-001 Home preserves native own preferences and friend read-only taste",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "native-acceptance:NA001"
+    ],
+    "filesystemScenarios": [
+      "generated-native-acceptance-media:NA001"
+    ],
+    "expectedContracts": [
+      "ftc-native-accept-001"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:NA001",
+      "filesystemCopy": "generated-native-acceptance/NA001"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.native-acceptance.config.js",
+    "project": "native-acceptance-chrome",
+    "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+    "case": "FTC-NATIVE-ACCEPT-002 Goals empty state keeps period and admission dismissal native",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "native-acceptance:NA002"
+    ],
+    "filesystemScenarios": [
+      "generated-native-acceptance-media:NA002"
+    ],
+    "expectedContracts": [
+      "ftc-native-accept-002"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:NA002",
+      "filesystemCopy": "generated-native-acceptance/NA002"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.native-acceptance.config.js",
+    "project": "native-acceptance-chrome",
+    "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+    "case": "FTC-NATIVE-ACCEPT-003 Album Top preserves order and explicit manual completion",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "native-acceptance:NA003"
+    ],
+    "filesystemScenarios": [
+      "generated-native-acceptance-media:NA003"
+    ],
+    "expectedContracts": [
+      "ftc-native-accept-003"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:NA003",
+      "filesystemCopy": "generated-native-acceptance/NA003"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.native-acceptance.config.js",
+    "project": "native-acceptance-chrome",
+    "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+    "case": "FTC-NATIVE-ACCEPT-004 Advanced Search commits once and Popularity Album results mark only selected siblings",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "native-acceptance:NA004"
+    ],
+    "filesystemScenarios": [
+      "generated-native-acceptance-media:NA004"
+    ],
+    "expectedContracts": [
+      "ftc-native-accept-004"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:NA004",
+      "filesystemCopy": "generated-native-acceptance/NA004"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.native-acceptance.config.js",
+    "project": "native-acceptance-chrome",
+    "test": "tests/e2e/nativeAcceptance/nativeAcceptance.spec.js",
+    "case": "FTC-NATIVE-ACCEPT-005 Mobile artist album sheet and native navigation retain ownership",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "native-acceptance:NA005"
+    ],
+    "filesystemScenarios": [
+      "generated-native-acceptance-media:NA005"
+    ],
+    "expectedContracts": [
+      "ftc-native-accept-005"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:NA005",
+      "filesystemCopy": "generated-native-acceptance/NA005"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playerCaptureTelemetry.spec.js",
+    "case": "short audible playback survives reload as positive private capture",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [
+      "audio-copy:lastfm-connect-scrobble"
+    ],
+    "expectedContracts": [
+      "positive-short-listen-capture",
+      "durable-private-capture"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-capture-short"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playerCaptureTelemetry.spec.js",
+    "case": "visible backward seek retains repeated consumed positions in one capture",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [
+      "audio-copy:lastfm-connect-scrobble"
+    ],
+    "expectedContracts": [
+      "same-parent-backward-seek",
+      "repeated-source-positions"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-capture-seek"
+    },
     "ownerApproval": "approved"
   }
 ]

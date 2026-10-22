@@ -8,7 +8,6 @@ import re
 from threading import RLock
 
 from music_app.services.library_roots_postgres import PostgresLibraryRootSettingsStore
-from config import PERSISTENCE_BACKEND_POSTGRES
 
 
 _MAIN_ROOTS_KEY = "main_library_roots"
@@ -64,6 +63,7 @@ def load_library_root_settings(
     if library_id is not None or media_host_library_id is not None:
         from music_app.services.scoped_library_roots import load_scoped_roots
         return load_scoped_roots(PostgresLibraryRootSettingsStore(config), library_id=library_id, media_host_library_id=media_host_library_id)
+    from config import PERSISTENCE_BACKEND_POSTGRES
     from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
     with _CONFIGURED_ROOT_PATHS_SNAPSHOT_LOCK:
@@ -87,6 +87,7 @@ def save_library_root_settings(config: dict[str, object], raw_payload: object, *
             result = save_scoped_roots(PostgresLibraryRootSettingsStore(config), raw_payload, library_id=library_id, media_host_library_id=media_host_library_id)
             _store_configured_root_paths_snapshot(config, result)
             return result
+    from config import PERSISTENCE_BACKEND_POSTGRES
     from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
     with _CONFIGURED_ROOT_PATHS_SNAPSHOT_LOCK:
@@ -586,3 +587,14 @@ def _normalize_album_folder_name(value: str) -> str:
     text = re.sub(r"\s*[\[(]\d{4}[\])]\s*$", "", text)
     text = re.sub(r"[_\-]+", " ", text)
     return " ".join(text.split()).casefold()
+
+
+
+def resolve_typed_artwork_observations(value):
+    """Dormant explicit-root observations; caller must be off-loop/outside DB.
+
+    This entry does not change existing media resolution or confer authority.
+    It accepts only the fixed immutable private resolution input contract.
+    """
+    from music_app.services._top_artwork_resolution import resolve
+    return resolve(value)

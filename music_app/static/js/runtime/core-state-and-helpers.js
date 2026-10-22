@@ -486,11 +486,21 @@ function renderSidebar() {
     allArtistsActiveOverride: effectiveAllArtistsActive,
   };
   const structureSignature = buildSidebarStructureSignature(sidebarArtists, sidebarRenderOptions);
-  if (el.dataset.sidebarStructureSignature === structureSignature) {
+  // Equal row labels cannot transfer an old private node to a new parent.
+  // This receipt contains only the existing safe native navigation projection.
+  const privateSearchView = v.private_search === true ? v : null;
+  if (el.dataset.sidebarStructureSignature === structureSignature
+    && (el.albumHavenSidebarPrivateView ?? null) === privateSearchView) {
     applySidebarSelectionMarkup(el, sidebarRenderOptions);
   } else {
     el.innerHTML = buildSidebarHtml(v, sidebarArtists, sidebarRenderOptions);
     el.dataset.sidebarStructureSignature = structureSignature;
+    el.albumHavenSidebarPrivateView = privateSearchView;
+    if (privateSearchView) {
+      for (const node of el.querySelectorAll('[data-sidebar-artist], [data-sidebar-all-artists="1"]')) {
+        node.albumHavenPrivateSearchView = privateSearchView;
+      }
+    }
   }
   el.albumHavenSidebarArtistsSource = sidebarArtists;
   el.albumHavenSidebarShowAllArtists = sidebarRenderOptions.showAllArtistsOverride !== null

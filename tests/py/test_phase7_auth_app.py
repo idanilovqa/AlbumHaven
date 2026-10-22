@@ -281,3 +281,76 @@ def test_phase7_drains_control_requests_before_database_release(tmp_path, monkey
                 thread.join(timeout=2)
                 assert not thread.is_alive()
     assert requests and requests[0][0] == 200
+
+
+@pytest.mark.parametrize("failure_point", [None, "reset", "restore"])
+def test_phase7_reset_restores_capture_budget_after_committed_reset_before_seed(
+    tmp_path, failure_point
+):
+    """Exercise the exact callback without starting servers or loading config."""
+    import ast
+    from types import SimpleNamespace
+
+    source_path = Path(__file__).resolve().parents[1] / "e2e" / "support" / "phase7AuthApp.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
+               and node.module == "isolatedPostgres"]
+    assert any(alias.name == "restore_empty_capture_budget_after_reset"
+               for node in imports for alias in node.names)
+    callbacks = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.FunctionDef) and node.name == "reset_fixture"]
+    assert len(callbacks) == 1
+    events = []
+    failure = RuntimeError("capture fixture failure")
+    reset_returned = False
+
+    def reset(url):
+        nonlocal reset_returned
+        assert url == "owned-setup"
+        events.append("reset")
+        if failure_point == "reset":
+            raise failure
+        reset_returned = True
+
+    def restore(url):
+        assert url == "owned-setup"
+        assert reset_returned, "restore must not open a connection under reset's TRUNCATE locks"
+        events.append("restore")
+        if failure_point == "restore":
+            raise failure
+
+    def seed(url):
+        assert url == "owned-setup"
+        events.append("seed")
+
+    def owner(url):
+        assert url == "owned-runtime"
+        events.append("owner")
+
+    def inventory(url, media, values, **kwargs):
+        assert (url, media, values) == ("owned-setup", tmp_path / "media", {})
+        assert kwargs == {"rebuild_relations": False, "include_missing_inventory": True}
+        events.append("inventory")
+
+    namespace = {
+        "reset_application_tables": reset,
+        "restore_empty_capture_budget_after_reset": restore,
+        "seed_bootstrap_owner_and_library": seed,
+        "_bootstrap_owner": owner,
+        "persist_settings_playback_inventory": inventory,
+        "setup_database_url": "owned-setup",
+        "runtime_database_url": "owned-runtime",
+        "temp_root": tmp_path,
+        "playback_inventory": {},
+        "args": SimpleNamespace(extended_mobile_media=False, playback_media=True, mobile_layout_media=False),
+    }
+    module = ast.Module(body=callbacks, type_ignores=[])
+    exec(compile(ast.fix_missing_locations(module), str(source_path), "exec"), namespace)
+    if failure_point:
+        with pytest.raises(RuntimeError) as caught:
+            namespace["reset_fixture"]()
+        assert caught.value is failure
+        assert events == (["reset"] if failure_point == "reset" else ["reset", "restore"])
+    else:
+        namespace["reset_fixture"]()
+        assert events == ["reset", "restore", "seed", "owner", "inventory"]

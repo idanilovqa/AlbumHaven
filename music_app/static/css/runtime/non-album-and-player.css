@@ -303,6 +303,17 @@ font-size: 0.9em;
 font-weight: 700;
 white-space: nowrap;
 }
+/* Compact read-only empty ratings share the star renderer without reserving
+   numeric text or expanding beyond their existing table/detail container. */
+.rating-row.rating-row--compact-empty {
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: calc(var(--rating-star-interval-count) * 1em);
+  max-width: 100%;
+  vertical-align: middle;
+}
+.rating-row.rating-row--compact-empty::after { display: none; }
+.rating-row--compact-empty .star:not(.filled) { color: var(--appearance-muted, var(--muted)); }
 .stars {
 display: flex;
 min-width: 0;
@@ -1905,6 +1916,18 @@ font-weight: 400;
 #app-form-content { min-height: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
 #app-form-modal .confirm-modal-title, #app-form-modal .confirm-modal-actions, #app-form-error { flex: 0 0 auto; }
 #app-form-error:empty { display: none; }
+/* Opt-in content composition; the native form retains its header and lifecycle. */
+#app-form-modal:not(.is-mobile-page) > .confirm-modal-dialog:has(.app-form-joined) { width: min(960px, calc(100vw - 32px)); max-width: 100%; }
+.app-form-joined { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; }
+.app-form-joined > .app-form-joined__pane { min-width: 0; }
+.app-form-joined > .app-form-joined__pane + .app-form-joined__pane { border-inline-start: 1px solid var(--border); padding-inline-start: 16px; }
+.app-form-joined__title { margin: 0; font-size: inherit; font-weight: 600; }
+@media (max-width: 720px) {
+  .app-form-joined { grid-template-columns: minmax(0, 1fr); }
+  .app-form-joined > .app-form-joined__pane + .app-form-joined__pane {
+    border-inline-start: 0; padding-inline-start: 0; border-block-start: 1px solid var(--border); padding-block-start: 16px;
+  }
+}
 .utility-loop-entry.is-drop-before::before { top: -9px; }
 .utility-loop-entry.is-drop-after::after { bottom: -9px; }
 .utility-loop-tree-child.is-drop-before::before { top: -2px; }
@@ -2040,3 +2063,18 @@ appearance: none; -webkit-appearance: none; height: 100%; margin: 0; background:
 text-shadow: 0 0 4px color-mix(in srgb, var(--appearance-waveform-edge, #AFD8C2) 24%, transparent),
 0 0 8px color-mix(in srgb, var(--appearance-play, #24B86B) 16%, transparent);
 }
+
+/* Collection variant of the native capsule: only its upper action row expands.
+   The fixed 64px main control spans both reserved header rows. */
+.collection-play-cluster { --loop-play-control-size: 56px; width: 64px; height: 64px; flex-basis: 64px; }
+.collection-play-cluster::before,
+.collection-play-cluster[data-loop-action-engaged="true"]::before { width: 64px; height: 64px; border-radius: 32px; }
+.collection-play-cluster::after { content: ''; position: absolute; box-sizing: border-box; left: 32px; top: 0; width: 32px; height: 44px; border: 1px solid var(--loop-control-border); border-radius: 0 24px 24px 0; background: var(--loop-control-surface); z-index: -1; pointer-events: none; opacity: 0; transition: width 150ms ease, opacity 150ms ease; }
+.collection-play-cluster[data-loop-action-engaged="true"]::after { width: 66px; opacity: 1; }
+.collection-play-actions { left: 60px; top: 0; height: 44px; }
+.collection-play-actions :is(.loop-edit-actions, .loop-edit-action-pod) { height: 44px; }
+.collection-play-mode-badge { position: absolute; right: -2px; bottom: -2px; display: grid; place-items: center; min-width: 18px; height: 18px; padding-inline: 2px; box-sizing: border-box; border-radius: 9px; background: var(--panel); color: var(--text); border: 1px solid var(--border); font-size: .6rem; font-weight: 700; pointer-events: none; }
+.loop-edit-action-options-icon.ui-icon { display: block; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.collection-play:disabled { cursor: default; background: var(--app-disabled, var(--panel-2)); color: var(--muted); border-color: var(--border); box-shadow: none; }
+.collection-play:focus-visible { outline: 2px solid var(--appearance-selected-accent, currentColor); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .collection-play-cluster::after { transition: none; } }

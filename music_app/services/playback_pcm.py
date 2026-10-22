@@ -254,6 +254,45 @@ class PcmDecoderProcess:
             raise RuntimeError("ffmpeg subprocess did not provide output pipes")
         return cls(command, process)
 
+    @classmethod
+    async def start_retained(
+        cls,
+        command: PcmOpenCommand,
+        *,
+        admission,
+        capability,
+        process_factory: ProcessFactory = asyncio.create_subprocess_exec,
+        capability_probe=None,
+        pipe_completion=None,
+    ) -> "RetainedPcmDecoderProcess":
+        """Dormant two-phase entry; caller admits P synchronously before await.
+
+        If this coroutine is never executed, caller must request_cancel on its
+        admission in finally. No application route invokes this method.
+        """
+        from music_app.services.rooted_playback_adapter import RootedPlaybackAdmission
+
+        if type(admission) is not RootedPlaybackAdmission:
+            raise TypeError("rooted_admission_required")
+        if type(command) is not PcmOpenCommand:
+            raise TypeError("pcm_open_command_required")
+        options = {"capability": capability, "process_factory": process_factory}
+        if capability_probe is not None:
+            options["capability_probe"] = capability_probe
+        if pipe_completion is not None:
+            options["pipe_completion"] = pipe_completion
+        # Preclaim rejection has no cancellation authority over another caller.
+        claim = admission._claim_start(command, **options)
+        try:
+            await admission._await_start(claim)
+            if admission.gapless is not None:
+                command = replace(command,
+                    provisional_duration_seconds=admission.gapless.duration_seconds)
+            return RetainedPcmDecoderProcess(command, admission)
+        except BaseException:
+            admission._cancel_start(claim)
+            raise
+
     def grant_credit(self, frame_count: int) -> None:
         _validate_nonnegative_integer("frame_count", frame_count)
         self.outstanding_credit_frames += frame_count
@@ -386,3 +425,73 @@ class PcmDecoderProcess:
                 self.metadata.timeline_start_frame + self.emitted_frames
             ),
         )
+
+
+class RetainedPcmDecoderProcess(PcmDecoderProcess):
+    """Additive retained facade; it never invokes the ordinary constructor.
+
+    Observation snapshots are local facts, not registry bindings or durable
+    telemetry. Ordinary metadata semantics are preserved separately.
+    """
+    def __init__(self, command: PcmOpenCommand, admission) -> None:
+        self.command = command
+        self._admission = admission
+        self._process = admission._process
+        self.metadata = PcmStreamMetadata(
+            generation=command.generation, stream_id=command.stream_id,
+            role=command.role, sample_rate=command.sample_rate, channels=2,
+            provisional_total_frames=round(
+                command.provisional_duration_seconds * command.sample_rate),
+            requested_start_frame=command.start_frame,
+            timeline_start_frame=command.start_frame,
+        )
+
+    @classmethod
+    async def start(cls, *args, **kwargs):
+        raise RuntimeError("use_explicit_retained_admission")
+
+    @property
+    def lifecycle_id(self):
+        return self._admission.lifecycle_id
+
+    @property
+    def emitted_frames(self):
+        return self._admission.emitted_frames
+
+    @property
+    def outstanding_credit_frames(self):
+        return self._admission.outstanding_credit_frames
+
+    @property
+    def stderr_tail(self):
+        return self._admission.stderr_tail
+
+    def grant_credit(self, frame_count: int) -> None:
+        self._admission.grant_credit(frame_count)
+
+    async def read_credited_frames(
+        self, *, max_frames: int, delivery_role: PcmRole | None = None,
+    ) -> PcmChunk:
+        # No allocation after the admission's final PCM publication fence.
+        # Retained display metadata is refreshed by finish, separately from
+        # the local zero-start evidence candidate.
+        return await self._admission.read_credited_frames(
+            max_frames=max_frames, delivery_role=delivery_role, chunk_factory=PcmChunk)
+
+    async def finish(self) -> PcmStreamMetadata:
+        await self._admission.finish()
+        self.metadata = replace(self.metadata, authoritative_total_frames=(
+            self.metadata.timeline_start_frame + self.emitted_frames))
+        return self.metadata
+
+    async def cancel(self) -> None:
+        await self._admission.cancel()
+
+    def request_cancel(self) -> None:
+        self._admission.request_cancel()
+
+    def observation_snapshot(self, expected_lifecycle_id):
+        return self._admission.observation_snapshot(expected_lifecycle_id)
+
+    def mark_observation_lost(self, expected_lifecycle_id, reason):
+        self._admission.mark_observation_lost(expected_lifecycle_id, reason)

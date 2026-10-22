@@ -293,7 +293,9 @@ def _matches_duration(duration_seconds: int, comparator: str, expected_seconds: 
 def _source_matches_field_filter(source: object, field_name: str, value: str) -> bool:
     if field_name == "love":
         overlay = track_preference_overlay_from_source(source)
-        return track_preference_matches_favorite_song_projection(overlay, love_tier=value)
+        return track_preference_matches_favorite_song_projection(
+            overlay, love_tier=None if value == "loved" else value
+        )
     source_values = _normalize_source_values(source, field_name)
     if not source_values:
         return False

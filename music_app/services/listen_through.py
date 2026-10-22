@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 from music_app.services.utils import safe_int
+from music_app.services.album_preferences import (
+    AlbumPreferenceError, serialize_own_album_preference, validated_progress_fields,
+)
 
 _PROGRESS_STATES = {"not_started", "active", "completed"}
 _FOLLOW_UP_STATES = {"none", "needs_rating", "needs_relisten_clear"}
 
 
 def default_album_preference_overlay() -> dict[str, object]:
+    # Generic/legacy producer defaults are not actor taste or progress evidence.
     return {
+        "album_ref": None,
+        "context_ref": None,
         "rating": None,
         "favorite_override": None,
-        "is_favorite": False,
+        "is_favorite": None,
         "favorite_source": None,
+        "taste_state": "unavailable",
+        "preference_revision": None,
         "can_edit": False,
-        "to_listen": False,
-        "is_relisten": False,
-        "can_toggle_to_listen": False,
+        "allowed_actions": {"can_manage_album_preferences": False},
     }
 
 
@@ -44,22 +50,52 @@ def apply_album_preference_overlay(
         }
 
 
-def normalize_album_preference_overlay(value: object) -> dict[str, object]:
+def normalize_album_preference_overlay(value: object, *, verified_progress=None) -> dict[str, object]:
+    """Normalize exact wire taste without promoting legacy defaults to facts.
+
+    Progress must be supplied separately after producer/actor/library/generation/
+    context verification. Mere presence in value is deliberately insufficient.
+    This is shape normalization, not an authorization or context-binding check.
+    """
     overlay = default_album_preference_overlay()
+    progress = validated_progress_fields(verified_progress)
+    overlay.update(progress)
     if not isinstance(value, dict):
         return overlay
-
-    overlay["rating"] = safe_int(value.get("rating"))
-    favorite_override = value.get("favorite_override")
-    overlay["favorite_override"] = favorite_override if favorite_override is not None else None
-    overlay["is_favorite"] = bool(value.get("is_favorite"))
-    favorite_source = value.get("favorite_source")
-    overlay["favorite_source"] = favorite_source if favorite_source is not None else None
-    overlay["can_edit"] = bool(value.get("can_edit"))
-    overlay["to_listen"] = bool(value.get("to_listen"))
-    overlay["is_relisten"] = bool(value.get("is_relisten"))
-    overlay["can_toggle_to_listen"] = bool(value.get("can_toggle_to_listen"))
-    return overlay
+    context_ref = value.get("context_ref")
+    if isinstance(context_ref, str) and context_ref:
+        overlay["context_ref"] = context_ref
+    if value.get("taste_state") != "available":
+        return overlay
+    from music_app.services.album_preferences import parse_album_preference_command
+    ref = value.get("album_ref")
+    try:
+        if not isinstance(ref, str) or len(ref) > 80:
+            return overlay
+        parts = ref.split(":")
+        if len(parts) != 3:
+            return overlay
+        library_id = int(parts[1])
+        command = parse_album_preference_command({
+            "album_ref": ref, "expected_revision": value.get("preference_revision"),
+            "patch": {"rating": value.get("rating")},
+        }, library_id=library_id)
+        actions = value.get("allowed_actions")
+        editable = value.get("can_edit")
+        if (type(editable) is not bool or not isinstance(actions, dict)
+                or set(actions) != {"can_manage_album_preferences"}
+                or actions["can_manage_album_preferences"] is not editable):
+            return overlay
+        return serialize_own_album_preference({
+            "album_id": command.album_id, "library_id": library_id,
+            "rating": value.get("rating"), "favorite": value.get("is_favorite"),
+            "favorite_override": value.get("favorite_override"),
+            "favorite_source": value.get("favorite_source"),
+            "preference_revision": command.expected_revision, "taste_state": "available",
+        }, library_id=library_id, context_ref=context_ref, can_edit=editable,
+            verified_progress=progress)
+    except (AlbumPreferenceError, ValueError, TypeError):
+        return overlay
 
 
 def default_top_viewer_overlay() -> dict[str, object]:

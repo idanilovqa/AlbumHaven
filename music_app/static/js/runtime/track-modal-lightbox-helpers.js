@@ -1,7 +1,337 @@
+let trackModalSampleSuspension = null;
 function invalidatePendingTrackModalLoad() {
+  if (typeof disposeTrackModalAlbumPreferences === 'function') disposeTrackModalAlbumPreferences();
   state.ui.pendingTrackModalLoadAlbumKey = '';
   state.ui.pendingTrackModalLoadToken = Number(state.ui.pendingTrackModalLoadToken || 0) + 1;
   return state.ui.pendingTrackModalLoadToken;
+}
+
+// One retained native Album composition. The hidden modal shell stays in its
+// dock; only its existing dialog moves, so all track/artwork owners remain real.
+let trackModalSelectionLease = null;
+let trackModalSearchPresentation = null;
+function retireTrackModalSearchPresentation(reason, expected = trackModalSearchPresentation) {
+  if (!expected || trackModalSearchPresentation !== expected) return;
+  trackModalSearchPresentation = null;
+  expected.dispose(reason);
+}
+let trackModalPresentationRestrictions = null;
+let trackModalSourcePageOwner = null;
+let artistSheetOrigin = null, artistSheetGeneration = 0, artistSheetPresenter = null;
+function getTrackModalArtistSheetOrigin() {return artistSheetOrigin;}
+function getTrackModalArtistSheetMarker(album) {
+  const origin = artistSheetOrigin;
+  if (!origin || trackModalSourcePageOwner || trackModalPresentationRestrictions?.can_open_album_page === false) return null;
+  const descriptor = {kind: 'album', albumKey: String(getAlbumRequestKey(album) || ''),
+    presentation: 'artist-discography-sheet', artistRef: origin.artistRef,
+    parentPosition: origin.entryKey, parentViewUrl: origin.parentViewUrl};
+  return origin.isRetainedCurrent(descriptor) && origin === artistSheetOrigin
+    ? {presentation: descriptor.presentation, artistRef: descriptor.artistRef} : null;
+}
+function disposeTrackModalArtistSheet() {
+  const owned = artistSheetPresenter;
+  artistSheetPresenter = null;
+  if (!owned) return;
+  owned.observer?.disconnect(); owned.unsubscribe?.(); owned.presenter?.dispose();
+  if (!artistSheetPresenter) owned.overlay.classList.remove('is-artist-discography-sheet');
+}
+function syncTrackModalArtistSheet(descriptor, {mobile, foreground} = {}) {
+  const origin = artistSheetOrigin, generation = artistSheetGeneration;
+  if (!mobile || !origin || !origin.isRetainedCurrent(descriptor)) {disposeTrackModalArtistSheet(); return;}
+  const overlay = document.getElementById('track-modal');
+  if (!overlay || !window.AlbumHavenBottomSheet) return;
+  if (artistSheetPresenter && artistSheetPresenter.origin !== origin) disposeTrackModalArtistSheet();
+  if (artistSheetOrigin !== origin || artistSheetGeneration !== generation) return;
+  if (!artistSheetPresenter) {
+    const panel = overlay.querySelector('[role="dialog"]');
+    if (!panel) return;
+    overlay.classList.add('is-artist-discography-sheet');
+    const owned = {origin, overlay, presenter: null, observer: null, unsubscribe: null, foreground};
+    artistSheetPresenter = owned;
+    const current = () => artistSheetPresenter === owned && artistSheetGeneration === generation
+      && artistSheetOrigin === origin && origin.isRetainedCurrent(mobilePageState.pages.find(page => page.kind === 'album'));
+    const top = () => current() && owned.foreground && !overlay.hidden && !overlay.inert
+      && getTopmostOpenModal() === overlay;
+    owned.presenter = window.AlbumHavenBottomSheet.mount({overlay, panel,
+      handle: overlay.querySelector('#track-modal-sheet-handle'), toggle: overlay.querySelector('#track-modal-sheet-toggle'),
+      scroller: overlay.querySelector('.track-modal-body'), readBounds: () => ({header: origin.readHeader()}),
+      isCurrent: current, foreground: top, requestClose: () => current() ? requestMobileArtistSheetDismissal() : false,
+      backgroundNodes: [document.getElementById('shell-main-surface'), document.querySelector('.global-player')]
+        .filter(node => node && !node.contains(overlay)),
+    });
+    if (!current()) {owned.presenter.dispose(); return;}
+    owned.reconcileForeground = () => {if (current()) owned.presenter.suspend(!top());};
+    owned.isCurrent = current;
+    owned.unsubscribe = window.AlbumHavenArtistPageRuntime?.subscribe(() => {
+      if (!current() && artistSheetPresenter === owned) {
+        disposeTrackModalArtistSheet();
+        if (!artistSheetPresenter) syncMobilePageShell();
+      }
+    });
+    if (typeof MutationObserver === 'function') {
+      owned.observer = new MutationObserver(() => {
+        if (current()) owned.presenter.suspend(!top());
+        else if (artistSheetPresenter === owned) {
+          disposeTrackModalArtistSheet();
+          if (!artistSheetPresenter) syncMobilePageShell();
+        }
+      });
+      owned.observer.observe(document.body, {subtree: true, attributes: true, attributeFilter: ['hidden', 'inert']});
+    }
+  }
+  if (!artistSheetPresenter || artistSheetOrigin !== origin || artistSheetGeneration !== generation) return;
+  artistSheetPresenter.foreground = foreground;
+  artistSheetPresenter.presenter.suspend(!foreground, {releaseBackground: !foreground});
+  artistSheetPresenter.presenter.update();
+}
+function resumeTrackModalArtistSheetForFocus(target) {
+  const owned = artistSheetPresenter;
+  if (!owned || !owned.overlay.contains(target)) return true;
+  owned.reconcileForeground?.();
+  return artistSheetPresenter === owned && owned.isCurrent?.() === true
+    && getTopmostOpenModal() === owned.overlay && !target.closest('[hidden],[inert]');
+}
+function updateTrackModalArtistSheet() {
+  if (typeof mobilePageState !== 'undefined') syncTrackModalArtistSheet(mobilePageState.pages.find(page => page.kind === 'album'),
+    {mobile: usesMobilePageLayout(), foreground: mobilePageState.pages.at(-1)?.kind === 'album'});
+}
+let trackModalSourcePageSequence = 0;
+const trackModalSourcePageOwners = new Map();
+const TRACK_MODAL_SOURCE_PAGE_LIMIT = 20;
+let trackModalSourcePageReplay = null;
+function getTrackModalSourcePageOwner() {return trackModalSourcePageOwner;}
+function getTrackModalSourcePageToken() {return trackModalSourcePageOwner?.token || null;}
+function isTrackModalSourceActionCurrent() {
+  const owner = trackModalSourcePageOwner;
+  if (!owner) return true;
+  try {return owner.isCurrent() === true && trackModalSourcePageOwner === owner;} catch {return false;}
+}
+function isTrackModalSourcePageCurrent(token, albumKey) {
+  const owner = trackModalSourcePageOwner;
+  if (!owner || !token || owner.token !== token) return false;
+  const album = getCurrentTrackModalAlbum();
+  if (!album) return false;
+  try {return String(getAlbumRequestKey(album) || '') === String(albumKey || '') && isTrackModalSourceActionCurrent();} catch {return false;}
+}
+function resolveTrackModalSourcePageOwner(candidate, albumKey, restrictions) {
+  if (!candidate) return null;
+  if (candidate.token && trackModalSourcePageOwners.get(candidate.token) === candidate) return candidate;
+  if (typeof candidate.isCurrent !== 'function') return null;
+  return Object.freeze({token: `album-source-${Date.now().toString(36)}-${++trackModalSourcePageSequence}-${Math.random().toString(36).slice(2)}`,
+    albumKey, restrictions, isCurrent: candidate.isCurrent, revalidate: candidate.revalidate,
+    ...(typeof candidate.retainNavigation === 'function' ? {retainNavigation: candidate.retainNavigation} : {})});
+}
+function retainTrackModalSourcePageOwner(owner) {
+  if (!owner) return;
+  trackModalSourcePageOwners.delete(owner.token); trackModalSourcePageOwners.set(owner.token, owner);
+  while (trackModalSourcePageOwners.size > TRACK_MODAL_SOURCE_PAGE_LIMIT) {
+    trackModalSourcePageOwners.delete(trackModalSourcePageOwners.keys().next().value);
+  }
+}
+async function restoreTrackModalSourcePage(descriptor, {signal, isCurrent, present} = {}) {
+  const owner = trackModalSourcePageOwners.get(descriptor?.sourcePageToken);
+  if (!owner || owner.albumKey !== descriptor.albumKey || typeof owner.revalidate !== 'function') return false;
+  const pending = {}; trackModalSourcePageReplay = pending;
+  releaseTrackModalSelection('history');
+  const token = Number(state.ui?.pendingTrackModalLoadToken || 0);
+  let presentationAttempt = null, completed = false;
+  try {
+    const result = await owner.revalidate({signal, albumKey: descriptor.albumKey});
+    presentationAttempt = result?.presentationAttempt || null;
+    if (signal?.aborted || !isCurrent?.()) return false;
+    if (trackModalSourcePageReplay !== pending || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)) {
+      throw Object.assign(new Error('A newer native Album action owns this presentation.'), {name: 'AbortError', sourcePageSuperseded: true});
+    }
+    if (!result?.album || String(getAlbumRequestKey(result.album) || '') !== descriptor.albumKey
+      || typeof result.isCurrent !== 'function' || !result.isCurrent()) return false;
+    const fresh = normalizeTrackModalPresentationRestrictions(result.presentationRestrictions);
+    const restrictions = normalizeTrackModalPresentationRestrictions({
+      can_view_artwork: owner.restrictions.can_view_artwork && fresh.can_view_artwork,
+      can_play_album: owner.restrictions.can_play_album && fresh.can_play_album,
+      can_open_album_page: owner.restrictions.can_open_album_page && fresh.can_open_album_page,
+    });
+    if (!restrictions.can_open_album_page) return false;
+    const refreshed = Object.freeze({...owner, restrictions, isCurrent: result.isCurrent});
+    retainTrackModalSourcePageOwner(refreshed);
+    let invoked = false, requested = false, handoffResult;
+    const open = () => {
+      if (requested || signal?.aborted || !isCurrent?.() || presentationAttempt && !presentationAttempt.isCurrent()) return false;
+      requested = true;
+      let accepting = true;
+      const handoff = () => {
+        if (!accepting || invoked || trackModalSourcePageReplay !== pending
+          || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)
+          || signal?.aborted || !isCurrent?.() || !refreshed.isCurrent()
+          || presentationAttempt && !presentationAttempt.isCurrent()) return false;
+        invoked = true;
+        handoffResult = openTrackModal(result.album, {sourcePageOwner: refreshed, presentationRestrictions: restrictions,
+          searchPresentationAttempt: presentationAttempt, coverLightboxGallery: false});
+        return handoffResult;
+      };
+      try {return typeof refreshed.retainNavigation === 'function' ? refreshed.retainNavigation(handoff) : handoff();}
+      finally {accepting = false;}
+    };
+    const presented = typeof present === 'function' ? await present(open) : open();
+    completed = invoked && handoffResult !== false && presented !== false && (!presentationAttempt || presentationAttempt.isCommitted());
+    return completed;
+  } finally {
+    if (trackModalSourcePageReplay === pending) trackModalSourcePageReplay = null;
+    if (!completed) {
+      retireTrackModalSearchPresentation('replay-uncommitted', presentationAttempt);
+      presentationAttempt?.dispose('replay-uncommitted');
+    }
+  }
+}
+
+function normalizeTrackModalPresentationRestrictions(value) {
+  const denied = name => value && Object.prototype.hasOwnProperty.call(value, name) && value[name] === false;
+  return Object.freeze({can_view_artwork: !denied('can_view_artwork'), can_play_album: !denied('can_play_album'),
+    can_open_album_page: !denied('can_open_album_page')});
+}
+function getTrackModalPresentationRestrictions() {return trackModalPresentationRestrictions;}
+function canViewTrackModalArtwork() {
+  const lease = trackModalSelectionLease;
+  return lease ? lease.isCurrent() && lease.canArtwork()
+    : isTrackModalSourceActionCurrent() && trackModalPresentationRestrictions?.can_view_artwork !== false;
+}
+
+function getTrackModalSelectionLease() { return trackModalSelectionLease; }
+function getTrackModalContentRoot() {
+  return trackModalSelectionLease?.dialog || document.getElementById('track-modal');
+}
+function isTrackModalContentVisible() {
+  const lease = trackModalSelectionLease;
+  return lease ? lease.dialog.isConnected && lease.isCurrent() : !document.getElementById('track-modal')?.hidden;
+}
+function getTrackModalSelectionAlbumFor(element) {
+  const lease = trackModalSelectionLease;
+  return lease && lease.dialog.contains(element) && lease.isCurrent() ? lease.album : null;
+}
+function canPlayTrackModalSelection(element) {
+  const lease = trackModalSelectionLease;
+  if (element?.closest?.('[data-resource-selection-content]')) {
+    return !!(lease && lease.dialog.contains(element) && lease.isCurrent() && lease.canPlay());
+  }
+  return !element?.closest?.('#track-modal')
+    || isTrackModalSourceActionCurrent() && trackModalPresentationRestrictions?.can_play_album !== false;
+}
+function reconcileTrackModalSelectionAlbum(album) {
+  const lease = trackModalSelectionLease;
+  if (!lease) return;
+  if (!lease.isCurrent() || getAlbumRequestKey(album) !== getAlbumRequestKey(lease.album)) lease.release('content');
+  else lease.album = album;
+}
+function focusTrackModalSelectionTitle(lease, title) {
+  const button = title?.querySelector('[data-resource-selection-open]');
+  if (button) {button.focus({preventScroll: true}); return;}
+  if (!title) return;
+  lease.focusedHeading = {node: title, tabIndex: title.getAttribute('tabindex')};
+  title.setAttribute('tabindex', '-1'); title.focus({preventScroll: true});
+}
+function restoreTrackModalSelectionHeading(lease) {
+  const saved = lease.focusedHeading;
+  if (!saved) return;
+  if (saved.tabIndex === null) saved.node.removeAttribute('tabindex');
+  else saved.node.setAttribute('tabindex', saved.tabIndex);
+  lease.focusedHeading = null;
+}
+function decorateTrackModalSelection() {
+  const lease = trackModalSelectionLease;
+  if (!lease) {
+    if (!isTrackModalSourceActionCurrent() || trackModalPresentationRestrictions?.can_play_album === false) {
+      for (const button of document.getElementById('track-modal')?.querySelectorAll?.('.play-track-button') || []) button.disabled = true;
+    }
+    return;
+  }
+  if (!lease.isCurrent()) return;
+  const title = lease.dialog.querySelector('.album-details-header__primary');
+  const oldTitle = title?.querySelector('[data-resource-selection-open]');
+  const canOpen = lease.canOpen() && typeof lease.onOpen === 'function';
+  if (title && canOpen && !oldTitle) {
+    const restoreFocus = document.activeElement === title;
+    restoreTrackModalSelectionHeading(lease);
+    title.innerHTML = ButtonComponent.renderButton({label: title.textContent, variant: 'secondary', quiet: true, size: 'small',
+      attributes: {'data-resource-selection-open': '1'}});
+    const button = title.querySelector('button'); button?.addEventListener('click', lease.onOpen);
+    if (restoreFocus) button?.focus({preventScroll: true});
+  } else if (title && !canOpen && oldTitle) {
+    const restoreFocus = oldTitle === document.activeElement || oldTitle.contains(document.activeElement);
+    title.textContent = oldTitle.textContent;
+    if (restoreFocus) focusTrackModalSelectionTitle(lease, title);
+  }
+  const actions = lease.dialog.querySelector('.album-details-header__actions');
+  const oldPage = actions?.querySelector('[data-resource-selection-page]');
+  const canPage = lease.canPage() && typeof lease.onPage === 'function';
+  if (actions && canPage && !oldPage) {
+    const host = document.createElement('span');
+    host.innerHTML = ButtonComponent.renderActionButton({icon: 'expand', ariaLabel: 'Full size', title: 'Full size', presentation: 'bare',
+      attributes: {'data-resource-selection-page': '1'}});
+    const button = host.firstElementChild;
+    actions.prepend(button); button.addEventListener('click', lease.onPage);
+  } else if (!canPage && oldPage) {
+    const restoreFocus = oldPage === document.activeElement || oldPage.contains(document.activeElement);
+    oldPage.remove();
+    if (restoreFocus) focusTrackModalSelectionTitle(lease, title);
+  }
+  for (const button of lease.dialog.querySelectorAll('.play-track-button')) if (!lease.canPlay()) button.disabled = true;
+  for (const button of lease.dialog.querySelectorAll('[data-open-lightbox]')) if (!lease.canArtwork()) button.disabled = true;
+}
+function releaseTrackModalSelection(reason = 'release') { trackModalSelectionLease?.release(reason); }
+function acquireTrackModalSelection(host, album, {isCurrent = () => false, canPlay = () => false, canArtwork = () => false, canOpen = () => true, canPage = () => false, retainNavigation, onRelease, onOpen, onPage, searchPresentationAttempt = null} = {}) {
+  const overlay = document.getElementById('track-modal');
+  if (trackModalSourcePageReplay || !host?.isConnected || !overlay?.hidden || !album || albumRequiresHydration(album) || !isCurrent()
+    || searchPresentationAttempt && !searchPresentationAttempt.isCurrent()) return null;
+  releaseTrackModalSelection('replace');
+  retireTrackModalSearchPresentation('embed-replace');
+  const dialog = overlay.querySelector('.track-modal-dialog');
+  if (!dialog || !overlay.hidden || trackModalSelectionLease || !isCurrent()
+    || searchPresentationAttempt && !searchPresentationAttempt.isCurrent()) return null;
+  trackModalCleanupGeneration += 1;
+  trackModalSourcePageOwner = null;
+  const marker = document.createComment('Native Album selection dock');
+  dialog.before(marker);
+  const attributes = ['role', 'aria-modal', 'aria-label'].map(name => [name, dialog.getAttribute(name)]);
+  const previousGallery = state.ui.trackModalCoverLightboxGallery;
+  const token = invalidatePendingTrackModalLoad();
+  const lease = {dialog, album, token, isCurrent, canPlay, canArtwork, canOpen, canPage, retainNavigation, onOpen, onPage, release(reason) {
+    if (trackModalSelectionLease !== lease) return;
+    trackModalSelectionLease = null;
+    window.removeEventListener('resize', resize);
+    restoreTrackModalSelectionHeading(lease);
+    const ownsContent = Number(state.ui.pendingTrackModalLoadToken || 0) === token
+      && state.modalReleases?.[state.modalReleaseIndex] === lease.album;
+    if (marker.parentNode) marker.replaceWith(dialog);
+    for (const [name, value] of attributes) {if (value === null) dialog.removeAttribute(name); else dialog.setAttribute(name, value);}
+    dialog.removeAttribute('data-resource-selection-content');
+    if (ownsContent) {
+      invalidatePendingTrackModalLoad(); state.modalReleases = []; state.modalReleaseIndex = 0;
+      state.ui.trackModalCoverLightboxGallery = previousGallery;
+      clearTrackModalRenderedState();
+    }
+    searchPresentationAttempt?.dispose(reason);
+    onRelease?.(reason);
+  }};
+  const resize = () => {
+    if (trackModalSelectionLease !== lease) return;
+    if (!lease.isCurrent()) {lease.release('stale'); return;}
+    decorateTrackModalSelection();
+  };
+  trackModalSelectionLease = lease;
+  dialog.setAttribute('role', 'region'); dialog.removeAttribute('aria-modal');
+  dialog.setAttribute('aria-label', 'Album details'); dialog.setAttribute('data-resource-selection-content', 'album');
+  host.appendChild(dialog);
+  state.modalReleases = [album]; state.modalReleaseIndex = 0;
+  state.ui.trackModalCoverLightboxGallery = false;
+  try {
+    renderTrackModalRelease(album);
+    if (!isCurrent() || trackModalSelectionLease !== lease || searchPresentationAttempt && !searchPresentationAttempt.isCurrent()) {lease.release('stale'); return null;}
+    decorateTrackModalSelection();
+    if (!isCurrent() || trackModalSelectionLease !== lease) {lease.release('stale'); return null;}
+    if (searchPresentationAttempt && (!dialog.querySelector('#track-modal-list') || !host.contains(dialog)
+      || !searchPresentationAttempt.isCurrent())) {lease.release('missing-render'); return null;}
+    window.addEventListener('resize', resize);
+    return lease;
+  } catch (error) {lease.release('error'); throw error;}
 }
 
 const trackModalAlbumDetailsLoads = new Map();
@@ -64,6 +394,8 @@ function renderTrackModalLoadingState(album) {
 }
 
 function clearTrackModalRenderedState() {
+  if (typeof disposeTrackModalAlbumPreferences === 'function') disposeTrackModalAlbumPreferences();
+  if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('album-tracks');
   const els = getTrackModalElements();
   if (!els.overlay) return;
   if (els.title) {
@@ -127,7 +459,9 @@ function scheduleTrackModalCleanupAfterPaint(generation, coverLoadSuspensionToke
 }
 
 function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
-  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
+  releaseTrackModalSelection('modal');
+  if (trackModalPresentationRestrictions?.can_open_album_page !== false
+    && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   state.modalReleases = Array.isArray(releaseSet?.releases) && releaseSet.releases.length
@@ -141,6 +475,7 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof renderTrackModalTabs === 'function') renderTrackModalTabs(els);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  updateTrackModalArtistSheet();
 }
 
 function suspendGalleryCoverLoadsForTrackModal() {
@@ -410,15 +745,168 @@ function attachGalleryPlaybackContextToAlbum(album) {
   const playbackContext = resolveGalleryPlaybackContext(album.playback_context)
     || resolveAlbumPlaybackContextFromView(album);
   if (!playbackContext) return album;
-  return {
+  const copy = {
     ...album,
     playback_context: playbackContext,
   };
+  if (typeof SearchAlbumPresentationProvenance !== 'undefined') SearchAlbumPresentationProvenance.bridge(album, copy);
+  return copy;
+}
+
+// Exact response objects carry provenance. Caches, renderers and subject copies
+// cannot turn DTO fields into a fresh preference read or revive an older grant.
+const trackModalPreferenceReceipts = new WeakMap();
+const trackModalPreferenceSources = new Map(), trackModalPreferenceListeners = new Set();
+let trackModalPreferenceScope = null;
+function subscribeTrackModalPreferences(listener) {
+  trackModalPreferenceListeners.add(listener);
+  return () => trackModalPreferenceListeners.delete(listener);
+}
+function notifyTrackModalPreferences() {
+  for (const listener of [...trackModalPreferenceListeners]) {
+    try {listener();} catch { /* A display subscriber cannot undo revocation. */ }
+  }
+}
+function trimTrackModalPreferenceSources() {
+  let unretained = [...trackModalPreferenceSources.values()].filter(token => token.retained === 0).length;
+  let changed = false;
+  for (const [key, token] of trackModalPreferenceSources) {
+    if (unretained <= TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT) break;
+    if (token.retained !== 0) continue;
+    token.revoked = true; trackModalPreferenceSources.delete(key); unretained--; changed = true;
+  }
+  if (changed) notifyTrackModalPreferences();
+}
+function retainTrackModalPreferenceRows(rows) {
+  const tokens = new Set((rows || []).filter(row => getTrackModalPreferenceSource(row))
+    .map(row => trackModalPreferenceReceipts.get(row).request));
+  for (const token of tokens) token.retained++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const token of tokens) token.retained--;
+    trimTrackModalPreferenceSources();
+  };
+}
+function trackModalPreferenceContainerReadable(value) {
+  return Boolean(value && typeof value === 'object' && !value.read_only_subject
+    && value.source_readable !== false && value.readable !== false
+    && (!Object.hasOwn(value.allowed_actions || {}, 'can_read') || value.allowed_actions.can_read === true));
+}
+function trackModalPreferenceFacts(row) {
+  if (!trackModalPreferenceContainerReadable(row) || row.track_preference_state !== 'available') return null;
+  const track = typeof row.track_ref === 'string' ? row.track_ref : row.path;
+  const canonical = row.canonical_track_ref, inventory = row.inventory_track_ref;
+  const overlay = TrackActionsRuntime.overlay(row.track_preference);
+  if (typeof track !== 'string' || !track.trim() || typeof canonical !== 'string' || !canonical.trim()
+    || typeof inventory !== 'string' || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(inventory) || !overlay) return null;
+  return {track_ref: track.trim(), canonical_track_ref: canonical, inventory_track_ref: inventory, track_preference: overlay};
+}
+function getTrackModalPreferenceSource(row) {
+  const receipt = row && trackModalPreferenceReceipts.get(row);
+  if (!receipt || receipt.request.revoked || receipt.scope !== TrackActionsRuntime.scope().token
+    || receipt.inventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) return null;
+  const facts = trackModalPreferenceFacts(row);
+  return facts && JSON.stringify(facts) === receipt.signature ? receipt.source : null;
+}
+
+// Capture only at a genuine read dispatch. Album and Loose share this bounded
+// exact-object owner, but a denial never crosses their source namespaces.
+function captureTrackModalPreferenceRead(namespace, sourceKey, options = {}) {
+  const preferenceRuntime = typeof TrackActionsRuntime !== 'undefined' ? TrackActionsRuntime : null;
+  const scope = preferenceRuntime?.scope(), epoch = preferenceRuntime?.readEpoch();
+  const inventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
+  if (scope?.token !== trackModalPreferenceScope) {
+    trackModalPreferenceScope = scope?.token; trackModalPreferenceSources.clear();
+  }
+  const key = JSON.stringify([namespace, sourceKey]);
+  let requestReceipt = trackModalPreferenceSources.get(key);
+  if (preferenceRuntime && options.readOnlySubject !== true && options.admitPreferences !== false) {
+    if (!requestReceipt || requestReceipt.revoked) requestReceipt = {revoked: false, retained: 0};
+    trackModalPreferenceSources.delete(key);
+    trackModalPreferenceSources.set(key, requestReceipt);
+    trimTrackModalPreferenceSources();
+  }
+  const requestCurrent = () => {
+    try {return Boolean(preferenceRuntime && !options.signal?.aborted && scope.token === preferenceRuntime.scope().token
+      && inventoryRevision === Number(state?.status?.inventory_mutation_revision || 0)
+      && (options.isCurrent === undefined || typeof options.isCurrent === 'function' && options.isCurrent() === true));}
+    catch {return false;}
+  };
+  const revoke = () => {
+    if (options.readOnlySubject === true || options.admitPreferences === false
+      || !requestCurrent() || !requestReceipt || requestReceipt.revoked) return;
+    requestReceipt.revoked = true;
+    notifyTrackModalPreferences();
+  };
+  let admitted = false;
+  return Object.freeze({revoke, admit(rows) {
+    if (admitted || options.readOnlySubject === true || options.admitPreferences === false
+      || !requestReceipt || requestReceipt.revoked || !requestCurrent()) return;
+    admitted = true;
+    // A successful current Loose replacement retires its prior exact-object
+    // lineage, including rows now unavailable or absent from the population.
+    // A stale preference epoch cannot retire it.
+    // Fresh readable siblings still use this dispatch's original batch epoch.
+    const previousReceipt = requestReceipt;
+    const replacementReceipt = namespace === 'loose' && epoch === preferenceRuntime.readEpoch()
+      ? {revoked: false, retained: 0} : null;
+    const batch = preferenceRuntime.readBatch(epoch), seen = new Set();
+    for (const row of rows) {
+      if (!requestCurrent() || previousReceipt.revoked) break;
+      if (!row || typeof row !== 'object' || seen.has(row)) continue;
+      seen.add(row);
+      const source = trackModalPreferenceFacts(row);
+      if (!source || source.inventory_track_ref.split(':')[1] !== scope.library || !batch.accept(source)) continue;
+      if (!requestCurrent() || previousReceipt.revoked) break;
+      trackModalPreferenceReceipts.set(row, {scope: scope.token, request: replacementReceipt || previousReceipt, inventoryRevision,
+        signature: JSON.stringify(source), source: Object.freeze(source)});
+    }
+    if (replacementReceipt) {
+      // Batch subscribers are synchronous. Publish no replacement if they
+      // retired this request; notify receipt consumers only after siblings
+      // have their own receipts, without transferring any old object grants.
+      if (!requestCurrent() || previousReceipt.revoked) {replacementReceipt.revoked = true; return;}
+      previousReceipt.revoked = true;
+      requestReceipt = replacementReceipt;
+      trackModalPreferenceSources.delete(key);
+      trackModalPreferenceSources.set(key, replacementReceipt);
+      trimTrackModalPreferenceSources();
+      notifyTrackModalPreferences();
+    }
+  }});
+}
+
+function admitLooseTrackPreferenceRows(payload, preferenceRead) {
+  if (!preferenceRead || !payload || payload.read_only_subject
+    || String(payload.surface?.active || payload.surface_request || 'albums') !== 'albums') return;
+  if (!trackModalPreferenceContainerReadable(payload)) {
+    preferenceRead.revoke();
+    return;
+  }
+  preferenceRead.admit(Array.isArray(payload.non_album_tracks) ? payload.non_album_tracks : []);
 }
 
 async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
-  if (!normalizedAlbumKey) return null;
+  const observed = Object.hasOwn(options, 'ownPreferenceObservation');
+  if (!normalizedAlbumKey) {
+    if (observed) throw runtimeAlbumPreferenceUnavailable();
+    return null;
+  }
+  const preferenceRead = captureTrackModalPreferenceRead('album', normalizedAlbumKey, options);
+  const albumPreferenceScope = captureRuntimeAlbumPreferenceScope();
+  const observation = observed ? options.ownPreferenceObservation : null;
+  if (observed && (!albumPreferenceScope || options.readOnlySubject === true || options.admitPreferences === false
+    || !isRuntimePlainObject(observation) || Reflect.ownKeys(observation).length !== 3
+    || !['inventoryAlbumRef', 'onAdmitted', 'onChange'].every(key => Object.hasOwn(observation, key))
+    || !runtimeAlbumPreferenceSyncFunction(observation.onAdmitted)
+    || !runtimeAlbumPreferenceSyncFunction(observation.onChange)
+    || typeof observation.inventoryAlbumRef !== 'string'
+    || !new RegExp('^inventory-album:' + albumPreferenceScope.library + ':[1-9]\\d*$').test(observation.inventoryAlbumRef))) {
+    throw runtimeAlbumPreferenceUnavailable();
+  }
   const response = await fetch(`/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`, {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
@@ -431,7 +919,56 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     payload = null;
   }
   if (!response.ok || !payload?.ok || !payload?.album) {
-    throw new Error(payload?.error || `Album detail request failed: ${response.status}`);
+    if (response.status === 401 || response.status === 403) preferenceRead.revoke();
+    throw Object.assign(new Error(payload?.error || `Album detail request failed: ${response.status}`), {status: response.status});
+  }
+  if (payload.album.source_readable === false || payload.album.allowed_actions?.can_read === false) preferenceRead.revoke();
+  if (trackModalPreferenceContainerReadable(payload.album)
+    && String(payload.album.key || payload.album.album_ref || '') === normalizedAlbumKey
+    && !(typeof albumRequiresHydration === 'function' && albumRequiresHydration(payload.album))) {
+    const rows = [], containers = [payload.album], seen = new Set();
+    for (const container of containers) {
+      if (!trackModalPreferenceContainerReadable(container) || seen.has(container)) continue;
+      seen.add(container);
+      containers.push(...(Array.isArray(container.duplicate_sources) ? container.duplicate_sources : []));
+      rows.push(...(Array.isArray(container.tracks) ? container.tracks : []),
+        ...(Array.isArray(container.track_rows) ? container.track_rows : []),
+        ...(Array.isArray(container.gallery_list_block?.track_rows) ? container.gallery_list_block.track_rows : []));
+    }
+    preferenceRead.admit(rows);
+  }
+  if (options.signal?.aborted || options.isCurrent && options.isCurrent() !== true
+    || albumPreferenceScope && !runtimeAlbumPreferenceScopeIsCurrent(albumPreferenceScope)) {
+    throw Object.assign(new Error('Album details were superseded.'), {name: 'AbortError'});
+  }
+  let provisionalObservation = null;
+  try {
+    const current = () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent() === true)
+      && runtimeAlbumPreferenceScopeIsCurrent(albumPreferenceScope);
+    const matches = String(payload.album.key || payload.album.album_ref || '') === normalizedAlbumKey;
+    if (observed && (!matches || !current() || payload.album.read_only_subject
+      || payload.album.source_readable === false || payload.album.allowed_actions?.can_read === false)) {
+      throw runtimeAlbumPreferenceUnavailable();
+    }
+    if (options.readOnlySubject !== true && options.admitPreferences !== false && matches) {
+      if (observed) {
+        provisionalObservation = admitRuntimeAlbumPreferenceRead(payload.album, albumPreferenceScope, {
+          inventoryAlbumRef: observation.inventoryAlbumRef,
+          onAdmitted: observation.onAdmitted, onChange: observation.onChange, isCurrent: current,
+        });
+        // Admission can notify reentrant consumers. Its successful return is not
+        // enough: the final read owner still proves scope, caller and signature.
+        const preference = runtimeAlbumPreferenceForAlbum(payload.album, albumPreferenceScope);
+        const baseline = provisionalObservation?.read();
+        if (!current() || !baseline || !preference || preference.taste_state !== 'available'
+          || preference.album_ref !== baseline.albumRef || preference.rating !== baseline.rating
+          || preference.preference_revision !== baseline.preferenceRevision) throw runtimeAlbumPreferenceUnavailable();
+      } else admitRuntimeAlbumPreferenceRead(payload.album, albumPreferenceScope);
+    }
+  } catch (error) {
+    provisionalObservation?.release();
+    if (observed) throw runtimeAlbumPreferenceUnavailable();
+    throw error;
   }
   return payload.album;
 }
@@ -572,11 +1109,65 @@ function preloadTrackModalArtwork(album) {
 }
 
 function openTrackModal(album, options = {}) {
-  if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
+  if (!album) return false;
+  const attempt = options.searchPresentationAttempt || null;
+  const current = () => !attempt || attempt.isCurrent() === true;
+  if (!current()) return false;
+  if (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(() => {
+    if (typeof options.deferResourceSelection === 'function') return options.deferResourceSelection();
+    if (!current()) return false;
+    return openTrackModal(album, options);
+  })) {attempt?.dispose('form-deferred'); return;}
+  const inherited = options.presentationRestrictions === undefined && options.releaseSet
+    ? trackModalPresentationRestrictions : options.presentationRestrictions;
+  const restrictions = normalizeTrackModalPresentationRestrictions(inherited);
+  const sourcePageOwner = resolveTrackModalSourcePageOwner(options.sourcePageOwner === undefined && options.releaseSet
+    ? trackModalSourcePageOwner : options.sourcePageOwner, String(getAlbumRequestKey(album) || ''), restrictions);
+  if (sourcePageOwner) {try {if (sourcePageOwner.isCurrent() !== true) return false;} catch {return false;}}
+  if (!restrictions.can_open_album_page && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) return false;
+  const inheritingSheet = options.artistSheetGeneration === artistSheetGeneration
+    && options.artistSheetOrigin === artistSheetOrigin;
+  if (options.artistSheetGeneration !== undefined && !inheritingSheet) return false;
+  let origin = inheritingSheet ? artistSheetOrigin : options.artistSheetOrigin || null;
+  if (!origin && options.releaseSet && artistSheetOrigin) origin = artistSheetOrigin.retarget(album);
+  if (origin && (!restrictions.can_open_album_page || sourcePageOwner)) {origin.release(); origin = null;}
+  if (!inheritingSheet) {
+    if (typeof mobilePageState !== 'undefined' && mobilePageState.sheetDismissal) {
+      settleMobileArtistSheetDismissal(mobilePageState.sheetDismissal.descriptor, false);
+    }
+    const previous = artistSheetOrigin;
+    artistSheetGeneration += 1; artistSheetOrigin = origin;
+    disposeTrackModalArtistSheet();
+    if (previous && previous !== origin) previous.release();
+  }
+  options = {...options, presentationRestrictions: restrictions, sourcePageOwner,
+    artistSheetOrigin: origin, artistSheetGeneration};
+  const openingGeneration = artistSheetGeneration;
+  if (!current()) return false;
+  retireTrackModalSearchPresentation('modal-replace');
+  releaseTrackModalSelection('modal');
+  if (artistSheetGeneration !== openingGeneration || !current()) return false;
+  trackModalSourcePageReplay = null;
+  trackModalPresentationRestrictions = restrictions;
+  trackModalSourcePageOwner = sourcePageOwner;
+  retainTrackModalSourcePageOwner(sourcePageOwner);
+  if (typeof cancelMobileArtistSheetReturn === 'function') cancelMobileArtistSheetReturn();
+  if (album && restrictions.can_open_album_page && typeof presentMobileAlbumPage === 'function') {
+    let presented = false;
+    try {presented = presentMobileAlbumPage(album) !== false;}
+    finally {
+      if (!presented && origin && artistSheetOrigin === origin && artistSheetGeneration === openingGeneration) {
+        artistSheetOrigin = null; artistSheetGeneration += 1;
+        origin.release(); disposeTrackModalArtistSheet();
+      }
+    }
+    if (!presented && origin) return false;
+  }
+  if (artistSheetGeneration !== openingGeneration || !current()) return false;
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   trackModalCleanupGeneration += 1;
-  preloadTrackModalArtwork(album);
+  if (canViewTrackModalArtwork()) preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
   }
@@ -586,6 +1177,9 @@ function openTrackModal(album, options = {}) {
   }
   const albumWithPlaybackContext = attachGalleryPlaybackContextToAlbum(album);
   if (albumRequiresHydration(albumWithPlaybackContext)) {
+    // Search operations already hydrated under their source owner. Never let a
+    // deferred cache read retain or revive their staged presentation attempt.
+    if (attempt) return false;
     const albumKey = getAlbumRequestKey(albumWithPlaybackContext);
     const loadToken = invalidatePendingTrackModalLoad();
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
@@ -618,18 +1212,38 @@ function openTrackModal(album, options = {}) {
   const releaseSet = preservedAlbum
     && getAlbumRequestKey(preservedAlbum) === getAlbumRequestKey(albumWithPlaybackContext)
     ? {
-      releases: preserved.releases.map((release, index) => index === preserved.selectedIndex
-        ? { ...albumWithPlaybackContext, tabLabel: release.tabLabel } : release),
+      releases: preserved.releases.map((release, index) => {
+        if (index !== preserved.selectedIndex) return release;
+        const copy = { ...albumWithPlaybackContext, tabLabel: release.tabLabel };
+        if (typeof SearchAlbumPresentationProvenance !== 'undefined') SearchAlbumPresentationProvenance.bridge(albumWithPlaybackContext, copy);
+        return copy;
+      }),
       selectedIndex: preserved.selectedIndex,
     }
     : getAlbumReleaseSet(albumWithPlaybackContext);
+  if (attempt && typeof SearchAlbumPresentationProvenance !== 'undefined') {
+    for (const release of releaseSet.releases) SearchAlbumPresentationProvenance.mark(release);
+  }
+  if (!current()) return false;
   state.modalReleases = releaseSet.releases;
   state.modalReleaseIndex = releaseSet.selectedIndex;
   hideVersionContextMenu();
-  renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
+  const renderedAlbum = state.modalReleases[state.modalReleaseIndex];
+  renderTrackModalRelease(renderedAlbum);
+  if (!current() || getCurrentTrackModalAlbum() !== renderedAlbum || getTrackModalElements().list !== els.list) return false;
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof NativePlaytables !== 'undefined') NativePlaytables.mount('album-tracks', els.list);
   attachSharedPlayer();
+  updateTrackModalArtistSheet();
+  if (attempt) {
+    if (!current() || getCurrentTrackModalAlbum() !== renderedAlbum || getTrackModalElements().list !== els.list
+      || !els.list?.isConnected || els.overlay.hidden || getTrackModalSelectionLease()) return false;
+    if (!attempt.commit()) return false;
+    if (!current() || getCurrentTrackModalAlbum() !== renderedAlbum || getTrackModalElements().list !== els.list
+      || els.overlay.hidden || getTrackModalSelectionLease()) {attempt.dispose('commit-superseded'); return false;}
+    trackModalSearchPresentation = attempt;
+  }
 }
 
 function getCurrentTrackModalAlbum() {
@@ -855,11 +1469,21 @@ function closeImageLightbox() {
   }
   const returnFocus = imageLightboxReturnFocus;
   imageLightboxReturnFocus = null;
-  if (returnFocus?.isConnected) returnFocus.focus?.();
+  if (returnFocus?.isConnected && resumeTrackModalArtistSheetForFocus(returnFocus)) returnFocus.focus?.();
 }
 
 function closeTrackModal() {
+  retireTrackModalSearchPresentation('close');
+  if (typeof disposeTrackModalAlbumPreferences === 'function') disposeTrackModalAlbumPreferences();
+  releaseTrackModalSelection('close');
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
+  const retiredOrigin = artistSheetOrigin;
+  artistSheetOrigin = null; artistSheetGeneration += 1;
+  const closingGeneration = artistSheetGeneration;
+  disposeTrackModalArtistSheet(); retiredOrigin?.release();
+  if (artistSheetGeneration !== closingGeneration) return;
+  trackModalPresentationRestrictions = null;
+  trackModalSourcePageOwner = null;
   const els = getTrackModalElements();
   if (!els.overlay) return;
   const cleanupGeneration = ++trackModalCleanupGeneration;
@@ -876,6 +1500,9 @@ function closeTrackModal() {
     document.body.classList.remove('modal-open');
   }
   scheduleTrackModalCleanupAfterPaint(cleanupGeneration, coverLoadSuspensionTokens);
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof Event === 'function') {
+    window.dispatchEvent(new Event('albumhaven:resource-selection-available'));
+  }
 }
 
 function openTrackModalForButton(button) {
@@ -884,7 +1511,10 @@ function openTrackModalForButton(button) {
     || button.dataset.albumKey
     || '';
   if (!albumKey) return false;
-  openTrackModal(resolveTrackModalActionAlbum(button));
+  const album = resolveTrackModalActionAlbum(button);
+  const origin = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+    ? window.AlbumHavenArtistPageRuntime?.captureAlbumSheetOrigin(button, album) : null;
+  openTrackModal(album, {artistSheetOrigin: origin});
   return true;
 }
 
@@ -948,6 +1578,8 @@ function handleModalEscapeKeydown(event) {
   if (event.defaultPrevented) return;
   event.preventDefault?.();
   if (event.repeat || event.isComposing) return;
+  const form = modal.id === 'app-form-modal' && typeof getActiveAppFormPage === 'function' ? getActiveAppFormPage() : null;
+  if (form) {void form.dismiss('escape'); return;}
   if (modal.id === 'tag-editor-modal') {
     if (state.tagEditor.reorder) {
       clearTagEditorReorderCue();
@@ -1005,8 +1637,18 @@ function attachModalEvents() {
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
   els.overlay.addEventListener('click', (event) => {
-    if (els.overlay.hidden) return;
-    if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-track-modal="1"]')) {
+    if (els.overlay.hidden || event.defaultPrevented) return;
+    const sample = event.target.closest('[data-create-sample-playlist="1"]');
+    if (sample && els.overlay.contains(sample)) {
+      event.preventDefault(); event.stopPropagation();
+      const libraryRef = TrackActionsRuntime.scope().library;
+      const lease = captureTrackModalSampleOrigin({libraryRef,
+        ...(sample.hasAttribute('data-duplicate-source-index') ? {duplicateButton:sample} : {})});
+      if (lease) {const originNavigation = captureSampleModalNavigation(els.overlay, lease, () => trackModalSampleSuspension, value => {trackModalSampleSuspension = value;});
+        if (originNavigation) window.AlbumHavenPlaylistUI?.openSamplePlaylist({originOwner:lease, originNavigation});}
+      return;
+    }
+    if ((!els.overlay.classList.contains('is-artist-discography-sheet') && overlayClickStartedOnOverlay(els.overlay, event)) || event.target.closest('[data-close-track-modal="1"]')) {
       closeTrackModal();
     }
   });
@@ -1038,4 +1680,99 @@ function attachModalEvents() {
       stepLightbox(1);
     }
   });
+}
+
+// A declared canonical Details selection. Cached rows never confer authority.
+function sampleDetailsTrackRefs(rows, libraryRef) {
+  const decimal = value => typeof value === 'string' && /^[1-9][0-9]*$/.test(value)
+    && (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
+  if (!decimal(libraryRef) || !Array.isArray(rows) || !rows.length || rows.length > 5000) return null;
+  const refs = [], seen = new Set();
+  for (const row of rows) {
+    const ref = row?.inventory_track_ref, match = typeof ref === 'string' && /^inventory-track:([1-9][0-9]*):([1-9][0-9]*)$/.exec(ref);
+    if (!match || match[1] !== libraryRef || !decimal(match[1]) || !decimal(match[2]) || seen.has(ref)
+      || row.source_readable === false || row.allowed_actions?.can_read === false) return null;
+    seen.add(ref); refs.push(ref);
+  }
+  return Object.freeze(refs);
+}
+function sampleDetailsBrowseAllowed() {
+  return typeof AlbumHavenCapabilities !== 'undefined' && AlbumHavenCapabilities.allows('library.browse.read') === true;
+}
+function captureTrackModalSampleOrigin({libraryRef, duplicateButton} = {}) {
+  if (trackModalSampleSuspension) return null;
+  const album = getCurrentTrackModalAlbum(), scope = TrackActionsRuntime.scope(), sourceOwner = trackModalSourcePageOwner;
+  const searchOwner = trackModalSearchPresentation, sheet = artistSheetGeneration, cleanup = trackModalCleanupGeneration;
+  const load = state.ui.pendingTrackModalLoadToken, key = String(getAlbumRequestKey(album) || '');
+  const overlay = getTrackModalElements().overlay;
+  if (duplicateButton) {const index = Number(duplicateButton.getAttribute?.('data-duplicate-source-index'));
+    if (!Number.isInteger(index) || index < 0 || !Array.isArray(album?.duplicate_sources) || index >= album.duplicate_sources.length) return null;}
+  const selected = duplicateButton ? resolveTrackModalDuplicateSourceAlbum(duplicateButton) : album;
+  const refs = sampleDetailsTrackRefs(selected?.tracks, libraryRef);
+  if (!refs || !album || !key || !overlay?.isConnected || !sampleDetailsBrowseAllowed()
+    || scope.library != null && scope.library !== libraryRef) return null;
+  let retired = false, lease;
+  const current = () => {
+    if (retired) return false;
+    try {
+      const live = TrackActionsRuntime.scope(), now = duplicateButton ? resolveTrackModalDuplicateSourceAlbum(duplicateButton) : album;
+      const next = sampleDetailsTrackRefs(now?.tracks, libraryRef);
+      if (getCurrentTrackModalAlbum() !== album || String(getAlbumRequestKey(album) || '') !== key
+        || live.token !== scope.token || live.library != null && live.library !== libraryRef
+        || trackModalSourcePageOwner !== sourceOwner || trackModalSearchPresentation !== searchOwner
+        || searchOwner && searchOwner.isCurrent() !== true || !isTrackModalSourceActionCurrent()
+        || artistSheetGeneration !== sheet || trackModalCleanupGeneration !== cleanup || state.ui.pendingTrackModalLoadToken !== load
+        || trackModalPresentationRestrictions?.can_open_album_page === false || !sampleDetailsBrowseAllowed()
+        || album.source_readable === false || album.allowed_actions?.can_read === false
+        || !overlay.isConnected || overlay.hidden && trackModalSampleSuspension?.lease !== lease && !(typeof mobilePageState !== 'undefined' && mobilePageState.pages?.some(page => page.kind === 'album'))
+        || !next || JSON.stringify(next) !== JSON.stringify(refs)) retired = true;
+    } catch {retired = true;}
+    return !retired;
+  };
+  if (!current()) return null;
+  const origin = Object.freeze({kind:'album_details', track_refs:refs}), sourcePageToken = getTrackModalSourcePageToken();
+  lease = Object.freeze({scopeKey:scope.token, origin, isCurrent:current,
+    back(returnToParent) {
+      if (!current() || typeof returnToParent !== 'function') return false;
+      if (sourcePageToken) return restoreTrackModalSourcePage({sourcePageToken,albumKey:key}, {
+        signal: new AbortController().signal, isCurrent: current,
+        present: open => current() && returnToParent() !== false ? open() : false});
+      return returnToParent();
+    }});
+  return lease;
+}
+
+// Local presentation-only handoff. Authority remains the exact captured source lease.
+function captureSampleModalNavigation(surface, lease, readOwner, writeOwner) {
+  if (!surface?.isConnected || surface.hidden || readOwner() || lease?.isCurrent() !== true) return null;
+  let used = false;
+  return Object.freeze({parentRegistration:null, presentation:Object.freeze({suspend() {
+    if (used || readOwner() || surface.hidden || !surface.isConnected || lease.isCurrent() !== true) return null;
+    used = true;
+    const owner = {lease}, focus = document.activeElement, hidden = surface.hidden, inert = surface.inert, aria = surface.getAttribute('aria-hidden');
+    const block = event => {event.preventDefault();event.stopImmediatePropagation();};
+    let settled = false;
+    writeOwner(owner); surface.hidden = true;surface.inert = true;surface.setAttribute('aria-hidden','true');
+    for(const type of ['click','keydown','pointerdown'])surface.addEventListener(type,block,true);
+    const finish = restore => {
+      if(settled)return false;settled=true;
+      const ownsPresentation=readOwner()===owner;
+      let valid=false;try{valid=ownsPresentation && surface.isConnected && lease.isCurrent()===true;}catch{}
+      if(readOwner()===owner)writeOwner(null);
+      for(const type of ['click','keydown','pointerdown'])surface.removeEventListener(type,block,true);
+      if(restore && valid){surface.hidden=hidden;surface.inert=inert;aria===null?surface.removeAttribute('aria-hidden'):surface.setAttribute('aria-hidden',aria);if(focus?.isConnected)focus.focus?.({preventScroll:true});}
+      else if(restore && ownsPresentation && surface.isConnected && !surface.hidden){
+        // A successful source-page revalidation already painted its new owner.
+        // Release only this suspension's inert/ARIA flags, never reopen old rows.
+        surface.inert=inert;aria===null?surface.removeAttribute('aria-hidden'):surface.setAttribute('aria-hidden',aria);
+      }
+      else if(ownsPresentation){
+        // A future genuine modal owner reuses this root; do not leave our flags.
+        if(surface.inert===true)surface.inert=inert;
+        if(surface.getAttribute('aria-hidden')==='true')aria===null?surface.removeAttribute('aria-hidden'):surface.setAttribute('aria-hidden',aria);
+      }
+      return restore && valid;
+    };
+    return Object.freeze({restore:()=>finish(true),retire:()=>finish(false)});
+  }})});
 }

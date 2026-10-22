@@ -253,9 +253,9 @@ function resolveGalleryScalePercent(value) {
   return Math.min(MAX_GALLERY_SCALE_PERCENT, Math.max(MIN_GALLERY_SCALE_PERCENT, numericValue));
 }
 
-function resolveGalleryCardWidth(layoutConfig = CARD_GALLERY_LAYOUT_CONFIG) {
+function resolveGalleryCardWidth(layoutConfig = CARD_GALLERY_LAYOUT_CONFIG, scale = state?.view?.gallery_scale_percent) {
   const baseWidth = Math.max(1, Number(layoutConfig?.cardMinWidth) || 240);
-  const scalePercent = resolveGalleryScalePercent(state?.view?.gallery_scale_percent);
+  const scalePercent = resolveGalleryScalePercent(scale);
   return Math.max(1, Math.round(baseWidth * (scalePercent / 100)));
 }
 
@@ -270,6 +270,203 @@ const MAX_RETAINED_ALBUM_CARD_NODES = 48;
 const MAX_VIRTUAL_GRID_DIAGNOSTIC_EVENTS = 24;
 const VIRTUAL_GRID_SCROLL_RENDER_FALLBACK_MS = 100;
 const MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO = 0.94;
+
+// Shared geometry has no resource, history, renderer, or global-state ownership.
+function resolveGalleryColumnGeometry({width, selectedCardWidth, columnGap, itemCount,
+  columns, cardTrackWidth, preserveCardTrackWidth = false, preserveColumnGeometry = false,
+  mobileGeometry = null}) {
+  const previousCardTrackWidth = Number(cardTrackWidth);
+  const preserve = Boolean(preserveCardTrackWidth
+    && Number.isFinite(previousCardTrackWidth) && previousCardTrackWidth > 0);
+  const target = preserve ? Math.min(previousCardTrackWidth, width) : selectedCardWidth;
+  const preservedColumns = Math.max(1, Math.floor((width + columnGap) / (target + columnGap)));
+  const fill = preserve && itemCount > Math.max(1, Number(columns) || 1);
+  const minimum = selectedCardWidth * MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO;
+  const settledColumns = Math.min(itemCount, Math.max(1, Math.floor((width + columnGap) / (minimum + columnGap))));
+  if (!preserveColumnGeometry) {
+    columns = fill ? settledColumns : preservedColumns;
+    cardTrackWidth = fill || !preserve ? (width - (columns - 1) * columnGap) / columns : target;
+  }
+  if (mobileGeometry) {
+    columns = mobileGeometry.columns;
+    cardTrackWidth = mobileGeometry.cardTrackWidth;
+  }
+  return {columns, cardTrackWidth};
+}
+
+const resourceGalleryHosts = new WeakMap();
+
+// Flat collection galleries share native card sizing without borrowing the
+// Artist index, viewport, history, or renderer. Family keeps its one virtualizer.
+class ResourceGalleryHost {
+  constructor({host, readSnapshot, renderCard, renderSeparator, onAction, isCurrent}) {
+    if (!host?.ownerDocument || typeof readSnapshot !== 'function'
+      || typeof renderCard !== 'function' || typeof isCurrent !== 'function') {
+      throw new TypeError('A scoped native Gallery host and owners are required.');
+    }
+    this.host = host; this.readSnapshot = readSnapshot; this.renderCard = renderCard;
+    this.renderSeparator = renderSeparator;
+    this.onAction = onAction; this.isCurrent = isCurrent; this.cards = new Map(); this.elements = new WeakMap();
+    this.snapshot = null; this.disposed = false; this.revision = 0; this.committedRevision = 0; this.frame = 0;
+    this.geometry = {columns: 1, cardTrackWidth: 0}; this.preserveWidth = false;
+    this.window = host.ownerDocument.defaultView;
+    this.root = host.ownerDocument.createElement('div'); this.root.className = 'album-row';
+    this.root.style.justifyContent = 'start';
+    const previous = resourceGalleryHosts.get(host);
+    resourceGalleryHosts.set(host, this);
+    previous?.dispose();
+    if (resourceGalleryHosts.get(host) !== this) {this.dispose(); return;}
+    host.append(this.root);
+    this.click = event => {
+      const snapshot = this.snapshot;
+      if (!this.current(snapshot)) {this.dispose(); return;}
+      if (this.committedRevision !== this.revision) return;
+      const action = event.target.closest?.('[data-gallery-card-intent]');
+      if (!action || action.disabled || action.getAttribute('aria-disabled') === 'true'
+        || !this.root.contains(action)) return;
+      for (let element = action; element && element !== this.root; element = element.parentElement) {
+        const card = this.elements.get(element);
+        if (card) {
+          if (card.kind === 'album' && this.current(snapshot) && this.committedRevision === this.revision) {
+            this.onAction?.(card.row, event, snapshot);
+          }
+          return;
+        }
+      }
+    };
+    this.resize = event => {
+      if (!this.snapshot) return;
+      if (!this.current(this.snapshot)) {this.dispose(); return;}
+      if (event?.type === 'album-haven:artist-tree-settled') this.preserveWidth = true;
+      if (!this.preserveWidth && this.host.ownerDocument.getElementById('shell-navigation-rail')
+        ?.classList?.contains('is-transitioning')) return;
+      this.schedule();
+    };
+    this.root.addEventListener('click', this.click);
+    this.window.addEventListener('resize', this.resize);
+    this.window.addEventListener('album-haven:artist-tree-settled', this.resize);
+    this.observer = this.window.ResizeObserver ? new this.window.ResizeObserver(this.resize) : null;
+    this.observer?.observe(host);
+  }
+
+  current(snapshot, revision = this.revision) {
+    if (this.disposed || resourceGalleryHosts.get(this.host) !== this
+      || revision !== this.revision || !snapshot || this.snapshot !== snapshot) return false;
+    const allowed = this.isCurrent() === true && this.readSnapshot() === snapshot;
+    return allowed && !this.disposed && resourceGalleryHosts.get(this.host) === this
+      && revision === this.revision && this.snapshot === snapshot;
+  }
+
+  update(rows) {
+    if (this.disposed || resourceGalleryHosts.get(this.host) !== this) return false;
+    const snapshot = this.readSnapshot();
+    if (!snapshot || typeof snapshot.scopeKey !== 'string' || !snapshot.scopeKey
+      || typeof snapshot.resourceKey !== 'string' || !snapshot.resourceKey
+      || !['list', 'cards', 'covers'].includes(snapshot.displayMode)
+      || this.snapshot && (this.snapshot.scopeKey !== snapshot.scopeKey
+        || this.snapshot.resourceKey !== snapshot.resourceKey) || this.isCurrent() !== true) {
+      this.dispose(); return false;
+    }
+    if (!Array.isArray(rows) || Array.from(rows).some(row => typeof row?.key !== 'string' || !row.key)
+      || new Set(rows.map(row => row.key)).size !== rows.length) {
+      throw new TypeError('Native Gallery requires unique stable row keys.');
+    }
+    const kinds = rows.map(row => Object.prototype.hasOwnProperty.call(row, 'kind') ? row.kind : 'album');
+    if (kinds.some((kind, index) => !['album', 'separator'].includes(kind)
+      || kind === 'separator' && typeof this.renderSeparator !== 'function'
+      || this.cards.has(rows[index].key) && this.cards.get(rows[index].key).kind !== kind)) {
+      throw new TypeError('Native Gallery requires valid, stable row kinds and their renderer.');
+    }
+    this.snapshot = snapshot; this.preserveWidth = false; const revision = ++this.revision;
+    const current = () => this.current(snapshot, revision), wanted = new Set(rows.map(row => row.key));
+    const focused = this.root.contains(this.host.ownerDocument.activeElement) ? this.host.ownerDocument.activeElement : null;
+    try {
+      for (const [key, card] of this.cards) if (!wanted.has(key)) {
+        this.cards.delete(key); this.elements.delete(card.owner.element);
+        card.owner.element.remove(); card.owner.dispose?.();
+        if (!current()) return false;
+      }
+      for (const [index, row] of rows.entries()) {
+        if (!current()) return false;
+        let card = this.cards.get(row.key);
+        if (!card) {
+          const owner = kinds[index] === 'separator'
+            ? this.renderSeparator(row, snapshot) : this.renderCard(row, snapshot);
+          if (!current()) {owner?.dispose?.(); return false;}
+          if (!owner?.element || owner.element.ownerDocument !== this.host.ownerDocument
+            || owner.element.parentNode || typeof owner.update !== 'function') {
+            owner?.dispose?.(); throw new TypeError('Gallery renderer must return a detached native card owner.');
+          }
+          card = {row, owner, kind: kinds[index]}; this.cards.set(row.key, card); this.elements.set(owner.element, card);
+        } else {
+          card.row = row; card.owner.update(row, snapshot);
+          if (!current()) return false;
+        }
+        if (card.kind === 'separator') card.owner.element.style.gridColumn = '1 / -1';
+        if (this.root.children[index] !== card.owner.element) {
+          this.root.insertBefore(card.owner.element, this.root.children[index] || null);
+        }
+      }
+      if (!current()) return false;
+      this.measure(snapshot, revision); this.schedule();
+      if (!current()) return false;
+      this.committedRevision = revision;
+      if (focused?.isConnected && this.root.contains(focused) && !focused.disabled
+        && this.host.ownerDocument.activeElement === this.host.ownerDocument.body && current()) {
+        focused.focus({preventScroll: true});
+      }
+      return current();
+    } catch (error) {
+      if (this.revision === revision && resourceGalleryHosts.get(this.host) === this) this.dispose();
+      throw error;
+    }
+    finally {if (!this.disposed && !this.current(this.snapshot)) this.dispose();}
+  }
+
+  measure(snapshot = this.snapshot, revision = this.revision) {
+    if (!this.current(snapshot, revision)) return;
+    if (!this.preserveWidth && this.host.ownerDocument.getElementById('shell-navigation-rail')
+      ?.classList?.contains('is-transitioning')) return;
+    const width = Math.max(1, this.host.clientWidth - 4), gap = 14;
+    const mobileGeometry = this.window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
+      viewportWidth: this.window.innerWidth, availableWidth: width, mode: snapshot.displayMode,
+      columns: snapshot.mobileColumns ?? 3, gap,
+    });
+    if (!this.current(snapshot, revision)) return;
+    const itemCount = [...this.cards.values()].filter(card => card.kind === 'album').length;
+    const geometry = resolveGalleryColumnGeometry({width, columnGap: gap, itemCount,
+      selectedCardWidth: resolveGalleryCardWidth(snapshot.layoutConfig, snapshot.galleryScalePercent ?? DEFAULT_GALLERY_SCALE_PERCENT),
+      columns: this.geometry.columns, cardTrackWidth: this.geometry.cardTrackWidth,
+      preserveCardTrackWidth: this.preserveWidth, mobileGeometry});
+    this.geometry = geometry; this.preserveWidth = false;
+    this.root.style.gridTemplateColumns = buildAlbumRowGridTemplate(geometry.columns, geometry.cardTrackWidth);
+    this.root.setAttribute('data-gallery-display', snapshot.displayMode);
+  }
+
+  schedule() {
+    if (this.frame || this.disposed) return;
+    const snapshot = this.snapshot, revision = this.revision;
+    this.frame = this.window.requestAnimationFrame(() => {
+      this.frame = 0;
+      if (this.current(snapshot, revision)) this.measure(snapshot, revision);
+      else if (!this.current(this.snapshot)) this.dispose();
+      else this.schedule();
+    });
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true; this.revision++;
+    if (resourceGalleryHosts.get(this.host) === this) resourceGalleryHosts.delete(this.host);
+    if (this.frame) this.window.cancelAnimationFrame(this.frame);
+    this.frame = 0; this.observer?.disconnect();
+    this.root.removeEventListener('click', this.click);
+    this.window.removeEventListener('resize', this.resize);
+    this.window.removeEventListener('album-haven:artist-tree-settled', this.resize);
+    const cards = [...this.cards.values()]; this.cards.clear(); this.root.remove();
+    for (const card of cards) {try {card.owner.dispose?.();} catch { /* Retire every owned card. */ }}
+  }
+}
 
 class VirtualArtistGrid {
   constructor() {
@@ -298,6 +495,9 @@ class VirtualArtistGrid {
     this.columns = 1;
     this.cardTrackWidth = CARD_GALLERY_LAYOUT_CONFIG.cardMinWidth;
     this.lastKey = '';
+    this._destroyed = false;
+    this._artistPageLease = null;
+    this._metadataMotion = null;
     this._raf = null;
     this._scrollRenderFallbackTimer = 0;
     this._measureRaf = null;
@@ -353,6 +553,380 @@ class VirtualArtistGrid {
     window.addEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
   }
 
+  artistPagePresentationCurrent(lease = this._artistPageLease) {
+    return Boolean(lease && lease.active && this._artistPageLease === lease
+      && !this._destroyed && lease.isCurrent());
+  }
+
+  artistPagePresentationPaused() {
+    const lease = this._artistPageLease;
+    return Boolean(lease && (!this.artistPagePresentationCurrent(lease)
+      || lease.suspended || lease.collapsed || lease.viewport.closest('[hidden],[inert]')));
+  }
+
+  getSectionHeaderHeight(section) {
+    return section?.artistPageRelease
+      ? Number(section.headerHeight || 54)
+      : this.sectionHeaderHeight;
+  }
+
+  getArtistPageOrigin() {
+    const lease = this._artistPageLease;
+    if (!lease) return 0;
+    if (this.artistPagePresentationPaused()) return lease.origin;
+    const viewport = lease.viewport.getBoundingClientRect();
+    const scroll = this.scrollEl.getBoundingClientRect();
+    if (viewport.width > 0 && scroll.height > 0) {
+      lease.origin = viewport.top - scroll.top - Number(this.scrollEl.clientTop || 0) + this.scrollEl.scrollTop;
+    }
+    return lease.origin;
+  }
+
+  cancelArtistPageWork() {
+    this.invalidateScrollStabilization();
+    for (const key of ['_raf', '_measureRaf', '_scrollRestoreRaf', '_albumCardPointerReleaseRaf']) {
+      if (this[key]) cancelBrowserAnimationFrame(this[key]);
+      this[key] = null;
+    }
+    for (const key of ['_measureTimeout', '_scrollRenderFallbackTimer']) {
+      if (this[key]) clearBrowserTimeout(this[key]);
+      this[key] = 0;
+    }
+    this._deferredPointerGestureRender = null;
+    this._albumCardPointerGestureActive = false;
+    this._activeAlbumCardPointerId = null;
+    this._resetScrollAfterMeasure = false;
+  }
+
+  artistPageParentToggle(lease) {
+    return lease.panel.parentElement?.querySelector('.intrinsic-disclosure__toggle button') || null;
+  }
+
+  preserveArtistPageFocus(lease, root, fallback) {
+    const active = root?.ownerDocument?.activeElement;
+    if (!active || !root.contains(active) || !this.artistPagePresentationCurrent(lease)) return true;
+    this.captureArtistPageFocusToken(lease, active);
+    const generation = this._renderGeneration;
+    (fallback || this.artistPageParentToggle(lease))?.focus({preventScroll: true});
+    return this.artistPagePresentationCurrent(lease) && generation === this._renderGeneration;
+  }
+
+  captureArtistPageFocusToken(lease, active) {
+    if (!active || !this.artistPagePresentationCurrent(lease)) return;
+    const trigger = active.closest?.('[data-album-key]');
+    const sectionKey = active.closest('[data-virtual-section-key]')?.getAttribute('data-virtual-section-key') || '';
+    const section = this.sections.find(item => this.getRenderedSectionKey(item) === sectionKey);
+    const albumKey = trigger?.getAttribute('data-album-key') || '';
+    const album = section?.group?.albums?.find(item => String(getAlbumRequestKey(item)) === albumKey);
+    if (album) lease.focusToken = Object.freeze({
+      sessionId: lease.sessionId, albumKey, versionKey: getAlbumCardVersionKey(album),
+      sectionKey: section.sectionKey,
+      trigger: trigger.classList.contains('cover') ? 'cover' : 'tracklist',
+    });
+  }
+
+  detachRetainedArtistCards(root) {
+    for (const card of this.albumCardNodeCache.values()) {
+      if (root.contains(card)) card.remove();
+    }
+  }
+
+  disposeArtistPageSection(lease, record, moveFocus = true) {
+    const generation = this._renderGeneration;
+    if (moveFocus && !this.preserveArtistPageFocus(lease, record.element,
+      this.artistPageParentToggle(lease))) return false;
+    this.rememberRenderedAlbumCards(record.element);
+    if (record.header) lease.observer?.unobserve(record.header);
+    lease.mounted.delete(record.key);
+    this.detachRetainedArtistCards(record.element);
+    record.owner.dispose();
+    record.element.remove();
+    return generation === this._renderGeneration;
+  }
+
+  acquireArtistPagePresentation({sessionId, panel, isCurrent, mountReleaseDisclosure, onReleaseToggle}) {
+    if (this._destroyed || !sessionId || typeof isCurrent !== 'function'
+      || !isCurrent() || typeof mountReleaseDisclosure !== 'function') return null;
+    const previous = this._artistPageLease;
+    if (previous) previous.api.release();
+    // A focus/disposal callback can acquire a successor. Do not steal its nodes.
+    if (this._artistPageLease || !isCurrent()) return null;
+    const viewport = document.getElementById('albums-viewport');
+    const glow = document.getElementById('gallery-focus-glow');
+    if (!viewport || !panel || !glow || viewport.parentElement !== this.scrollEl
+      || !this.scrollEl.contains(panel) || viewport.contains(panel)
+      || this.scrollEl !== document.getElementById('albums-scroll')
+      || this.containerEl !== document.getElementById('artist-groups')
+      || this.topSpacerEl !== document.getElementById('albums-spacer-top')
+      || this.bottomSpacerEl !== document.getElementById('albums-spacer-bottom')
+      || [this.containerEl, this.topSpacerEl, this.bottomSpacerEl, glow]
+        .some(node => !node || node.parentElement !== viewport)) return null;
+    const marker = document.createComment('Artist viewport origin');
+    const lease = {sessionId, panel, viewport, marker, isCurrent, mountReleaseDisclosure,
+      onReleaseToggle, active: true, suspended: false, collapsed: false, origin: 0,
+      choices: new Map(), mounted: new Map(), headers: new Map(), nextId: 0,
+      scrollIntent: 0, anchor: null, pendingAnchor: null, geometryDirty: true,
+      ordinarySections: this.sections, observer: null, focusToken: null};
+    const current = () => this.artistPagePresentationCurrent(lease);
+    const release = () => {
+      if (!lease.active || this._artistPageLease !== lease) return;
+      lease.active = false;
+      this._renderGeneration += 1;
+      this.cancelArtistPageWork();
+      lease.observer?.disconnect();
+      this.containerEl.removeEventListener('focusin', lease.onFocus);
+      // Dock before native owners dispose, and before any external callback can reenter.
+      if (marker.parentNode) marker.parentNode.insertBefore(viewport, marker);
+      marker.remove();
+      viewport.removeAttribute('data-artist-page-viewport');
+      this._artistPageLease = null;
+      this.sections = lease.ordinarySections;
+      this.sectionByKey = new Map();
+      this.lastKey = '';
+      for (const record of Array.from(lease.mounted.values())) {
+        this.disposeArtistPageSection(lease, record, false);
+      }
+      lease.choices.clear(); lease.headers.clear();
+      lease.anchor = null; lease.pendingAnchor = null; lease.focusToken = null;
+    };
+    lease.api = {
+      update: ({collapsed = lease.collapsed} = {}) => {
+        if (!current()) return false;
+        const changed = lease.collapsed !== Boolean(collapsed);
+        lease.collapsed = Boolean(collapsed);
+        if (lease.collapsed) {
+          this.cancelArtistPageWork();
+          for (const record of Array.from(lease.mounted.values())) {
+            if (!this.disposeArtistPageSection(lease, record)) return false;
+          }
+          this.pruneArtistPageCoverConsumers();
+        } else if (changed && !lease.suspended) {
+          this.recalculate(); this.render(true); this.scheduleMeasureRows(true);
+        }
+        return current();
+      },
+      suspend: (suspended, {discardRows = false} = {}) => {
+        if (!current()) return false;
+        const changed = lease.suspended !== Boolean(suspended);
+        lease.suspended = Boolean(suspended);
+        if (lease.suspended) {
+          this.cancelArtistPageWork();
+          if (discardRows) for (const record of Array.from(lease.mounted.values())) {
+            if (!this.disposeArtistPageSection(lease, record)) return false;
+          }
+          this.pruneArtistPageCoverConsumers();
+        } else if (changed && !lease.collapsed) {
+          // Navigation has already restored the original absolute scroller coordinates.
+          lease.pendingAnchor = null; lease.anchor = null;
+          this.recalculate(); this.render(true); this.scheduleMeasureRows(true);
+        }
+        return current();
+      },
+      restoreFocus: (token, options = {}) => this.restoreArtistPageFocus(lease, token || lease.focusToken, options),
+      release,
+    };
+    this._artistPageLease = lease;
+    try {
+      viewport.parentNode.insertBefore(marker, viewport);
+      panel.appendChild(viewport);
+      viewport.setAttribute('data-artist-page-viewport', '');
+      lease.onFocus = event => this.captureArtistPageFocusToken(lease, event.target);
+      this.containerEl.addEventListener('focusin', lease.onFocus);
+      if (!current()) {release(); return null;}
+      if (typeof ResizeObserver === 'function') {
+        lease.observer = new ResizeObserver(() => {
+          if (!current() || this.artistPagePresentationPaused()) return;
+          if (!lease.geometryDirty) lease.pendingAnchor = lease.anchor;
+          lease.geometryDirty = true;
+          this.scheduleMeasureRows(true);
+        });
+        const flow = panel.closest('#artist-page-root') || panel.parentElement;
+        lease.observer.observe(flow);
+        lease.observer.observe(viewport);
+        for (const section of flow.querySelectorAll(':scope > div > section')) lease.observer.observe(section);
+      }
+      this.lastKey = '';
+      return lease.api;
+    } catch (error) {
+      release();
+      throw error;
+    }
+  }
+
+  pruneArtistPageCoverConsumers() {
+    if (typeof galleryCoverLoadScheduler !== 'undefined') {
+      galleryCoverLoadScheduler.pruneObsoleteConsumerTasks?.(this._coverLoadGeneration);
+    }
+  }
+
+  restoreArtistPageFocus(lease, token, {preserveViewport = false} = {}) {
+    if (!this.artistPagePresentationCurrent(lease) || lease.suspended
+      || lease.panel.parentElement?.closest('[hidden],[inert]')
+      || (lease.panel.closest('[hidden],[inert]') && !lease.collapsed)) return false;
+    if (token && token.sessionId !== lease.sessionId) return false;
+    const generation = this._renderGeneration;
+    const section = this.sections.find(item => item.sectionKey === token?.sectionKey);
+    const albumIndex = section?.group?.albums?.findIndex(album =>
+      String(getAlbumRequestKey(album)) === token?.albumKey
+      && getAlbumCardVersionKey(album) === token?.versionKey) ?? -1;
+    if (preserveViewport) {
+      // Returning a sheet must never trade the restored viewport for a row.
+      const current = () => this.artistPagePresentationCurrent(lease)
+        && generation === this._renderGeneration && !lease.suspended
+        && !lease.panel.parentElement?.closest('[hidden],[inert]');
+      const eligible = node => {
+        if (!current() || !node?.isConnected || node.disabled || node.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
+        const box = node.getBoundingClientRect(), viewport = this.scrollEl.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return current() && style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.display !== 'none' && node.getClientRects().length > 0 && box.bottom > viewport.top
+          && box.top < viewport.bottom && box.right > viewport.left && box.left < viewport.right;
+      };
+      const record = section && lease.mounted.get(this.getRenderedSectionKey(section));
+      let target = null;
+      if (!lease.collapsed && albumIndex >= 0 && !lease.choices.get(section.sectionKey)) {
+        target = Array.from(record?.element.querySelectorAll('[data-album-key]') || []).find(node =>
+          node.getAttribute('data-album-key') === token.albumKey
+          && node.getAttribute('data-album-version-key') === token.versionKey
+          && (token.trigger === 'cover' ? node.classList.contains('cover')
+            : node.classList.contains('album-title-button') && !node.classList.contains('cover')
+              && node.getAttribute('data-open-tracklist') === '1') && eligible(node));
+      }
+      if (!target) target = !lease.collapsed && eligible(record?.toggle) ? record.toggle : this.artistPageParentToggle(lease);
+      if (!current() || !target?.isConnected || target.closest('[hidden],[inert]')) return false;
+      target.focus({preventScroll: true});
+      return current();
+    }
+    if (lease.collapsed || albumIndex < 0) {
+      const fallback = !lease.collapsed && section
+        ? lease.mounted.get(this.getRenderedSectionKey(section))?.toggle : null;
+      (fallback || this.artistPageParentToggle(lease))?.focus({preventScroll: true});
+      return this.artistPagePresentationCurrent(lease);
+    }
+    this.getArtistPageOrigin();
+    const closed = Boolean(lease.choices.get(section.sectionKey));
+    const blockIndex = Math.floor(albumIndex / Math.max(1, this.columns));
+    this.scrollEl.scrollTop = Math.max(0, lease.origin + section.top
+      + (closed ? 0 : this.getSectionHeaderHeight(section) + (section.blockOffsets[blockIndex] || 0)));
+    this.render(true);
+    if (!this.artistPagePresentationCurrent(lease) || generation !== this._renderGeneration
+      || this.artistPagePresentationPaused()) return false;
+    this.measureRenderedRows();
+    if (!this.artistPagePresentationCurrent(lease) || generation !== this._renderGeneration
+      || this.artistPagePresentationPaused()) return false;
+    const record = lease.mounted.get(this.getRenderedSectionKey(section));
+    let target = record?.toggle;
+    if (!closed) {
+      const triggers = Array.from(record?.element.querySelectorAll('[data-album-key]') || []);
+      target = triggers.find(node => node.getAttribute('data-album-key') === token.albumKey
+        && node.getAttribute('data-album-version-key') === token.versionKey
+        && (token.trigger === 'cover' ? node.classList.contains('cover')
+          : node.classList.contains('album-title-button') && !node.classList.contains('cover')
+            && node.getAttribute('data-open-tracklist') === '1')) || target;
+    }
+    (target || this.artistPageParentToggle(lease))?.focus({preventScroll: true});
+    return this.artistPagePresentationCurrent(lease);
+  }
+
+  partitionArtistPageSections(sections, previousSections) {
+    const lease = this._artistPageLease;
+    if (!lease) return sections;
+    lease.ordinarySections = sections;
+    const previous = new Map(previousSections.map(section => [section.sectionKey, section]));
+    const disambiguate = sections.filter(section => section.kind === 'artist').length > 1;
+    return sections.flatMap(section => {
+      if (section.kind !== 'artist') return [];
+      return GALLERY_RELEASE_TYPES.flatMap(type => {
+        const albums = section.group.albums.filter(album => classifyGalleryReleaseType(album) === type);
+        if (!albums.length) return [];
+        const sectionKey = `${section.sectionKey}:release:${type}`;
+        const old = previous.get(sectionKey);
+        const title = type === 'studio' ? 'Studio' : type === 'compilation' ? 'Compilation' : type;
+        return [{...section, group: {...section.group, albums}, sectionKey,
+          measurementKey: `${section.measurementKey}\u0000release:${type}`,
+          artistPageRelease: true, releaseType: type,
+          releaseLabel: disambiguate ? `${section.group.artist_display || section.group.artist} · ${title}` : title,
+          headerHeight: lease.headers.get(sectionKey) || 54,
+          rowGeometryKey: old?.rowGeometryKey,
+          blockHeights: old?.blockHeights?.slice() || [],
+          blockMeasureKeys: old?.blockMeasureKeys?.slice() || [],
+          measuredBlockKeys: old?.measuredBlockKeys?.slice() || []}];
+      });
+    });
+  }
+
+  patchArtistPageSections(records) {
+    const lease = this._artistPageLease;
+    const generation = this._renderGeneration;
+    const current = () => this.artistPagePresentationCurrent(lease) && generation === this._renderGeneration;
+    if (!current() || this.artistPagePresentationPaused()) return;
+    this.rememberRenderedAlbumCards(this.containerEl);
+    const keep = new Set(records.map(record => record.key));
+    for (const mounted of Array.from(lease.mounted.values())) {
+      if (!keep.has(mounted.key) && (!this.disposeArtistPageSection(lease, mounted) || !current())) return;
+    }
+    // Ordinary startup rows are not native subsection owners.
+    for (const child of Array.from(this.containerEl.children)) {
+      if (![...lease.mounted.values()].some(record => record.element === child)) {
+        if (!this.preserveArtistPageFocus(lease, child, this.artistPageParentToggle(lease))) return;
+        child.remove();
+      }
+    }
+    for (const record of records) {
+      if (!current()) return;
+      const section = record.section;
+      let mounted = lease.mounted.get(record.key);
+      const props = {id: `artist-release-${lease.sessionId}-${mounted?.id || ++lease.nextId}`,
+        memberKey: section.sectionKey, label: section.releaseLabel, count: section.group.albums.length,
+        collapsed: Boolean(lease.choices.get(section.sectionKey)), enabled: true,
+        onToggle: (key, closed) => {
+          if (!this.artistPagePresentationCurrent(lease) || this.artistPagePresentationPaused()
+            || !this.sectionByKey.has(key)) return;
+          const operation = this._renderGeneration;
+          const anchor = this.captureScrollAnchor();
+          lease.choices.set(key, Boolean(closed));
+          this.cancelArtistPageWork();
+          this.recalculate(); this.render(true);
+          if (!this.artistPagePresentationCurrent(lease) || operation !== this._renderGeneration) return;
+          this.stabilizeScrollAfterMeasurement(anchor);
+          lease.onReleaseToggle?.(key, Boolean(closed));
+        }};
+      if (!mounted) {
+        const element = document.createElement('section');
+        element.className = `artist-section ${section.sectionType} artist-page-release`;
+        element.setAttribute('data-virtual-section-key', record.key);
+        const owner = lease.mountReleaseDisclosure(element, props);
+        if (!current()) {owner?.dispose(); return;}
+        if (!owner?.slots?.panel) {owner?.dispose(); throw new Error('Artist release disclosure unavailable');}
+        mounted = {key: record.key, id: lease.nextId, element, owner,
+          header: element.querySelector('.intrinsic-disclosure__header'),
+          toggle: element.querySelector('.intrinsic-disclosure__toggle button')};
+        lease.mounted.set(record.key, mounted);
+        if (mounted.header) lease.observer?.observe(mounted.header);
+      } else mounted.owner.update(props);
+      if (!current()) return;
+      const next = mounted.html === record.html ? null : this.createRenderedSectionNode(record);
+      if (next) {
+        const rows = next?.querySelector('.artist-rows');
+        if (!rows) throw new Error('Artist rows unavailable');
+        const oldRows = mounted.owner.slots.panel.querySelector('.artist-rows');
+        if (oldRows && !this.preserveArtistPageFocus(lease, oldRows, mounted.toggle)) return;
+        if (!current()) return;
+        this.reuseMatchingMountedAlbumCards(mounted.element, next);
+        this.reuseRenderedAlbumCards(next);
+        if (oldRows) {
+          this.detachRetainedArtistCards(oldRows);
+          oldRows.replaceWith(rows);
+        }
+        else mounted.owner.slots.panel.appendChild(rows);
+        mounted.html = record.html;
+      }
+      if (!current()) return;
+      const atIndex = this.containerEl.children[records.indexOf(record)];
+      if (atIndex !== mounted.element) this.containerEl.insertBefore(mounted.element, atIndex || null);
+    }
+    this.rememberRenderedAlbumCards(this.containerEl);
+  }
+
   recordDiagnosticEvent(type, details = {}) {
     const event = {
       sequence: ++this._diagnosticSequence,
@@ -385,6 +959,11 @@ class VirtualArtistGrid {
   }
 
   destroy() {
+    if (this._destroyed) return;
+    this._artistPageLease?.api.release();
+    this._destroyed = true;
+    this._metadataMotion?.dispose();
+    this._metadataMotion = null;
     this._renderGeneration += 1;
     this.scrollEl.removeEventListener('scroll', this.onScroll);
     this.scrollEl.removeEventListener('wheel', this.onUserScrollIntent);
@@ -435,6 +1014,7 @@ class VirtualArtistGrid {
   }
 
   onPointerDown(event) {
+    if (this._destroyed) return;
     const target = event?.target;
     const closest = typeof target?.closest === 'function'
       ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]')
@@ -464,6 +1044,7 @@ class VirtualArtistGrid {
     this._activeAlbumCardPointerId = null;
     if (this._albumCardPointerReleaseRaf) return;
     this._albumCardPointerReleaseRaf = scheduleBrowserAnimationFrame(() => {
+      if (this._destroyed) return;
       this._albumCardPointerReleaseRaf = 0;
       if (this._albumCardPointerGestureActive) return;
       const deferredRender = this._deferredPointerGestureRender;
@@ -480,6 +1061,7 @@ class VirtualArtistGrid {
   }
 
   suspendSelectedArtistCoverLoadsForUserAction() {
+    if (this._destroyed) return 0;
     if (typeof galleryCoverLoadScheduler === 'undefined') return 0;
     this._nextCoverLoadUserActionToken += 1;
     const token = this._nextCoverLoadUserActionToken;
@@ -566,6 +1148,7 @@ class VirtualArtistGrid {
   }
 
   restoreScrollAnchor(anchor) {
+    if (this.artistPagePresentationPaused()) return;
     if (!this.scrollEl || !anchor) return;
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
     // At the root, hydration must preserve the top rather than follow a preview card.
@@ -645,7 +1228,8 @@ class VirtualArtistGrid {
           const modeledBlockOffset = Number(modeledSection.blockOffsets?.[blockIndex]);
           const modeledSectionTop = Number(modeledSection.top);
           if (Number.isFinite(modeledBlockOffset) && Number.isFinite(modeledSectionTop)) {
-            const modeledCardTop = modeledSectionTop + this.sectionHeaderHeight + modeledBlockOffset;
+            const modeledCardTop = this.getArtistPageOrigin() + modeledSectionTop
+              + this.getSectionHeaderHeight(modeledSection) + modeledBlockOffset;
             this.scrollEl.scrollTop = Math.max(0, modeledCardTop - Number(anchor.offsetTop || 0));
             return;
           }
@@ -697,6 +1281,7 @@ class VirtualArtistGrid {
   }
 
   restoreOwnedAbsoluteScrollPosition(position) {
+    if (this._destroyed) return false;
     if (
       !this.scrollEl
       || !Number.isFinite(Number(position?.scrollTop))
@@ -729,13 +1314,14 @@ class VirtualArtistGrid {
   }
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
+    if (this._destroyed) return;
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
     this._renderGeneration += 1;
     const renderGeneration = this._renderGeneration;
     this._preserveExistingChildrenGeneration = options.preserveMountedGalleryChildren
       ? renderGeneration
       : -1;
-    if (typeof galleryCoverLoadScheduler !== 'undefined') {
+    if (!this.artistPagePresentationPaused() && typeof galleryCoverLoadScheduler !== 'undefined') {
       if (
         String(state?.view?.selected_artist || '').trim()
         && typeof galleryCoverLoadScheduler.ensureFamilyPrefetchReconciliation === 'function'
@@ -860,7 +1446,7 @@ class VirtualArtistGrid {
         ? previousSection.measuredBlockKeys.slice()
         : [];
     });
-    this.sections = sections;
+    this.sections = this.partitionArtistPageSections(sections, this.sections);
     rebuildAlbumIndex(
       sections
         .filter((section) => section.kind === 'artist')
@@ -868,6 +1454,7 @@ class VirtualArtistGrid {
     );
     this.lastKey = '';
     this.recalculate();
+    if (this.artistPagePresentationPaused()) {this._resetScrollAfterMeasure = false; return;}
     if (!preserveScroll && this.scrollEl) {
       this.scrollEl.scrollTop = 0;
     }
@@ -887,6 +1474,7 @@ class VirtualArtistGrid {
     } finally {
       this._activeRenderRafOwner = previousActiveRenderRafOwner;
     }
+    if (renderGeneration !== this._renderGeneration || this.artistPagePresentationPaused()) return;
     const scheduleSettledScrollRestore = (restoreScroll) => {
       let scrollRestoreRafOwner = 0;
       scrollRestoreRafOwner = scheduleBrowserAnimationFrame(() => {
@@ -976,46 +1564,29 @@ class VirtualArtistGrid {
     this.sectionHeaderHeight = this.showArtistSectionHeaders ? 54 : 0;
     const layoutConfig = this.getLayoutConfig();
     const selectedCardWidth = resolveGalleryCardWidth(layoutConfig);
-    const width = Math.max(1, this.scrollEl.clientWidth - 4);
-    const previousCardTrackWidth = Number(this.cardTrackWidth);
-    const preserveCardTrackWidth = Boolean(
-      options.preserveCardTrackWidth && Number.isFinite(previousCardTrackWidth) && previousCardTrackWidth > 0,
-    );
-    const targetCardTrackWidth = preserveCardTrackWidth
-      ? Math.min(previousCardTrackWidth, width)
-      : selectedCardWidth;
-    const preservedColumns = Math.max(
-      1,
-      Math.floor((width + this.columnGap) / (targetCardTrackWidth + this.columnGap)),
-    );
-    const largestArtistAlbumCount = this.sections.reduce((largest, section) => Math.max(
-      largest,
-      Array.isArray(section?.group?.albums) ? section.group.albums.length : 0,
-    ), 0);
-    const shouldFillSettledRow = preserveCardTrackWidth
-      && largestArtistAlbumCount > Math.max(1, Number(this.columns) || 1);
-    const minimumSettledCardWidth = selectedCardWidth * MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO;
-    const settledColumns = Math.min(
-      largestArtistAlbumCount,
-      Math.max(1, Math.floor(
-        (width + this.columnGap) / (minimumSettledCardWidth + this.columnGap),
-      )),
-    );
-    if (!options.preserveColumnGeometry) {
-      this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
-      this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-        ? (width - (this.columns - 1) * this.columnGap) / this.columns
-        : targetCardTrackWidth;
+    if (this.artistPagePresentationPaused()) return;
+    const width = Math.max(1, (this._artistPageLease?.viewport.clientWidth ?? this.scrollEl.clientWidth) - 4);
+    if (this._artistPageLease) {
+      const lease = this._artistPageLease;
+      if (lease.width && lease.width !== width) {
+        lease.headers.clear();
+        for (const section of this.sections) if (section.artistPageRelease) section.headerHeight = 54;
+      }
+      lease.width = width;
     }
+    const largestArtistAlbumCount = this.sections.reduce((largest, section) => Math.max(
+      largest, Array.isArray(section?.group?.albums) ? section.group.albums.length : 0,
+    ), 0);
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
     const mobileGeometry = window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
       viewportWidth: window.innerWidth, availableWidth: width, mode: displayMode,
       columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3), gap: this.columnGap,
     });
-    if (mobileGeometry) {
-      this.columns = mobileGeometry.columns;
-      this.cardTrackWidth = mobileGeometry.cardTrackWidth;
-    }
+    const geometry = resolveGalleryColumnGeometry({width, selectedCardWidth, columnGap: this.columnGap,
+      itemCount: largestArtistAlbumCount, columns: this.columns, cardTrackWidth: this.cardTrackWidth,
+      preserveCardTrackWidth: options.preserveCardTrackWidth,
+      preserveColumnGeometry: options.preserveColumnGeometry, mobileGeometry});
+    this.columns = geometry.columns; this.cardTrackWidth = geometry.cardTrackWidth;
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
     const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
       || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);
@@ -1042,7 +1613,8 @@ class VirtualArtistGrid {
       const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
       const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
       const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
-      section.blocksData = blocks;
+      const collapsed = section.artistPageRelease && this._artistPageLease?.choices.get(section.sectionKey);
+      section.blocksData = collapsed ? [] : blocks;
       if (!Array.isArray(section.blockHeights) || section.blockHeights.length !== blocks.length) {
         const previousBlockHeights = Array.isArray(section.blockHeights)
           ? section.blockHeights
@@ -1050,13 +1622,15 @@ class VirtualArtistGrid {
         section.blockHeights = blocks.map((block, index) => {
           if (block.kind === 'subheading') return this.subsectionLabelHeight;
           const previousHeight = Number(previousBlockHeights[index] || 0);
-          return previousHeight > 0 ? previousHeight : estimatedRowHeight;
+          return (!section.artistPageRelease || previousMeasureKeys[index] === nextMeasureKeys[index]) && previousHeight > 0
+            ? previousHeight : estimatedRowHeight;
         });
       } else {
         section.blockHeights = blocks.map((block, index) => (
           block.kind === 'subheading'
             ? this.subsectionLabelHeight
-            : (section.blockHeights[index] || estimatedRowHeight)
+            : (!section.artistPageRelease || previousMeasureKeys[index] === nextMeasureKeys[index]
+              ? (section.blockHeights[index] || estimatedRowHeight) : estimatedRowHeight)
         ));
       }
       section.blockMeasureKeys = nextMeasureKeys;
@@ -1070,8 +1644,8 @@ class VirtualArtistGrid {
         if (index < blocks.length - 1) blockOffset += this.rowGap;
         return top;
       });
-      section.blocksHeight = blockOffset;
-      section.height = this.sectionHeaderHeight + section.blocksHeight + this.sectionMarginBottom;
+      section.blocksHeight = collapsed ? 0 : blockOffset;
+      section.height = this.getSectionHeaderHeight(section) + section.blocksHeight + this.sectionMarginBottom;
       offsetTop += section.height;
       section.bottom = offsetTop;
       this.sectionByKey.set(section.sectionKey, section);
@@ -1101,6 +1675,9 @@ class VirtualArtistGrid {
   }
 
   onScroll() {
+    if (this.artistPagePresentationPaused()) return;
+    if (this._destroyed) return;
+    if (this._artistPageLease) this._artistPageLease.anchor = this.captureScrollAnchor();
     const ownsPendingAbsoluteRestore = Boolean(
       this._absoluteScrollRestore,
     );
@@ -1158,11 +1735,20 @@ class VirtualArtistGrid {
   }
 
   onUserScrollIntent(event) {
-    if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
+    if (this._artistPageLease) {
+      this._artistPageLease.scrollIntent += 1;
+      this._artistPageLease.pendingAnchor = null;
+      this._artistPageLease.anchor = null;
+    } else if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     this.invalidateScrollStabilization();
+    if (this._scrollRestoreRaf) {
+      cancelBrowserAnimationFrame(this._scrollRestoreRaf);
+      this._scrollRestoreRaf = null;
+    }
   }
 
   onArtistTreeSettled() {
+    if (this._destroyed) return;
     const anchor = this.captureScrollAnchor();
     this.onResize({ preserveCardTrackWidth: true });
     if (anchor && !this._resetScrollAfterMeasure) {
@@ -1175,6 +1761,15 @@ class VirtualArtistGrid {
   }
 
   onResize(options = {}) {
+    if (this.artistPagePresentationPaused()) return;
+    if (this._artistPageLease) {
+      const lease = this._artistPageLease;
+      lease.pendingAnchor = lease.anchor;
+      lease.geometryDirty = true;
+      this.scheduleMeasureRows(true);
+      return;
+    }
+    if (this._destroyed) return;
     const artistTreeTransitioning = document.getElementById('shell-navigation-rail')
       ?.classList?.contains?.('is-transitioning');
     if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;
@@ -1185,6 +1780,10 @@ class VirtualArtistGrid {
   }
 
   render(force = false, options = {}) {
+    if (this.artistPagePresentationPaused()) return;
+    const artistLease = this._artistPageLease;
+    const generation = this._renderGeneration;
+    if (this._destroyed) return;
     if (this._albumCardPointerGestureActive || this._albumCardPointerReleaseRaf) {
       this._deferredPointerGestureRender = {
         force: Boolean(force),
@@ -1198,6 +1797,8 @@ class VirtualArtistGrid {
       return;
     }
     const viewportTop = this.scrollEl.scrollTop;
+    const gridOrigin = this.getArtistPageOrigin();
+    const localViewportTop = viewportTop - gridOrigin;
     const latestScroll = this.diagnostics.latestScroll;
     const settledScrollRenderRafOwner = (
       Number(latestScroll?.renderGeneration || 0) === Number(this._renderGeneration || 0)
@@ -1209,8 +1810,10 @@ class VirtualArtistGrid {
       this._activeRenderRafOwner || settledScrollRenderRafOwner || 0,
     );
     const viewportBottom = viewportTop + this.scrollEl.clientHeight;
-    const start = Math.max(0, viewportTop - this.overscanPx);
-    const end = viewportBottom + this.overscanPx;
+    const start = Math.max(0, localViewportTop - this.overscanPx);
+    const end = viewportBottom - gridOrigin + this.overscanPx;
+    const outsideArtistGrid = Boolean(this._artistPageLease
+      && (end < 0 || localViewportTop - this.overscanPx > this.totalHeight));
     const configuredBufferSections = Number.isInteger(this.bufferSectionsOverride)
       ? this.bufferSectionsOverride
       : this.bufferSections;
@@ -1230,7 +1833,7 @@ class VirtualArtistGrid {
     firstIndex = Math.max(0, firstIndex - effectiveBufferSections);
     lastIndex = Math.min(this.sections.length - 1, lastIndex + effectiveBufferSections);
 
-    const visible = this.sections.slice(firstIndex, lastIndex + 1);
+    const visible = outsideArtistGrid ? [] : this.sections.slice(firstIndex, lastIndex + 1);
     const visibleRanges = visible
       .map((section) => {
         const range = this.getVisibleBlockRange(section, start, end);
@@ -1261,7 +1864,8 @@ class VirtualArtistGrid {
     this.lastKey = rangeKey;
 
     this.topSpacerEl.style.height = `${visible.length ? visible[0].top : 0}px`;
-    const bottomHeight = visible.length ? Math.max(0, this.totalHeight - visible[visible.length - 1].bottom) : 0;
+    const bottomHeight = visible.length ? Math.max(0, this.totalHeight - visible[visible.length - 1].bottom)
+      : (this._artistPageLease ? this.totalHeight : 0);
     this.bottomSpacerEl.style.height = `${bottomHeight}px`;
     let foundFirstRenderedArtistSection = false;
     this.patchRenderedSections(visible.map((section) => {
@@ -1271,15 +1875,18 @@ class VirtualArtistGrid {
       }
       return {
         key: this.getRenderedSectionKey(section),
+        section,
         html: this.renderSection(section, start, end, {
           isFirstRenderedArtistSection,
-          viewportTop,
-          viewportBottom,
+          viewportTop: localViewportTop,
+          viewportBottom: viewportBottom - gridOrigin,
         }),
       };
     }), {
       preserveExistingChildren: Boolean(options.preserveExistingChildren),
     });
+    if (artistLease && (!this.artistPagePresentationCurrent(artistLease)
+      || generation !== this._renderGeneration || this.artistPagePresentationPaused())) return;
     this.activateGalleryCoverImages(this.containerEl);
     if (
       typeof galleryCoverLoadScheduler !== 'undefined'
@@ -1318,9 +1925,13 @@ class VirtualArtistGrid {
     };
     this.diagnostics.latestRender = completedRender;
     this.recordDiagnosticEvent('render-completed', completedRender);
+    if (this._artistPageLease && !this.artistPagePresentationPaused()) {
+      this._artistPageLease.anchor = this.captureScrollAnchor();
+    }
   }
 
   primeVisibleCoverImages() {
+    if (this.artistPagePresentationPaused()) return;
     if (!(this.scrollEl instanceof HTMLElement) || !(this.containerEl instanceof HTMLElement)) {
       return;
     }
@@ -1360,7 +1971,11 @@ class VirtualArtistGrid {
   }
 
   activateGalleryCoverImages(rootEl = this.containerEl) {
-    if (typeof syncGalleryCardMetadataMotion === 'function') syncGalleryCardMetadataMotion(rootEl);
+    if (this.artistPagePresentationPaused()) return;
+    if (this._destroyed) return;
+    if (typeof syncGalleryCardMetadataMotion === 'function') {
+      this._metadataMotion = syncGalleryCardMetadataMotion(rootEl);
+    }
     if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
     rootEl.querySelectorAll('img[data-gallery-cover-src]').forEach((image) => {
       if (!(image instanceof HTMLImageElement)) return;
@@ -1383,6 +1998,7 @@ class VirtualArtistGrid {
   }
 
   scheduleSelectedFamilyCoverPrefetch() {
+    if (this.artistPagePresentationPaused()) return;
     if (typeof galleryCoverLoadScheduler === 'undefined') return;
     if (this._familyPrefetchScheduledCoverLoadGeneration === this._coverLoadGeneration) return;
     this._familyPrefetchScheduledCoverLoadGeneration = this._coverLoadGeneration;
@@ -1627,6 +2243,10 @@ class VirtualArtistGrid {
   }
 
   patchRenderedSections(records, options = {}) {
+    if (this._artistPageLease) {
+      this.patchArtistPageSections(records);
+      return;
+    }
     // An uninitialized model must not clear the server-rendered startup preview.
     if (this._renderGeneration === 0 && !records.length) return;
     if (
@@ -1709,6 +2329,8 @@ class VirtualArtistGrid {
   }
 
   scheduleMeasureRows(force = false) {
+    if (this.artistPagePresentationPaused()) return;
+    if (this._destroyed) return;
     if (!force && !this.isScrollSettled) {
       this.recordDiagnosticEvent('measure-request-skipped-scrolling', { force: false });
       return;
@@ -1720,8 +2342,14 @@ class VirtualArtistGrid {
       });
       return;
     }
+    const artistLease = this._artistPageLease;
+    const renderGeneration = this._renderGeneration;
     let measureRafOwner = 0;
     measureRafOwner = scheduleBrowserAnimationFrame(() => {
+      if (this._destroyed || this._measureRaf !== measureRafOwner
+        || renderGeneration !== this._renderGeneration
+        || (artistLease && (!this.artistPagePresentationCurrent(artistLease)
+          || this.artistPagePresentationPaused()))) return;
       this._activeMeasureRafOwner = measureRafOwner;
       this._measureRaf = null;
       this.recordDiagnosticEvent('measure-frame-started', { measureRafOwner });
@@ -1736,6 +2364,7 @@ class VirtualArtistGrid {
   }
 
   stabilizeScrollAfterMeasurement(anchor) {
+    if (this.artistPagePresentationPaused()) return;
     const preservedAbsoluteScroll = (
       this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
     )
@@ -1780,11 +2409,41 @@ class VirtualArtistGrid {
   }
 
   measureRenderedRows() {
+    if (this.artistPagePresentationPaused()) return;
+    const generation = this._renderGeneration;
     const absoluteScrollActive = (
       this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
     );
-    const preservedAnchor = absoluteScrollActive ? null : this.captureScrollAnchor();
+    const lease = this._artistPageLease;
+    const preservedAnchor = absoluteScrollActive ? null
+      : (lease?.pendingAnchor || this.captureScrollAnchor());
     let changed = false;
+    if (lease) {
+      lease.pendingAnchor = null;
+      const oldOrigin = lease.measuredOrigin ?? lease.origin;
+      this.getArtistPageOrigin();
+      changed = Math.abs(oldOrigin - lease.origin) > 1;
+      lease.measuredOrigin = lease.origin;
+      for (const record of lease.mounted.values()) {
+        const section = this.sections.find(item => this.getRenderedSectionKey(item) === record.key);
+        const height = Math.ceil(record.header?.getBoundingClientRect().height || 0);
+        if (section && height > 0 && Math.abs(this.getSectionHeaderHeight(section) - height) > 1) {
+          section.headerHeight = height;
+          lease.headers.set(section.sectionKey, height);
+          changed = true;
+        }
+      }
+      const width = Math.max(1, lease.viewport.clientWidth - 4);
+      lease.geometryDirty = false;
+      if (width !== lease.width) {
+        this.recalculate();
+        this.render(true);
+        if (generation === this._renderGeneration && this.artistPagePresentationCurrent(lease)) {
+          this.stabilizeScrollAfterMeasurement(preservedAnchor);
+        }
+        return;
+      }
+    }
     const rowMeasurements = [];
     const rows = this.containerEl.querySelectorAll('.album-row[data-section-key][data-block-index]');
     rows.forEach((rowEl) => {
@@ -1878,7 +2537,9 @@ class VirtualArtistGrid {
         }));
       }
     }
-    this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    if (generation === this._renderGeneration && (!lease || this.artistPagePresentationCurrent(lease))) {
+      this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    }
   }
 
   getVisibleBlockRange(section, start, end) {
@@ -1892,7 +2553,7 @@ class VirtualArtistGrid {
         bottomSpacerHeight: 0,
       };
     }
-    const contentTop = section.top + this.sectionHeaderHeight;
+    const contentTop = section.top + this.getSectionHeaderHeight(section);
     const localStart = Math.max(0, start - contentTop);
     const localEnd = Math.max(0, end - contentTop);
     let firstIndex = 0;
@@ -1939,7 +2600,9 @@ class VirtualArtistGrid {
       if (block.kind === 'subheading') {
         return `<div class="artist-subsection-label">${escapeHtml(block.title || 'Non-Album Tracks')}</div>`;
       }
-      const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
+      const blockTop = Number(section.top || 0)
+        + (section.artistPageRelease ? this.getSectionHeaderHeight(section) : 0)
+        + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
       const coverPriority = blockBottom >= Number(options.viewportTop || 0)
         && blockTop <= Number(options.viewportBottom || 0)
@@ -1956,7 +2619,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length }) : ''}
+        ${!section.artistPageRelease && this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -2081,7 +2744,8 @@ function renderArtistGroupsCardMode(displayGroupState = {}, fallbackGroups = [],
     }
   }
 
-  if (!hasRenderableGroups || !virtualGrid.containerEl) {
+  // An off-grid or collapsed Artist lease legitimately has no mounted rows.
+  if (virtualGrid._artistPageLease || !hasRenderableGroups || !virtualGrid.containerEl) {
     return;
   }
   const renderedChildCount = Array.isArray(virtualGrid.containerEl.children)
@@ -2106,20 +2770,33 @@ function getGalleryModeRenderer(mode) {
 }
 
 function renderArtistGroups(options = {}) {
+  const ownsRender = () => typeof options.isCurrentResponse !== 'function' || options.isCurrentResponse() === true;
+  if (!ownsRender()) return;
   // Home hides the gallery; restore its visibility before measuring virtual rows.
   if (typeof syncMobileHome === 'function') syncMobileHome();
+  if (!ownsRender()) return;
   const model = getFilteredGalleryMainModel();
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
+  if (!ownsRender()) return;
   const renderOptions = {
     ...options,
     showArtistSectionHeaders: !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
   };
+  const artistRuntime = window.AlbumHavenArtistPageRuntime;
+  const artistRendered = artistRuntime?.renderDiscography({model, layoutConfig: modeConfig.layoutConfig, options: renderOptions});
+  // A retired bridge call returning false has no authority to start fallback.
+  if (!ownsRender()) return;
+  if (artistRendered) {
+    if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+    return;
+  }
   modeConfig.renderer(
     { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },
     model.fallbackGroups,
     renderOptions,
     modeConfig.layoutConfig,
   );
+  if (!ownsRender()) return;
   if (
     state.gallery.mainState.familySelectionExplicit === true
     && state.gallery.mainState.familyArtists.length === 0

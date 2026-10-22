@@ -1,0 +1,119 @@
+/* Collection layout only. Controls, gallery cards, menus and dialogs remain
+   owned by the shared native component families. */
+#library-navigation-root { flex: 1 1 auto; min-width: 0; }
+#library-navigation-root .ui-choice, #library-navigation-root .ui-choice__control,
+#library-navigation-root .ui-choice__trigger { width: 100%; }
+:is(#playlist-sidebar-root, #album-tops-sidebar-root) { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; }
+:is(#playlist-sidebar-root, #album-tops-sidebar-root)[hidden] { display: none; }
+.collection-sidebar { display: flex; flex-direction: column; gap: 10px; padding: 12px; min-width: 0; }
+#album-tops-root { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; }
+#album-tops-root[hidden] { display: none; }
+.shell-main-surface.has-react-album-tops > :is([data-gallery-bar-instance="gallery"], #albums-scroll, .discovery-center-page) { display: none; }
+.album-tops { display: flex; flex-direction: column; min-width: 0; min-height: 0; color: var(--text); }
+.album-tops > :is(.home-activity__cards, .home-friends__status, p) { margin: 12px; }
+.album-tops__header { flex: 0 0 auto; }
+#collection-library-navigation { order: -1; flex: 0 0 auto; }
+#collection-library-navigation[hidden] { display: none; }
+.album-top-builder, .album-top-builder__identity, .album-top-builder__picker { min-width: 0; }
+.album-top-builder__identity { display: grid; gap: 8px; }
+.album-top-builder__picker { display: flex; flex-direction: column; gap: 8px; }
+.album-top-builder__scroll { max-height: 50vh; overflow: auto; min-width: 0; padding: 4px; }
+.album-top-builder__cards { grid-template-columns: repeat(auto-fill, minmax(min(145px, 100%), 1fr)); }
+.album-top-builder__cards > div { min-width: 0; }
+.album-top-builder__cards [data-album-draft-move] { touch-action: none; }
+.album-top-inline-edit { min-width: 0; }
+.album-top-inline-edit .album-tops__header { flex-wrap: nowrap; align-items: flex-start; gap: 8px; }
+.album-top-inline-edit .gallery-bar__context { flex: 1 1 0; min-width: 0; }
+.album-top-inline-edit .gallery-bar__title { display: block; min-width: 0; width: 100%; }
+.album-top-inline-edit .album-top-builder__identity { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 0; }
+.album-top-inline-edit .album-top-builder__identity input { width: 100%; min-width: 0; box-sizing: border-box; }
+.album-top-inline-edit .gallery-bar__actions { flex-wrap: nowrap; }
+.album-top-inline-edit__content { padding: 12px; min-width: 0; }
+/* Share keeps the canonical joined form, fields and buttons. These rules only
+   bound its nested lists and let subsection controls fit narrow viewports. */
+.album-top-share, .album-top-share :is(fieldset, .ui-choice, .ui-choice__control) { min-width: 0; max-width: 100%; }
+.album-top-share :is(.album-top-share__people, .album-top-share__public, .album-top-share__publication,
+  .album-top-share__saved-album, .album-top-share__source-chooser, .album-top-share__publication-preview) { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.album-top-share :is(.album-top-share__member-results, .album-top-share__source-results) {
+  height: min(18rem, 40vh); min-height: 8rem; overflow: auto; overscroll-behavior: contain;
+  min-width: 0; max-width: 100%; box-sizing: border-box; padding: 4px;
+}
+.album-top-share__saved-albums { display: grid; gap: 12px; max-height: 45vh; overflow: auto; margin: 0; padding: 4px 4px 4px 28px; min-width: 0; }
+.album-top-share__saved-album { padding: 4px; }
+.album-top-share__source-chooser { padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.album-top-share__source-row { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 0; min-width: 0; }
+.album-top-share :is(.album-top-share__text, .playlists__note, .album-top-share__member-label) { overflow-wrap: anywhere; min-width: 0; }
+.album-top-share :is(.playlists__actions, .album-top-share__member-actions) { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.album-top-share .playlists__share-person { flex-wrap: wrap; }
+.album-top-share__member-actions { display: flex; align-items: center; gap: 8px; }
+.album-top-share .album-top-share__page-actions { align-items: center; }
+@media (max-width: 520px) {
+  .album-top-share .playlists__share-person { align-items: flex-start; }
+  .album-top-share :is(.album-top-share__member-actions, .ui-choice__trigger) { max-width: 100%; }
+  .album-top-share__source-chooser { padding: 6px; }
+  .album-top-share__saved-albums { padding-left: 22px; }
+}
+
+/* Search composes existing native controls, cards and the measured flat table.
+   Match paint remains exclusively with the shared gallery-card modifier. */
+#search-results-root { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; }
+#search-results-root[hidden], #search-results-root [hidden] { display: none; }
+.search-results { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; color: var(--text); }
+.search-results :is(.search-results__panel, .search-results__body, .search-results__tracks, .album-track-table) { min-width: 0; }
+.search-results__panel, .search-results__sidebar-progress { display: flex; flex-direction: column; gap: 12px; }
+.search-results__actions, .search-results__table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.search-results__table-actions { justify-content: flex-end; margin-bottom: 8px; }
+.search-results__albums { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 12px; }
+.search-results__albums > .album-card { min-width: 0; }
+.search-results__albums[data-gallery-display="covers"] { grid-template-columns: repeat(auto-fill, minmax(min(145px, 100%), 1fr)); }
+.search-results__albums[data-gallery-display="list"] { grid-template-columns: minmax(0, 1fr); }
+.search-results__albums[data-gallery-display="list"] > .album-card { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; }
+.search-results__tracks .compact-data-table { width: 100%; }
+.search-results__status { min-width: 0; overflow-wrap: anywhere; }
+
+
+/* Native remote authoring shares existing cards and controls. Only layout is
+   scoped here; hidden pools remain hidden even when their panels use flex. */
+.album-top-builder__picker [hidden] { display: none; }
+.album-top-builder__remote, .album-top-builder__remote-management,
+.album-top-builder__remote-parents { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.album-top-builder__remote-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.album-top-builder__remote-fields input { width: 100%; min-width: 0; box-sizing: border-box; }
+.album-top-builder__remote .playlists__actions { flex-wrap: wrap; }
+.album-top-builder__remote .playlists__note { overflow-wrap: anywhere; }
+.album-top-builder__remote > .album-top-builder__cards { max-height: 40vh; overflow: auto; padding: 4px; }
+@media (max-width: 520px) {
+  .album-top-builder__remote-fields { grid-template-columns: minmax(0, 1fr); }
+}
+/* Collection filters share one compact disclosure and phone-form layout.
+   Playlist hooks retain their existing layout while callers adopt shared names. */
+.collection-filter-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+:is(.collection-filter-fields, .playlists__filters) label { display: flex; flex-direction: column; gap: 5px; }
+:is(.collection-filter-fields, .playlists__filters) :is(input, select) { max-width: 100%; min-width: 0; box-sizing: border-box; }
+:is(.collection-filter-fields, .playlists__filters) { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding-block: 10px; }
+:is(.collection-filter-fields, .playlists__filters) > :is(.collection-filter-note, .playlists__note) { flex-basis: 100%; }
+.collection-filter-search { flex: 1 1 100%; min-width: 0; width: 100%; }
+.collection-filter-note { color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+.collection-filter-surface { flex: none; min-width: 0; }
+.collection-filter-surface--inline { padding-inline: 12px; }
+.collection-filter-surface--inline .ui-choice__label { display: none; }
+.collection-filter-surface--inline :is(.collection-filter-fields, .playlists__filters) { align-items: center; }
+.collection-filter-surface .playlists-filter__search { flex: 1 1 200px; min-width: 0; max-width: 320px; }
+.collection-filter-surface--inline :is(.collection-filter-search, .playlists-filter__search) { --search-field-height: 28px; }
+.collection-filter-surface :is(.collection-filter-fields, .playlists__filters) > :is(.collection-filter-note, .playlists__note) { margin: 0; }
+.collection-filter-surface--form :is(.collection-filter-fields, .playlists__filters) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.collection-filter-surface--form :is(.collection-filter-search, .playlists-filter__search),
+.collection-filter-surface--form :is(.collection-filter-note, .playlists__note) { grid-column: 1 / -1; width: 100%; max-width: none; }
+.collection-filter-surface--form .ui-choice__control,
+.collection-filter-surface--form .ui-choice__trigger { width: 100%; }
+
+.album-top-image { position: relative; display: grid; gap: 16px; min-width: 0; }
+.album-top-image__settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-width: 0; }
+.album-top-image__settings > label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.album-top-image__settings input[type="range"] { min-width: 0; flex: 1; }
+.album-top-image__preview { min-width: 0; overflow: auto; }
+.album-top-image__preview img { display: block; max-width: 100%; height: auto; opacity: 1; }
+.album-top-image__color-popup { position: absolute; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; max-width: calc(100% - 24px); background: var(--panel-background, var(--background, Canvas)); border: 1px solid var(--border); }
+.album-top-image :is(button, input[type="range"], input[type="checkbox"], input[type="color"], output, label > span) { caret-color: transparent; }
+.album-top-image :is(input[type="text"], input:not([type])) { caret-color: auto; cursor: text; user-select: text; }
+@media (max-width: 720px) { .album-top-image__settings { grid-template-columns: minmax(0, 1fr); } }

@@ -20,7 +20,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 49],
   ['cover-providers', 20],
   ['metadata-mutations', 14],
-  ['playback-utilities', 40],
+  ['playback-utilities', 58],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -34,6 +34,8 @@ const EXPECTED_FUNCTIONAL_CONFIGS = [
   'playwright.cover-rescan.config.js',
   'playwright.lastfm-auto-timezone.config.js',
   'playwright.non-album-rescan.config.js',
+  'playwright.home-feedback.config.js',
+  'playwright.native-acceptance.config.js',
 ];
 const FIXTURE_RELEASE = 'fixtures-v1.0.25';
 const FIXTURE_MANIFEST_SHA256 = 'e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60';
@@ -110,7 +112,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 123-case assignment', () => {
+test('functional shard contract pins the approved four-way 141-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +126,7 @@ test('functional shard contract pins the approved four-way 123-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 123);
+  assert.equal(total, 141);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -225,6 +227,27 @@ validatorTest('validator accepts the exact approved ownership and rejects every 
   const mismatch = clone(contract);
   mismatch.shards[0].invocations[0].cases[0].project = 'wrong-project';
   assert.match(errorText(validator.validateFunctionalShardContract(mismatch, discovered)), /mismatch|disagree/i);
+});
+
+validatorTest('validator accepts all 141 discovered owners and rejects the former 134-case inventory', () => {
+  const validator = loadValidator();
+  const contract = readJson(shardContractPath);
+  const discovered = ownedCases(contract);
+  assert.equal(discovered.length, 141);
+  assert.equal(discovered.filter(row => row.config === 'playwright.native-acceptance.config.js').length, 5);
+  assert.deepEqual(validator.validateFunctionalShardContract(contract, discovered), []);
+
+  const former = clone(contract);
+  for (const shard of former.shards) {
+    shard.invocations = shard.invocations.filter(invocation => invocation.config !== 'playwright.native-acceptance.config.js');
+    for (const invocation of shard.invocations) {
+      invocation.cases = invocation.cases.filter(row => row.test !== 'tests/e2e/specs/playerCaptureTelemetry.spec.js');
+    }
+  }
+  const formerDiscovered = ownedCases(former);
+  assert.equal(formerDiscovered.length, 134);
+  assert.ok(validator.validateFunctionalShardContract(former, formerDiscovered)
+    .includes('functional contract owns 134 cases; expected 141'));
 });
 
 validatorTest('execution waves share readers and isolate each mutator despite shared setup groups', () => {
@@ -837,6 +860,8 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
       'FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album',
       'FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details',
       'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
+      'short audible playback survives reload as positive private capture',
+      'visible backward seek retains repeated consumed positions in one capture',
       'FTC-TAGS-024 completes a verified Album and Exception intent during app restart',
     ],
   );
@@ -847,13 +872,55 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
     ],
   );
+  const captureCases = [
+    ['short audible playback survives reload as positive private capture', 'case:playback-capture-short'],
+    ['visible backward seek retains repeated consumed positions in one capture', 'case:playback-capture-seek'],
+  ];
+  const captureInvocations = waves[0].invocations.filter(invocation =>
+    invocation.cases.some(row => row.test === 'tests/e2e/specs/playerCaptureTelemetry.spec.js'));
+  assert.deepEqual(captureInvocations.map(invocation => invocation.cases.map(row => row.case)), [
+    ['short audible playback survives reload as positive private capture'],
+    ['visible backward seek retains repeated consumed positions in one capture'],
+  ]);
+  for (const [title, databaseIdentity] of captureCases) {
+    const row = matrixByCase.get(title);
+    assert.equal(row.config, 'playwright.config.js');
+    assert.equal(row.project, 'functional');
+    assert.equal(row.test, 'tests/e2e/specs/playerCaptureTelemetry.spec.js');
+    assert.equal(row.setupScope, 'isolated');
+    assert.equal(row.stateMode, 'owned-mutation');
+    assert.equal(row.executionWave, 1);
+    assert.deepEqual(row.mutationOwnership, { databaseIdentity });
+    assert.deepEqual(row.databaseScenarios, []);
+    assert.deepEqual(row.filesystemScenarios, ['audio-copy:lastfm-connect-scrobble']);
+    const invocation = captureInvocations.find(item => item.cases[0].case === title);
+    assert.equal(invocation.config, 'playwright.config.js');
+    assert.equal(invocation.project, 'functional');
+    assert.equal(invocation.workers, 1);
+    assert.equal(invocation.baselineMode, 'owned-mutation');
+    assert.equal(invocation.appProcessOrder, null);
+    const index = waves[0].invocations.indexOf(invocation);
+    assert.ok(waves[0].invocations.every((item, position) =>
+      item.baselineMode !== 'shared-setup' || position < index));
+    assert.ok(waves[0].invocations.every((item, position) =>
+      item.baselineMode !== 'global-mutation' || position > index));
+  }
   const ordinaryInvocationIndex = waves[1].invocations.findIndex(
     (invocation) => invocation.config === 'playwright.config.js'
       && invocation.baselineMode === 'owned-mutation',
   );
-  assert.equal(waves[3].invocations.length, 1);
-  assert.equal(waves[3].invocations[0].baselineMode, 'global-mutation');
-  assert.deepEqual(waves[3].invocations[0].cases.map(({ case: name }) => name), [
+  assert.equal(waves[3].invocations.length, 17);
+  const homeInvocations = waves[3].invocations.filter(invocation => invocation.config === 'playwright.home-feedback.config.js');
+  assert.equal(homeInvocations.length, 11);
+  assert.deepEqual(homeInvocations.flatMap(invocation => invocation.cases.map(row => row.case)),
+    shard.invocations.find(invocation => invocation.config === 'playwright.home-feedback.config.js').cases.map(row => row.case));
+  for (const invocation of homeInvocations) {
+    assert.equal(invocation.baselineMode, 'isolated-app-process');
+    assert.equal(invocation.appProcessOrder, 'after-shared');
+    assert.equal(invocation.cases.length, 1);
+  }
+  assert.equal(waves[3].invocations.at(-1).baselineMode, 'global-mutation');
+  assert.deepEqual(waves[3].invocations.at(-1).cases.map(({ case: name }) => name), [
     'FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership',
   ]);
   const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 5 } : row);
@@ -917,7 +984,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
     ['gallery-search-visual', { cases: 49, waves: [1, 2] }],
     ['cover-providers', { cases: 20, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 40, waves: [1, 2, 3, 4] }],
+    ['playback-utilities', { cases: 58, waves: [1, 2, 3, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 
@@ -1183,20 +1250,33 @@ test('functional workflow teardown consumes the exact provision receipt for its 
   assert.match(job, /-Mode\s+Teardown[\s\S]*?-StatePath/);
 });
 
-test('all functional configs route functional-core through the preloaded preserved baseline', () => {
+test('original five functional configs preserve functional-core while Home owns a dedicated isolated launcher', () => {
   const runnerSource = fs.readFileSync(runnerPath, 'utf8');
   const isolatedSource = fs.readFileSync(isolatedAppPath, 'utf8');
   const runner = require(runnerPath)._private;
   const previousProfile = process.env.ALBUM_HAVEN_FIXTURE_PROFILE;
   process.env.ALBUM_HAVEN_FIXTURE_PROFILE = 'functional-core';
   try {
-    for (const config of EXPECTED_FUNCTIONAL_CONFIGS) {
+    const sharedFixtureConfigs = EXPECTED_FUNCTIONAL_CONFIGS.filter(config => !['playwright.home-feedback.config.js', 'playwright.native-acceptance.config.js'].includes(config));
+    assert.equal(sharedFixtureConfigs.length, 5);
+    for (const config of sharedFixtureConfigs) {
       assert.equal(
         runner.resolveManagedFixtureProfile([`--config=${config}`]),
         'functional-core',
         `${config} must select functional-core`,
       );
     }
+    assert.equal(runner.resolveManagedFixtureProfile(['--config=playwright.home-feedback.config.js']), '');
+    const homeConfig = fs.readFileSync(path.join(repoRoot, 'playwright.home-feedback.config.js'), 'utf8');
+    const homeLauncher = fs.readFileSync(path.join(repoRoot, 'tests/e2e/support/homeFeedbackApp.py'), 'utf8');
+    assert.doesNotMatch(homeConfig, /webServer:/);
+    assert.match(runnerSource, /homeFeedbackApp\.py/);
+    assert.match(homeConfig, /metadata:\s*\{ homeFeedbackManifest: manifest \}/);
+    assert.match(homeLauncher, /resolve_isolated_database_urls\(\)/);
+    assert.match(homeLauncher, /IsolatedDatabaseOwnershipLock\(database_url=setup_url\)/);
+    assert.match(homeLauncher, /prepare_isolated_database\(setup_url, runtime_url\)/);
+    assert.match(homeLauncher, /seed_data\(setup_url\)/);
+    assert.ok(homeLauncher.indexOf('seed_data(setup_url)') < homeLauncher.indexOf('app = create_asgi_app()'));
   } finally {
     if (previousProfile === undefined) {
       delete process.env.ALBUM_HAVEN_FIXTURE_PROFILE;
@@ -1296,3 +1376,51 @@ for (const selector of [
     }
   });
 }
+
+validatorTest('native acceptance enrolls exactly five isolated case namespaces after Home', () => {
+  const contract = readJson(shardContractPath), matrix = readJson(path.join(repoRoot, 'tests/ci/test-data-matrix.json'));
+  const shard = contract.shards.find(row => row.name === 'playback-utilities');
+  const position = shard.invocations.findIndex(row => row.config === 'playwright.native-acceptance.config.js');
+  assert.equal(shard.invocations[position - 1].config, 'playwright.home-feedback.config.js');
+  const invocation = shard.invocations[position];
+  assert.equal(invocation.project, 'native-acceptance-chrome');
+  assert.equal(invocation.workers, 1);
+  assert.equal(invocation.cases.length, 5);
+  assert.deepEqual(invocation.cases.map(row => row.case.match(/^FTC-NATIVE-ACCEPT-(\d{3}) /)?.[1]), ['001', '002', '003', '004', '005']);
+  for (const [index, row] of invocation.cases.entries()) {
+    assert.equal(row.area, 'native-acceptance');
+    assert.equal(row.test, 'tests/e2e/nativeAcceptance/nativeAcceptance.spec.js');
+    const records = matrix.filter(item => item.config === row.config && item.project === row.project && item.case === row.case);
+    assert.equal(records.length, 1);
+    const record = records[0];
+    assert.equal(record.stateMode, 'owned-mutation'); assert.equal(record.executionWave, 4);
+    assert.equal(record.appProcessScope, 'isolated'); assert.equal(record.appProcessOrder, 'after-shared');
+    assert.equal(record.profile, 'functional-core');
+    assert.deepEqual(record.databaseScenarios, [`native-acceptance:NA00${index + 1}`]);
+  }
+});
+
+validatorTest('native inventory rejects duplicate, absent, unknown and mixed-owner identities', () => {
+  const validator = loadValidator(), contract = readJson(shardContractPath), discovered = ownedCases(contract);
+  const nativeInvocation = value => value.shards.find(row => row.name === 'playback-utilities').invocations.find(
+    row => row.config === 'playwright.native-acceptance.config.js');
+  for (const [mutate, pattern] of [
+    [value => nativeInvocation(value).cases.push(clone(nativeInvocation(value).cases[0])), /duplicate/],
+    [value => nativeInvocation(value).cases.pop(), /missing|unassigned/],
+    [value => { nativeInvocation(value).cases[0].case = 'FTC-NATIVE-ACCEPT-999 unknown'; }, /orphan|unknown|unassigned/],
+    [value => { nativeInvocation(value).config = 'playwright.unknown-native.config.js'; }, /unknown.*config|mismatch/],
+    [value => { nativeInvocation(value).cases[0].project = 'home-feedback-chromium'; }, /mismatch|disagree/],
+  ]) {
+    const changed = clone(contract); mutate(changed);
+    assert.match(errorText(validator.validateFunctionalShardContract(changed, discovered)), pattern);
+  }
+  const matrix = readJson(path.join(repoRoot, 'tests/ci/test-data-matrix.json'));
+  const shard = contract.shards.find(row => row.name === 'playback-utilities');
+  const invalid = clone(matrix);
+  invalid.find(row => row.config === 'playwright.native-acceptance.config.js').appProcessScope = 'shared';
+  assert.throws(() => validator.executionWavesForShard(shard, invalid), /unsupported appProcessScope/);
+  const waves = validator.executionWavesForShard(shard, matrix);
+  const native = waves.find(row => row.wave === 4).invocations.filter(row => row.config === 'playwright.native-acceptance.config.js');
+  assert.equal(native.length, 5);
+  assert.ok(native.every(row => row.cases.length === 1 && row.baselineMode === 'isolated-app-process' && row.appProcessOrder === 'after-shared'));
+});

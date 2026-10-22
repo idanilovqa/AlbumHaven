@@ -1,0 +1,163 @@
+{
+  "schema_version": "foobar-preview-plan-v1",
+  "workflow_path": ".github/workflows/foobar-preview-backend-evidence.yml",
+  "lane": "foobar-preview",
+  "selectors": [
+    "tests/py/test_foobar_snapshot_preview.py",
+    "tests/py/test_foobar_snapshot_preview_resources.py"
+  ],
+  "legacy_helper_selectors": [
+    "tests/py/test_new_feature_ci_contract.py",
+    "tests/py/test_new_feature_evidence.py"
+  ],
+  "helper_selectors": [
+    "tests/py/test_foobar_preview_ci_contract.py",
+    "tests/py/test_foobar_preview_evidence.py"
+  ],
+  "core_count": 380,
+  "resource_ids": [
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_entry_limit_is_not_truncation[at-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_entry_limit_is_not_truncation[over-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_revision_validation_precedes_count_and_count_precedes_entry_validation",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_aggregate_budget_counts_repeated_strings_per_entry[at-limit-ascii]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_aggregate_budget_counts_repeated_strings_per_entry[at-limit-utf8]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_aggregate_budget_counts_repeated_strings_per_entry[over-limit-ascii]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_aggregate_budget_counts_repeated_strings_per_entry[over-limit-utf8]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_all_entries_and_duplicates_are_checked_before_aggregate_rejection[invalid-over-budget]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_all_entries_and_duplicates_are_checked_before_aggregate_rejection[duplicate-over-budget]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_all_entries_and_duplicates_are_checked_before_aggregate_rejection[invalid-over-duplicate]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_maximum_parser_rows_are_preserved_and_share_one_candidate_projection",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_many_distinct_path_groups_keep_exact_counts_and_bounded_candidates",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_all_inventory_entries_can_be_distinct_candidates_without_false_uniqueness",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_invalid_parser_row_dimensions_reject_without_partial_results[empty]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_invalid_parser_row_dimensions_reject_without_partial_results[over-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_header_width_boundary[at-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_header_width_boundary[over-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_total_cells_includes_header[at-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_total_cells_includes_header[over-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[at-limit-ascii-header]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[at-limit-ascii-cell]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[at-limit-utf8-header]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[at-limit-utf8-cell]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[over-limit-ascii-header]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[over-limit-ascii-cell]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[over-limit-utf8-header]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[over-limit-utf8-cell]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_record_budget_includes_tab_separators[at-limit-header]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_record_budget_includes_tab_separators[at-limit-row]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_record_budget_includes_tab_separators[over-limit-header]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_record_budget_includes_tab_separators[over-limit-row]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_zero_byte_data_record_is_invalid_even_with_consistent_empty_path",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_reconstructed_parser_64_mib_lower_bound[at-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_reconstructed_parser_64_mib_lower_bound[over-limit]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_exact_diagnostic_prefix_and_truncation_accounting[at-cap]",
+    "tests/py/test_foobar_snapshot_preview_resources.py::test_exact_diagnostic_prefix_and_truncation_accounting[over-cap]"
+  ],
+  "shards": [
+    {
+      "index": 1,
+      "job": "resource_1",
+      "assigned_ids": [
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_entry_limit_is_not_truncation[at-limit]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_entry_limit_is_not_truncation[over-limit]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_revision_validation_precedes_count_and_count_precedes_entry_validation",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_aggregate_budget_counts_repeated_strings_per_entry[at-limit-ascii]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_aggregate_budget_counts_repeated_strings_per_entry[at-limit-utf8]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_aggregate_budget_counts_repeated_strings_per_entry[over-limit-ascii]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_inventory_aggregate_budget_counts_repeated_strings_per_entry[over-limit-utf8]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_all_entries_and_duplicates_are_checked_before_aggregate_rejection[invalid-over-budget]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_all_entries_and_duplicates_are_checked_before_aggregate_rejection[duplicate-over-budget]"
+      ]
+    },
+    {
+      "index": 2,
+      "job": "resource_2",
+      "assigned_ids": [
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_all_entries_and_duplicates_are_checked_before_aggregate_rejection[invalid-over-duplicate]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_maximum_parser_rows_are_preserved_and_share_one_candidate_projection",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_many_distinct_path_groups_keep_exact_counts_and_bounded_candidates",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_all_inventory_entries_can_be_distinct_candidates_without_false_uniqueness",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_invalid_parser_row_dimensions_reject_without_partial_results[empty]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_invalid_parser_row_dimensions_reject_without_partial_results[over-limit]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_header_width_boundary[at-limit]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_header_width_boundary[over-limit]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_total_cells_includes_header[at-limit]"
+      ]
+    },
+    {
+      "index": 3,
+      "job": "resource_3",
+      "assigned_ids": [
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_total_cells_includes_header[over-limit]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[at-limit-ascii-header]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[at-limit-ascii-cell]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[at-limit-utf8-header]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[at-limit-utf8-cell]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[over-limit-ascii-header]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[over-limit-ascii-cell]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[over-limit-utf8-header]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_cell_and_header_byte_bounds[over-limit-utf8-cell]"
+      ]
+    },
+    {
+      "index": 4,
+      "job": "resource_4",
+      "assigned_ids": [
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_record_budget_includes_tab_separators[at-limit-header]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_record_budget_includes_tab_separators[at-limit-row]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_record_budget_includes_tab_separators[over-limit-header]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_record_budget_includes_tab_separators[over-limit-row]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_parser_zero_byte_data_record_is_invalid_even_with_consistent_empty_path",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_reconstructed_parser_64_mib_lower_bound[at-limit]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_reconstructed_parser_64_mib_lower_bound[over-limit]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_exact_diagnostic_prefix_and_truncation_accounting[at-cap]",
+        "tests/py/test_foobar_snapshot_preview_resources.py::test_exact_diagnostic_prefix_and_truncation_accounting[over-cap]"
+      ]
+    }
+  ],
+  "reuse": {
+    "path": "scripts/ci/new_feature_evidence.py",
+    "sha256": "8f45a3c1c3ada77a817928463527fb4add58f57f70a2d3f24cc9187cf5fb3673",
+    "callables": [
+      "run_owned",
+      "process_success",
+      "node_list",
+      "timestamp",
+      "owned_file"
+    ]
+  },
+  "limits": {
+    "collection_seconds": 300,
+    "core_seconds": 600,
+    "resource_seconds": 300,
+    "helper_collection_seconds": 60,
+    "helper_runtime_seconds": 180,
+    "term_seconds": 30,
+    "kill_reap_seconds": 30,
+    "git_seconds": 10,
+    "artifact_bytes": 268435456,
+    "artifact_files": 4096,
+    "file_bytes": 33554432,
+    "aggregate_bytes": 2147483648,
+    "aggregate_files": 32768
+  },
+  "job_minutes": {
+    "admission": 2,
+    "helper": 40,
+    "core": 45,
+    "resource_1": 90,
+    "resource_2": 90,
+    "resource_3": 90,
+    "resource_4": 90,
+    "reconcile": 15
+  },
+  "overhead_seconds": {
+    "checkout": 120,
+    "setup_python": 300,
+    "install": 300,
+    "download": 120,
+    "verify": 120,
+    "finalize": 120,
+    "upload": 180
+  }
+}

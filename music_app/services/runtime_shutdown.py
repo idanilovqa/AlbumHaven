@@ -13,6 +13,11 @@ _RUNTIME_SHUTDOWN_LOCK = Lock()
 _RUNTIME_SHUTDOWN_REQUESTED = False
 
 
+def runtime_shutdown_requested() -> bool:
+    with _RUNTIME_SHUTDOWN_LOCK:
+        return _RUNTIME_SHUTDOWN_REQUESTED
+
+
 class DaemonThreadPoolExecutor(ThreadPoolExecutor):
     """ThreadPoolExecutor variant whose worker threads do not block process exit."""
 

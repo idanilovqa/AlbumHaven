@@ -3,20 +3,40 @@ function getBackgroundAppearanceEditor() {
   return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
 }
 let pendingBackgroundAppearanceLeave = null;
-function confirmBackgroundAppearanceLeave(onDiscard = null) {
+function confirmBackgroundAppearanceLeave(onDiscard = null, leaveContext = null) {
   const editor = getBackgroundAppearanceEditor();
-  if (!editor || editor.allowLeave(() => false) !== false) return true;
-  if (!pendingBackgroundAppearanceLeave && typeof showAppConfirmDialog === 'function') {
-    pendingBackgroundAppearanceLeave = showAppConfirmDialog({
-      title: 'Discard appearance changes?',
-      message: 'Your unsaved Appearance changes will be lost.',
-      cancelLabel: 'Keep editing',
-      acceptLabel: 'Discard changes',
-      danger: true,
-    }).then(accepted => {
-      if (accepted && editor.allowLeave(() => true) !== false) onDiscard?.();
-    }).finally(() => { pendingBackgroundAppearanceLeave = null; });
+  if (!leaveContext) {
+    if (!editor || editor.allowLeave(() => false) !== false) return true;
+    if (!pendingBackgroundAppearanceLeave && typeof showAppConfirmDialog === 'function') {
+      const pending = showAppConfirmDialog({title:'Discard appearance changes?',message:'Your unsaved Appearance changes will be lost.',cancelLabel:'Keep editing',acceptLabel:'Discard changes',danger:true})
+        .then(accepted => {if(accepted && editor.allowLeave(() => true) !== false)onDiscard?.();})
+        .finally(()=>{if(pendingBackgroundAppearanceLeave===pending)pendingBackgroundAppearanceLeave=null;});
+      pendingBackgroundAppearanceLeave=pending;
+    }
+    return false;
   }
+  let done=false;
+  const current=()=>leaveContext.isCurrent()&&editor===getBackgroundAppearanceEditor();
+  const outcome=(status,reason)=>{if(done)return;done=true;leaveContext.onOutcome?.({status,reason});};
+  if(!current()){outcome('superseded','appearance-owner');return false;}
+  if(pendingBackgroundAppearanceLeave){outcome('cancelled','busy');return false;}
+  try {if(!editor||editor.allowLeave(()=>false)!==false)return true;}
+  catch(_error){outcome('failed','appearance-error');return false;}
+  if(typeof showAppConfirmDialog!=='function'){outcome('failed','appearance-unavailable');return false;}
+  const departure={};pendingBackgroundAppearanceLeave=departure;
+  Promise.resolve().then(()=>{
+    if(!current())throw {stale:true};
+    return showAppConfirmDialog({title:'Discard appearance changes?',message:'Your unsaved Appearance changes will be lost.',cancelLabel:'Keep editing',acceptLabel:'Discard changes',danger:true});
+  }).then(accepted=>{
+    if(pendingBackgroundAppearanceLeave!==departure||!current()){outcome('superseded','appearance-owner');return;}
+    pendingBackgroundAppearanceLeave=null;
+    if(accepted!==true){outcome('cancelled','blocked');return;}
+    if(!current()){outcome('superseded','stale-intent');return;}
+    if(editor.allowLeave(()=>true)===false){outcome('cancelled','blocked');return;}
+    if(!current()){outcome('superseded','stale-intent');return;}
+    onDiscard?.();done=true;
+  }).catch(()=>outcome(current()?'failed':'superseded','appearance-error'))
+    .finally(()=>{if(pendingBackgroundAppearanceLeave===departure)pendingBackgroundAppearanceLeave=null;});
   return false;
 }
 function unmountAppearanceEditors() {

@@ -132,15 +132,30 @@ document.addEventListener('change', (event) => {
 });
 
 const searchInput = document.getElementById('search-input');
-searchInput?.addEventListener('search', syncSearchClear);
+searchInput?.addEventListener('search', () => {
+  if (typeof invalidateAdvancedSearchIntent === 'function') invalidateAdvancedSearchIntent('native-clear');
+  syncSearchClear();
+});
 searchInput?.addEventListener('blur', handleGalleryBootstrapSearchBlur);
 searchInput?.addEventListener('focus', handleGalleryBootstrapSearchFocus);
 searchInput?.addEventListener('keydown', handleGalleryBootstrapSearchKeyDown);
+searchInput?.addEventListener('compositionstart', handleSearchCompositionStart);
+searchInput?.addEventListener('compositionend', handleSearchCompositionEnd);
+searchInput?.addEventListener('select', handleSearchShorthandCaret);
+searchInput?.addEventListener('keyup', event => {
+  if (['ArrowLeft', 'ArrowRight'].includes(event.key) && !event.isComposing
+      || ['Home', 'End'].includes(event.key) && !event.isComposing && state.ui?.recentSearchActiveIndex < 0) handleSearchShorthandCaret();
+});
 searchInput?.addEventListener('input', () => {
   handleGalleryBootstrapSearchInput(searchInput.value || '');
 });
 
-window.addEventListener('popstate', () => {
+window.addEventListener('popstate', event => {
+  const pendingReturn = typeof advancedFormReturnReceipt !== 'undefined' ? advancedFormReturnReceipt : null;
+  const receipt = typeof classifyAdvancedFormReturn === 'function' ? classifyAdvancedFormReturn(event) : null;
+  if (receipt && typeof handleMobilePagePopState === 'function' && handleMobilePagePopState(null, receipt)) return;
+  if (typeof invalidateAdvancedSearchIntent === 'function') invalidateAdvancedSearchIntent('history');
+  if (typeof cancelAdvancedFormReturn === 'function') cancelAdvancedFormReturn(pendingReturn);
   if (typeof handleImageLightboxPopState === 'function' && handleImageLightboxPopState()) return;
   if (typeof handleMobilePagePopState === 'function' && handleMobilePagePopState()) return;
   handleGalleryBootstrapPopState();

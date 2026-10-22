@@ -20,6 +20,7 @@ from isolatedPostgres import (
     IsolatedDatabaseOwnershipLock,
     prepare_isolated_database,
     reset_application_tables,
+    restore_empty_capture_budget_after_reset,
     resolve_isolated_database_urls,
     seed_bootstrap_owner_and_library,
 )
@@ -506,6 +507,7 @@ def main() -> None:
 
         def reset_fixture() -> None:
             reset_application_tables(setup_database_url)
+            restore_empty_capture_budget_after_reset(setup_database_url)
             seed_bootstrap_owner_and_library(setup_database_url)
             _bootstrap_owner(runtime_database_url)
             persist_settings_playback_inventory(

@@ -85,8 +85,16 @@ from music_app.services.loops import (
     resolve_loop_media_path,
 )
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
-from music_app.services.track_preferences import save_track_preference
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.track_preferences import (
+    normalize_track_preference_patch, save_track_preference, track_preference_scope,
+)
+from music_app.services.track_preferences_postgres import (
+    PostgresTrackPreferencesStore, TrackPreferenceConflictError,
+    TrackPreferenceNotFoundError, TrackPreferenceScopeError,
+)
+from music_app.services.current_actor_asgi import current_actor_from_request
+from music_app.services.policy import ResourceScope
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
 
 router = APIRouter()
@@ -1001,35 +1009,13 @@ async def _reserved_playlist_response(request: Request, *, create_route: bool = 
     return _json_response(({"ok": False, "error": _PLAYLIST_MUTATION_ERROR}, 409))
 
 
-@router.post("/playlists")
-async def playlists_create_reserved(request: Request) -> JSONResponse:
-    return await _reserved_playlist_response(request, create_route=True)
-
-
 @router.post("/playlists/derived-popular-tracks")
 async def playlist_derived_create_reserved(request: Request) -> JSONResponse:
     return await _reserved_playlist_response(request)
 
 
-@router.patch("/playlists/{playlist_ref}")
-@router.delete("/playlists/{playlist_ref}")
-async def playlists_mutate_reserved(request: Request, playlist_ref: str) -> JSONResponse:
-    return await _reserved_playlist_response(request)
-
-
-@router.post("/playlists/{playlist_ref}/items")
-async def playlist_items_create_reserved(request: Request, playlist_ref: str) -> JSONResponse:
-    return await _reserved_playlist_response(request)
-
-
 @router.patch("/playlists/{playlist_ref}/items/{playlist_item_ref}")
-@router.delete("/playlists/{playlist_ref}/items/{playlist_item_ref}")
 async def playlist_items_mutate_reserved(request: Request, playlist_ref: str, playlist_item_ref: str) -> JSONResponse:
-    return await _reserved_playlist_response(request)
-
-
-@router.post("/playlists/{playlist_ref}/items/reorder")
-async def playlist_items_reorder_reserved(request: Request, playlist_ref: str) -> JSONResponse:
     return await _reserved_playlist_response(request)
 
 
@@ -1039,24 +1025,13 @@ async def playlist_cover_mutate_reserved(request: Request, playlist_ref: str) ->
     return await _reserved_playlist_response(request)
 
 
-@router.post("/playlists/{playlist_ref}/access-grants")
-async def playlist_access_grants_create_reserved(request: Request, playlist_ref: str) -> JSONResponse:
-    return await _reserved_playlist_response(request)
-
-
 @router.patch("/playlists/{playlist_ref}/access-grants/{grant_ref}")
-@router.delete("/playlists/{playlist_ref}/access-grants/{grant_ref}")
 async def playlist_access_grants_mutate_reserved(request: Request, playlist_ref: str, grant_ref: str) -> JSONResponse:
     return await _reserved_playlist_response(request)
 
 
 @router.post("/playlists/{playlist_ref}/regenerate-derived-items")
 async def playlist_derived_regenerate_reserved(request: Request, playlist_ref: str) -> JSONResponse:
-    return await _reserved_playlist_response(request)
-
-
-@router.post("/playlists/{playlist_ref}/default-sort")
-async def playlist_default_sort_reserved(request: Request, playlist_ref: str) -> JSONResponse:
     return await _reserved_playlist_response(request)
 
 
@@ -1083,12 +1058,28 @@ async def track_preferences_write(request: Request) -> JSONResponse:
         )
 
     try:
-        result = save_track_preference(
-            config,
-            track_ref,
-            track_preference_payload,
+        account_id, library_id = track_preference_scope(await current_actor_from_request(request))
+        patch = normalize_track_preference_patch(track_preference_payload)
+        selected = await run_in_threadpool(
+            PostgresTrackPreferencesStore(config).resolve_track,
+            track_ref, account_id=account_id, library_id=library_id,
+        )
+        await require_action(
+            "library.track_preferences.manage", library_id=library_id,
+            resource=ResourceScope("track", str(selected["track_id"])),
+        )(request)
+        result = await run_in_threadpool(
+            save_track_preference, config, track_ref, patch,
+            account_id=account_id, library_id=library_id,
+            expected_track_id=selected["track_id"],
             client_surface_class=_client_surface_class_from_asgi(request),
         )
+    except TrackPreferenceScopeError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 403))
+    except TrackPreferenceNotFoundError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 404))
+    except TrackPreferenceConflictError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 409))
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
 

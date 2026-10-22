@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import math
 from threading import Event, Thread
 from time import perf_counter
 from typing import Any
@@ -250,18 +251,13 @@ def ensure_relation_projection_ready(
     scan_cache = _relation_projection_scan_cache_from_row(snapshot_row)
     reason = relation_projection_readiness_stale_reason(scan_cache)
     if not reason:
-        metadata = dict(scan_cache.get(RELATION_PROJECTION_METADATA_KEY) or {})
-        return _projection_result(
-            scan_cache.get("relation_views"),
-            metadata,
-            startup_rebuilt=False,
-            reason="healthy",
-            duration_ms=(perf_counter() - started_at) * 1000,
-        )
+        return _repair_healthy_alias_endpoints(config, database_url, connector,
+            cancel_requested=cancel_requested, started_at=started_at)
 
     if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
         raise RuntimeError("Shared browsing cannot rebuild a stale relation projection: " + reason)
 
+    healthy_after_lock = False
     try:
         for attempt in range(_PROJECTION_READY_MAX_ATTEMPTS):
             _raise_if_projection_cancelled(cancel_requested)
@@ -344,13 +340,8 @@ def ensure_relation_projection_ready(
                             locked_scan_cache
                         )
                         if not locked_reason:
-                            return _projection_result(
-                                locked_scan_cache.get("relation_views"),
-                                locked_metadata,
-                                startup_rebuilt=False,
-                                reason="healthy",
-                                duration_ms=(perf_counter() - started_at) * 1000,
-                            )
+                            healthy_after_lock = True
+                            break
                         reason = locked_reason
                         scan_cache = locked_scan_cache
                         duration_ms = (perf_counter() - started_at) * 1000
@@ -424,6 +415,11 @@ def ensure_relation_projection_ready(
             )
         raise RuntimeError(f"Relation projection startup rebuild failed ({reason}): {exc}") from exc
 
+    if healthy_after_lock:
+        # Deliberately outside the legacy rebuild failure-status catch.
+        return _repair_healthy_alias_endpoints(config, database_url, connector,
+            cancel_requested=cancel_requested, started_at=started_at)
+
     if logger is not None:
         logger.info(
             "Relation projection startup readiness ready=true rebuilt=true "
@@ -460,6 +456,7 @@ def replace_artist_search_projection_in_transaction(
     metadata: Mapping[str, object],
     relations_last_built: float,
 ) -> int:
+    connection.execute(relation_projection_advisory_lock_sql())
     rows = _artist_search_projection_rows(relation_views)
     builder_version = str(metadata.get("builder_version") or "").strip()
     source_fingerprint = str(metadata.get("source_fingerprint") or "").strip()
@@ -482,6 +479,8 @@ def replace_artist_search_projection_in_transaction(
             "Artist-search projection replacement count did not match input "
             f"({replacement_count}/{len(rows)})."
         )
+    replace_relation_alias_endpoints_in_transaction(connection, relation_views,
+        metadata=metadata, relations_last_built=relations_last_built)
     return replacement_count
 
 
@@ -491,14 +490,16 @@ def _artist_search_projection_rows(
     identity_to_canonical: dict[str, str] = {}
     alias_to_canonical = relation_views.get("alias_to_canonical")
     if isinstance(alias_to_canonical, Mapping):
-        for alias, canonical in alias_to_canonical.items():
+        # JSONB object order differs from caller insertion order. Keep the
+        # legacy winner stable so reloading cannot manufacture stale readiness.
+        for alias, canonical in sorted(alias_to_canonical.items(), key=lambda item: str(item[0])):
             normalized_key = local_inventory_identity_key(alias)
             canonical_name = str(canonical or "").strip()
             if normalized_key and canonical_name:
                 identity_to_canonical.setdefault(normalized_key, canonical_name)
     canonical_to_aliases = relation_views.get("canonical_to_aliases")
     if isinstance(canonical_to_aliases, Mapping):
-        for canonical, aliases in canonical_to_aliases.items():
+        for canonical, aliases in sorted(canonical_to_aliases.items(), key=lambda item: str(item[0])):
             canonical_name = str(canonical or "").strip()
             if not canonical_name:
                 continue
@@ -935,3 +936,165 @@ def relation_projection_advisory_lock_sql() -> str:
           hashtextextended('album-haven:local-relation-projection', 0)
         );
     """
+
+
+RELATION_ALIAS_ENDPOINT_VERSION = 'relation-alias-endpoints-v1'
+_ENDPOINT_MAX_RECORDS = 100000
+_ENDPOINT_MAX_BYTES = 64 * 1024 * 1024
+
+
+class AliasEndpointPublicationError(RuntimeError):
+    """Sanitized unexpected endpoint failure; never a successful unavailable result."""
+
+
+class _EndpointUnsupported(ValueError):
+    pass
+
+
+def _endpoint_text(value):
+    if (not isinstance(value, str) or not value.strip() or '\0' in value
+            or any('\ud800' <= character <= '\udfff' for character in value)):
+        raise _EndpointUnsupported('unsupported_shape')
+    key = local_inventory_identity_key(value)
+    if not key:
+        raise _EndpointUnsupported('unsupported_shape')
+    if len(value.encode('utf-8')) > 4096 or len(key.encode('utf-8')) > 1024:
+        raise _EndpointUnsupported('budget_exceeded')
+    return key
+
+
+def _endpoint_payload(relation_views, metadata, relations_last_built, *, stored=False):
+    """Pure bounded derivation; expected unsupported data invalidates endpoints only."""
+    from uuid import uuid4
+    payload = dict(publication_id=str(uuid4()), endpoint_builder_version=RELATION_ALIAS_ENDPOINT_VERSION,
+        status='unavailable', reason_code='unsupported_shape', source_snapshot=None,
+        relation_metadata=None, relations_last_built=None, manifest=[], edge_count=0)
+    try:
+        if not isinstance(metadata, Mapping):
+            raise _EndpointUnsupported('unsupported_shape')
+        fingerprint = metadata.get('source_fingerprint')
+        if (metadata.get('status') != 'ready'
+                or metadata.get('builder_version') != RELATION_PROJECTION_BUILDER_VERSION
+                or not isinstance(fingerprint, str) or len(fingerprint) != 64
+                or any(char not in '0123456789abcdef' for char in fingerprint)
+                or metadata.get('built_from_fingerprint') != fingerprint
+                or type(relations_last_built) not in (int, float)
+                or not math.isfinite(relations_last_built)):
+            raise _EndpointUnsupported('unsupported_shape')
+        if not isinstance(relation_views, Mapping):
+            raise _EndpointUnsupported('unsupported_shape')
+        alias_map = relation_views.get('alias_to_canonical')
+        groups = relation_views.get('canonical_to_aliases')
+        if not isinstance(alias_map, Mapping) or not isinstance(groups, Mapping):
+            raise _EndpointUnsupported('unsupported_shape')
+        if len(alias_map) + len(groups) > _ENDPOINT_MAX_RECORDS:
+            raise _EndpointUnsupported('budget_exceeded')
+        for alias, canonical in alias_map.items():
+            _endpoint_text(alias); _endpoint_text(canonical)
+        for canonical, members in groups.items():
+            _endpoint_text(canonical)
+            if not isinstance(members, (list,) if stored else (list, tuple, set)):
+                raise _EndpointUnsupported('unsupported_shape')
+            if len(members) > _ENDPOINT_MAX_RECORDS:
+                raise _EndpointUnsupported('budget_exceeded')
+            for member in members:
+                _endpoint_text(member)
+        if stored:
+            source = {'alias_to_canonical': dict(alias_map),
+                      'canonical_to_aliases': {key: list(value) for key, value in groups.items()}}
+        else:
+            serialized = serialize_relation_views(dict(alias_to_canonical=dict(alias_map),
+                                                       canonical_to_aliases=dict(groups)))
+            source = {key: serialized[key] for key in ('alias_to_canonical', 'canonical_to_aliases')}
+        if len(json.dumps(source, ensure_ascii=False, allow_nan=False).encode('utf-8')) > _ENDPOINT_MAX_BYTES:
+            raise _EndpointUnsupported('budget_exceeded')
+        records = set()
+        membership = {}
+        def add(origin, alias, canonical):
+            alias_key, canonical_key = _endpoint_text(alias), _endpoint_text(canonical)
+            for key in (alias_key, canonical_key):
+                if key in membership and membership[key] != canonical_key:
+                    raise _EndpointUnsupported('unsupported_membership')
+                membership[key] = canonical_key
+            records.add((origin, alias, canonical, alias_key, canonical_key))
+            if len(records) > _ENDPOINT_MAX_RECORDS:
+                raise _EndpointUnsupported('budget_exceeded')
+        for alias, canonical in source['alias_to_canonical'].items():
+            add('alias_to_canonical', alias, canonical)
+        for canonical, aliases in source['canonical_to_aliases'].items():
+            add('canonical_group', canonical, canonical)
+            for alias in aliases:
+                add('canonical_to_aliases', alias, canonical)
+        manifest = [dict(edge_id=index, origin=row[0], raw_alias=row[1], raw_canonical=row[2],
+                         alias_key=row[3], canonical_key=row[4]) for index, row in enumerate(sorted(records))]
+        if len(json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode('utf-8')) > _ENDPOINT_MAX_BYTES:
+            raise _EndpointUnsupported('budget_exceeded')
+        payload.update(status='ready', reason_code=None, source_snapshot=source,
+            relation_metadata=dict(metadata), relations_last_built=relations_last_built,
+            manifest=manifest, edge_count=len(manifest))
+    except _EndpointUnsupported as exc:
+        payload['reason_code'] = str(exc)
+    return payload
+
+
+def _endpoint_execute(connection, sql, parameters=None):
+    """Do not let endpoint row values escape through existing upstream error logs."""
+    try:
+        return connection.execute(sql, parameters) if parameters is not None else connection.execute(sql)
+    except InterruptedError:
+        raise
+    except Exception as exc:
+        if getattr(exc, 'sqlstate', None) == '57014':
+            raise InterruptedError('Alias endpoint operation cancelled.') from None
+        raise AliasEndpointPublicationError('Alias endpoint database operation failed.') from None
+
+
+def replace_relation_alias_endpoints_in_transaction(connection, relation_views, *, metadata,
+                                                     relations_last_built, stored=False):
+    payload = _endpoint_payload(relation_views, metadata, relations_last_built, stored=stored)
+    result = _first_row(_endpoint_execute(connection,
+        'select library.replace_relation_alias_endpoints(%(payload)s::jsonb) as status',
+        {'payload': _jsonb(payload)}))
+    status = _row_mapping(result).get('status')
+    if status not in ('ready', 'unavailable'):
+        raise AliasEndpointPublicationError('Alias endpoint publication returned invalid status.')
+    return status
+
+
+def _repair_healthy_alias_endpoints(config, database_url, connector, *, cancel_requested, started_at):
+    """Only normal readiness invokes this; no Search path and no legacy rebuild."""
+    with connector(database_url) as connection:
+        with _cancel_active_connection_on_request(connection, cancel_requested):
+            writable = config.get('SHARED_LIBRARY_BROWSE_ONLY') is not True
+            if writable:
+                writable = _row_mapping(_first_row(_endpoint_execute(connection, '''
+                    select has_function_privilege(current_user,
+                        'library.replace_relation_alias_endpoints(jsonb)', 'EXECUTE')
+                      and current_setting('transaction_read_only') = 'off' as writable
+                '''))).get('writable') is True
+            if writable:
+                _endpoint_execute(connection, relation_projection_advisory_lock_sql())
+            targets = list(_endpoint_execute(connection, '''
+                select l.id from app.bootstrap_owners b join library.libraries l
+                  on l.owner_account_id=b.account_id and l.name='Local Library' and l.library_kind='local'
+                where b.owner_key='local-bootstrap-owner' order by l.id''' +
+                (' for update of l' if writable else '')).fetchall())
+            if len(targets) != 1:
+                raise AliasEndpointPublicationError('Alias endpoint target is unavailable.')
+            library_id = _row_mapping(targets[0])['id']
+            locked = _relation_projection_scan_cache_from_row(
+                _first_row(_endpoint_execute(connection, _load_relation_projection_sql())))
+            if relation_projection_readiness_stale_reason(locked):
+                raise AliasEndpointPublicationError('Legacy readiness changed before endpoint repair.')
+            if writable:
+                ready = _row_mapping(_first_row(_endpoint_execute(connection,
+                    'select library.relation_alias_endpoints_ready(%(library_id)s::bigint) as ready',
+                    {'library_id': library_id}))).get('ready') is True
+                if not ready:
+                    replace_relation_alias_endpoints_in_transaction(connection, locked['relation_views'],
+                        metadata=locked[RELATION_PROJECTION_METADATA_KEY],
+                        relations_last_built=locked['relations_last_built'], stored=True)
+                # Return only the snapshot revalidated under the publication and target locks.
+            _raise_if_projection_cancelled(cancel_requested)
+    return _projection_result(locked['relation_views'], locked[RELATION_PROJECTION_METADATA_KEY],
+        startup_rebuilt=False, reason='healthy', duration_ms=(perf_counter() - started_at) * 1000)

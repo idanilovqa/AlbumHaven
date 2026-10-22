@@ -52,6 +52,9 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
     folderAttributes['data-open-track-modal-folder'] = '1';
   }
   return [
+    ButtonComponent.renderActionButton({ariaLabel:'Create sample playlist', title:'Create sample playlist', disabled:missing || config.sampleDisabled !== false,
+      className:'album-details-header__action', iconClass:'album-details-header__action-icon',
+      attributes:{'data-create-sample-playlist':'1'}}),
     ButtonComponent.renderActionButton({
       ariaLabel: editLabel,
       title: editLabel,
@@ -77,8 +80,11 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   ].join('');
 }
 
-function buildLooseTracksHeaderActionsHtml() {
+function buildLooseTracksHeaderActionsHtml(config = {}) {
   return [
+    ButtonComponent.renderActionButton({ariaLabel:'Create sample playlist', title:'Create sample playlist', disabled:config.sampleDisabled !== false,
+      className:'album-details-header__action', iconClass:'album-details-header__action-icon',
+      attributes:{'data-create-non-album-sample-playlist':'1'}}),
     ButtonComponent.renderActionButton({
       ariaLabel: 'Edit tags',
       title: 'Edit tags',
@@ -133,9 +139,14 @@ function syncMobileAlbumComposition(album) {
   const cover = document.getElementById('track-modal-cover');
   const body = cover?.closest('.track-modal-body');
   if (!overlay || !cover || !body || !album) return;
-  const mobile = overlay.classList.contains('is-mobile-page') && usesMobilePageLayout();
+  const sheet = overlay.classList.contains('is-artist-discography-sheet');
+  const mobile = (overlay.classList.contains('is-mobile-page') || sheet) && usesMobilePageLayout();
   const layout = normalizeAlbumDetailsLayout(document.documentElement.getAttribute('data-album-details-layout'));
   const inline = mobile && layout !== 'classic_bar';
+  if (!sheet) {
+    overlay.querySelector('.track-modal-header')?.classList.remove('artist-sheet-inline-identity');
+    overlay.querySelector('.track-modal-dialog')?.setAttribute('aria-labelledby', 'track-modal-title');
+  }
   overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
   let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
@@ -193,7 +204,18 @@ function syncMobileAlbumComposition(album) {
   }
   if (mobile) {
     const descriptor = mobilePageState.pages.find(page => page.kind === 'album');
-    if (descriptor) Object.assign(descriptor, mobilePageDescriptor('album', album));
+    if (descriptor) {
+      const fresh = mobilePageDescriptor('album', album);
+      if (!fresh.presentation) {delete descriptor.presentation; delete descriptor.artistRef;}
+      Object.assign(descriptor, fresh);
+    }
     syncMobilePageShell();
+    // The sheet owns its own title and Close; the Artist bar never takes identity.
+    if (sheet) {
+      const header = overlay.querySelector('.track-modal-header');
+      if (header) header.classList.toggle('artist-sheet-inline-identity', inline);
+      const dialog = overlay.querySelector('[role="dialog"]');
+      dialog?.setAttribute('aria-labelledby', inline ? 'mobile-album-identity-title' : 'track-modal-title');
+    }
   }
 }

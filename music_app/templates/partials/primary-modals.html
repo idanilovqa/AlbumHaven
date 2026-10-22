@@ -73,7 +73,7 @@
       <div class="tag-editor-actions utility-modal-footer" id="tag-editor-footer">
         <div class="tag-editor-auto-number-controls" id="tag-editor-auto-number-controls" hidden>
           <label for="tag-editor-auto-number-start">Start at</label>
-          <input id="tag-editor-auto-number-start" type="number" min="1" step="1" inputmode="numeric">
+          <input id="tag-editor-auto-number-start" class="ui-numeric-input" type="number" min="1" step="1" inputmode="numeric">
           <button
             class="button tag-editor-auto-number"
             id="tag-editor-auto-number"
@@ -90,6 +90,8 @@
 
   <div class="track-modal" id="track-modal" hidden>
     <div class="track-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="track-modal-title">
+      <div class="album-sheet-handle" id="track-modal-sheet-handle" hidden aria-hidden="true"><span></span></div>
+      {% call action_button('Expand album sheet', class_name='album-sheet-toggle', id='track-modal-sheet-toggle', attributes={'hidden': 'hidden', 'aria-expanded': 'false', 'aria-controls': 'track-modal-list'}) %}<span aria-hidden="true">↕</span>{% endcall %}
       <div class="track-modal-header">
         <div class="track-modal-title-wrap">
           <h3 id="track-modal-title">Album</h3>

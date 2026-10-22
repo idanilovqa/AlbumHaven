@@ -72,3 +72,7 @@
     max-height: calc(100dvh - var(--player-height));
   }
 }
+
+/* The Artist album sheet deliberately covers the mounted player. */
+.track-modal.is-artist-discography-sheet { bottom: 0; }
+.track-modal.is-artist-discography-sheet .track-modal-dialog { max-height: none; }

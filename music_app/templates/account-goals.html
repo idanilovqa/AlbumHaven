@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Home — Album Haven</title>
+  <link rel="stylesheet" href="/static/css/runtime/base-layout.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/button-component.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/album-artbox-and-gallery-card.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/home-friends.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/home-profile.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/trigger-anchor.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/track-modal-and-lightbox.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/utilities.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/gallery-main.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/choice-component.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/scrollbar.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/account-home.css?v={{ runtime_asset_version }}">
+  {% include "partials/appearance-bootstrap.html" %}
+  <script src="/static/js/button-component.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/markup-format-helpers.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/alert-components.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/browser-scheduling-helpers.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/notification-ui-helpers.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/album-artbox.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/gallery-main-components.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/gallery-card-component.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/in-page-tabs.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/trigger-anchor.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/library-settings.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/browser-dialog-helpers.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/session-csrf-fetch.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/private-ui-transport.js?v={{ runtime_asset_version }}" defer></script>
+  <script type="module" src="/static/js/home-friends/account-entry.mjs?v={{ runtime_asset_version }}"></script>
+</head>
+<body>
+  <nav aria-label="Account navigation"><a href="/account">My account</a></nav>
+  <main id="account-home" data-account-goals-context="{{ account_goals_context }}" data-account-name="{{ account_name }}" aria-label="Home">
+    <p role="status">Loading Home…</p>
+  </main>
+  <noscript>JavaScript is required to use Goals.</noscript>
+  <form method="post" action="/logout">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="button ui-button ui-button--secondary ui-button--medium" type="submit">Sign Out</button>
+  </form>
+  <div class="toast-layer" id="toast-layer"></div>
+  {% include "partials/app-form-modal.html" %}
+</body>
+</html>

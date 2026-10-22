@@ -143,6 +143,128 @@ def load_selected_artist_family_projection(
     }
 
 
+class ArtistFamilyIdentityUnavailable(RuntimeError):
+    """Current relationship identity cannot be evaluated reliably."""
+
+
+def load_artist_family_identity_scope(
+    connection: Any,
+    *,
+    library_id: int,
+    root_artist_id: int,
+    scope_mode: str,
+    is_artist_readable: Callable[[int], bool],
+) -> tuple[tuple[int, str], ...] | None:
+    """Resolve a live root/family on the caller's admitted library transaction.
+
+    The caller owns session, current-library and Browse admission and holds the
+    library lock through evaluation. The callback must return True for every
+    admitted artist. None means the exact root was deleted; authority denial,
+    stale projection and database failure are not empty-family successes.
+
+    This read does not lock inventory or cache membership. Call it again after
+    relevant inventory/parent waits and compare the full identity/basis vector
+    before committing a generated result. It never substitutes a same-name ID.
+    """
+    from music_app.services.library_browse_postgres import (
+        _canonical_artist_name, _expanded_primary_artist_names,
+        load_current_library_relation_alias_maps,
+    )
+    from music_app.services.selected_artist_membership import selected_artist_family_artists
+
+    if (getattr(connection, "autocommit", True) is not False
+            or any(type(value) is not int or not 0 < value < 2**63
+                   for value in (library_id, root_artist_id))
+            or scope_mode not in ("artist", "family") or not callable(is_artist_readable)):
+        raise ValueError("Expected a transaction and exact current-library artist identity")
+    if is_artist_readable(root_artist_id) is not True:
+        raise PermissionError("Artist Browse authority is unavailable")
+    root = connection.execute("""select id, name, artist_key from library.local_artists
+        where library_id=%s and id=%s""", (library_id, root_artist_id)).fetchone()
+    if root is None:
+        return None
+    root = _row_mapping(root)
+    alias_state = load_current_library_relation_alias_maps(connection, library_id)
+    if alias_state.get("projection_stale_reason"):
+        raise ArtistFamilyIdentityUnavailable("Current artist relationship projection is unavailable")
+    aliases = alias_state["alias_to_canonical"]
+    canonical_aliases = alias_state["canonical_to_aliases"]
+    # Reject conflicting normalized alias identities instead of taking the
+    # first spelling from a projection. Only names used by this scope matter.
+    canonical_keys: dict[str, set[str]] = {}
+    for alias, canonical in aliases.items():
+        if not isinstance(canonical, str) or not canonical.strip():
+            raise ArtistFamilyIdentityUnavailable("Invalid artist alias projection")
+        canonical_keys.setdefault(_artist_key(alias), set()).add(_artist_key(canonical))
+
+    def primary_names(name: str) -> list[str]:
+        if len(canonical_keys.get(_artist_key(name), ())) > 1:
+            raise ArtistFamilyIdentityUnavailable("Ambiguous artist alias projection")
+        canonical = _canonical_artist_name(name, aliases)
+        values = canonical_aliases.get(canonical, [])
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise ArtistFamilyIdentityUnavailable("Invalid artist alias projection")
+        if collaboration_alias_of(name, canonical):
+            return [name]
+        expanded = _expanded_primary_artist_names(name, aliases, canonical_aliases)
+        canonical_key = _artist_key(canonical)
+        for value in expanded:
+            owners = canonical_keys.get(_artist_key(value), set())
+            if len(owners) > 1:
+                raise ArtistFamilyIdentityUnavailable("Ambiguous artist alias projection")
+            if owners and canonical_key not in owners:
+                raise ArtistFamilyIdentityUnavailable("Conflicting artist alias projection")
+        return expanded
+
+    root_name = root["name"]
+    primary_keys = {_artist_key(name) for name in [root_name, *primary_names(root_name)]}
+    primary_keys.add(root["artist_key"])
+    primary_rows = connection.execute("""select id from library.local_artists
+        where library_id=%s and artist_key=any(%s::text[]) order by id""",
+        (library_id, sorted(primary_keys))).fetchall()
+    primary = {row["id"] for row in primary_rows if is_artist_readable(row["id"]) is True}
+    if root_artist_id not in primary:
+        # Distinguish a root disappearing between reads from a denied root.
+        if is_artist_readable(root_artist_id) is not True:
+            raise PermissionError("Artist Browse authority is unavailable")
+        present = connection.execute("""select id from library.local_artists
+            where library_id=%s and id=%s""", (library_id, root_artist_id)).fetchone()
+        if present is None:
+            return None
+        raise ArtistFamilyIdentityUnavailable("Artist identity changed during evaluation")
+    memberships = {identity: "primary_credit" for identity in primary}
+    if scope_mode == "artist":
+        return tuple(sorted(memberships.items()))
+
+    related_rows = connection.execute("""select distinct related.id, related.name, related.artist_key
+        from library.local_artist_family_links as link
+        join library.local_artists as related
+          on related.id=link.related_artist_id and related.library_id=link.library_id
+        where link.library_id=%s and link.artist_id=any(%s::bigint[])
+        order by related.id""", (library_id, sorted(primary))).fetchall()
+    related_rows = [row for row in related_rows if is_artist_readable(row["id"]) is True]
+    related_names = [row["name"] for row in related_rows]
+    root_canonical = _canonical_artist_name(root_name, aliases)
+    root_is_collaboration = collaboration_alias_of(root_name, root_canonical)
+    family_names = selected_artist_family_artists(
+        root_name if root_is_collaboration else root_canonical,
+        related_names, canonical_aliases,
+        {**aliases, root_name: root_name} if root_is_collaboration else aliases,
+    )
+    family_keys = {_artist_key(value) for name in family_names for value in primary_names(name)}
+    family_name_keys = {_artist_key(name) for name in family_names}
+    family_keys.update(row["artist_key"] for row in related_rows
+                       if _artist_key(row["name"]) in family_name_keys)
+    if family_keys:
+        family_rows = connection.execute("""select id from library.local_artists
+            where library_id=%s and artist_key=any(%s::text[]) order by id""",
+            (library_id, sorted(family_keys))).fetchall()
+        for row in family_rows:
+            if is_artist_readable(row["id"]) is True:
+                memberships.setdefault(row["id"], "family_credit")
+    return tuple(sorted(memberships.items()))
+
+
 def replace_artist_family_projection_in_transaction(
     connection: Any,
     relation_views: Mapping[str, object],

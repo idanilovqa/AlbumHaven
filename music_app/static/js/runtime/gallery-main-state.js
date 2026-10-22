@@ -201,7 +201,7 @@ function resolveGalleryBarContext(config = {}) {
   const threshold = Number(config.scrollTop || 0);
   const current = (config.groups || []).filter((group) => Number(group.labelBottom ?? group.top ?? 0) <= threshold).at(-1);
   return current
-    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
+    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount, sourceSection: current }
     : summaryContext;
 }
 

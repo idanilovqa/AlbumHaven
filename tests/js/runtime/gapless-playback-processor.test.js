@@ -1458,3 +1458,235 @@ test('processor partial underrun credits preceding frames before ending the meas
   assert.equal(receiver.session.measurement.longest,2+32/48000);
   assert.equal(receiver.session.measurement.contiguous,0);
 });
+
+
+// App-reported position capture: separate from legacy rendered/consumed fields.
+function enablePositionCapture(fixture) {
+  Object.assign(fixture.context, { ArrayBuffer, Float64Array, currentFrame: fixture.renderedFrames });
+  fixture.send({ type: 'capture-enable', ownerSerial: 1, generation: fixture.generation,
+    sourceRate: 48000, outputRate: 48000,
+    buffers: Array.from({ length: 4 }, () => new ArrayBuffer(16384)) });
+}
+function bindPositionCapture(fixture, streamId, sourceBase48 = 0, slot = 1, bindingSerial = slot) {
+  fixture.send({ type: 'capture-bind', ownerSerial: 1, generation: fixture.generation,
+    slot, bindingSerial, streamId, sourceBase48 });
+}
+function renderCapturedQuantum(fixture) {
+  fixture.context.currentFrame = fixture.renderedFrames;
+  return renderQuantum(fixture);
+}
+function positionPackets(fixture) {
+  return fixture.events('capture-packet').map(event => new Float64Array(event.buffer));
+}
+function positionRuns(fixture) {
+  return positionPackets(fixture).flatMap(data => Array.from({ length: data[4] }, (_, index) =>
+    Array.from(data.slice(256 + index * 7, 263 + index * 7))));
+}
+function flushPositionCapture(fixture) {
+  fixture.send({ type: 'pause', generation: fixture.generation });
+}
+
+test('capture preserves nonzero absolute source base and counts only successfully copied output', () => {
+  const fixture = createProcessor();
+  enablePositionCapture(fixture);
+  bindPositionCapture(fixture, 41, 480000);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [0, 1, 2, 3] });
+  play(fixture);
+  const output = renderCapturedQuantum(fixture);
+  flushPositionCapture(fixture);
+  const runs = positionRuns(fixture);
+  assert.deepEqual(output.left.slice(0, 4), [0, 1, 2, 3]);
+  assert.equal(runs.reduce((sum, run) => sum + run[3], 0), 4);
+  assert.equal(runs[0][2], 480000);
+  assert.equal(runs[0][4], 0);
+  assert.equal(runs[0][5], 0);
+  assert.equal(fixture.processor.renderedFrames, 128);
+});
+
+test('capture follows actual prepared seek swap instead of requested seek time', () => {
+  const fixture = createProcessor();
+  enablePositionCapture(fixture);
+  bindPositionCapture(fixture, 41, 1000);
+  bindPositionCapture(fixture, 42, 96000, 2);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(256).fill(1) });
+  fixture.send({ type: 'reserve-seek', generation: 7, streamId: 42, timelineStartFrame: 96000 });
+  play(fixture);
+  renderCapturedQuantum(fixture);
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: Array(128).fill(2) });
+  fixture.send({ type: 'prepare-seek', generation: 7, streamId: 42, timelineStartFrame: 96000 });
+  const output = renderCapturedQuantum(fixture);
+  flushPositionCapture(fixture);
+  assert.ok(output.left.every(sample => sample === 2));
+  const runs = positionRuns(fixture);
+  assert.deepEqual(runs.map(run => [run[0], run[2], run[3], run[4], run[5]]),
+    [[1, 1000, 128, 0, 0], [2, 96000, 128, 128, 128]]);
+});
+
+test('capture keeps many short wraps in one quantum without spending a credit per wrap', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 16, continuityCapacityFrames: 16 });
+  enablePositionCapture(fixture);
+  bindPositionCapture(fixture, 41, 0);
+  bindPositionCapture(fixture, 42, 0, 2);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [1, 2, 3, 4] });
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: [5, 6, 7, 8] });
+  markEos(fixture, { streamId: 41, role: 'current', emittedFrames: 4 });
+  markEos(fixture, { streamId: 42, role: 'continuity', emittedFrames: 4 });
+  fixture.send({ type: 'set-loop', generation: 7, active: true, kind: 'short-loop',
+    startFrame: 0, endFrame: 4, retainedStreamId: 42 });
+  play(fixture);
+  const output = renderCapturedQuantum(fixture);
+  flushPositionCapture(fixture);
+  assert.deepEqual(output.left.slice(0, 12), [1, 2, 3, 4, 5, 6, 7, 8, 5, 6, 7, 8]);
+  const runs = positionRuns(fixture);
+  assert.equal(runs.length, 32);
+  assert.equal(runs.reduce((sum, run) => sum + run[3], 0), 128);
+  assert.ok(runs.slice(1).every(run => run[0] === 2 && run[2] === 0 && run[3] === 4));
+  assert.equal(positionPackets(fixture).length, 1);
+});
+
+test('capture mixed-track quantum assigns each copied frame to its immutable stream binding', () => {
+  const fixture = createProcessor();
+  enablePositionCapture(fixture);
+  bindPositionCapture(fixture, 41, 500);
+  bindPositionCapture(fixture, 42, 900, 2);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [1, 2] });
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: [3, 4] });
+  markEos(fixture, { streamId: 41, role: 'current', emittedFrames: 2 });
+  markEos(fixture, { streamId: 42, role: 'continuity', emittedFrames: 2 });
+  play(fixture); renderCapturedQuantum(fixture); flushPositionCapture(fixture);
+  assert.deepEqual(positionRuns(fixture).map(run => [run[0], run[2], run[3], run[5]]),
+    [[1, 500, 2, 0], [2, 900, 2, 2]]);
+});
+
+test('four stalled capture buffers preserve mixed-epoch loss without allocating replacements', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 1024 });
+  enablePositionCapture(fixture); bindPositionCapture(fixture, 41);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(1024).fill(1) });
+  for (let index = 0; index < 6; index++) {
+    play(fixture); renderCapturedQuantum(fixture); flushPositionCapture(fixture);
+  }
+  assert.equal(positionPackets(fixture).length, 4);
+  assert.equal(fixture.processor.positionCapture.outstanding, 4);
+  assert.equal(fixture.processor.positionCapture.credits.length, 0);
+  const first = positionPackets(fixture)[0], id = first[12];
+  first.fill(0);
+  fixture.send({ type: 'capture-credit', ownerSerial: 1, bufferId: id, buffer: first.buffer });
+  const loss = positionPackets(fixture).at(-1);
+  assert.equal(loss[8], 1);
+  assert.equal(loss[33], 0, 'loss spanning pause/play epochs is explicitly unanchored');
+  assert.equal(loss[36], 256);
+  assert.equal(loss[34], 512);
+  assert.equal(loss[35], 768);
+  assert.equal(fixture.processor.positionCapture.outstanding, 4);
+});
+
+test('unbind waits for retained-loop emissions and acknowledges only through a credited packet', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 16, continuityCapacityFrames: 16 });
+  enablePositionCapture(fixture); bindPositionCapture(fixture, 41); bindPositionCapture(fixture, 42, 0, 2);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [1, 2, 3, 4] });
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: [5, 6, 7, 8] });
+  fixture.send({ type: 'set-loop', generation: 7, active: true, kind: 'short-loop',
+    startFrame: 0, endFrame: 4, retainedStreamId: 42 });
+  fixture.send({ type: 'capture-unbind', ownerSerial: 1, generation: 7, bindingSerial: 2 });
+  assert.equal(positionPackets(fixture).length, 0);
+  fixture.send({ type: 'set-loop', generation: 7, active: false });
+  fixture.send({ type: 'capture-probe', ownerSerial: 1, generation: 7, probe_id: 1, epoch: 1 });
+  const packet = positionPackets(fixture)[0];
+  assert.equal(packet[9], 1);
+  assert.equal(packet[96], 2);
+  assert.equal(packet[97], packet[3]);
+});
+
+test('unsupported worklet rate disables only capture while PCM output remains unchanged', () => {
+  const fixture = createProcessor({ sampleRate: 44100 });
+  enablePositionCapture(fixture); bindPositionCapture(fixture, 41);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [1, 2, 3] });
+  play(fixture);
+  assert.deepEqual(renderCapturedQuantum(fixture).left.slice(0, 3), [1, 2, 3]);
+  flushPositionCapture(fixture);
+  assert.equal(positionPackets(fixture).length, 0);
+});
+
+test('retained fallback copy path uses loop absolute source instead of promoted ring cursor', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 16, continuityCapacityFrames: 16 });
+  enablePositionCapture(fixture); bindPositionCapture(fixture, 41, 0); bindPositionCapture(fixture, 42, 10, 2);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [1] });
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: [5, 6, 7, 8] });
+  markEos(fixture, { streamId: 41, role: 'current', emittedFrames: 1 });
+  markEos(fixture, { streamId: 42, role: 'continuity', emittedFrames: 4 });
+  fixture.send({ type: 'set-loop', generation: 7, active: true, kind: 'short-loop',
+    startFrame: 10, endFrame: 14, retainedStreamId: 42 });
+  play(fixture); renderCapturedQuantum(fixture); flushPositionCapture(fixture);
+  const runs = positionRuns(fixture);
+  assert.equal(runs.reduce((sum, run) => sum + run[3], 0), 128);
+  assert.deepEqual(runs.slice(0, 3).map(run => [run[0], run[2], run[3], run[5]]),
+    [[1, 0, 1, 0], [2, 10, 4, 1], [2, 10, 4, 5]]);
+});
+
+test('foreign or duplicate logical credit ID disables capture without a playback protocol rejection', () => {
+  const fixture = createProcessor(); enablePositionCapture(fixture);
+  fixture.send({ type: 'capture-credit', ownerSerial: 1, bufferId: 1, buffer: new ArrayBuffer(16384) });
+  assert.equal(fixture.processor.positionCapture.enabled, false);
+  assert.equal(fixture.events('protocol-reject').length, 0);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [3, 4] });
+  play(fixture); assert.deepEqual(renderCapturedQuantum(fixture).left.slice(0, 2), [3, 4]);
+});
+
+test('capture transfers and returns the same logical credit with real ArrayBuffer detachment', () => {
+  const fixture = createProcessor();
+  fixture.port.postMessage = (message, transfer = []) => {
+    fixture.port.events.push(structuredClone(message, { transfer }));
+  };
+  enablePositionCapture(fixture); bindPositionCapture(fixture, 41);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [1, 2] });
+  play(fixture); renderCapturedQuantum(fixture); flushPositionCapture(fixture);
+  const message = fixture.events('capture-packet')[0], data = new Float64Array(message.buffer), bufferId = data[12];
+  assert.equal(fixture.processor.positionCapture.outstanding, 1);
+  assert.equal(message.buffer.byteLength, 16384);
+  data.fill(0);
+  const returned = structuredClone({ type: 'capture-credit', ownerSerial: 1, bufferId, buffer: message.buffer }, { transfer: [message.buffer] });
+  assert.equal(message.buffer.byteLength, 0);
+  fixture.send(returned);
+  assert.equal(fixture.processor.positionCapture.outstanding, 0);
+  assert.equal(fixture.processor.positionCapture.credits.length, 4);
+});
+
+test('reused binding slot resets final ordinal before a zero-consumption cancellation', () => {
+  const fixture = createProcessor(); enablePositionCapture(fixture); bindPositionCapture(fixture, 41);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [1, 2] });
+  play(fixture); renderCapturedQuantum(fixture); flushPositionCapture(fixture);
+  fixture.send({ type: 'capture-unbind', ownerSerial: 1, generation: 7, bindingSerial: 1 });
+  const firstAck = positionPackets(fixture).find(packet => packet[9] && packet[96] === 1);
+  assert.equal(firstAck[98], 2);
+  bindPositionCapture(fixture, 42, 500, 1, 2);
+  fixture.send({ type: 'capture-unbind', ownerSerial: 1, generation: 7, bindingSerial: 2 });
+  const secondAck = positionPackets(fixture).find(packet => packet[9] && packet[96] === 2);
+  assert.equal(secondAck[98], 0, 'new binding has never copied a positive frame');
+  assert.equal(secondAck[8], 0, 'no summary counters leak from the retired binding');
+});
+
+test('fresh node admits retained engine owner before configure but rejects stale source bindings', () => {
+  const loaded = loadProcessorModule();
+  Object.assign(loaded.context, { ArrayBuffer, Float64Array, currentFrame: 0 });
+  const Processor = loaded.registrations.find(item => item.name === PROCESSOR_NAME).Processor;
+  const processor = new Processor();
+  const fixture = { ...loaded, processor, port: processor.port, generation: 7, renderedFrames: 0,
+    send(message) { processor.port.onmessage({ data: message }); },
+    events(type) { return processor.port.events.filter(event => event.type === type); } };
+  assert.equal(processor.generation, 0);
+  enablePositionCapture(fixture); // Recreated node, already-resolved preparation context, retained engine generation7.
+  assert.equal(processor.positionCapture.enabled, true);
+  assert.equal(processor.positionCapture.credits.length, 4);
+  fixture.send({ type: 'configure', generation: 7, sampleRate: 48000,
+    currentCapacityFrames: 512, continuityCapacityFrames: 512, startupBufferFrames: 1 });
+  fixture.send({ type: 'capture-bind', ownerSerial: 1, generation: 6,
+    slot: 1, bindingSerial: 1, streamId: 41, sourceBase48: 999 });
+  assert.equal(processor.positionCapture.slots[0].serial, 0);
+  bindPositionCapture(fixture, 41, 123);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: [1, 2] });
+  play(fixture); renderCapturedQuantum(fixture); flushPositionCapture(fixture);
+  assert.deepEqual(positionRuns(fixture).map(run => [run[2], run[3]]), [[123, 2]]);
+  fixture.send({ type: 'capture-enable', ownerSerial: 2, generation: 7,
+    sourceRate: 48000, outputRate: 48000, buffers: Array.from({ length: 4 }, () => new ArrayBuffer(16384)) });
+  assert.equal(processor.positionCapture.owner, 1, 'one-time admission never replaces the original port owner');
+});

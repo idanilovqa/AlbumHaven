@@ -605,32 +605,21 @@ function findAlbumByTrackPaths(albums, trackPaths) {
 
 function findVisibleAlbumByTrackPaths(trackPaths) {
   if (!trackPaths?.size) return null;
-  const matches = flattenVisibleAlbums()
-    .filter((album) => albumsShareTrackPath(album, trackPaths));
-  const isValidDisplayRating = (value) => {
-    const rating = Number(value);
-    return Number.isInteger(rating) && rating >= 1 && rating <= 10;
-  };
-  const preferenceRatingMatch = matches.find((album) => (
-    isValidDisplayRating(album?.album_preference?.rating)
-  ));
-  const legacyRatingMatch = matches.find((album) => (
-    isValidDisplayRating(album?.album_rating)
-  ));
-  const preferenceDataMatch = matches.find((album) => {
-    const preference = album?.album_preference;
-    return Boolean(
-      preference
-      && typeof preference === 'object'
-      && !Array.isArray(preference)
-      && Object.values(preference).some((value) => value != null && value !== ''),
-    );
-  });
-  return preferenceRatingMatch
-    || legacyRatingMatch
-    || preferenceDataMatch
-    || matches[0]
-    || null;
+  const match = flattenVisibleAlbums().find(album => albumsShareTrackPath(album, trackPaths));
+  if (!match) return null;
+  // Track overlap is metadata lookup only, never actor/album-generation proof.
+  const metadata = {...match};
+  for (const key of ['album_preference', 'album_preference_overlay', 'album_rating', 'rating', 'favorite',
+    'is_favorite', 'favorite_override', 'favorite_source', 'taste_state', 'preference_revision',
+    'context_ref', 'can_edit', 'can_manage_album_preferences', 'to_listen', 'is_relisten', 'can_toggle_to_listen']) delete metadata[key];
+  if (metadata.allowed_actions) {
+    metadata.allowed_actions = {...metadata.allowed_actions};
+    delete metadata.allowed_actions.can_manage_album_preferences;
+  }
+  // Do not expose nested personal summaries through this fallback either.
+  delete metadata.gallery_list_block;
+  delete metadata.duplicate_sources;
+  return metadata;
 }
 
 function findVisibleAlbumByTrackPath(trackPath) {
@@ -2141,7 +2130,8 @@ async function watchSaveTask(taskId, context = {}) {
               );
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
                 window.history.replaceState(
-                  { ...window.history.state, ...state.view }, '', buildUrl(state.view),
+                  window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot({ ...window.history.state, ...state.view }),
+                  '', buildUrl(state.view),
                 );
               }
               if (viewRefreshed && finalizedAlbums.length) {

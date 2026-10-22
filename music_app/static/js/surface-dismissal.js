@@ -1,7 +1,7 @@
 /* A dismissal gesture never also activates the surface underneath it. */
 (function (scope) {
   'use strict';
-  function create(resolve) {
+  function create(resolve, onSuppress = () => {}) {
     let gesture = null;
     let suppressClick = false;
     let refocusPending = false;
@@ -10,7 +10,10 @@
       : active.surface.contains(target) || Boolean(active.anchor?.contains(target));
     const backdrop = (active, target) => Boolean(active.isBackdrop?.(target));
     const reset = () => { gesture = null; suppressClick = false; };
+    const arm = () => { suppressClick = true; onSuppress(); };
     return {
+      suppressNextClick: arm,
+      hasPendingClick: () => suppressClick,
       pointerdown(event) {
         if (event.isPrimary === false) return;
         reset();
@@ -29,7 +32,7 @@
         if (!gesture || gesture.id !== event.pointerId) return;
         if (!gesture.dismissOnly) return;
         consume(event);
-        suppressClick = true;
+        arm();
         const started = gesture;
         gesture = null;
         if (!started.refocusOnly
@@ -67,20 +70,56 @@
     };
   }
   function bind(window, resolve) {
-    const handlers = create(resolve);
-    const listeners = { ...handlers, blur(event) {
-      // Restoring the opener's focus emits a descendant blur during dismissal.
-      // Only loss of window focus may release the pending native-click guard.
+    let disposed = false;
+    let expiry = null;
+    let tail = false;
+    const clearTail = () => {
+      if (expiry !== null) window.clearTimeout(expiry);
+      expiry = null;
+      if (!tail) return;
+      tail = false;
+      window.removeEventListener('click', tailClick, true);
+      window.removeEventListener('pointerdown', clearTail, true);
+      window.removeEventListener('keydown', clearTail, true);
+      window.removeEventListener('blur', tailBlur, true);
+    };
+    const tailBlur = event => { if (event.target === window) clearTail(); };
+    const tailClick = event => {
+      if (event.detail === 0) return;
+      event.preventDefault(); event.stopImmediatePropagation(); clearTail();
+    };
+    const handlers = create(resolve, () => {
+      if (expiry !== null) window.clearTimeout(expiry);
+      expiry = window.setTimeout(() => { clearTail(); handlers.pointercancel(); }, 1000);
+    });
+    // Only actual event names are installed. Controller methods are not events.
+    const listeners = {};
+    for (const type of ['pointerdown', 'pointerup', 'click', 'pointercancel', 'keydown']) {
+      listeners[type] = handlers[type];
+    }
+    listeners.blur = event => {
       if (event.target === window) handlers.blur();
-    } };
+    };
     for (const [type, handler] of Object.entries(listeners)) {
       window.addEventListener(type, handler, { capture: true, passive: false });
     }
-    return () => {
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
       for (const [type, handler] of Object.entries(listeners)) window.removeEventListener(type, handler, true);
-      handlers.blur();
+      if (handlers.hasPendingClick()) {
+        // Keep only the bounded one-shot tail, even across synchronous teardown.
+        tail = true;
+        window.addEventListener('click', tailClick, { capture: true, passive: false });
+        window.addEventListener('pointerdown', clearTail, true);
+        window.addEventListener('keydown', clearTail, true);
+        window.addEventListener('blur', tailBlur, true);
+      } else clearTail();
     };
+    dispose.suppressNextClick = () => { if (!disposed) handlers.suppressNextClick(); };
+    return dispose;
   }
+
   const api = { create, bind };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else scope.AlbumHavenSurfaceDismissal = api;

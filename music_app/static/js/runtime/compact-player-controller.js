@@ -300,18 +300,28 @@ function isCurrentCompactQueueSelection(selection) {
 
 function currentQueueIndex() {
   const queue = state.player.playbackQueue;
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) return TopPlaybackRuntime.currentIndex(queue);
+  if (queue?.sourceKind === 'album-top') return -1;
   if (isCurrentCompactQueueSelection(compactPlayerPendingSelection)) {
     return compactPlayerPendingSelection.index;
   }
   compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
+  if (queue.playlistId) return playlistQueueCurrentIndex(queue, path);
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }
 
 async function playCompactQueueOffset(offset) {
+  if (isPlaybackLockedByAnotherTab()) return false;
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
+    const result = await ExplicitQueueRuntime.skip(offset);
+    if (result !== undefined) return result;
+  }
   const queue = state.player.playbackQueue;
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) return TopPlaybackRuntime.skip(queue, offset);
+  if (queue?.sourceKind === 'album-top') return false;
   const index = currentQueueIndex();
   if (!queue?.tracks?.length || index < 0) return;
   const targetIndex = index + offset;
@@ -322,14 +332,14 @@ async function playCompactQueueOffset(offset) {
   queue.currentIndex = targetIndex;
   let started = false;
   try {
-    const playbackStart = playTrackFromPayload(track);
+    const playbackStart = playTrackFromPayload(track, {explicitQueueTransition: true});
     syncCompactPlayerUi();
     started = await playbackStart;
     return started;
   } catch (error) {
     if (isCurrentCompactQueueSelection(selection)) {
       if (typeof observeStreamingFacadeCallback === 'function') {
-        observeStreamingFacadeCallback(Promise.reject(error), 'compact-track-selection-start-error');
+        console.warn('[AlbumHaven][Playback] Compact selection failed.', error);
       } else {
         console.warn('[AlbumHaven][Playback] Compact track selection failed.', error);
       }
@@ -341,7 +351,8 @@ async function playCompactQueueOffset(offset) {
       compactPlayerPendingSelection = null;
       if (!started && ownsQueueCursor) {
         const playingPath = String(state.player.current?.path || '');
-        const playingIndex = queue.tracks.findIndex(item => String(item?.path || '') === playingPath);
+        const playingIndex = queue.playlistId ? playlistQueueCurrentIndex(queue, playingPath)
+          : queue.tracks.findIndex(item => String(item?.path || '') === playingPath);
         queue.currentIndex = playingIndex >= 0 ? playingIndex : index;
       }
       syncCompactPlayerUi();
@@ -353,16 +364,18 @@ function syncCompactPlayerUi(snapshot = {}) {
   const els = compactPlayerElements();
   if (!els.player) return;
   const playback = snapshot.playback || getPlayerPlaybackSnapshot();
-  const track = snapshot.displayTrack || state.player.current;
-  const hasTrack = snapshot.hasTrack ?? Boolean(track && (playback.src || track.src));
-  const locked = snapshot.lockedByAnotherTab ?? (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab());
+  const locked = snapshot.lockedByAnotherTab ?? isPlaybackLockedByAnotherTab();
+  const track = locked ? (Object.prototype.hasOwnProperty.call(snapshot, 'displayTrack') ? snapshot.displayTrack : getMirroredPlaybackTrack())
+    : (snapshot.displayTrack || state.player.current);
+  const hasTrack = locked || (snapshot.hasTrack ?? Boolean(track && (playback.src || track.src)));
+  if (locked) clearCompactPlayerArtClick();
   const trackKey = track?.path || null;
   if (trackKey !== compactPlayerTrackKey) {
     clearCompactPlayerArtClick();
     hideCompactPlayerMetadata(els);
   }
   compactPlayerTrackKey = trackKey;
-  if (els.titleText) els.titleText.textContent = track?.title || track?.name || 'Nothing playing';
+  if (els.titleText) els.titleText.textContent = track?.title || track?.name || (locked ? 'Playing in another tab' : 'Nothing playing');
   if (els.artistText) els.artistText.textContent = track?.artist || '';
   const summary = buildCompactPlayerMetadataSummary(track ? { ...track, album: '' } : null);
   const album = String(track?.album || '').trim();
@@ -374,10 +387,10 @@ function syncCompactPlayerUi(snapshot = {}) {
   }
   scheduleCompactPlayerMetadataRowRefresh(els);
   if (els.cover) {
-    els.cover.style.backgroundImage = track?.coverPath
+    els.cover.style.backgroundImage = !locked && track?.coverPath
       ? `url("/cover?path=${encodeURIComponent(track.coverPath)}")`
       : '';
-    els.cover.classList.toggle('is-idle-placeholder', !track);
+    els.cover.classList.toggle('is-idle-placeholder', locked || !track);
     els.cover.disabled = !track && !['docked', 'rail_artbox'].includes(compactPlayerPresentation);
     const openLabel = compactPlayerPresentation === 'floating' ? 'Double-click to open album details' : 'Expand player; double-click or Arrow Up for album details';
     els.cover.setAttribute('aria-label', openLabel);
@@ -389,8 +402,13 @@ function syncCompactPlayerUi(snapshot = {}) {
   }
   const queue = state.player.playbackQueue;
   const controls = resolveCompactQueueControls({ queueLength: queue?.tracks?.length || 0, currentIndex: currentQueueIndex() });
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) {
+    controls.previousDisabled = !TopPlaybackRuntime.hasOffset(queue, -1);
+    controls.nextDisabled = !TopPlaybackRuntime.hasOffset(queue, 1);
+  }
   if (els.previous) els.previous.disabled = controls.previousDisabled || locked;
-  if (els.next) els.next.disabled = controls.nextDisabled || locked;
+  const explicitNext = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.hasNext();
+  if (els.next) els.next.disabled = (controls.nextDisabled && !explicitNext) || locked;
 }
 
 function initCompactPlayer() {
@@ -416,8 +434,10 @@ function initCompactPlayer() {
   els.previous?.addEventListener('click', () => playCompactQueueOffset(-1));
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));
   const openCurrentAlbumDetails = () => {
-    const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
+    if (isPlaybackLockedByAnotherTab()) return;
+    const selected = state.player.current;
+    const album = resolveAlbumForPlayerTrack(selected);
+    if (album && selected === state.player.current && !isPlaybackLockedByAnotherTab()) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
   };
   els.albumLink?.addEventListener('click', openCurrentAlbumDetails);
   els.cover?.addEventListener('click', event => {

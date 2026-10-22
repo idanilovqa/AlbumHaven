@@ -1,0 +1,20 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm');
+const {read,plain}=require('./search-native-fixtures/advanced-runtime.cjs');
+function model(){const c=vm.createContext({});vm.runInContext(read('music_app/static/js/runtime/search-shorthand-model.js'),c);return vm.runInContext('SearchShorthandModel',c);}
+// Literal protected-contract witnesses. Python references are read/hash guarded
+// separately; no Python parser is imported, run, or translated into the fixture.
+for(const [raw,family,fields]of [
+ [':obſeſſed','love',{include:['obsessed']}],['-:obſeſſed','love',{exclude:['obsessed']}],
+ [':obseßed','love',{include:['obsessed']}],['love:obseẞed','love',{include:['obsessed']}],
+ ['@maya liſtened:all','listener',{username:'maya'}],['@maya :tracKs','listener',{username:'maya'}],
+ [':popular :tracKs','popularity',{}],['ſort:popular','popularity',{}],
+ [':popular artiﬅ:AB','popularity',{facets:[{rowId:'t1',kind:'artist',polarity:'include',text:'AB'}]}],
+ [':popular artiﬆ:AB','popularity',{facets:[{rowId:'t1',kind:'artist',polarity:'include',text:'AB'}]}]
+])test(`Advanced casefold parity witness ${raw}`,()=>{const m=model(),d=m.parseAdvanced(raw);assert.equal(d.status,'editable');assert.equal(d.family,family);for(const [key,value]of Object.entries(fields))assert.deepEqual(plain(d.fields[key]),value);assert.equal(m.serializeAdvanced(d).value,raw);});
+for(const ch of ['\t','\n','\v','\f','\r','\u001c','\u001d','\u001e','\u001f',' ','\u0085','\u00a0','\u1680','\u2000','\u2001','\u2002','\u2003','\u2004','\u2005','\u2006','\u2007','\u2008','\u2009','\u200a','\u2028','\u2029','\u202f','\u205f','\u3000'])test(`Advanced Python whitespace U+${ch.codePointAt(0).toString(16)}`,()=>{const raw=ch+':loved'+ch+'-:obsessed'+ch,m=model(),d=m.parseAdvanced(raw);assert.equal(d.status,'editable');assert.deepEqual(plain(d.fields.include),['loved']);assert.deepEqual(plain(d.fields.exclude),['obsessed']);assert.equal(d.tokens.length,2);assert.equal(m.serializeAdvanced(d).value,raw);});
+test('BOM remains a raw token character, not Python whitespace',()=>{const raw=':popular\ufeffartist:A',m=model(),d=m.parseAdvanced(raw);assert.notEqual(d.status,'editable');assert.equal(d.tokens.length,1);assert.equal(m.serializeAdvanced(d).value,raw);});
+for(const [raw,text]of [[':popular artist:ab" cd"ef','ab cdef'],[":popular artist:'ab'\" cd\"ef",'ab cdef'],[':popular artist:ab\\ c','ab c'],[':popular artist:"A\\\"B"','A"B'],[':popular artist:A\\\\B','A\\B']])test(`Advanced decoded value and raw roundtrip ${raw}`,()=>{const m=model(),d=m.parseAdvanced(raw);assert.equal(d.status,'editable');assert.equal(d.fields.facets[0].text,text);assert.equal(m.serializeAdvanced(d).value,raw);});
+for(const raw of [':popular "artist":A',':popular art\\ist:A','":popular" artist:A','sort\\:popular artist:A',':popular "genre:A"'])test(`quoted or escaped prefix does not become structural keyword ${raw}`,()=>{const m=model(),d=m.parseAdvanced(raw);assert.notEqual(d.status,'editable');assert.equal(m.serializeAdvanced(d).value,raw);assert.equal(m.editAdvanced(d,{type:'reset'}).ok,false);});
+for(const text of ['+1','-1','1e2','1E2','1.0','١','１','NaN','Infinity','0','5001'])test(`enabled cap rejects ${text} with exact raw retention`,()=>{const m=model(),raw=':popular per_artist:'+text,d=m.parseAdvanced(raw);assert.equal(d.status,'malformed');assert.equal(m.serializeAdvanced(d).value,raw);const changed=m.editAdvanced(m.parseAdvanced(':popular'),{type:'setCap',present:true,text});assert.equal(changed.ok,true);assert.equal(m.serializeAdvanced(changed.draft).ok,false);assert.equal(m.serializeAdvanced(changed.draft).value,':popular');});
+test('handle lower differs from keyword casefold and Unicode handles stay conservatively unsupported',()=>{const m=model();for(const raw of ['@maKa','@maſa','@maßa']){const d=m.parseAdvanced(raw);assert.equal(d.status,'unsupported');assert.equal(m.serializeAdvanced(d).value,raw);}const d=m.parseAdvanced('@MAYA @maya');assert.equal(d.status,'editable');assert.equal(d.fields.username,'maya');assert.equal(m.serializeAdvanced(d).value,'@MAYA @maya');});

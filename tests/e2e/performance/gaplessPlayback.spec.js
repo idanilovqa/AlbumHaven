@@ -1,3 +1,5 @@
+import { observePlaybackCapture, captureForPath, readPlaybackCapture, assertCaptureStored } from '../helpers/playbackCaptureReadHelpers.js';
+import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
 import { expect, test } from '../support/performanceFixtures.js';
 import {
   assertActiveReplacementContract,
@@ -28,6 +30,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
   utilityAppearanceActions,
   utilityTabBarActions,
 }) => {
+  const capture = observePlaybackCapture(page);
   const traffic = playbackEvidence;
   {
     await stepLogger.step('Open the generated lossless-boundary album through visible controls', async () => {
@@ -374,6 +377,28 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       }
     });
     gaplessPlaybackReport.recordContractCompletion();
+    // All existing sample, continuity, resource and timing assertions above remain
+    // unchanged. Inspect telemetry only after those measured windows have closed.
+    try {
+      const observations = await capture.snapshot();
+      for (const track of [outgoing, incoming, nearEnd, ...encodedChain.slice(0, 2)]) {
+        const identity = captureForPath(observations, track.path);
+        const stored = await readPlaybackCapture({
+          username: PERFORMANCE_AUTH_USERNAME,
+          deviceUuid: identity.body.device_uuid,
+          captureUuid: identity.body.capture_uuid,
+        });
+        assertCaptureStored(expect, stored, await capture.snapshot(), identity);
+        expect(stored.known_frames).toBeGreaterThan(0);
+        if (track === nearEnd) {
+          expect(stored.runs.some(run => run.source_start48 >=
+            Math.floor((Number(nearEnd.durationSeconds) - 2.5) * 48000))).toBe(true);
+          expect(stored.known_frames).toBeLessThan(Number(nearEnd.durationSeconds) * 48000);
+        }
+      }
+    } finally {
+      capture.stop();
+    }
   }
 });
 

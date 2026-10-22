@@ -1,0 +1,79 @@
+/* The original album dialog is the only rendered album surface. */
+.track-modal.is-artist-discography-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 4550;
+  padding: 0;
+  align-items: stretch;
+  overflow: hidden;
+}
+.track-modal.is-artist-discography-sheet .track-modal-dialog {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  min-height: 0;
+  max-height: none;
+  border-radius: 16px 16px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
+  transition: transform 180ms ease-out;
+  will-change: transform;
+}
+.track-modal.is-artist-discography-sheet[data-sheet-state="dragging"] .track-modal-dialog,
+.track-modal.is-artist-discography-sheet[data-sheet-state="suspended"] .track-modal-dialog {
+  transition: none;
+}
+.track-modal.is-artist-discography-sheet .album-sheet-handle {
+  flex: 0 0 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+.album-sheet-handle > span {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: .35;
+}
+.track-modal.is-artist-discography-sheet .track-modal-header,
+.track-modal.is-artist-discography-sheet .track-modal-tabs { flex-shrink: 0; }
+.track-modal.is-artist-discography-sheet .track-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+.track-modal.is-artist-discography-sheet .track-modal-main,
+.track-modal.is-artist-discography-sheet .track-modal-list {
+  overflow-y: visible;
+  max-height: none;
+}
+.album-sheet-handle[hidden], .album-sheet-toggle[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .track-modal.is-artist-discography-sheet .track-modal-dialog { transition: none; }
+}
+/* Content-mode identity keeps the existing Close/actions in the header. */
+#track-modal.is-artist-discography-sheet .artist-sheet-inline-identity :is(.track-modal-title-wrap, .album-details-header__identity) { display: none; }
+#track-modal.is-artist-discography-sheet .artist-sheet-inline-identity { justify-content: flex-end; }
+#track-modal.is-artist-discography-sheet .mobile-album-overview .track-modal-cover { grid-column: 1; }
+#track-modal.is-artist-discography-sheet[data-mobile-album-layout="stacked_bar"] .mobile-album-overview {
+  grid-template-columns: clamp(96px, 28.7vw, 112px) minmax(0, 1fr);
+}
+#track-modal.is-artist-discography-sheet[data-mobile-album-layout="stacked_bar"] :is(.mobile-album-identity, .mobile-album-actions) { grid-column: 2; }
+#track-modal.is-artist-discography-sheet[data-mobile-album-layout="editorial_canvas"] .mobile-album-overview { grid-template-columns: minmax(0, 1fr) 32px; }
+#track-modal.is-artist-discography-sheet[data-mobile-album-layout="editorial_canvas"] .mobile-album-actions { grid-column: 2; }
+#track-modal.is-artist-discography-sheet :is(.track-list, .track-table-wrap, .album-track-table-wrap) { max-height: none; overflow-y: visible; }
+#track-modal.is-artist-discography-sheet .track-modal-table-wrap { max-height: none; overflow-x: auto; }
+
+.track-modal.is-artist-discography-sheet > .track-modal-dialog > .album-sheet-toggle { align-self: flex-end; flex-shrink: 0; margin-inline-end: 12px; }

@@ -179,7 +179,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTrackCredits.spec.js",
-              "case": "FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words",
+              "case": "FTC-ALBUM-DETAILS-005 ignores a sole bonus-labeled group",
               "area": "album-details"
             },
             {

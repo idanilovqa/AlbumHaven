@@ -2282,7 +2282,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${ButtonComponent.renderIconSvg(track.isPlaying ? 'pause' : 'play', { className: `album-track-table__play-icon ui-icon--${track.isPlaying ? 'pause' : 'play'}` })}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
     )).join('');
   }
-  const hasBonusDisc = componentGroups.some((group) => group.isBonus);
+  const hasMainAndBonusDiscs = componentGroups.some((group) => group.isBonus)
+    && componentGroups.some((group) => !group.isBonus);
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -2293,8 +2294,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
 
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
-    mainLength: hasBonusDisc && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
-    bonusLength: hasBonusDisc && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
+    mainLength: hasMainAndBonusDiscs && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
+    bonusLength: hasMainAndBonusDiscs && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }

@@ -2274,7 +2274,10 @@ def build_file_cache(
                             )
                         )
                         else "Bonus Disc"
-                        if is_bonus_duration_control_fixture and track_index >= 3
+                        if (
+                            is_bonus_duration_false_positive_fixture
+                            or (is_bonus_duration_control_fixture and track_index >= 3)
+                        )
                         else "2"
                         if (
                             is_bonus_duration_numeric_multidisc_fixture

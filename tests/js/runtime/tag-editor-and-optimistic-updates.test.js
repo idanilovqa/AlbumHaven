@@ -942,7 +942,8 @@ for (const scenario of [
   { name: 'explicit bonus', discs: [['1', 180], ['Bonus Disc', 1350]], expected: ['180', '1350'] },
   { name: 'multiple main and bonus discs', discs: [['1', 100], ['2', 80], ['Bonus Disc', 1000], ['Extras', 350]], expected: ['180', '1350'] },
   { name: 'ordinary numbered discs', discs: [['1', 180], ['2', 1350]], expected: ['', ''] },
-  { name: 'bonus-only album', discs: [['Bonus Disc', 1350]], expected: ['', '1350'] },
+  { name: 'single bonus-labeled group', discs: [['Bonus Disc', 1350]], expected: ['', ''] },
+  { name: 'multiple bonus-only groups', discs: [['Bonus Disc', 1000], ['Extras', 350]], expected: ['', ''] },
 ]) {
   test(`Album Details supplies classified duration summaries for ${scenario.name}`, () => {
     let renderedConfig;

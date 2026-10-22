@@ -1314,7 +1314,14 @@ def _duplicate_track_coverage_identity(track: Track) -> tuple[object, ...]:
     return ("title", title)
 
 
-_RELEASE_TYPE_EDITIONS = {"ep", "single", "maxi single", "maxi-single"}
+_RELEASE_TYPE_EDITIONS = {"ep", "single", "maxi single"}
+
+
+def _normalized_duplicate_card_text(value: object) -> str:
+    text = unicodedata.normalize("NFKD", str(value or "").casefold())
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    text = text.replace("'", "").replace("’", "")
+    return " ".join(re.sub(r"[\W_]+", " ", text, flags=re.UNICODE).split())
 
 
 def _duplicate_card_track_signature(tracks: list[Track]) -> tuple[tuple[object, ...], ...] | None:
@@ -1324,21 +1331,23 @@ def _duplicate_card_track_signature(tracks: list[Track]) -> tuple[tuple[object, 
         for track in group:
             track_number = safe_int(track.track_number)
             duration = safe_int(track.duration_seconds)
-            title = " ".join(unicodedata.normalize("NFC", str(track.title or "")).casefold().split())
+            title = _normalized_duplicate_card_text(track.title)
             if track_number is None or duration is None or duration <= 0 or not title:
                 return None
             signature.append((safe_int(track.disc_number) or 1, track_number, title, duration))
+        if len(signature) < 2:
+            return None
         signatures.add(tuple(sorted(signature)))
     return next(iter(signatures)) if len(signatures) == 1 else None
 
 
 def _duplicate_card_album_identity(album: Album) -> tuple[str, str, int, str, str] | None:
-    artist = " ".join(unicodedata.normalize("NFC", str(album.album_artist or "")).casefold().split())
-    title = " ".join(unicodedata.normalize("NFC", str(album.name or "")).casefold().split())
+    artist = _normalized_duplicate_card_text(album.album_artist)
+    title = _normalized_duplicate_card_text(album.name)
     year = safe_int(album.year)
     if not artist or not title or year is None or not 1000 <= year <= 9999:
         return None
-    edition = " ".join(unicodedata.normalize("NFC", str(album.edition or "")).casefold().split())
+    edition = _normalized_duplicate_card_text(album.edition)
     release_date = str(album.release_date or "").strip()
     return artist, title, year, edition, release_date
 
@@ -1355,14 +1364,20 @@ def _duplicate_track_group_card_identity(tracks: list[Track]) -> tuple[str, str,
     if album_identity is None:
         return None
     editions = {
-        " ".join(unicodedata.normalize("NFC", str(track.edition or "")).casefold().split())
+        _normalized_duplicate_card_text(track.edition)
         for track in tracks
     }
     release_dates = {str(track.release_date or "").strip() for track in tracks}
     if len(editions) != 1 or len(release_dates) != 1:
         return None
     artist, title, year = album_identity
-    return artist, title, year, next(iter(editions)), next(iter(release_dates))
+    return (
+        _normalized_duplicate_card_text(artist),
+        _normalized_duplicate_card_text(title),
+        year,
+        next(iter(editions)),
+        next(iter(release_dates)),
+    )
 
 
 def _equivalent_duplicate_track_groups(left: list[Track], right: list[Track]) -> bool:
@@ -1418,6 +1433,7 @@ def _collapse_equivalent_duplicate_album_cards(albums: list[Album]) -> list[Albu
             key=lambda candidate: (
                 not bool(str(candidate.edition or "").strip()),
                 str(candidate.name or "").casefold().startswith("the "),
+                not bool(re.search(r"[-–—:]\s*$", str(candidate.name or ""))),
                 len(str(candidate.name or "")),
             ),
             reverse=True,

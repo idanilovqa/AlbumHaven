@@ -289,6 +289,32 @@ def test_article_variant_joins_an_existing_multi_source_duplicate_card():
     assert len(get_album_duplicate_sources(albums[0])) == 3
 
 
+def test_punctuation_and_diacritic_variants_do_not_create_a_second_card():
+    tracks = [
+        _track(
+            "main/original",
+            number,
+            album="Kivenpyörittäjä — Tales and Travels",
+            title="Suomenmaa (Samba da Finlandia)" if number == 1 else "Hääpolska",
+        )
+        for number in range(1, 3)
+    ] + [
+        _track(
+            "hoard/tag-variant",
+            number,
+            album="Kivenpyörittäjä - Tales And Travels -",
+            title="Suomenmaa (Samba da Finlândia)" if number == 1 else "Hääpolska",
+        )
+        for number in range(1, 3)
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert albums[0].name == "Kivenpyörittäjä — Tales and Travels"
+    assert len(get_album_duplicate_sources(albums[0])) == 2
+
+
 def test_leading_article_variant_with_different_track_evidence_stays_separate():
     tracks = [
         _track("main/original", album="The Serpent's Egg"),
@@ -340,10 +366,58 @@ def test_postgres_projection_keeps_article_variant_sources_on_the_canonical_card
             "file_entry": asdict(track),
             "duration_seconds": track.duration_seconds,
         }
-        for track in (
-            _track("main/original", album="The Serpent's Egg"),
-            _track("hoard/article-variant", album="Serpent's Egg"),
-        )
+        for track in [
+            *(
+                _track("main/original", number, album="The Serpent's Egg")
+                for number in range(1, 3)
+            ),
+            *(
+                _track("hoard/article-variant", number, album="Serpent's Egg")
+                for number in range(1, 3)
+            ),
+        ]
+    ]
+
+    result = _duplicate_sources_from_rows(rows)["canonical"]
+
+    assert result["has_duplicate_files"] is True
+    assert len(result["duplicate_sources"]) == 2
+
+
+def test_postgres_projection_keeps_punctuation_variant_sources_on_the_canonical_card():
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    rows = [
+        {
+            "album_key": "canonical",
+            "album_title": "Kivenpyörittäjä — Tales and Travels",
+            "album_metadata": {"album_artist": "Juha Kujanpää"},
+            "file_private_path": str(track.path),
+            "file_entry": asdict(track),
+            "duration_seconds": track.duration_seconds,
+        }
+        for track in [
+            *(
+            _track(
+                "main/original",
+                number,
+                album_artist="Juha Kujanpää",
+                album="Kivenpyörittäjä — Tales and Travels",
+                title="Suomenmaa (Samba da Finlandia)" if number == 1 else "Hääpolska",
+            )
+            for number in range(1, 3)
+            ),
+            *(
+            _track(
+                "hoard/tag-variant",
+                number,
+                album_artist="Juha Kujanpää",
+                album="Kivenpyörittäjä - Tales And Travels -",
+                title="Suomenmaa (Samba da Finlândia)" if number == 1 else "Hääpolska",
+            )
+            for number in range(1, 3)
+            ),
+        ]
     ]
 
     result = _duplicate_sources_from_rows(rows)["canonical"]

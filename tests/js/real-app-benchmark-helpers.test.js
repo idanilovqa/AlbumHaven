@@ -218,6 +218,31 @@ test('production bootstrap parser preserves braces and quotes inside JSON string
   assert.equal(payload.initial_view.app_name, 'Album {"Haven"}');
 });
 
+test('startup authority collection ignores unsuccessful root browse responses', async () => {
+  const { collectRootBrowseStartupAuthorityEvidence } = await import(
+    '../../tests/e2e/helpers/realAppBenchmarkHelpers.js'
+  );
+  let responseListener = null;
+  const page = {
+    on(eventName, listener) {
+      if (eventName === 'response') responseListener = listener;
+    },
+    off(eventName, listener) {
+      if (eventName === 'response' && responseListener === listener) responseListener = null;
+    },
+  };
+  const evidence = await collectRootBrowseStartupAuthorityEvidence(page, async () => {
+    responseListener({
+      ok: () => false,
+      url: () => 'http://127.0.0.1:5101/view-data?surface=albums',
+      request: () => ({ resourceType: () => 'fetch' }),
+      json: async () => ({ payload_tier: 'gallery_page' }),
+    });
+  });
+
+  assert.deepEqual(evidence, { rootBrowsePayloads: [], bootstrapPayloads: [] });
+});
+
 test('startup authority accepts a production embedded-sidebar bootstrap without a later response', async () => {
   const {
     expectRootBrowseStartupAuthorityEvidence,

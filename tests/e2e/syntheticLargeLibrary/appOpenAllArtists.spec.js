@@ -36,21 +36,30 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
     requirePostgresRuntimeEnv('the app-open All Artists benchmark');
 
     let startupAuthorityEvidence = null;
+    let readinessResult = null;
+    let runtimeView = null;
+    let startupDiagnostics = null;
+    let sidebarArtistCount = 0;
+    let visibleAllArtistsCount = 0;
+    let visibleArtistHeadings = [];
+    let fullSidebarProof = null;
     const coverPreemptionBefore = await readGalleryCoverPreemptionSnapshot(page);
-    const { appOpenTimings, startupEntryState, awaitFullSidebarProof } = await stepLogger.step('Open the real app root, confirm the startup entry path, and wait for visible All Artists UI readiness', async () => {
-      let readinessResult = null;
-      startupAuthorityEvidence = await collectRootBrowseStartupAuthorityEvidence(page, async () => {
-        readinessResult = await measureAllArtistsAppOpenVisibleReadiness(galleryActions, navigationPanelActions);
+    startupAuthorityEvidence = await collectRootBrowseStartupAuthorityEvidence(page, async () => {
+      readinessResult = await stepLogger.step('Open the real app root, confirm the startup entry path, and wait for visible All Artists UI readiness', async () => (
+        measureAllArtistsAppOpenVisibleReadiness(galleryActions, navigationPanelActions)
+      ));
+      runtimeView = await readRuntimeView(page);
+      startupDiagnostics = await readStartupDiagnostics(page, {
+        coverImageSelector: galleryActions.galleryPage.albumCard.coverImageSelector,
       });
-      return readinessResult;
+      sidebarArtistCount = await navigationPanelActions.readSidebarArtistCount();
+      visibleAllArtistsCount = await navigationPanelActions.readAllArtistsVisibleCount();
+      visibleArtistHeadings = await galleryActions.readArtistHeadings();
+      fullSidebarProof = await stepLogger.step('Wait for complete sidebar metadata rendering after visible readiness', async () => (
+        readinessResult.awaitFullSidebarProof()
+      ));
     });
-    const runtimeView = await readRuntimeView(page);
-    const startupDiagnostics = await readStartupDiagnostics(page, {
-      coverImageSelector: galleryActions.galleryPage.albumCard.coverImageSelector,
-    });
-    const sidebarArtistCount = await navigationPanelActions.readSidebarArtistCount();
-    const visibleAllArtistsCount = await navigationPanelActions.readAllArtistsVisibleCount();
-    const visibleArtistHeadings = await galleryActions.readArtistHeadings();
+    const { appOpenTimings, startupEntryState } = readinessResult;
 
     await stepLogger.step('Assert the app-open path exposes a valid startup entry path and then displays All Artists', async () => {
       expectManualStartupEntryPath(startupEntryState, 'the app-open benchmark');
@@ -85,9 +94,6 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
       },
     });
 
-    const fullSidebarProof = await stepLogger.step('Wait for complete sidebar metadata rendering after visible readiness', async () => (
-      awaitFullSidebarProof()
-    ));
     startupDiagnostics.phases.treeReadyMs = fullSidebarProof.treeReadyAtMs;
     await stepLogger.step('Retain each true-cold startup phase', async () => {
       for (const [phase, timingMs] of Object.entries(startupDiagnostics.phases)) {

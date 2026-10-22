@@ -41,7 +41,7 @@
 .gallery-anchored-menu[hidden] { display: none; }
 .gallery-menu-title { display: block; padding: 7px 8px; color: var(--muted); font-size: .66rem; letter-spacing: .12em; text-transform: uppercase; }
 .gallery-switch, .gallery-type-choice, .gallery-menu-action { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.gallery-type-choice:hover, .gallery-menu-action:hover { background: var(--dropdown-item-hover-background, var(--appearance-item-hover, color-mix(in srgb, var(--panel) 82%, white 8%))); }
+.gallery-type-choice:hover, .gallery-menu-action:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--dropdown-item-hover-background, var(--appearance-item-hover, color-mix(in srgb, var(--panel) 82%, white 8%))); }
 .gallery-switch:focus-visible, .gallery-type-choice:focus-visible, .gallery-menu-action:focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, #55c7ff))); outline-offset: 1px; }
 .gallery-switch__track { width: 36px; height: 20px; flex: 0 0 36px; display: flex; margin-left: auto; padding: 2px; border-radius: 999px; background: #58615f; transition: background-color 150ms ease; }
 .gallery-switch[aria-checked="true"] .gallery-switch__track,
@@ -83,7 +83,7 @@
   border-color: transparent;
   background: var(--appearance-item-action-pressed, var(--dropdown-item-hover-background, var(--appearance-item-hover, var(--appearance-hover))));
 }
-.gallery-menu-action[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.gallery-menu-action:is(:disabled, [aria-disabled="true"]) { color: var(--muted); opacity: .55; cursor: not-allowed; }
 .gallery-divider, .family-artist-header { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--muted); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
 .gallery-divider { margin: 4px 0 14px; }
 .gallery-divider__line { height: 1px; background: var(--border); }

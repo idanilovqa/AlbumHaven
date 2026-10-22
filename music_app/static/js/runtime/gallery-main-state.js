@@ -82,8 +82,7 @@ function reorderGalleryFamilyArtists(artists = [], artist = '', beforeArtist = '
 }
 
 function hasGalleryNonAlbumTracks(view = {}) {
-  return Boolean(view.non_album_tracks_deferred)
-    || (Array.isArray(view.non_album_tracks) && view.non_album_tracks.length > 0);
+  return Array.isArray(view.non_album_tracks) && view.non_album_tracks.length > 0;
 }
 
 function classifyGalleryReleaseType(album = {}) {

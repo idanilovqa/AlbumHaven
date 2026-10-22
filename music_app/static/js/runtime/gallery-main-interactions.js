@@ -461,7 +461,7 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = Boolean(state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
+    const enabled = Boolean(button.dataset.libraryWide === '1' && state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
       libraryWide: button.dataset.libraryWide === '1',
     }).length > 0;
     button.disabled = !enabled;
@@ -735,7 +735,16 @@ function handleGalleryMainClick(event) {
   const familyAnchor = event.target.closest?.('[data-gallery-bar-action="artist-family"]');
   if (familyAnchor) { event.preventDefault(); openGalleryMainSurface('artist-family', familyAnchor, document.getElementById('artist-family-panel')); return true; }
   const typeAnchor = event.target.closest?.('[data-gallery-bar-action="album-types"]');
-  if (typeAnchor) { event.preventDefault(); openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu')); return true; }
+  if (typeAnchor) {
+    event.preventDefault();
+    openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu'));
+    if (state.view?.non_album_tracks_deferred && typeof hydrateDeferredNonAlbumTracks === 'function') {
+      void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
+        console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+      });
+    }
+    return true;
+  }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();

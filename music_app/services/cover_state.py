@@ -146,6 +146,31 @@ def iter_local_cover_candidates(
                     "depth": len(relative_path.parts),
                 }
             )
+    if (
+        active_cover_path
+        and active_cover_path.suffix.lower() in image_extensions
+        and not is_managed_preview_path(active_cover_path)
+        and all(str(item["path"]) != str(active_cover_path) for item in candidates)
+    ):
+        try:
+            if active_cover_path.is_file():
+                width, height = image_dimensions(active_cover_path)
+                candidates.append(
+                    {
+                        "path": str(active_cover_path),
+                        "filename": active_cover_path.name,
+                        "relative_path": active_cover_path.name,
+                        "width": width,
+                        "height": height,
+                        "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
+                        "is_squareish": is_squareish_cover(width, height),
+                        "is_active": True,
+                        "area": width * height if width > 0 and height > 0 else 0,
+                        "depth": 0,
+                    }
+                )
+        except OSError:
+            pass
     candidates.sort(
         key=lambda item: (
             not bool(item.get("is_squareish")),
@@ -157,6 +182,14 @@ def iter_local_cover_candidates(
     return candidates
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as image:
+        for chunk in iter(lambda: image.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _matching_local_cover_sources(
     candidates: list[dict[str, object]], active_path: Path, revision: str | None,
 ) -> Iterator[str]:
@@ -164,8 +197,7 @@ def _matching_local_cover_sources(
     try:
         size = active_path.stat().st_size
         if not revision:
-            with active_path.open("rb") as image:
-                revision = hashlib.file_digest(image, "sha256").hexdigest()
+            revision = _file_sha256(active_path)
     except OSError:
         return
     for item in candidates:
@@ -175,8 +207,7 @@ def _matching_local_cover_sources(
         try:
             if candidate.stat().st_size != size:
                 continue
-            with candidate.open("rb") as image:
-                digest = hashlib.file_digest(image, "sha256").hexdigest()
+            digest = _file_sha256(candidate)
             if digest == revision:
                 yield str(candidate)
         except OSError:

@@ -732,6 +732,66 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     ]
 
 
+def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    hydrated_album_ids = []
+
+    def build_album_detail(_self, album_id):
+        hydrated_album_ids.append(album_id)
+        return {**_album_payload(track_path), "id": album_id}
+
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_album_detail_payload_by_id",
+        build_album_detail,
+    )
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_cover_state_entries_by_paths",
+        lambda _self, _paths: {},
+    )
+    snapshot_reads = []
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            snapshot_reads.append(album_id)
+            return None
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeRepository)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={
+            "album": {
+                "id": 41,
+                "name": "Test Album",
+                "album_artist": "Test Artist",
+                "year": 2001,
+                "edition": "",
+            }
+        },
+    )
+
+    assert status == 200
+    assert _decode_json(body)["album_root"] == str(track_path.parent)
+    assert hydrated_album_ids == [41]
+    assert snapshot_reads == [41]
+
+
 def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider_search(
     app,
     monkeypatch,

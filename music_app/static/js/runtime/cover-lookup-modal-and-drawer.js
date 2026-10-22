@@ -2048,7 +2048,8 @@ function handleCoverLookupDrawerScroll(event) {
   const remaining = Number(body.scrollHeight || 0)
     - Number(body.scrollTop || 0)
     - Number(body.clientHeight || 0);
-  if (remaining > 600 || !state.coverLookup.tasksNextCursor) return Promise.resolve();
+  const prefetchThreshold = Math.max(600, Number(body.clientHeight || 0) * 2);
+  if (remaining > prefetchThreshold || !state.coverLookup.tasksNextCursor) return Promise.resolve();
   return loadNextCoverLookupTaskPage({ toast: false });
 }
 

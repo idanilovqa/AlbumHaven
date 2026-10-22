@@ -5068,7 +5068,9 @@ test('cover lookup records decoded candidate readiness before response hashing',
 test('cover lookup hashes only decoded visible currentSrc response evidence', () => {
   const coverLookup = read('tests/e2e/actions/coverLookupActions.js');
 
-  assert.match(coverLookup, /expect\(image,[\s\S]*?\)\.toBeVisible\(\)/);
+  assert.match(coverLookup, /expect\(image,[\s\S]*?\)\.toHaveCount\(1, \{ timeout \}\)/);
+  assert.doesNotMatch(coverLookup, /if \(!\(await image\.count\(\)\)\) return/);
+  assert.match(coverLookup, /expect\(image,[^;]*\)\.toBeVisible\(\{ timeout \}\)/);
   assert.match(coverLookup, /element\.complete\s*&&\s*element\.naturalWidth\s*>\s*0/);
   assert.match(coverLookup, /currentSrc:/);
   assert.match(coverLookup, /hasAttribute\('data-cover-visual-state'\)/);

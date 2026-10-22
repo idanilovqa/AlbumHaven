@@ -425,13 +425,23 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     album, album_error = _require_album_payload(payload)
     if album_error is not None:
         return _json_response(album_error)
-    album_context = resolve_album_context(config, album or {})
+    album = _album_with_context_tracks(album or {})
+    if not _album_track_paths(album):
+        album_id = _album_id(album)
+        if album_id is not None:
+            refreshed_album = await run_in_threadpool(
+                PostgresLibraryBrowseRepository(config).build_album_detail_payload_by_id,
+                album_id,
+            )
+            if refreshed_album is not None:
+                album = _album_with_context_tracks(refreshed_album)
+    album_context = resolve_album_context(config, album)
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
     task_id = str(payload.get("task_id") or "").strip()
     repository, album_id, identity_error = _resolved_snapshot_album_context(
         config,
-        album or {},
+        album,
         album_context.track_paths,
     )
     if identity_error is not None:

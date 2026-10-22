@@ -148,6 +148,88 @@ def test_functional_core_preloaded_fixture_accepts_exact_media_directory(
     assert isolatedLibraryApp.configure_preloaded_fixture() == media_root.resolve()
 
 
+def test_preloaded_fixture_persists_its_exact_media_root(tmp_path, monkeypatch):
+    from music_app.services import library_roots
+
+    media_root = (tmp_path / "fixture" / "media").resolve()
+    recorded = {}
+
+    def save(config, payload):
+        recorded["config"] = config
+        recorded["payload"] = payload
+
+    monkeypatch.setattr(library_roots, "save_library_root_settings", save)
+    rebased = []
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "rebase_preloaded_fixture_paths",
+        lambda database_url, root: rebased.append((database_url, root)),
+    )
+
+    isolatedLibraryApp.persist_preloaded_fixture_library_root(
+        "postgresql://fixture",
+        media_root,
+    )
+
+    assert recorded["config"]["ALBUM_HAVEN_APP_DATABASE_URL"] == "postgresql://fixture"
+    assert recorded["config"]["MUSIC_DIR"] == media_root
+    assert recorded["config"]["PERSISTENCE_BACKENDS"]["library_roots"] == "postgres"
+    assert rebased == [("postgresql://fixture", media_root)]
+    assert recorded["payload"] == {
+        "main_library_roots": [
+            {
+                "id": "isolated-e2e-root",
+                "path": str(media_root),
+                "layout_mode": "artist",
+            }
+        ]
+    }
+
+
+def test_preloaded_fixture_rebases_persisted_track_and_cover_paths(tmp_path):
+    old_root = (tmp_path / "old" / "media").resolve()
+    new_root = (tmp_path / "new" / "media").resolve()
+    track_path = old_root / "Artist" / "Album" / "song.mp3"
+
+    class Result:
+        def fetchone(self):
+            return (str(track_path), "Artist/Album/song.mp3")
+
+    class Connection:
+        def __init__(self):
+            self.operations = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def execute(self, statement, params=None):
+            self.operations.append((" ".join(str(statement).split()), params))
+            return Result()
+
+    connection = Connection()
+    isolatedLibraryApp.rebase_preloaded_fixture_paths(
+        "postgresql://fixture",
+        new_root,
+        connect=lambda _url: connection,
+    )
+
+    assert len(connection.operations) == 4
+    assert "select private_path, relative_path" in connection.operations[0][0].lower()
+    assert "left(private_path" not in connection.operations[0][0].lower()
+    assert "update library.local_track_files" in connection.operations[1][0].lower()
+    assert "private_path" in connection.operations[1][0].lower()
+    assert "left(private_path" in connection.operations[1][0].lower()
+    assert "metadata" in connection.operations[2][0].lower()
+    assert "update library.local_albums" in connection.operations[3][0].lower()
+    assert "left(cover_path" in connection.operations[3][0].lower()
+    for _statement, params in connection.operations[1:]:
+        assert params["old_root"] == str(old_root)
+        assert params["new_root"] == str(new_root)
+
+
 def test_functional_core_seeds_only_the_normal_negative_cover_cache(tmp_path):
     cache_path = tmp_path / "app-data" / "cover-search-cache.json"
     coverless_rows = [

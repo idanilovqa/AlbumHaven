@@ -1161,9 +1161,9 @@ export class CoverLookupActions {
   }
 
   async readDisplayedImageEvidence(image, label, options = {}) {
-    if (!(await image.count())) return { src: '', coverPath: '', sha256: '' };
     const timeout = options.timeout || 30000;
-    await expect(image, `Expected the displayed ${label} image to be visible.`).toBeVisible();
+    await expect(image, `Expected one displayed ${label} image.`).toHaveCount(1, { timeout });
+    await expect(image, `Expected the displayed ${label} image to be visible.`).toBeVisible({ timeout });
     // parity-check: allow-read-only-measurement-evaluate -- await native displayed-image load/decode readiness only
     await image.evaluate(waitForDisplayedImageDecode);
     let resolvedEvidence = null;

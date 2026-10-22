@@ -42,6 +42,10 @@ async function executeFixtureSql(sql, environment = process.env) {
 }
 
 export async function seedCoverLookupNotificationHistory() {
+  await executeFixtureSql(`
+    delete from ops.cover_lookup_tasks
+    where task_key like '${TASK_PREFIX}%';
+  `);
   const inserted = Number(await executeFixtureSql(`
     with fixture_library as (
       select libraries.id
@@ -65,9 +69,6 @@ export async function seedCoverLookupNotificationHistory() {
               = 'd0a0d0b5d0bcd0b8d0bad181d18b'
         and encode(convert_to(artists.name, 'UTF8'), 'hex') = 'd094d094d0a2'
       limit 1
-    ), removed as (
-      delete from ops.cover_lookup_tasks
-      where task_key like '${TASK_PREFIX}%'
     ), inserted as (
       insert into ops.cover_lookup_tasks (
         library_id, task_key, status, requested_at, completed_at,

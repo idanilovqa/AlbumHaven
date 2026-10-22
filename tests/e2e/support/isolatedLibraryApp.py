@@ -2655,6 +2655,93 @@ def configure_preloaded_fixture() -> Path:
     return media_root
 
 
+def rebase_preloaded_fixture_paths(
+    database_url: str,
+    media_root: Path,
+    *,
+    connect=None,
+) -> None:
+    if connect is None:
+        import psycopg
+
+        connect = psycopg.connect
+    new_root = media_root.resolve(strict=False)
+    with connect(database_url) as connection:
+        row = connection.execute(
+            """
+            select private_path, relative_path
+            from library.local_track_files
+            where nullif(relative_path, '') is not null
+            order by id
+            limit 1
+            """
+        ).fetchone()
+        if row is None:
+            return
+        private_path, relative_path = row
+        relative_parts = PurePosixPath(str(relative_path)).parts
+        if not relative_parts or any(part in {"", ".", ".."} for part in relative_parts):
+            raise RuntimeError("Prepared fixture contains an invalid relative media path.")
+        old_root = Path(str(private_path)).resolve(strict=False)
+        for _part in relative_parts:
+            old_root = old_root.parent
+        if old_root == new_root:
+            return
+        params = {
+            "old_root": str(old_root),
+            "new_root": str(new_root),
+            "old_json": json.dumps(str(old_root))[1:-1],
+            "new_json": json.dumps(str(new_root))[1:-1],
+        }
+        connection.execute(
+            """
+            update library.local_track_files
+            set private_path = %(new_root)s || substring(private_path from length(%(old_root)s) + 1)
+            where left(private_path, length(%(old_root)s)) = %(old_root)s
+            """,
+            params,
+        )
+        connection.execute(
+            """
+            update library.local_track_files
+            set metadata = replace(metadata::text, %(old_json)s, %(new_json)s)::jsonb
+            where position(%(old_json)s in metadata::text) > 0
+            """,
+            params,
+        )
+        connection.execute(
+            """
+            update library.local_albums
+            set cover_path = %(new_root)s || substring(cover_path from length(%(old_root)s) + 1)
+            where left(cover_path, length(%(old_root)s)) = %(old_root)s
+            """,
+            params,
+        )
+
+
+def persist_preloaded_fixture_library_root(database_url: str, media_root: Path) -> None:
+    from config import PERSISTENCE_BACKEND_POSTGRES
+    from music_app.services.library_roots import save_library_root_settings
+
+    rebase_preloaded_fixture_paths(database_url, media_root)
+    save_library_root_settings(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+            "MUSIC_DIR": media_root,
+            "PERSISTENCE_BACKENDS": {"library_roots": PERSISTENCE_BACKEND_POSTGRES},
+        },
+        {
+            "main_library_roots": [
+                {
+                    "id": "isolated-e2e-root",
+                    "path": str(media_root),
+                    "layout_mode": "artist",
+                }
+            ]
+        },
+    )
+
+
 def seed_functional_cover_search_cache(
     setup_database_url: str,
     cache_path: Path,
@@ -5233,6 +5320,8 @@ def main() -> None:
             materialize_fixture_track_files(file_cache, loop_source)
             track_count = len(file_cache)
         database_lock.acquire()
+        if is_preloaded_fixture:
+            persist_preloaded_fixture_library_root(setup_database_url, library_root)
         if fixture_profile == "functional-core":
             seed_functional_cover_search_cache(
                 setup_database_url,

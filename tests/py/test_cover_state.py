@@ -52,6 +52,88 @@ def test_cover_gallery_excludes_managed_preview_files(tmp_path: Path):
     assert [item["path"] for item in payload["local_covers"]] == [str(cover_path)]
 
 
+def test_cover_gallery_includes_active_cover_outside_album_folder(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    active_cover = (tmp_path / "covers" / "active.jpg").resolve()
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(active_cover, (220, 40, 40))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={str(track_path): {"cover_path": str(active_cover)}},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert payload["local_covers"] == [
+        {
+            "path": str(active_cover),
+            "filename": active_cover.name,
+            "relative_path": active_cover.name,
+            "width": 12,
+            "height": 12,
+            "resolution": "12x12",
+            "is_squareish": True,
+            "is_active": True,
+            "area": 144,
+            "depth": 0,
+        }
+    ]
+
+
+def test_cover_gallery_excludes_external_managed_active_preview(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    managed_preview = (
+        tmp_path / ".album-haven" / "v1" / "cover_variants" / "aa" / "active.jpg"
+    ).resolve()
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(managed_preview, (220, 40, 40))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={str(track_path): {"cover_path": str(managed_preview)}},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert payload["local_covers"] == []
+
+
+def test_cover_gallery_hashes_local_duplicates_without_hashlib_file_digest(
+    tmp_path: Path,
+    monkeypatch,
+):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    active_cover = album_root / "cover.jpg"
+    duplicate_cover = album_root / "folder.jpg"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(active_cover, (220, 40, 40))
+    duplicate_cover.write_bytes(active_cover.read_bytes())
+    monkeypatch.delattr(hashlib, "file_digest", raising=False)
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={str(track_path): {"cover_path": str(active_cover)}},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    candidates = {item["path"]: item for item in payload["local_covers"]}
+    assert candidates[str(duplicate_cover)]["duplicate_of"] == str(active_cover)
+
+
 def test_serialize_cover_gallery_payload_prefers_saved_remote_cover(tmp_path: Path):
     album_root = (tmp_path / "Artist" / "Album").resolve()
     track_path = (album_root / "song.mp3").resolve()

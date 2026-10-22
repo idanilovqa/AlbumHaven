@@ -440,6 +440,28 @@ require('node:test')('active-only polling refreshes the first page when a runnin
   assert.deepEqual(Array.from(context.state.coverLookup.tasks, task => task.id), ['finished', 'history']);
 });
 
+require('node:test')('notification history prefetches within two visible drawer heights', async () => {
+  let fetchCount = 0;
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: async () => {
+      fetchCount += 1;
+      return {
+        ok: true,
+        json: async () => ({ ok: true, tasks: [], next_cursor: null }),
+      };
+    },
+  });
+  Object.assign(bodyElement, { scrollTop: 800, clientHeight: 500, scrollHeight: 2_000 });
+  Object.assign(context.state.coverLookup, {
+    tasks: [{ id: 'newest', status: 'completed' }],
+    tasksNextCursor: 'page-two',
+  });
+
+  await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+
+  assert.equal(fetchCount, 1);
+});
+
 require('node:test')('notification history mounts no more than 60 cards with two spacers', () => {
   const { context, bodyElement } = createDrawerHarness();
   bodyElement.scrollTop = 0;

@@ -7,6 +7,7 @@ import {
   authenticatedPagePost,
 } from '../helpers/authenticatedPageRequest.js';
 import {
+  defineTimingBudget,
   expectTimingBudget,
   performanceTimingBudget,
 } from '../helpers/index.js';
@@ -51,6 +52,10 @@ const SAVED_MESSAGE = /^Saved changes to \d+ tracks? in “.+”\.$/u;
 const TYPO_SAVED_MESSAGE = `Saved changes to ${TYPO_TRACK_FILENAMES.length} tracks in “${TYPO_ALBUM}”.`;
 const MAX_RETAINED_HEAP_GROWTH_BYTES = 32 * 1024 * 1024;
 const MAX_RETAINED_DOM_NODE_GROWTH = 1_500;
+const CONCURRENT_PROBE_BUDGET = defineTimingBudget({
+  targetMaximum: 800,
+  graceMs: 400,
+});
 const BUDGETS = Object.freeze(Object.fromEntries([
   'tagEditorOpenMs',
   'searchGalleryReadyMs',
@@ -276,10 +281,12 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
             probe.ok,
             `${probe.name} returned HTTP ${probe.status}${probe.body ? `: ${probe.body}` : ''} during Edit Tags.`,
           ).toBe(true);
-          expect(
+          expectTimingBudget(
+            expect,
             probe.durationMs,
-            `${probe.name} took ${probe.durationMs.toFixed(1)} ms during Edit Tags.`,
-          ).toBeLessThanOrEqual(1200);
+            CONCURRENT_PROBE_BUDGET,
+            `${probe.name} during Edit Tags`,
+          );
         }
         const reconciledView = await readRuntimeView(page);
         const [sourceIdentity, destinationIdentity] = await Promise.all([

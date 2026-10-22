@@ -6479,3 +6479,19 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
     }, 'Mastodon', 'Later album', { ...supplied, waitAtBoundary: true }), error => error === stop);
   }
 });
+
+test('Edit Tags duration gates use the shared timing-budget helper', () => {
+  const functionalSpec = read('tests/e2e/specs/albumTagRename.spec.js');
+  const performanceSpec = read('tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js');
+
+  assert.match(functionalSpec, /defineTimingBudget/);
+  assert.match(
+    functionalSpec,
+    /expectTimingBudget\(\s*expect,\s*Math\.max\(0, lateMedianMs - earlyMedianMs\)/,
+  );
+  assert.match(performanceSpec, /defineTimingBudget/);
+  assert.match(
+    performanceSpec,
+    /expectTimingBudget\(\s*expect,\s*probe\.durationMs,\s*CONCURRENT_PROBE_BUDGET/,
+  );
+});

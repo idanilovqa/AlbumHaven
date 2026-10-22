@@ -6,6 +6,7 @@ export class SettingsShell {
     this.navigation = page.getByRole('complementary', { name: 'Settings navigation' });
     this.items = this.navigation.getByRole('navigation').locator('a, button');
     this.users = this.navigation.getByRole('link', { name: 'Users', exact: true });
+    this.server = this.navigation.getByRole('link', { name: 'Server', exact: true });
     this.myAccount = this.navigation.getByRole('link', { name: 'My account', exact: true });
     this.signOut = this.navigation.getByRole('button', { name: 'Sign Out', exact: true });
     this.library = page.getByRole('link', { name: 'Back to library', exact: true });
@@ -17,12 +18,16 @@ export class SettingsShell {
 
   async expectOwnerNavigation(active) {
     await expect(this.navigation.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
-    await expect(this.items).toHaveCount(3);
+    await expect(this.items).toHaveCount(4);
     await expect(this.items.nth(0)).toHaveAccessibleName('Users');
-    await expect(this.items.nth(1)).toHaveAccessibleName('My account');
-    await expect(this.items.nth(2)).toHaveAccessibleName('Sign Out');
-    await expect(active === 'users' ? this.users : this.myAccount).toHaveAttribute('aria-current', 'page');
-    await expect(active === 'users' ? this.myAccount : this.users).not.toHaveAttribute('aria-current', 'page');
+    await expect(this.items.nth(1)).toHaveAccessibleName('Server');
+    await expect(this.items.nth(2)).toHaveAccessibleName('My account');
+    await expect(this.items.nth(3)).toHaveAccessibleName('Sign Out');
+    const activeLink = active === 'users' ? this.users : active === 'server' ? this.server : this.myAccount;
+    await expect(activeLink).toHaveAttribute('aria-current', 'page');
+    for (const link of [this.users, this.server, this.myAccount]) {
+      if (link !== activeLink) await expect(link).not.toHaveAttribute('aria-current', 'page');
+    }
   }
 
   async geometry() {

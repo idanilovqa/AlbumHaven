@@ -6,6 +6,7 @@ import {
 import { temporarilyRevokeRuntimeDeletePrivileges } from '../helpers/postgresPrivilegeHelpers.js';
 import { holdStructuralSavePersistence } from '../helpers/structuralSavePollWindowHelpers.js';
 import {
+  defineTimingBudget,
   expectTimingBudget,
   performanceTimingBudget,
 } from '../helpers/timingBudget.js';
@@ -54,6 +55,10 @@ const POST_EDIT_TREE_GALLERY_BUDGET = performanceTimingBudget(
   'artist-family-local-managed-chrome.treeNealGalleryReadyMs',
 );
 const POST_EDIT_DEGRADATION_GRACE_MS = 400;
+const POST_EDIT_DEGRADATION_BUDGET = defineTimingBudget({
+  targetMaximum: 0,
+  graceMs: POST_EDIT_DEGRADATION_GRACE_MS,
+});
 
 const median = (values) => {
   const sorted = [...values].sort((left, right) => left - right);
@@ -1427,10 +1432,12 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
     for (const metric of ['searchReadyMs', 'treeSelectionMs', 'treeGalleryReadyMs']) {
       const earlyMedianMs = median(postEditTimings.slice(0, 2).map((sample) => sample[metric]));
       const lateMedianMs = median(postEditTimings.slice(-2).map((sample) => sample[metric]));
-      expect(
-        lateMedianMs - earlyMedianMs,
-        `${metric} degraded from ${Math.round(earlyMedianMs)} ms to ${Math.round(lateMedianMs)} ms across repeated tag edits.`,
-      ).toBeLessThanOrEqual(POST_EDIT_DEGRADATION_GRACE_MS);
+      expectTimingBudget(
+        expect,
+        Math.max(0, lateMedianMs - earlyMedianMs),
+        POST_EDIT_DEGRADATION_BUDGET,
+        `${metric} repeated Edit Tags degradation from ${Math.round(earlyMedianMs)} ms to ${Math.round(lateMedianMs)} ms`,
+      );
     }
   });
 

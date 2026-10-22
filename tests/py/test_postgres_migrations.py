@@ -54,6 +54,9 @@ NONBLOCKING_GALLERY_PUBLICATION_MIGRATION = (
 ROOT_PREVIEW_ARTIST_ORDER_MIGRATION = (
     MIGRATIONS_DIR / "0095_add_root_preview_artist_order_index.sql"
 )
+GENERATED_PREVIEW_STORAGE_MIGRATION = (
+    MIGRATIONS_DIR / "0096_create_generated_preview_storage.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -459,7 +462,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-55:] == [
+    assert migration_names[-56:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -515,6 +518,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0093_add_duplicate_identity_lookup_index.sql",
         "0094_stage_gallery_projection_publication.sql",
         "0095_add_root_preview_artist_order_index.sql",
+        "0096_create_generated_preview_storage.sql",
     ]
 
 
@@ -656,6 +660,29 @@ def test_root_preview_artist_order_migration_matches_startup_query():
     assert "lower(name)," in sql
     assert "name" in sql
     assert "include (id)" in sql
+
+
+def test_generated_preview_storage_migration_is_durable_and_least_privileged():
+    sql = _normalized_sql(
+        GENERATED_PREVIEW_STORAGE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    for table in (
+        "app.generated_preview_storage",
+        "app.generated_preview_inventory",
+        "app.generated_preview_relocation_items",
+    ):
+        assert _qualified_table_pattern(table).search(sql)
+    assert "storage_key smallint primary key" in sql
+    assert "check (storage_key = 1)" in sql
+    assert "revision bigint not null default 0" in sql
+    assert "managed_relative_path text not null unique" in sql
+    assert "expected_sha256 text not null" in sql
+    assert "foreign key (operation_id)" in sql
+    assert "grant select, insert, update, delete on table" in sql
+    assert "to album_haven_app" in sql
+    assert "album_haven_readonly" not in sql
+    assert "c:\\users\\rendref" not in sql
 
 
 def test_album_raw_artist_search_index_verifier_checks_the_complete_definition():

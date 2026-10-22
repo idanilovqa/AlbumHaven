@@ -117,8 +117,11 @@ const shouldApplyEmbeddedSidebarHydration = Boolean(
   && embeddedStartupViewPatch.artists_sidebar.length
 );
 const shouldTreatStartupPreviewAsVisibleReady = Boolean(
-  shouldApplyEmbeddedSidebarHydration
-  && startupHydrationFollowupEndpoint
+  bootstrap.startupPreview?.renderedGalleryMarkup
+  || (
+    shouldApplyEmbeddedSidebarHydration
+    && startupHydrationFollowupEndpoint
+  )
 );
 if (shouldStartImmediateHydration) {
   startupMetrics.beginInitialRefresh();
@@ -193,7 +196,7 @@ if (
   && typeof startupMetrics?.completeVisibleInitialRefresh === 'function'
 ) {
   startupMetrics.completeVisibleInitialRefresh(state.view, {
-    hydrationTier: 'sidebar',
+    hydrationTier: startupHydrationTier,
     source: 'startup_preview',
   });
 }

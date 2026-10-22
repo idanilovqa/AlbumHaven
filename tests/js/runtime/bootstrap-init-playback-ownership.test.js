@@ -920,10 +920,19 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
   });
 });
 
-function createDelayedStartupHydrationHarness() {
+function createDelayedStartupHydrationHarness({
+  selectedArtist = '',
+  startupHydrationTier = 'sidebar',
+  renderedGalleryMarkup = false,
+} = {}) {
   const scheduledTimeouts = [];
   const fetchedEndpoints = [];
+  let visibleRefreshCount = 0;
+  const visibleRefreshDetails = [];
   const runtimeBootstrap = {
+    startupPreview: {
+      renderedGalleryMarkup,
+    },
     startupPayloadTiers: {
       hydration: {
         embeddedViewPatch: {
@@ -935,7 +944,7 @@ function createDelayedStartupHydrationHarness() {
       required: true,
       endpoint: '/view-data?payload_tier=sidebar',
       followupEndpoint: '/view-data',
-      tier: 'sidebar',
+      tier: startupHydrationTier,
       embeddedViewPatch: {
         artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
         artist_count: 1,
@@ -961,7 +970,7 @@ function createDelayedStartupHydrationHarness() {
       awaitingInitialDataRefresh: false,
       ui: { viewStateRevision: 0 },
       view: {
-        selected_artist: '',
+        selected_artist: selectedArtist,
         query: '',
         artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
         primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
@@ -989,6 +998,10 @@ function createDelayedStartupHydrationHarness() {
     startupMetrics: {
       beginInitialRefresh() {},
       markInitialRender() {},
+      completeVisibleInitialRefresh(_view, detail) {
+        visibleRefreshCount += 1;
+        visibleRefreshDetails.push(detail);
+      },
     },
     rebuildAlbumIndex() {},
     renderView() {},
@@ -1026,8 +1039,33 @@ function createDelayedStartupHydrationHarness() {
 
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
-  return { context, fetchedEndpoints, scheduledTimeouts };
+  return {
+    context,
+    fetchedEndpoints,
+    scheduledTimeouts,
+    visibleRefreshCount,
+    visibleRefreshDetails,
+  };
 }
+
+test('server-rendered selected gallery dismisses startup blocking before full hydration', () => {
+  const {
+    context,
+    visibleRefreshCount,
+    visibleRefreshDetails,
+  } = createDelayedStartupHydrationHarness({
+    selectedArtist: 'Broadcast',
+    startupHydrationTier: 'full',
+    renderedGalleryMarkup: true,
+  });
+
+  assert.equal(visibleRefreshCount, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(visibleRefreshDetails)), [{
+    hydrationTier: 'full',
+    source: 'startup_preview',
+  }]);
+  assert.equal(context.state.awaitingInitialDataRefresh, true);
+});
 
 test('delayed startup hydration yields to cover-display/source work without aborting it', () => {
   const { context, fetchedEndpoints, scheduledTimeouts } = createDelayedStartupHydrationHarness();

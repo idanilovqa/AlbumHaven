@@ -11,6 +11,9 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 
 
+_POSTGRES_RELATION_WARMUP_DELAY_SECONDS = 5.0
+
+
 class _BoundedExecutorAdmission:
     """Bound queued and running work submitted to an owned executor."""
 
@@ -94,7 +97,7 @@ def _start_library_warmup(
                         raise
                     except Exception:
                         runtime.logger.exception("Postgres scan timestamp hydration failed.")
-                if stop_requested.is_set():
+                if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
                     return
                 ensure_relations(runtime, cancel_requested=stop_requested)
                 return

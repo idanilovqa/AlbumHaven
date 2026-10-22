@@ -16,6 +16,8 @@ import {
   requirePostgresRuntimeEnv,
   waitForPostgresBrowseWarmRoot,
 } from '../helpers/realAppBenchmarkHelpers.js';
+import { readStartupDiagnostics } from '../helpers/appOpenAllArtistsHelpers.js';
+import { markRelationProjectionStale } from '../helpers/postgresProjectionFixture.js';
 
 const CASE_ID = 'FTC-GALLERY-STARTUP-005Q';
 const SELECTED_ARTIST_BUDGET = Object.freeze(
@@ -45,6 +47,13 @@ const MAX_TOTAL_DOM_NODES = 8000;
 const MAX_SELECTED_ARTIST_VIEW_DATA_RESPONSES = 1;
 const MAX_SELECTED_ARTIST_VIEW_DATA_BYTES = 2 * 1024 * 1024;
 const TAG_TYPING_PROBE = 'perf';
+const COLD_SELECTED_ARTIST = 'Neal Morse';
+const COLD_SELECTED_GALLERY_BUDGET = Object.freeze(
+  performanceTimingBudget('selected-artist.coldSelectedGalleryMs'),
+);
+const COLD_HOME_BUDGET = Object.freeze(
+  performanceTimingBudget('all-artists.startupPreviewSidebarMs'),
+);
 
 test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
   test.afterEach(async ({ navigationPanelActions }, testInfo) => {
@@ -55,6 +64,101 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
         contentType: 'application/json',
       });
     }
+  });
+
+  test('Stale projection keeps selected startup and superseding Home responsive', async ({
+    galleryActions,
+    managedAppLifecycle,
+    navigationPanelActions,
+    page,
+    stepLogger,
+  }, testInfo) => {
+    requirePostgresRuntimeEnv('the stale-projection selected-artist benchmark');
+
+    await stepLogger.step('Stop the isolated app, stale its relation projection, and restart it', async () => {
+      await managedAppLifecycle.stop();
+      try {
+        await markRelationProjectionStale();
+      } finally {
+        await managedAppLifecycle.restart();
+      }
+    });
+
+    const selectedStartupMs = await stepLogger.step(
+      'Open one selected artist while the full projection rebuild runs',
+      async () => measureActionTime(
+        () => galleryActions.goto(
+          `/?surface=albums&artist=${encodeURIComponent(COLD_SELECTED_ARTIST)}`,
+        ),
+        () => galleryActions.waitForSelectedArtistGallery(COLD_SELECTED_ARTIST, {
+          timeout: 120000,
+        }),
+      ),
+    );
+    const selectedStartupDiagnostics = await readStartupDiagnostics(page, {
+      coverImageSelector: galleryActions.galleryPage.albumCard.coverImageSelector,
+    });
+    const selectedGalleryReadyMs = selectedStartupDiagnostics.phases?.galleryReadyMs;
+    await testInfo.attach('selected-startup-diagnostics.json', {
+      body: Buffer.from(JSON.stringify({
+        ...selectedStartupDiagnostics,
+        measurements: {
+          outerWallMs: selectedStartupMs,
+          visibleGalleryMs: selectedGalleryReadyMs,
+        },
+      }, null, 2)),
+      contentType: 'application/json',
+    });
+    expect(typeof selectedGalleryReadyMs).toBe('number');
+    expect(Number.isFinite(selectedGalleryReadyMs)).toBe(true);
+    expectTimingBudget(
+      expect,
+      selectedGalleryReadyMs,
+      COLD_SELECTED_GALLERY_BUDGET,
+      'Cold selected-artist gallery',
+    );
+
+    await stepLogger.step('Keep stale tree rows out of the selected startup view', async () => {
+      expect((await galleryActions.readRelationProjectionReadiness()).ready).toBe(false);
+      expect(await navigationPanelActions.readHydratedSidebarArtistNames())
+        .toEqual([COLD_SELECTED_ARTIST]);
+    });
+
+    const homeMs = await stepLogger.step(
+      'Supersede startup hydration through the visible Home control',
+      async () => measureActionTime(
+        () => navigationPanelActions.clickAllArtists({ expectArtistQueryCleared: true }),
+        () => Promise.all([
+          navigationPanelActions.waitForSidebarSelection('', { timeout: 120000 }),
+          galleryActions.waitForInitialAllArtistsSections({
+            minimumHeadingCount: 1,
+            requireScrollable: false,
+            timeout: 120000,
+          }),
+        ]),
+      ),
+    );
+    expectTimingBudget(expect, homeMs, COLD_HOME_BUDGET, 'Cold Home gallery');
+    await expect.poll(
+      () => page.evaluate(() => ({
+        awaiting: Boolean(state?.awaitingInitialDataRefresh),
+        pending: state?.ui?.pendingStartupHydrationFollowup ?? null,
+      })),
+      { timeout: 5000 },
+    ).toEqual({ awaiting: false, pending: null });
+
+    await stepLogger.step('Hydrate the complete current tree after the background rebuild', async () => {
+      await expect.poll(
+        async () => (await galleryActions.readRelationProjectionReadiness()).ready,
+        { timeout: 120000 },
+      ).toBe(true);
+      await navigationPanelActions.waitForSidebarFullyHydrated({ timeout: 120000 });
+      await navigationPanelActions.waitForSidebarAndAllArtistsCountSynchronized({ timeout: 120000 });
+      const view = await readRuntimeView(page);
+      const artistNames = await navigationPanelActions.readHydratedSidebarArtistNames();
+      expect(artistNames.length).toBeGreaterThan(100);
+      expect(artistNames.length).toBe(Number(view.artist_count));
+    });
   });
 
   test('Selected artist UI reports library_browse telemetry and timing', async ({

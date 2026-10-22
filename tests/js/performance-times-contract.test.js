@@ -156,8 +156,12 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       ci: [800, 400, 1200],
     },
     'selected-artist.selectedArtistApiMs': {
-      local: [1800, 400, 2200],
-      ci: [1800, 400, 2200],
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
+    },
+    'selected-artist.coldSelectedGalleryMs': {
+      local: [1100, 400, 1500],
+      ci: [1100, 400, 1500],
     },
     'selected-artist.albumDetailsOpenMs': {
       local: [800, 400, 1200],

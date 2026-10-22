@@ -1127,8 +1127,9 @@ test('buildRunnerArgs preserves selected-artist target metadata when selected by
   const target = _private.resolvePerformanceTarget('tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js');
 
   assert.equal(target.aliasNames[0], 'selected-artist');
-  assert.deepEqual(target.env, REAL_APP_ENV);
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
   assert.deepEqual(target.casePatterns, [
+    'Stale projection keeps selected startup and superseding Home responsive',
     'Selected artist UI reports library_browse telemetry and timing',
     'FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family',
   ]);
@@ -1221,13 +1222,13 @@ test('every real-app target forces the browse selector', () => {
     assert.equal(target.coverageClass, 'real-app-library-browse-load');
     assert.deepEqual(
       target.env,
-      targetName === 'artist-tree-scroll-navigation'
+      ['artist-tree-scroll-navigation', 'selected-artist'].includes(targetName)
         ? CALIBRATED_REAL_APP_ENV
         : targetName === 'problematic-files-focused'
-        ? FOCUSED_PROBLEMATIC_FILES_REAL_APP_ENV
-        : targetName === 'utility-problematic-files'
-          ? BROAD_UTILITY_PROBLEMATIC_FILES_REAL_APP_ENV
-          : REAL_APP_ENV
+          ? FOCUSED_PROBLEMATIC_FILES_REAL_APP_ENV
+          : targetName === 'utility-problematic-files'
+            ? BROAD_UTILITY_PROBLEMATIC_FILES_REAL_APP_ENV
+            : REAL_APP_ENV
     );
   }
 });
@@ -1284,7 +1285,7 @@ test('broad utility rules target forces the Postgres browse selector', () => {
 test('selected-artist target forces the browse selector', () => {
   assert.deepEqual(
     performanceRunner.PERFORMANCE_TARGETS['selected-artist'].env,
-    REAL_APP_ENV
+    CALIBRATED_REAL_APP_ENV
   );
 });
 
@@ -2261,7 +2262,9 @@ test('selected-artist timing recovery cannot clear a sibling functional failure'
     ...baseAttempt,
     parsedTestResults: [
       { status: 'failed', testName: target.metricCasePattern },
-      { status: 'passed', testName: target.casePatterns[1] },
+      ...target.casePatterns
+        .filter((pattern) => pattern !== target.metricCasePattern)
+        .map((testName) => ({ status: 'passed', testName })),
     ],
   };
   assert.equal(_private.classifyPerformanceAttempt(timingOnly, 'ci').eligibleForRecovery, true);
@@ -2270,7 +2273,9 @@ test('selected-artist timing recovery cannot clear a sibling functional failure'
     ...baseAttempt,
     parsedTestResults: [
       { status: 'failed', testName: target.metricCasePattern },
-      { status: 'failed', testName: target.casePatterns[1] },
+      ...target.casePatterns
+        .filter((pattern) => pattern !== target.metricCasePattern)
+        .map((testName, index) => ({ status: index ? 'passed' : 'failed', testName })),
     ],
   };
   assert.equal(_private.classifyPerformanceAttempt(mixedFailure, 'ci').eligibleForRecovery, false);

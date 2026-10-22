@@ -683,6 +683,33 @@ def test_library_warmup_stop_during_postgres_prewarm_skips_relation_projection()
     assert relation_calls == []
 
 
+def test_postgres_relation_warmup_waits_for_startup_grace(monkeypatch):
+    import music_app
+
+    monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0.05)
+    relation_started = threading.Event()
+    runtime = types.SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        logger=logging.getLogger("test-library-warmup-grace"),
+        library_state={},
+    )
+
+    handle = music_app._start_library_warmup(
+        runtime,
+        lambda _runtime: (_ for _ in ()).throw(AssertionError("hydrate must not run")),
+        lambda _runtime, **_kwargs: relation_started.set(),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("scan must not start")
+        ),
+        lambda _database_url: None,
+    )
+    try:
+        assert not relation_started.wait(timeout=0.01)
+        assert relation_started.wait(timeout=0.5)
+    finally:
+        asyncio.run(handle.stop())
+
+
 def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
@@ -738,6 +765,7 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
     projection_finished = threading.Event()
     shutdown_requested = threading.Event()
     original_request_stop = music_app._LibraryWarmupHandle.request_stop
+    monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
 
     def request_stop(handle):
         shutdown_requested.set()
@@ -833,6 +861,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch,
     caplog,
 ):
+    import music_app
     from config import Config
     from music_app import create_asgi_app
     from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
@@ -840,6 +869,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch.setattr(state, "hydrate_runtime_scan_metadata_on_startup", lambda _runtime: None)
     calls = []
     database_url = "postgresql://album_haven_app@localhost/app"
+    monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
 
     def fail_prewarm(url):
         calls.append(("prewarm", url))
@@ -1450,10 +1480,11 @@ def test_route_method_collection_uses_prefixed_nested_paths():
     assert _collect_route_methods(synthetic_app) == {"/api/status": {"GET"}}
 
 
-def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration():
+def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration(monkeypatch):
     import asyncio
     from music_app import _start_library_warmup
 
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
     completed = threading.Event()
     calls = []
     runtime = types.SimpleNamespace(
@@ -1487,10 +1518,11 @@ def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration():
         asyncio.run(handle.stop())
 
 
-def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization():
+def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization(monkeypatch):
     import asyncio
     from music_app import _start_library_warmup
 
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
     completed = threading.Event()
     runtime = types.SimpleNamespace(
         config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test/isolated"},
@@ -1510,11 +1542,12 @@ def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization(
         asyncio.run(handle.stop())
 
 
-def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration():
+def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
     from music_app import _start_library_warmup
 
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
     calls = []
     runtime = SimpleNamespace(config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"}, logger=Mock())
     handle = _start_library_warmup(

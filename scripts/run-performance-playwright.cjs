@@ -319,12 +319,14 @@ const PERFORMANCE_TARGETS = {
     reportId: 'selectedArtistFocusedLocal',
     casePattern: 'FTC-GALLERY-STARTUP-005Q',
     casePatterns: [
+      'Stale projection keeps selected startup and superseding Home responsive',
       'Selected artist UI reports library_browse telemetry and timing',
       'FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family',
     ],
     metricCasePattern: 'Selected artist UI reports library_browse telemetry and timing',
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'edit-tags-post-edit': {

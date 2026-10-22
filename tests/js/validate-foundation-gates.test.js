@@ -259,7 +259,7 @@ test('foundation validator enforces the approved portable and Windows gate contr
     [workflow.replaceAll('node-version: "22"', 'node-version: "20"'), /Node(?:\.js)? 22/i],
     [workflow.replaceAll('python-version: "3.11"', 'python-version: "3.12"'), /Python 3\.11/i],
     [workflow.replaceAll('151.0.7922.138', '151.0.7922.139'), /Chrome 151\.0\.7922\.138/i],
-    [workflow.replaceAll('ExpectedMajorVersion 17', 'ExpectedMajorVersion 16'), /PostgreSQL 17/i],
+    [workflow.replaceAll('ExpectedMajorVersion 18', 'ExpectedMajorVersion 17'), /PostgreSQL 18/i],
     [
       workflow.replaceAll('7.1-essentials_build-www.gyan.dev', '7.2-essentials_build-www.gyan.dev'),
       /FFmpeg 7\.1-essentials_build-www\.gyan\.dev/i,

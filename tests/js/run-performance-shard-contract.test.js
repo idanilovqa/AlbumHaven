@@ -82,7 +82,7 @@ test('performance profile runner prepares one isolated fixture before compatible
   ]) {
     assert.match(source, new RegExp(`\\$${parameter}\\b`));
   }
-  assert.match(source, /\[string\]\$ExpectedPostgresMajor\s*=\s*['"]17['"]/);
+  assert.match(source, /\[string\]\$ExpectedPostgresMajor\s*=\s*['"]18['"]/);
   assert.match(source, /foreach\s*\(\$target\s+in\s+\$targetNames\)/i);
   assert.match(source, /\$targetIndex\s*\+=\s*1/);
   assert.doesNotMatch(source, /targetSuffix/i);

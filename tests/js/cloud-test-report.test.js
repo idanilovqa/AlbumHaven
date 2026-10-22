@@ -28,7 +28,7 @@ function sampleInput() {
     },
     environment: {
       runner: 'windows-2025', node: '22.20.0', python: '3.11', chrome: '151.0.7922.138',
-      postgres: '17', imageioFfmpeg: '0.6.0', ffmpeg: '7.1-essentials_build-www.gyan.dev',
+      postgres: '18', imageioFfmpeg: '0.6.0', ffmpeg: '7.1-essentials_build-www.gyan.dev',
     },
     functional: [{
       shard: 'gallery-search-visual', passed: 35, failed: 0, skipped: 0,

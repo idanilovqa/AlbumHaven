@@ -55,7 +55,7 @@ function fingerprint(overrides = {}) {
     chromeVersion: '151.0.7922.138',
     fixtureRelease: 'fixtures-v1.0.22',
     fixtureSchemaVersion: 1,
-    postgresMajor: 17,
+    postgresMajor: 18,
     measurementContract: 'performance-v1',
     ...overrides,
   };
@@ -755,7 +755,7 @@ mergerTest('history partitions on every approved environment fingerprint field',
     { chromeVersion: '152.0.0.0' },
     { fixtureRelease: 'fixtures-v1.0.20' },
     { fixtureSchemaVersion: 2 },
-    { postgresMajor: 18 },
+    { postgresMajor: 17 },
     { measurementContract: 'performance-v2' },
   ].map((change, index) => ({
     ...clone(baseEntry),

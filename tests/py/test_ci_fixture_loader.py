@@ -1870,13 +1870,13 @@ def _run_bootstrap_contract(tmp_path: Path, **overrides: str) -> subprocess.Comp
     executable = shutil.which("pwsh") or shutil.which("powershell")
     if executable is None:
         pytest.skip("PowerShell is required for the Windows Postgres bootstrap contract")
-    pgbin = tmp_path / "PostgreSQL" / "17" / "bin"
+    pgbin = tmp_path / "PostgreSQL" / "18" / "bin"
     pgbin.mkdir(parents=True, exist_ok=True)
     runner_temp = tmp_path / "runner-temp"
     runner_temp.mkdir(parents=True, exist_ok=True)
     arguments = {
-        "ServiceName": "postgresql-x64-17",
-        "ExpectedMajorVersion": "17",
+        "ServiceName": "postgresql-x64-18",
+        "ExpectedMajorVersion": "18",
         "Pgbin": str(pgbin),
         "HostName": "localhost",
         "DatabaseSuffix": "run_123_attempt_2_python_windows",
@@ -1920,11 +1920,11 @@ def test_bootstrap_contract_rejects_wrong_service_version_pgbin_host_or_suffix(
     assert message.casefold() in (result.stdout + result.stderr).casefold()
 
 
-def test_bootstrap_contract_pins_postgres_17_server_and_client_preflight(tmp_path: Path) -> None:
+def test_bootstrap_contract_pins_postgres_18_server_and_client_preflight(tmp_path: Path) -> None:
     contract = _bootstrap_contract(tmp_path)
     assert contract["service"] == {
-        "name": "postgresql-x64-17",
-        "expectedMajorVersion": 17,
+        "name": "postgresql-x64-18",
+        "expectedMajorVersion": 18,
         "host": "localhost",
         "allowedHosts": ["localhost", "127.0.0.1", "::1"],
     }
@@ -1932,21 +1932,21 @@ def test_bootstrap_contract_pins_postgres_17_server_and_client_preflight(tmp_pat
         "requiredExecutables": ["postgres.exe", "psql.exe", "pg_isready.exe"],
         "serverVersionProbe": "show server_version_num",
         "clientVersionProbe": "psql --version",
-        "requiredMajorVersion": 17,
+        "requiredMajorVersion": 18,
         "readinessTimeoutSeconds": 60,
     }
 
 
-def test_bootstrap_contract_accepts_matching_local_postgres_18_service_and_client(tmp_path: Path) -> None:
+def test_bootstrap_contract_accepts_matching_local_postgres_17_service_and_client(tmp_path: Path) -> None:
     contract = _bootstrap_contract(
         tmp_path,
-        ServiceName="postgresql-x64-18",
-        ExpectedMajorVersion="18",
-        Pgbin=str(tmp_path / "PostgreSQL" / "18" / "bin"),
+        ServiceName="postgresql-x64-17",
+        ExpectedMajorVersion="17",
+        Pgbin=str(tmp_path / "PostgreSQL" / "17" / "bin"),
     )
-    assert contract["service"]["name"] == "postgresql-x64-18"
-    assert contract["service"]["expectedMajorVersion"] == 18
-    assert contract["preflight"]["requiredMajorVersion"] == 18
+    assert contract["service"]["name"] == "postgresql-x64-17"
+    assert contract["service"]["expectedMajorVersion"] == 17
+    assert contract["preflight"]["requiredMajorVersion"] == 17
 
 
 def test_bootstrap_preflight_skips_noop_service_reconfiguration() -> None:
@@ -2151,7 +2151,7 @@ def test_bootstrap_teardown_rejects_unowned_pgpass_before_filesystem_deletion(tm
             "-Mode",
             "Teardown",
             "-Pgbin",
-            r"C:\Program Files\PostgreSQL\17\bin",
+            r"C:\Program Files\PostgreSQL\18\bin",
             "-DatabaseSuffix",
             "run_123_attempt_2_python_windows",
             "-RepositoryRoot",

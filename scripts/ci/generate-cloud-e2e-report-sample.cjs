@@ -15,7 +15,7 @@ const screenshotBytes = Buffer.from(
 const inventory = buildExpectedCloudE2EInventory({ runAttempt });
 const fingerprint = {
   runnerImage: 'windows-2025', chromeVersion: '151.0.7922.138', fixtureRelease: 'fixtures-v1.0.22',
-  fixtureSchemaVersion: 1, postgresMajor: 17, measurementContract: 'performance-v1',
+  fixtureSchemaVersion: 1, postgresMajor: 18, measurementContract: 'performance-v1',
 };
 
 const resultArtifacts = [

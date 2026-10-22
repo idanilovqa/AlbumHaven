@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][ValidateSet('Contract', 'Provision', 'Teardown')][string]$Mode,
-    [string]$ServiceName = 'postgresql-x64-17',
-    [ValidateSet('17', '18')][string]$ExpectedMajorVersion = '17',
+    [string]$ServiceName = 'postgresql-x64-18',
+    [ValidateSet('17', '18')][string]$ExpectedMajorVersion = '18',
     [string]$Pgbin = $env:PGBIN,
     [string]$HostName = 'localhost',
     [string]$DatabaseSuffix,

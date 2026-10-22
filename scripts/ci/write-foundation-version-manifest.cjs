@@ -7,7 +7,7 @@ const EXPECTED = Object.freeze({
   python: '3.11',
   componentChrome: '151.0.7922.138',
   windowsChrome: '151.0.7922.138',
-  postgresMajor: 17,
+  postgresMajor: 18,
   imageioFfmpeg: '0.6.0',
   ffmpeg: '7.1-essentials_build-www.gyan.dev',
 });

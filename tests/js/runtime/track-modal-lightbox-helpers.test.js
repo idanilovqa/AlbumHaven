@@ -341,6 +341,13 @@ function loadHelper(options = {}) {
     showToast(message, tone, duration) {
       context.showToastCalls.push({ message, tone, duration });
     },
+    cancelActiveLightboxPreloader() {
+      const activePreloader = context.state.lightbox.activePreloader;
+      if (!activePreloader) return;
+      activePreloader.onload = null;
+      activePreloader.onerror = null;
+      context.state.lightbox.activePreloader = null;
+    },
     escapeHtml(value) {
       return String(value);
     },
@@ -528,6 +535,50 @@ test('preview hydration completes before full-size artwork preload', async () =>
     context.modalSchedulingEvents,
     ['fetch-album-details', 'preload-full-artwork'],
   );
+});
+
+test('a superseded Album Details response cannot replace the newer album', async () => {
+  const responses = new Map();
+  const previews = [
+    { key: 'alpha', name: 'Album Alpha', preview_only: true, tracks: [] },
+    { key: 'beta', name: 'Album Beta', preview_only: true, tracks: [] },
+  ];
+  const { context } = loadHelper({
+    initialAlbums: previews,
+    onFetchAlbumDetails: ({ url }) => new Promise((resolve) => {
+      responses.set(decodeURIComponent(url).includes('beta') ? 'beta' : 'alpha', resolve);
+    }),
+  });
+
+  context.openTrackModal(previews[0]);
+  context.openTrackModal(previews[1]);
+
+  responses.get('beta')({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      album: { key: 'beta', name: 'Album Beta', tracks: [{ path: 'beta.flac' }] },
+    }),
+  });
+  await flushMicrotasks();
+  const betaRenderCount = context.renderTrackModalReleaseCalls.length;
+  const betaReleaseKeys = context.state.modalReleases.map((album) => album.key);
+
+  responses.get('alpha')({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      album: { key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'alpha.flac' }] },
+    }),
+  });
+  await flushMicrotasks();
+
+  assert.equal(context.getTrackModalElements().title.textContent, 'Album Beta');
+  assert.deepEqual(context.state.modalReleases.map((album) => album.key), betaReleaseKeys);
+  assert.equal(context.renderTrackModalReleaseCalls.length, betaRenderCount);
+  assert.equal(context.renderTrackModalReleaseCalls.at(-1), 'beta');
 });
 
 test('player Album Details takes foreground without closing Settings or its draft', () => {

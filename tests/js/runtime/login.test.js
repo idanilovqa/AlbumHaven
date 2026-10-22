@@ -140,6 +140,17 @@ test('startup stages are accessible, monotonic and permanently complete after fi
   assert.equal(ui.root.hidden, true);
 });
 
+test('startup overlay background stays stable while account appearance hydrates', () => {
+  const css = fs.readFileSync(
+    path.join(path.dirname(sourcePath), '..', 'css', 'startup-progress.css'),
+    'utf8',
+  );
+  const overlayRule = css.match(/\.startup-progress\s*\{([^}]*)\}/)?.[1] || '';
+
+  assert.match(overlayRule, /background:\s*#07101d;/);
+  assert.doesNotMatch(overlayRule, /--appearance-main-surface/);
+});
+
 test('startup failure provides recovery and reset restores login interactivity', () => {
   const ui = loadStartupProgress();
   ui.controller.fail();

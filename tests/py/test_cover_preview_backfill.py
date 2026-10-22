@@ -146,6 +146,55 @@ def test_backfill_uses_configured_data_dir_and_cover_revision(tmp_path):
     assert "metadata ->> 'cover_revision'" in connection.executed[0]
 
 
+def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    preview = source.parent / ".album-haven" / "cover_variants" / "aa" / "aabb.webp"
+    preview.parent.mkdir(parents=True)
+    preview.write_bytes(b"preview")
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    recorded = []
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": (
+                lambda source_path, preview_path: recorded.append(
+                    (Path(source_path), Path(preview_path))
+                )
+            ),
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        throttle_seconds=0,
+    )
+
+    assert worker.inventory_existing_previews() == 1
+    assert recorded == [(source, preview)]
+
+
+def test_inventory_existing_previews_does_not_wait_for_foreground_idle(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    preview = source.parent / ".album-haven" / "cover_variants" / "aa" / "aabb.webp"
+    preview.parent.mkdir(parents=True)
+    preview.write_bytes(b"preview")
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": lambda *_args: None,
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        throttle_seconds=0,
+    )
+    worker._wait_until_idle = lambda: (_ for _ in ()).throw(
+        AssertionError("explicit relocation discovery must not wait for HTTP silence")
+    )
+
+    assert worker.inventory_existing_previews() == 1
+
+
 def test_backfill_writes_to_requested_preview_storage_during_relocation(tmp_path):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
     from music_app.services.generated_preview_storage import (

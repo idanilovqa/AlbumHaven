@@ -78,6 +78,17 @@ def _stub_relation_projection_startup(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _disable_preview_storage_database_by_default(monkeypatch):
+    from music_app.services import generated_preview_storage_postgres
+
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "is_generated_preview_storage_postgres_available",
+        lambda _config: False,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _preserve_process_global_executors(monkeypatch):
     from music_app.services import runtime_shutdown
 
@@ -604,15 +615,22 @@ def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
         def __init__(self, config):
             self.config = config
 
+        def load(self):
+            return {
+                "mode": "custom",
+                "active_root": str(tmp_path / "Generated"),
+                "operation_state": "idle",
+            }
+
         def record_inventory(self, **metadata):
             recorded.append(metadata)
 
     class FakeWorker:
-        def __init__(self, repository, *, logger, on_state):
+        def __init__(self, repository, *, logger, on_state, **_kwargs):
             self.on_state = on_state
 
         def start(self):
-            self.on_state({"mode": "album_folders", "operation_state": "idle"})
+            return None
 
         async def stop(self, *, timeout_seconds=30.0):
             return None
@@ -635,6 +653,7 @@ def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
 
     asgi_app = music_app.create_asgi_app()
     messages = _run_asgi_lifespan(asgi_app)
+    assert asgi_app.state.generated_preview_storage_policy.snapshot.mode == "custom"
     source_path = tmp_path / "Music" / "Artist" / "Album" / "cover.jpg"
     preview_path = (
         tmp_path / "Generated" / "v1" / "cover_variants" / "aa" / "aabb.jpg"
@@ -650,7 +669,7 @@ def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
     )
 
     assert messages[-1] == {"type": "lifespan.shutdown.complete"}
-    assert len(recorded) == 1
+    assert len(recorded) == 2
     assert recorded[0]["managed_relative_path"] == "v1/cover_variants/aa/aabb.jpg"
 
 

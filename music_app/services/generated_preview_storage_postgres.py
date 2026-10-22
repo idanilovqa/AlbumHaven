@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _MODES = frozenset({"album_folders", "custom"})
 _TERMINAL_ITEM_STATES = frozenset({"completed", "failed", "skipped"})
+_PREVIEW_RELOCATION_LOCK_KEY = 1_094_735_954
 
 
 class PreviewStorageConflict(RuntimeError):
@@ -98,6 +99,7 @@ class PostgresGeneratedPreviewStorageRepository:
     def record_inventory(
         self,
         *,
+        current_path: str,
         album_preview_path: str,
         managed_relative_path: str,
         byte_count: int,
@@ -112,6 +114,7 @@ class PostgresGeneratedPreviewStorageRepository:
                     connection.execute(
                         _record_inventory_sql(),
                         {
+                            "current_path": str(current_path),
                             "album_preview_path": str(album_preview_path),
                             "managed_relative_path": str(managed_relative_path),
                             "byte_count": int(byte_count),
@@ -122,6 +125,36 @@ class PostgresGeneratedPreviewStorageRepository:
         if row is None:
             raise RuntimeError("Generated preview inventory was not recorded.")
         return _row_mapping(row)
+
+    @contextmanager
+    def operation_lock(self):
+        with self._connect_to_database() as connection:
+            row = _first_row(
+                connection.execute(
+                    "select pg_try_advisory_lock(%(lock_key)s) as acquired;",
+                    {"lock_key": _PREVIEW_RELOCATION_LOCK_KEY},
+                )
+            )
+            acquired = bool(_row_mapping(row).get("acquired"))
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    connection.execute(
+                        "select pg_advisory_unlock(%(lock_key)s) as unlocked;",
+                        {"lock_key": _PREVIEW_RELOCATION_LOCK_KEY},
+                    )
+
+    def stage_inventory(self, *, operation_id: str) -> int:
+        with self._connect_to_database() as connection:
+            with _transaction(connection):
+                row = _first_row(
+                    connection.execute(
+                        _stage_inventory_sql(),
+                        {"operation_id": str(UUID(str(operation_id)))},
+                    )
+                )
+        return int(_row_mapping(row).get("staged_count") or 0)
 
     def claim_batch(self, *, operation_id: str, limit: int) -> list[dict[str, object]]:
         if type(limit) is not int or limit < 1 or limit > 100:
@@ -178,9 +211,43 @@ class PostgresGeneratedPreviewStorageRepository:
         if row is None:
             raise PreviewStorageConflict("Preview relocation item is no longer claimable.")
 
+    def fail_item_cleanup(
+        self,
+        *,
+        operation_id: str,
+        item_id: int,
+        error: str,
+    ) -> None:
+        with self._connect_to_database() as connection:
+            with _transaction(connection):
+                row = _first_row(
+                    connection.execute(
+                        _fail_item_cleanup_sql(),
+                        {
+                            "operation_id": str(UUID(str(operation_id))),
+                            "item_id": int(item_id),
+                            "last_error": str(error)[:1000],
+                        },
+                    )
+                )
+        if row is None:
+            raise PreviewStorageConflict(
+                "Preview relocation cleanup failure could not be recorded."
+            )
+
     def finish_operation(self, operation_id: str) -> dict[str, object]:
         with self._connect_to_database() as connection:
             with _transaction(connection):
+                locked = _first_row(
+                    connection.execute(
+                        _lock_operation_sql(),
+                        {"operation_id": str(UUID(str(operation_id)))},
+                    )
+                )
+                if locked is None:
+                    raise PreviewStorageConflict(
+                        "Preview relocation cannot be finished."
+                    )
                 row = _first_row(
                     connection.execute(
                         _finish_operation_sql(),
@@ -267,7 +334,18 @@ def _validate_location(mode: str, root: str | None) -> tuple[str, str | None]:
 
 
 def _load_sql() -> str:
-    return "select * from app.generated_preview_storage where storage_key = 1;"
+    return """
+        select storage.*,
+               inventory.inventory_count,
+               inventory.inventory_bytes
+        from app.generated_preview_storage storage
+        cross join (
+          select count(*) as inventory_count,
+                 coalesce(sum(byte_count), 0) as inventory_bytes
+          from app.generated_preview_inventory
+        ) inventory
+        where storage_key = 1;
+    """
 
 
 def _request_location_sql() -> str:
@@ -292,15 +370,10 @@ def _begin_operation_sql() -> str:
           update app.generated_preview_storage
           set operation_id = %(operation_id)s::uuid,
               operation_state = 'queued',
-              total_count = (
-                select count(*) from app.generated_preview_inventory
-              ),
+              total_count = 0,
               completed_count = 0,
               failed_count = 0,
-              total_bytes = (
-                select coalesce(sum(byte_count), 0)
-                from app.generated_preview_inventory
-              ),
+              total_bytes = 0,
               completed_bytes = 0,
               cancel_requested = false,
               failure_summary = '[]'::jsonb,
@@ -309,53 +382,182 @@ def _begin_operation_sql() -> str:
             and requested_mode is not null
             and operation_state not in ('queued', 'running', 'cancel_requested')
           returning *
+        )
+        select * from activated;
+    """
+
+
+def _stage_inventory_sql() -> str:
+    return """
+        with storage_state as (
+          select *
+          from app.generated_preview_storage
+          where storage_key = 1
+            and operation_id = %(operation_id)s::uuid
+            and operation_state in ('queued', 'running', 'cancel_requested')
+          for update
         ), staged as (
           insert into app.generated_preview_relocation_items (
             storage_key, operation_id, inventory_id, source_path, target_path,
             expected_bytes, expected_sha256
           )
-          select activated.storage_key,
-                 activated.operation_id,
+          select storage.storage_key,
+                 storage.operation_id,
                  inventory.id,
                  paths.source_path,
                  paths.target_path,
                  inventory.byte_count,
                  inventory.sha256
           from app.generated_preview_inventory inventory
-          cross join activated
+          cross join storage_state storage
           cross join lateral (
             select
-              case when activated.mode = 'custom'
-                then activated.active_root || '/' || inventory.managed_relative_path
-                else inventory.album_preview_path
-              end as source_path,
-              case when activated.requested_mode = 'custom'
-                then activated.requested_root || '/' || inventory.managed_relative_path
+              inventory.current_path as source_path,
+              case when storage.requested_mode = 'custom'
+                then storage.requested_root || '/' || inventory.managed_relative_path
                 else inventory.album_preview_path
               end as target_path
           ) paths
           where paths.source_path <> paths.target_path
           on conflict (operation_id, inventory_id) do nothing
-          returning id
+          returning expected_bytes
+        ), counted as (
+          update app.generated_preview_storage storage
+          set total_count = total_count + (select count(*) from staged),
+              total_bytes = total_bytes + (select coalesce(sum(expected_bytes), 0) from staged),
+              updated_at = now()
+          where storage.storage_key = 1
+            and storage.operation_id = %(operation_id)s::uuid
+          returning storage.*
         )
-        select activated.* from activated;
+        select count(*) as staged_count from staged;
     """
 
 
 def _record_inventory_sql() -> str:
     return """
-        insert into app.generated_preview_inventory (
-          album_preview_path, managed_relative_path, byte_count, sha256
-        ) values (
-          %(album_preview_path)s, %(managed_relative_path)s,
-          %(byte_count)s, %(sha256)s
+        with storage_state as (
+          select *
+          from app.generated_preview_storage
+          where storage_key = 1
+          for update
+        ), inventory as (
+          insert into app.generated_preview_inventory (
+            current_path, album_preview_path, managed_relative_path, byte_count, sha256
+          ) values (
+            %(current_path)s, %(album_preview_path)s, %(managed_relative_path)s,
+            %(byte_count)s, %(sha256)s
+          )
+          on conflict (managed_relative_path) do update
+          set current_path = excluded.current_path,
+              album_preview_path = excluded.album_preview_path,
+              byte_count = excluded.byte_count,
+              sha256 = excluded.sha256,
+              updated_at = now()
+          returning *
+        ), desired as (
+          select storage.*,
+                 inventory.id as inventory_id,
+                 inventory.current_path,
+                 inventory.byte_count,
+                 inventory.sha256,
+                 case when storage.requested_mode = 'custom'
+                   then storage.requested_root || '/' || inventory.managed_relative_path
+                   when storage.requested_mode = 'album_folders'
+                   then inventory.album_preview_path
+                 end as requested_target_path,
+                 case when storage.mode = 'custom'
+                   then storage.active_root || '/' || inventory.managed_relative_path
+                   else inventory.album_preview_path
+                 end as active_target_path
+          from inventory
+          cross join storage_state storage
+        ), reopen_candidates as (
+          select item.id,
+                 item.expected_bytes as previous_expected_bytes,
+                 item.actual_bytes as previous_actual_bytes
+          from app.generated_preview_relocation_items item
+          cross join desired
+          where item.operation_id = desired.operation_id
+            and item.inventory_id = desired.inventory_id
+            and item.status = 'completed'
+            and desired.requested_mode is not null
+            and desired.operation_state in ('queued', 'running', 'cancel_requested')
+            and replace(desired.current_path, E'\\\\', '/') <>
+                replace(desired.requested_target_path, E'\\\\', '/')
+          for update of item
+        ), reopened as (
+          update app.generated_preview_relocation_items item
+          set status = 'pending',
+              source_path = desired.current_path,
+              target_path = desired.requested_target_path,
+              expected_bytes = desired.byte_count,
+              expected_sha256 = desired.sha256,
+              actual_bytes = null,
+              actual_sha256 = null,
+              last_error = null,
+              started_at = null,
+              finished_at = null
+          from desired, reopen_candidates candidate
+          where item.id = candidate.id
+          returning candidate.previous_expected_bytes,
+                    candidate.previous_actual_bytes,
+                    item.expected_bytes
+        ), staged as (
+          insert into app.generated_preview_relocation_items (
+            storage_key, operation_id, inventory_id, source_path, target_path,
+            expected_bytes, expected_sha256
+          )
+          select desired.storage_key,
+                 desired.operation_id,
+                 desired.inventory_id,
+                 desired.current_path,
+                 desired.requested_target_path,
+                 desired.byte_count,
+                 desired.sha256
+          from desired
+          where desired.requested_mode is not null
+            and desired.operation_state in ('queued', 'running', 'cancel_requested')
+            and replace(desired.current_path, E'\\\\', '/') <>
+                replace(desired.requested_target_path, E'\\\\', '/')
+          on conflict (operation_id, inventory_id) do nothing
+          returning expected_bytes
+        ), counted as (
+          update app.generated_preview_storage storage
+          set total_count = total_count + (select count(*) from staged),
+              total_bytes = total_bytes
+                + (select coalesce(sum(expected_bytes), 0) from staged)
+                + (select coalesce(sum(expected_bytes - previous_expected_bytes), 0) from reopened),
+              completed_count = completed_count - (select count(*) from reopened),
+              completed_bytes = completed_bytes
+                - (select coalesce(sum(previous_actual_bytes), 0) from reopened),
+              updated_at = now()
+          where storage.storage_key = 1
+            and (exists (select 1 from staged) or exists (select 1 from reopened))
+          returning storage.storage_key
+        ), reconciliation_requested as (
+          update app.generated_preview_storage storage
+          set requested_mode = storage.mode,
+              requested_root = storage.active_root,
+              operation_id = null,
+              operation_state = 'idle',
+              total_count = 0,
+              completed_count = 0,
+              failed_count = 0,
+              total_bytes = 0,
+              completed_bytes = 0,
+              cancel_requested = false,
+              failure_summary = '[]'::jsonb,
+              updated_at = now()
+          from desired
+          where storage.storage_key = 1
+            and desired.requested_mode is null
+            and desired.operation_state not in ('queued', 'running', 'cancel_requested')
+            and replace(desired.current_path, E'\\\\', '/') <>
+                replace(desired.active_target_path, E'\\\\', '/')
+          returning storage.storage_key
         )
-        on conflict (managed_relative_path) do update
-        set album_preview_path = excluded.album_preview_path,
-            byte_count = excluded.byte_count,
-            sha256 = excluded.sha256,
-            updated_at = now()
-        returning *;
+        select * from inventory;
     """
 
 
@@ -406,6 +608,14 @@ def _complete_item_sql() -> str:
             and operation_id = %(operation_id)s::uuid
             and status = 'running'
           returning *
+        ), inventory_moved as (
+          update app.generated_preview_inventory inventory
+          set current_path = finished.target_path,
+              updated_at = now()
+          from finished
+          where inventory.id = finished.inventory_id
+            and %(status)s <> 'failed'
+          returning inventory.id
         ), counted as (
           update app.generated_preview_storage storage
           set completed_count = completed_count + case when %(status)s <> 'failed' then 1 else 0 end,
@@ -479,6 +689,55 @@ def _finish_operation_sql() -> str:
             )
           )
         returning *;
+    """
+
+
+def _lock_operation_sql() -> str:
+    return """
+        select storage_key
+        from app.generated_preview_storage
+        where storage_key = 1
+          and operation_id = %(operation_id)s::uuid
+          and operation_state in ('queued', 'running', 'cancel_requested')
+          and not exists (
+            select 1
+            from app.generated_preview_relocation_items item
+            where item.operation_id = %(operation_id)s::uuid
+              and item.status in ('pending', 'running')
+              and (item.status = 'running' or not cancel_requested)
+          )
+        for update;
+    """
+
+
+def _fail_item_cleanup_sql() -> str:
+    return """
+        with finished as (
+          update app.generated_preview_relocation_items
+          set status = 'failed',
+              last_error = %(last_error)s,
+              finished_at = now()
+          where id = %(item_id)s
+            and operation_id = %(operation_id)s::uuid
+            and status = 'completed'
+          returning actual_bytes
+        )
+        update app.generated_preview_storage storage
+        set completed_count = completed_count - 1,
+            failed_count = failed_count + 1,
+            completed_bytes = completed_bytes - finished.actual_bytes,
+            failure_summary = case
+              when jsonb_array_length(failure_summary) < 20
+              then failure_summary || jsonb_build_array(
+                jsonb_build_object('item_id', %(item_id)s, 'error', %(last_error)s)
+              )
+              else failure_summary
+            end,
+            updated_at = now()
+        from finished
+        where storage.storage_key = 1
+          and storage.operation_id = %(operation_id)s::uuid
+        returning storage.storage_key;
     """
 
 

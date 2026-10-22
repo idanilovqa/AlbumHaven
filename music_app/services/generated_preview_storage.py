@@ -10,6 +10,7 @@ from typing import Callable, Iterable, Mapping
 _MANAGED_MARKERS = (
     (".album-haven", "cover_variants"),
     (".album-haven", "v1", "cover_variants"),
+    ("display-cover-cache", "cover_variants"),
 )
 
 
@@ -97,7 +98,7 @@ def managed_preview_relative_path(preview_path: Path | str) -> Path | None:
         if part != "cover_variants" or len(parts) - index < 3:
             continue
         prefix = normalized[max(0, index - 2) : index]
-        if ".album-haven" in prefix or "v1" in prefix:
+        if any(marker in prefix for marker in (".album-haven", "v1", "display-cover-cache")):
             return Path("v1", *parts[index:])
     return None
 
@@ -113,6 +114,7 @@ def record_generated_preview(repository, source_path: Path, preview_path: Path) 
             digest.update(chunk)
             byte_count += len(chunk)
     repository.record_inventory(
+        current_path=str(preview_path),
         album_preview_path=str(
             source_path.parent / ".album-haven" / Path(*relative_path.parts[1:])
         ),

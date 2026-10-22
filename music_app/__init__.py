@@ -443,26 +443,22 @@ def create_asgi_app():
                 runtime.config
             )
         _app.state.generated_preview_storage_repository = preview_storage_repository
+        preview_storage_state = None
+        if preview_storage_repository is not None:
+            try:
+                preview_storage_state = preview_storage_repository.load()
+            except Exception:
+                runtime.logger.exception(
+                    "Generated preview storage state was unavailable at startup."
+                )
         preview_inventory_recorder = None
         if preview_storage_repository is not None:
-            recorded_preview_paths: set[str] = set()
-            recorded_preview_paths_lock = threading.Lock()
-
             def preview_inventory_recorder(source_path, preview_path) -> None:
-                inventory_key = str(
-                    Path(preview_path).resolve(strict=False)
-                ).casefold()
-                with recorded_preview_paths_lock:
-                    if inventory_key in recorded_preview_paths:
-                        return
-                    recorded_preview_paths.add(inventory_key)
                 try:
                     record_generated_preview(
                         preview_storage_repository, source_path, preview_path
                     )
                 except Exception:
-                    with recorded_preview_paths_lock:
-                        recorded_preview_paths.discard(inventory_key)
                     runtime.logger.exception(
                         "Generated preview inventory record failed for %s.",
                         preview_path,
@@ -473,7 +469,7 @@ def create_asgi_app():
             preview_inventory_recorder
         )
         _app.state.generated_preview_storage_policy = (
-            preview_storage_policy_from_mapping(None)
+            preview_storage_policy_from_mapping(preview_storage_state)
         )
         runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = (
             _app.state.generated_preview_storage_policy
@@ -494,6 +490,9 @@ def create_asgi_app():
                 preview_storage_repository,
                 logger=runtime.logger,
                 on_state=update_preview_storage_policy,
+                discover_inventory=(
+                    _app.state.cover_preview_backfill.inventory_existing_previews
+                ),
             )
             _app.state.generated_preview_relocation.start()
         _app.state.library_warmup_thread = _start_library_warmup(

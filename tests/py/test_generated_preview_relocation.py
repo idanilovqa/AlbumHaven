@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import hashlib
 import time
 from pathlib import Path
@@ -29,17 +30,27 @@ class FakeRepository:
         self.items = list(items)
         self.operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
         self.operation_state = operation_state
+        self.mode = "album_folders"
         self.completed = []
         self.finished = []
         self.recovered = []
         self.claims = 0
+        self.staged = []
+        self.cleanup_failures = []
 
     def load(self):
         return {
+            "mode": self.mode,
             "operation_id": self.operation_id,
             "operation_state": self.operation_state,
             "cancel_requested": self.operation_state == "cancel_requested",
         }
+
+    def operation_lock(self):
+        return nullcontext(True)
+
+    def stage_inventory(self, *, operation_id):
+        self.staged.append(operation_id)
 
     def claim_batch(self, *, operation_id, limit):
         assert operation_id == self.operation_id
@@ -54,6 +65,9 @@ class FakeRepository:
     def complete_item(self, **result):
         self.completed.append(result)
 
+    def fail_item_cleanup(self, **result):
+        self.cleanup_failures.append(result)
+
     def finish_operation(self, operation_id):
         self.finished.append(operation_id)
         self.operation_state = "completed"
@@ -61,7 +75,11 @@ class FakeRepository:
 
 
 def run_worker(repository):
-    worker = GeneratedPreviewRelocationWorker(repository, batch_size=2)
+    worker = GeneratedPreviewRelocationWorker(
+        repository,
+        batch_size=2,
+        sync_grace_seconds=0,
+    )
     worker.start()
     worker.wake()
     deadline = time.monotonic() + 3
@@ -158,6 +176,34 @@ def test_interrupted_partial_copy_is_replaced_and_unrelated_files_survive(
     assert not temp.exists()
 
 
+def test_source_cleanup_failure_is_durable_and_retryable(tmp_path, monkeypatch):
+    content = b"already-published"
+    source = tmp_path / "source.webp"
+    target = tmp_path / "target.webp"
+    source.write_bytes(content)
+    target.write_bytes(content)
+    repository = FakeRepository([item(source, target, content)])
+    original_unlink = Path.unlink
+
+    def fail_source_unlink(path, *args, **kwargs):
+        if path == source:
+            raise PermissionError("source is locked")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_source_unlink)
+    run_worker(repository)
+
+    assert source.exists()
+    assert target.read_bytes() == content
+    assert repository.cleanup_failures == [
+        {
+            "operation_id": repository.operation_id,
+            "item_id": 1,
+            "error": "source is locked",
+        }
+    ]
+
+
 def test_cancellation_stops_at_file_boundary_without_claiming(tmp_path):
     content = b"preview"
     source = tmp_path / "source.webp"
@@ -181,6 +227,95 @@ def test_worker_recovers_interrupted_claims_before_resuming():
     run_worker(repository)
 
     assert repository.recovered == [repository.operation_id]
+
+
+def test_worker_does_not_recover_or_claim_without_database_operation_lock():
+    repository = FakeRepository([])
+    repository.operation_lock = lambda: nullcontext(False)
+    worker = GeneratedPreviewRelocationWorker(
+        repository,
+        retry_seconds=0.01,
+        sync_grace_seconds=0,
+    )
+    worker.start()
+    time.sleep(0.03)
+    asyncio.run(worker.stop(timeout_seconds=2))
+
+    assert repository.recovered == []
+    assert repository.claims == 0
+
+
+def test_worker_discovers_existing_previews_before_claiming(tmp_path):
+    content = b"existing-preview"
+    source = tmp_path / "source.webp"
+    target = tmp_path / "target.webp"
+    source.write_bytes(content)
+    repository = FakeRepository([])
+    discovered = []
+
+    def discover():
+        discovered.append(True)
+        repository.items.append(item(source, target, content))
+
+    worker = GeneratedPreviewRelocationWorker(
+        repository,
+        discover_inventory=discover,
+        retry_seconds=0.01,
+        sync_grace_seconds=0,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2
+    while not repository.finished and time.monotonic() < deadline:
+        time.sleep(0.01)
+    asyncio.run(worker.stop(timeout_seconds=2))
+
+    assert discovered == [True]
+    assert repository.staged == [repository.operation_id]
+    assert target.read_bytes() == content
+
+
+def test_cancellation_during_inventory_discovery_stops_before_claiming():
+    repository = FakeRepository([])
+
+    def discover():
+        repository.operation_state = "cancel_requested"
+
+    worker = GeneratedPreviewRelocationWorker(
+        repository,
+        discover_inventory=discover,
+        retry_seconds=0.01,
+        sync_grace_seconds=0,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2
+    while not repository.finished and time.monotonic() < deadline:
+        time.sleep(0.01)
+    asyncio.run(worker.stop(timeout_seconds=2))
+
+    assert repository.claims == 0
+    assert repository.finished == [repository.operation_id]
+
+
+def test_idle_worker_refreshes_policy_changed_by_another_process():
+    repository = FakeRepository([], operation_state="idle")
+    observed = []
+    worker = GeneratedPreviewRelocationWorker(
+        repository,
+        on_state=lambda state: observed.append(state["mode"]),
+        refresh_seconds=0.01,
+        sync_grace_seconds=0,
+    )
+    worker.start()
+    deadline = time.monotonic() + 1
+    while not observed and time.monotonic() < deadline:
+        time.sleep(0.005)
+    repository.mode = "custom"
+    deadline = time.monotonic() + 1
+    while "custom" not in observed and time.monotonic() < deadline:
+        time.sleep(0.005)
+    asyncio.run(worker.stop(timeout_seconds=2))
+
+    assert "custom" in observed
 
 
 def test_worker_recovers_requested_location_left_before_operation_start():

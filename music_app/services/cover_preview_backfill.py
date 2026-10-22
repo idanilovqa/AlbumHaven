@@ -8,6 +8,7 @@ from typing import Callable, Mapping
 
 from music_app.services.covers import (
     display_cover_variant_cache_root,
+    find_existing_cover_display_variant,
     resolve_cover_display_variant,
 )
 from music_app.services.postgres_connections import pooled_connection
@@ -117,6 +118,34 @@ class CoverPreviewBackfill:
             if self._stop_requested.wait(self._throttle_seconds):
                 break
         return generated
+
+    def inventory_existing_previews(self) -> int:
+        recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
+        if recorder is None:
+            return 0
+        recorded = 0
+        for source_path, cover_revision in self._load_cover_paths():
+            for cache_root in (
+                source_path.parent / ".album-haven" / "cover_variants",
+                source_path.parent / ".album-haven" / "v1" / "cover_variants",
+            ):
+                if not cache_root.is_dir():
+                    continue
+                for preview_path in cache_root.rglob("*"):
+                    if preview_path.is_file():
+                        recorder(source_path, preview_path)
+                        recorded += 1
+            if self._data_dir and cover_revision:
+                preview_path = find_existing_cover_display_variant(
+                    source_path,
+                    cache_root=Path(str(self._data_dir)) / "display-cover-cache",
+                    max_size=_DISPLAY_COVER_SIZE,
+                    revision=cover_revision,
+                )
+                if preview_path is not None:
+                    recorder(source_path, preview_path)
+                    recorded += 1
+        return recorded
 
     def _run_forever(self) -> None:
         while not self._stop_requested.is_set():

@@ -53,6 +53,7 @@ on conflict (storage_key) do nothing;
 
 create table if not exists app.generated_preview_inventory (
   id bigint generated always as identity primary key,
+  current_path text not null,
   album_preview_path text not null,
   managed_relative_path text not null unique,
   byte_count bigint not null,

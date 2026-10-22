@@ -90,6 +90,9 @@ def test_load_returns_the_singleton_storage_state():
     assert state["mode"] == "album_folders"
     assert state["revision"] == 0
     assert "where storage_key = 1" in connection.calls[0][0]
+    assert "inventory_count" in connection.calls[0][0]
+    assert "inventory_bytes" in connection.calls[0][0]
+    assert connection.calls[0][0].count("from app.generated_preview_inventory") == 1
 
 
 def test_request_location_is_revision_guarded_and_records_requested_target():
@@ -141,12 +144,8 @@ def test_begin_operation_has_identity_and_bounded_counters():
     UUID(str(state["operation_id"]))
     sql, params = connection.calls[0]
     assert "operation_state = 'queued'" in sql
-    assert "insert into app.generated_preview_relocation_items" in sql
-    assert "from app.generated_preview_inventory inventory" in sql
-    assert "requested_mode = 'custom'" in sql
-    assert "mode = 'custom'" in sql
-    assert "select count(*) from app.generated_preview_inventory" in sql
-    assert "select coalesce(sum(byte_count), 0)" in sql
+    assert "total_count = 0" in sql
+    assert "total_bytes = 0" in sql
     assert params == {"operation_id": operation_id}
 
 
@@ -166,6 +165,7 @@ def test_record_inventory_upserts_only_published_preview_metadata():
     )
 
     record = repository_for(connection).record_inventory(
+        current_path="D:/Music/Album/.album-haven/cover_variants/aa/aabb.jpg",
         album_preview_path="D:/Music/Album/.album-haven/cover_variants/aa/aabb.jpg",
         managed_relative_path="v1/cover_variants/aa/aabb.jpg",
         byte_count=123,
@@ -175,9 +175,66 @@ def test_record_inventory_upserts_only_published_preview_metadata():
     sql, params = connection.calls[0]
     assert "insert into app.generated_preview_inventory" in sql
     assert "on conflict (managed_relative_path) do update" in sql
+    assert "current_path = excluded.current_path" in sql
+    assert "insert into app.generated_preview_relocation_items" in sql
+    assert "for update" in sql
+    assert "reopened as" in sql
+    assert "status = 'pending'" in sql
+    assert "reconciliation_requested as" in sql
+    assert "requested_mode = storage.mode" in sql
+    assert "requested_root = storage.active_root" in sql
+    assert "total_count = total_count +" in sql
+    assert params["current_path"].endswith("aabb.jpg")
     assert params["byte_count"] == 123
     assert params["sha256"] == "a" * 64
     assert record["id"] == 9
+
+
+def test_operation_lock_holds_one_database_advisory_lock_for_context():
+    connection = FakeConnection(
+        [
+            FakeCursor(row={"acquired": True}),
+            FakeCursor(row={"unlocked": True}),
+        ]
+    )
+
+    with repository_for(connection).operation_lock() as acquired:
+        assert acquired is True
+        assert len(connection.calls) == 1
+
+    assert "pg_try_advisory_lock" in connection.calls[0][0]
+    assert "pg_advisory_unlock" in connection.calls[1][0]
+
+
+def test_stage_inventory_adds_only_missing_items_to_active_operation():
+    operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
+    connection = FakeConnection([FakeCursor(row={"staged_count": 3})])
+
+    staged = repository_for(connection).stage_inventory(operation_id=operation_id)
+
+    sql, params = connection.calls[0]
+    assert "on conflict (operation_id, inventory_id) do nothing" in sql
+    assert "for update" in sql
+    assert "total_count = total_count +" in sql
+    assert params == {"operation_id": operation_id}
+    assert staged == 3
+
+
+def test_cleanup_failure_reopens_completed_item_and_counters():
+    operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
+    connection = FakeConnection([FakeCursor(row={"id": 7})])
+
+    repository_for(connection).fail_item_cleanup(
+        operation_id=operation_id,
+        item_id=7,
+        error="source is locked",
+    )
+
+    sql, params = connection.calls[0]
+    assert "set status = 'failed'" in sql
+    assert "completed_count = completed_count - 1" in sql
+    assert "completed_bytes = completed_bytes - finished.actual_bytes" in sql
+    assert params["last_error"] == "source is locked"
 
 
 def test_claim_batch_uses_skip_locked_and_returns_item_checkpoints():
@@ -251,6 +308,7 @@ def test_finish_operation_marks_pending_items_skipped_when_canceling():
     operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
     connection = FakeConnection(
         [
+            FakeCursor(row={"storage_key": 1}),
             FakeCursor(
                 row=storage_row(
                     operation_id=operation_id,
@@ -263,7 +321,10 @@ def test_finish_operation_marks_pending_items_skipped_when_canceling():
 
     state = repository_for(connection).finish_operation(operation_id)
 
-    sql, _params = connection.calls[0]
+    lock_sql, _params = connection.calls[0]
+    sql, _params = connection.calls[1]
+    assert "for update" in lock_sql
+    assert "status in ('pending', 'running')" in lock_sql
     assert "set status = 'skipped'" in sql
     assert "status = 'pending'" in sql
     assert "when cancel_requested then 'canceled'" in sql

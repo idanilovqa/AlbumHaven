@@ -48,6 +48,7 @@ def test_record_generated_preview_uses_canonical_album_path_and_content_hash(tmp
 
     assert recorded == [
         {
+            "current_path": str(preview_path),
             "album_preview_path": str(
                 source_path.parent
                 / ".album-haven"

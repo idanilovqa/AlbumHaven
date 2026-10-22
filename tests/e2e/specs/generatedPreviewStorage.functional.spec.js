@@ -7,7 +7,13 @@ import { expect, test } from '../support/baseFixtures.js';
 import { waitForDisplayedImageDecode } from '../actions/coverLookupActions.js';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
+import {
+  defineTimingBudget,
+  expectTimingBudget,
+  formatTimingBudgetOutcome,
+} from '../helpers/timingBudget.js';
 import { InvitationPage, LoginPage, MembersPage } from '../phase7/poms/authPages.js';
+import { AdminServerPage } from '../poms/adminServer.js';
 
 const ARTIST = 'Generated Preview Storage Artist';
 const ALBUM = 'Generated Preview Storage Album';
@@ -18,7 +24,8 @@ const MEMBER = Object.freeze({
   email: 'preview.storage.listener@example.test',
   password: 'Cobalt Meadow 73! Silent Aurora',
 });
-const HARD_CEILING_MS = 1200;
+const GALLERY_BUDGET = defineTimingBudget({ targetMaximum: 800, graceMs: 400 });
+const COVER_LOOKUP_BUDGET = defineTimingBudget({ targetMaximum: 800, graceMs: 400 });
 const PNG_RED = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAHIElEQVR4nO3VMQEAIAzAMEDN/OtBDDI4mijo131nFgA953cAAH8YAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAEQZAECUAQBEGQBAlAEARBkAQJQBAKymB5R4BSw25oZ9AAAAAElFTkSuQmCC',
   'base64',
@@ -86,15 +93,15 @@ async function waitForStorageState(page, predicate, message) {
 }
 
 async function selectStorage(page, { mode, root = '' }) {
+  const adminServer = new AdminServerPage(page);
   await page.goto('/admin/server');
-  await expect(page.getByRole('heading', { name: 'Album previews' })).toBeVisible();
+  await expect(adminServer.heading).toBeVisible();
   const current = await readStorageState(page);
-  await expect(page.locator(`[data-preview-mode="${current.mode}"]`)).toBeChecked({ timeout: 10_000 });
-  await page.locator(`[data-preview-mode="${mode}"]`).check({ timeout: 10_000 });
+  await expect(adminServer.mode(current.mode)).toBeChecked({ timeout: 10_000 });
+  await adminServer.mode(mode).check({ timeout: 10_000 });
   if (mode === 'custom') {
-    const pathInput = page.locator('[data-preview-path]');
-    await expect(pathInput).toBeEnabled({ timeout: 10_000 });
-    await pathInput.fill(root, { timeout: 10_000 });
+    await expect(adminServer.path).toBeEnabled({ timeout: 10_000 });
+    await adminServer.path.fill(root, { timeout: 10_000 });
   }
   page.once('dialog', (dialog) => dialog.accept());
   const [response] = await Promise.all([
@@ -102,7 +109,7 @@ async function selectStorage(page, { mode, root = '' }) {
       candidate.request().method() === 'PUT'
       && new URL(candidate.url()).pathname === '/admin/server/preview-storage'
     ), { timeout: 10_000 }),
-    page.getByRole('button', { name: 'Save', exact: true }).click({ timeout: 10_000 }),
+    adminServer.save.click({ timeout: 10_000 }),
   ]);
   expect(response.status()).toBe(202);
   return response.json();
@@ -172,6 +179,14 @@ test(
         await generateVariants(page, productionSource, Array.from({ length: 160 }, (_, index) => 80 + index));
 
         const albumCacheRoot = path.join(fixture.albumDirectory, '.album-haven');
+        const preexistingPreview = path.join(
+          albumCacheRoot,
+          'cover_variants',
+          'fe',
+          `${'f'.repeat(40)}.webp`,
+        );
+        fs.mkdirSync(path.dirname(preexistingPreview), { recursive: true });
+        fs.writeFileSync(preexistingPreview, Buffer.from('pre-feature-preview'));
         const initialHashes = hashTree(albumCacheRoot);
         expect(Object.keys(initialHashes).length).toBeGreaterThanOrEqual(150);
         testArtifacts.queueJsonAttachment('generated-preview-storage-initial-hashes.json', initialHashes);
@@ -193,19 +208,35 @@ test(
         await galleryActions.waitForAlbumVisible(ALBUM);
         const galleryReadyMs = performance.now() - searchStartedAt;
         const cover = galleryActions.albumCoverByName(ALBUM);
+        // parity-check: allow-read-only-measurement-evaluate -- wait for the rendered image to decode
         await cover.evaluate(waitForDisplayedImageDecode);
         const firstDecodedCoverMs = performance.now() - searchStartedAt;
-        expect(galleryReadyMs).toBeLessThanOrEqual(HARD_CEILING_MS);
-        expect(firstDecodedCoverMs).toBeLessThanOrEqual(HARD_CEILING_MS);
+        const galleryReady = expectTimingBudget(
+          expect,
+          galleryReadyMs,
+          GALLERY_BUDGET,
+          'Preview relocation search gallery readiness',
+        );
+        const firstDecodedCover = expectTimingBudget(
+          expect,
+          firstDecodedCoverMs,
+          GALLERY_BUDGET,
+          'Preview relocation first decoded cover',
+        );
         await coverLookupActions.readDisplayedImageEvidence(cover, 'cover during relocation');
 
         await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);
         await trackModalActions.waitForReady();
         const lookupStartedAt = performance.now();
         await trackModalActions.openCoverLookup();
-        await coverLookupActions.waitForModalReady({ timeout: HARD_CEILING_MS });
+        await coverLookupActions.waitForModalReady({ timeout: COVER_LOOKUP_BUDGET.hardCeiling });
         const coverLookupReadyMs = performance.now() - lookupStartedAt;
-        expect(coverLookupReadyMs).toBeLessThanOrEqual(HARD_CEILING_MS);
+        const coverLookupReady = expectTimingBudget(
+          expect,
+          coverLookupReadyMs,
+          COVER_LOOKUP_BUDGET,
+          'Preview relocation Cover Lookup readiness',
+        );
         const candidates = await coverLookupActions.readLocalCoverCandidates();
         expect(candidates.some((candidate) => /[\\/]\.album-haven[\\/]/i.test(candidate.sourcePath))).toBe(false);
         await coverLookupActions.closeModal();
@@ -220,11 +251,16 @@ test(
         expect(hashTree(path.join(customRoot, 'v1'))).toMatchObject(initialHashes);
         expect(hashTree(albumCacheRoot)).toEqual({});
         testArtifacts.queueJsonAttachment('generated-preview-storage-relocation-performance.json', {
-          galleryReadyMs,
-          firstDecodedCoverMs,
-          coverLookupReadyMs,
+          galleryReady,
+          firstDecodedCover,
+          coverLookupReady,
           operationStateAfterInteractions: (await readStorageState(page)).operation_state,
         });
+        console.info([
+          formatTimingBudgetOutcome('Search gallery', galleryReady),
+          formatTimingBudgetOutcome('First decoded cover', firstDecodedCover),
+          formatTimingBudgetOutcome('Cover Lookup', coverLookupReady),
+        ].join(' '));
       });
 
       await stepLogger.step('Interrupt reverse relocation, restart the real app, and verify byte-identical recovery', async () => {
@@ -273,15 +309,15 @@ test(
       });
 
       await stepLogger.step('Verify desktop and narrow owner controls, then deny an ordinary member page and API access', async () => {
+        const adminServer = new AdminServerPage(page);
         for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
           await page.setViewportSize(viewport);
           await page.goto('/admin/server');
-          const form = page.getByRole('form', { name: 'Album previews' });
-          await expect(form).toBeVisible();
-          const bounds = await form.boundingBox();
+          await expect(adminServer.form).toBeVisible();
+          const bounds = await adminServer.form.boundingBox();
           expect(bounds).not.toBeNull();
           expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
-          const albumFolders = page.locator('[data-preview-mode="album_folders"]');
+          const albumFolders = adminServer.mode('album_folders');
           await albumFolders.focus();
           await expect(albumFolders).toBeFocused();
         }

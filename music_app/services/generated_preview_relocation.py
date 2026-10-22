@@ -20,11 +20,19 @@ class GeneratedPreviewRelocationWorker:
         batch_size: int = 20,
         logger=None,
         on_state=None,
+        discover_inventory=None,
+        retry_seconds: float = 5.0,
+        refresh_seconds: float = 5.0,
+        sync_grace_seconds: float = 1.0,
     ) -> None:
         self._repository = repository
         self._batch_size = max(1, min(int(batch_size), 100))
         self._logger = logger or logging.getLogger("music_app")
         self._on_state = on_state
+        self._discover_inventory = discover_inventory
+        self._retry_seconds = max(0.01, float(retry_seconds))
+        self._refresh_seconds = max(0.01, float(refresh_seconds))
+        self._sync_grace_seconds = max(0.0, float(sync_grace_seconds))
         self._wake_requested = threading.Event()
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
@@ -54,16 +62,19 @@ class GeneratedPreviewRelocationWorker:
 
     def _run(self) -> None:
         while not self._stop_requested.is_set():
-            self._wake_requested.wait()
+            self._wake_requested.wait(timeout=self._refresh_seconds)
             self._wake_requested.clear()
             if self._stop_requested.is_set():
                 return
             try:
-                self._drain()
+                retry = self._drain()
             except Exception:
                 self._logger.exception("Generated preview relocation failed.")
+                retry = True
+            if retry and not self._stop_requested.wait(self._retry_seconds):
+                self._wake_requested.set()
 
-    def _drain(self) -> None:
+    def _drain(self) -> bool:
         state = self._repository.load()
         if self._on_state is not None:
             self._on_state(state)
@@ -84,42 +95,92 @@ class GeneratedPreviewRelocationWorker:
             "running",
             "cancel_requested",
         }:
-            return
-        if operation_state == "running":
-            self._repository.recover_interrupted_items(operation_id=operation_id)
-        if state.get("cancel_requested") or operation_state == "cancel_requested":
-            state = self._repository.finish_operation(operation_id)
-            if self._on_state is not None:
-                self._on_state(state)
-            return
-        while not self._stop_requested.is_set():
-            items = self._repository.claim_batch(
-                operation_id=operation_id,
-                limit=self._batch_size,
+            return False
+        with self._repository.operation_lock() as acquired:
+            if not acquired:
+                return True
+            self._logger.info(
+                "Generated preview relocation acquired the operation lock.",
+                extra={"operation_id": operation_id, "operation_state": operation_state},
             )
-            if not items:
+            if operation_state == "queued" and self._sync_grace_seconds:
+                if self._stop_requested.wait(self._sync_grace_seconds):
+                    return False
+                state = self._repository.load()
+                operation_state = str(state.get("operation_state") or "idle")
+                if self._on_state is not None:
+                    self._on_state(state)
+            if operation_state == "running":
+                self._repository.recover_interrupted_items(operation_id=operation_id)
+            if state.get("cancel_requested") or operation_state == "cancel_requested":
                 state = self._repository.finish_operation(operation_id)
                 if self._on_state is not None:
                     self._on_state(state)
-                return
-            for item in items:
-                result = _relocate_item(item, operation_id=operation_id)
-                source_to_delete = result.pop("source_to_delete", None)
-                self._repository.complete_item(operation_id=operation_id, **result)
-                if source_to_delete is not None and _matches(
-                    source_to_delete,
-                    int(item["expected_bytes"]),
-                    str(item["expected_sha256"]),
+                return False
+            if self._discover_inventory is not None:
+                discovered_count = self._discover_inventory()
+                staged_count = self._repository.stage_inventory(operation_id=operation_id)
+                self._logger.info(
+                    "Generated preview relocation staged inventory.",
+                    extra={
+                        "operation_id": operation_id,
+                        "discovered_count": discovered_count,
+                        "staged_count": staged_count,
+                    },
+                )
+                state = self._repository.load()
+                if (
+                    state.get("cancel_requested")
+                    or state.get("operation_state") == "cancel_requested"
                 ):
-                    source_to_delete.unlink()
-                if self._stop_requested.is_set():
-                    return
-            state = self._repository.load()
-            if state.get("cancel_requested"):
-                state = self._repository.finish_operation(operation_id)
-                if self._on_state is not None:
-                    self._on_state(state)
-                return
+                    state = self._repository.finish_operation(operation_id)
+                    if self._on_state is not None:
+                        self._on_state(state)
+                    return False
+            while not self._stop_requested.is_set():
+                items = self._repository.claim_batch(
+                    operation_id=operation_id,
+                    limit=self._batch_size,
+                )
+                self._logger.info(
+                    "Generated preview relocation claimed a batch.",
+                    extra={"operation_id": operation_id, "claimed_count": len(items)},
+                )
+                if not items:
+                    state = self._repository.finish_operation(operation_id)
+                    if self._on_state is not None:
+                        self._on_state(state)
+                    return False
+                for item in items:
+                    result = _relocate_item(item, operation_id=operation_id)
+                    source_to_delete = result.pop("source_to_delete", None)
+                    self._repository.complete_item(operation_id=operation_id, **result)
+                    if source_to_delete is not None and _matches(
+                        source_to_delete,
+                        int(item["expected_bytes"]),
+                        str(item["expected_sha256"]),
+                    ):
+                        try:
+                            source_to_delete.unlink()
+                        except OSError as exc:
+                            self._repository.fail_item_cleanup(
+                                operation_id=operation_id,
+                                item_id=int(item["id"]),
+                                error=str(exc),
+                            )
+                            self._logger.exception(
+                                "Generated preview source cleanup failed for %s.",
+                                source_to_delete,
+                            )
+                    if self._stop_requested.is_set():
+                        return False
+                state = self._repository.load()
+                if state.get("cancel_requested"):
+                    state = self._repository.finish_operation(operation_id)
+                    if self._on_state is not None:
+                        self._on_state(state)
+                    return False
+        return False
 
 
 def _relocate_item(item: Mapping[str, object], *, operation_id: str) -> dict[str, object]:

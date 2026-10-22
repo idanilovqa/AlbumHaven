@@ -88,12 +88,14 @@ test('save stays disabled until initial server state loads', async () => {
   const ui = runtime({
     mode: 'album_folders', revision: 4, operation_state: 'idle',
     total_count: 0, completed_count: 0, failed_count: 0, total_bytes: 0,
+    inventory_count: 17, inventory_bytes: 4096,
   });
 
   const cleanup = ui.context.window.AlbumHavenMountAdminServer(ui.context.document);
   assert.equal(ui.save.disabled, true);
   await settleController();
   assert.equal(ui.save.disabled, false);
+  assert.match(ui.form.querySelector('[data-preview-counts]').textContent, /17 previews · 4\.0 KB stored/);
   cleanup();
 });
 

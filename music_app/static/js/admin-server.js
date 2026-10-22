@@ -84,7 +84,9 @@
       retry.textContent = canceled ? 'Resume move' : 'Retry failed files';
       progress.max = Math.max(1, Number(next.total_count || 0));
       progress.value = Math.min(progress.max, Number(next.completed_count || 0));
-      counts.textContent = `${Number(next.completed_count || 0)} of ${Number(next.total_count || 0)} previews moved · ${formatBytes(next.total_bytes)} estimated · ${Number(next.failed_count || 0)} failed`;
+      const inventoryCount = Number(next.inventory_count ?? next.total_count ?? 0);
+      const inventoryBytes = Number(next.inventory_bytes ?? next.total_bytes ?? 0);
+      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored · ${Number(next.completed_count || 0)} of ${Number(next.total_count || 0)} moved · ${Number(next.failed_count || 0)} failed`;
       const failures = Array.isArray(next.failure_summary) ? next.failure_summary : [];
       const lastFailure = failures.at(-1);
       failure.textContent = lastFailure?.error ? `Last failure: ${lastFailure.error}` : '';

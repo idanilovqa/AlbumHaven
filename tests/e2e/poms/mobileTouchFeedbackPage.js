@@ -87,7 +87,18 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
   }
 
   async openAlbumFromGalleryAnchor(albumKey) {
-    await this.galleryCardByKey(albumKey).locator('.album-meta-row').click();
+    const row = this.galleryCardByKey(albumKey).locator('.album-meta-row');
+    const [rowBox, viewport] = await Promise.all([
+      row.boundingBox(),
+      this.galleryScroll.boundingBox(),
+    ]);
+    if (!rowBox || !viewport) throw new Error('Gallery anchor row is not visible.');
+    const left = Math.max(rowBox.x, viewport.x);
+    const right = Math.min(rowBox.x + rowBox.width, viewport.x + viewport.width);
+    const top = Math.max(rowBox.y, viewport.y);
+    const bottom = Math.min(rowBox.y + rowBox.height, viewport.y + viewport.height);
+    if (right <= left || bottom <= top) throw new Error('Gallery anchor row is outside the viewport.');
+    await this.page.mouse.click((left + right) / 2, (top + bottom) / 2);
   }
   async readScroll(region) {
     // parity-check: allow-read-only-measurement-evaluate -- read actual native scroll owners.

@@ -644,6 +644,193 @@ function createDrawerHarness(overrides = {}) {
   assert.equal(context.hasPendingLocalCoverSelection(), true);
 }
 
+require('node:test')('remote save closes only after the server accepts the queued mutation', async () => {
+  const album = {
+    key: 'artist::album::2001',
+    tracks: [{ path: 'C:/music/Remote/01.flac' }],
+  };
+  let resolveResponse;
+  let closeCount = 0;
+  let fetchCount = 0;
+  let refreshCount = 0;
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    showToast: () => {},
+  });
+  const advanceModalSession = context.closeCoverLookupModal;
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-acceptance',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      display_only: false,
+    }],
+  };
+  context.applyOptimisticRemoteCoverSelection = () => {};
+  context.closeCoverLookupModal = () => { closeCount += 1; };
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => { refreshCount += 1; };
+  context.fetch = () => {
+    fetchCount += 1;
+    return new Promise((resolve) => { resolveResponse = resolve; });
+  };
+  context.loadCoverLookupTasks = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.renderCoverLookupDrawer = () => {};
+
+  const pending = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+
+  assert.equal(closeCount, 0);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+  const duplicate = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+  assert.equal(fetchCount, 1);
+  await duplicate;
+
+  resolveResponse({
+    ok: false,
+    json: async () => ({ ok: false, error: 'Save was rejected.' }),
+  });
+  await pending;
+
+  assert.equal(closeCount, 0);
+  assert.equal(refreshCount, 0);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+
+  const accepted = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+  resolveResponse({
+    ok: true,
+    json: async () => ({ ok: true, queued: true, task: { id: 'remote-save-acceptance' } }),
+  });
+  await accepted;
+
+  assert.equal(closeCount, 1);
+
+  const replacementAlbum = {
+    key: 'replacement::album::2002',
+    tracks: [{ path: 'C:/music/Replacement/01.flac' }],
+  };
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-stale-modal',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      display_only: false,
+    }],
+    saving: false,
+  };
+  const staleModalSave = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+  advanceModalSession();
+  context.state.coverLookup.modal = {
+    album: replacementAlbum,
+    selectedRemoteId: 'replacement-candidate',
+    saving: false,
+  };
+  resolveResponse({
+    ok: true,
+    json: async () => ({ ok: true, queued: true, task: { id: 'remote-save-stale-modal' } }),
+  });
+  await staleModalSave;
+
+  assert.strictEqual(context.state.coverLookup.modal.album, replacementAlbum);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'replacement-candidate');
+  assert.equal(closeCount, 1);
+});
+
+require('node:test')('failed or canceled accepted remote save restores owned artwork state', async () => {
+  const album = {
+    key: 'artist::album::2001',
+    cover_path: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+  };
+  const albumSignature = 'C:/music/Remote/01.flac';
+  let terminalStatus = 'failed';
+  const toastCalls = [];
+  const restoredAlbums = [];
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    showToast: (...args) => toastCalls.push(args),
+  });
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-failure',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      display_only: false,
+    }],
+  };
+  context.state.coverLookup.tasks = [];
+  context.state.coverLookup.appliedTaskUpdateSignatures = {};
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.applyOptimisticRemoteCoverSelection = (_selectedAlbum, selectedMatch) => {
+    context.state.coverLookup.optimisticAlbumCovers[albumSignature] = { src: selectedMatch.url };
+  };
+  context.closeCoverLookupModal = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = (_album, updatedAlbums) => {
+    restoredAlbums.push(updatedAlbums);
+  };
+  context.fetch = async (url) => {
+    if (url === '/utilities/cover-lookup/save-remote') {
+      return {
+        ok: true,
+        json: async () => ({ ok: true, queued: true, task: { id: 'remote-save-failure' } }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        tasks: [{
+          id: 'remote-save-failure',
+          status: terminalStatus,
+          progress: 100,
+          progress_label: terminalStatus === 'failed' ? 'Save failed' : 'Canceled',
+          message: terminalStatus === 'failed' ? 'Remote image could not be saved.' : 'Cover save canceled.',
+          notification_action_taken: false,
+          job_contract: { job_kind: 'save_remote_selection' },
+          album_payload: album,
+        }],
+      }),
+    };
+  };
+  context.mergeCoverLookupTasksWithNotifications = (tasks) => tasks;
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.stopCoverLookupPollingIfIdle = () => {};
+
+  await context.saveRemoteCoverFromLookup();
+
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbums)), [[album]]);
+  assert.deepEqual(toastCalls, [['Remote image could not be saved.', 'error', 5000]]);
+
+  terminalStatus = 'canceled';
+  context.state.coverLookup.modal.selectedRemoteId = 'candidate-1';
+  context.state.coverLookup.modal.possibleMatches = [{
+    id: 'candidate-1',
+    url: 'https://images.example/remote-cover.jpg',
+    display_only: false,
+  }];
+  await context.saveRemoteCoverFromLookup();
+
+  assert.equal(restoredAlbums.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbums.at(-1))), [album]);
+  assert.deepEqual(toastCalls, [['Remote image could not be saved.', 'error', 5000]]);
+});
+
 ;(async () => {
   class TestButton {
     constructor() {

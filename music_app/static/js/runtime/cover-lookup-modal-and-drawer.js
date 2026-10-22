@@ -1980,8 +1980,29 @@ function collectManualCoverLookupUrls() {
 }
 
 function applyCoverLookupTaskUpdates(task, options = {}) {
+  const taskId = String(task?.id || '');
+  const pendingRemoteSave = coverLookupPendingRemoteSaves.get(taskId);
+  const taskStatus = String(task?.status || '');
+  if (pendingRemoteSave && ['failed', 'canceled'].includes(taskStatus)) {
+    coverLookupPendingRemoteSaves.delete(taskId);
+    if (
+      pendingRemoteSave.optimisticCover
+      && state.coverLookup.optimisticAlbumCovers[pendingRemoteSave.signature] === pendingRemoteSave.optimisticCover
+    ) {
+      clearOptimisticAlbumCovers([pendingRemoteSave.previousAlbum]);
+      markAlbumCoverPathsFresh([pendingRemoteSave.previousAlbum]);
+      syncCoverLookupAlbumReferences([pendingRemoteSave.previousAlbum]);
+      refreshCoverLookupAlbumArtwork(pendingRemoteSave.previousAlbum, [pendingRemoteSave.previousAlbum]);
+    }
+    if (taskStatus === 'failed') {
+      showToast(task.message || task.progress_label || 'Failed save selected cover art.', 'error', 5000);
+    }
+    return;
+  }
+  if (pendingRemoteSave && taskStatus === 'completed') {
+    coverLookupPendingRemoteSaves.delete(taskId);
+  }
   if (!task || !Array.isArray(task.updated_albums) || !task.updated_albums.length) return;
-  const taskId = String(task.id || '');
   const signature = JSON.stringify({
     status: String(task.status || ''),
     progress: Number(task.progress || 0),
@@ -2000,6 +2021,7 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
 let coverLookupGalleryRequest = 0;
 let coverLookupModalSession = 0;
 const coverLookupPendingLocalMutations = new Set();
+const coverLookupPendingRemoteSaves = new Map();
 const coverLookupSeenRequests = new WeakMap();
 
 function isCoverLookupLocalMutationPending(album = state.coverLookup.modal.album) {
@@ -2423,6 +2445,8 @@ function selectPastedCoverFromLookup(imageId) {
 }
 
 async function saveRemoteCoverFromLookup() {
+  const session = coverLookupModalSession;
+  const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
   const candidateId = state.coverLookup.modal.selectedRemoteId;
   const selectionOwnerGeneration = String(
@@ -2432,18 +2456,13 @@ async function saveRemoteCoverFromLookup() {
   const snapshotGeneration = selectionOwnerGeneration || String(
     state.coverLookup.modal.candidateSnapshot?.search_generation || '',
   ).trim();
-  if (!album || (!taskId && !snapshotGeneration) || !candidateId) return;
+  if (!album || (!taskId && !snapshotGeneration) || !candidateId || state.coverLookup.modal.saving) return;
   const previousAlbum = deepCloneJson(album);
   const selectedMatch = (state.coverLookup.modal.possibleMatches || []).find((item) => String(item?.id || '') === String(candidateId || ''));
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
+  state.coverLookup.modal.saving = true;
+  syncCoverLookupSaveButton();
   try {
-    if (selectedMatch) {
-      applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
-    }
-    state.coverLookup.modal.manualBusy = false;
-    state.coverLookup.modal.pendingLocalPath = '';
-    state.coverLookup.modal.selectedRemoteId = '';
-    closeCoverLookupModal();
     const requestPayload = { album, task_id: taskId, candidate_id: candidateId };
     if (snapshotGeneration) requestPayload.snapshot_generation = snapshotGeneration;
     const response = await fetch('/utilities/cover-lookup/save-remote', {
@@ -2456,17 +2475,34 @@ async function saveRemoteCoverFromLookup() {
       throw new Error(data.error || 'Failed to save selected cover art');
     }
     const optimisticCoverPath = String(data.optimistic_cover_path || '').trim();
-    if (selectedMatch && optimisticCoverPath) {
+    const previousOptimisticCovers = { ...(state.coverLookup.optimisticAlbumCovers || {}) };
+    if (selectedMatch) {
       applyOptimisticRemoteCoverSelection(album, selectedMatch, optimisticCoverPath);
+    }
+    const acceptedTaskId = String(data.task?.id || taskId || '').trim();
+    if (acceptedTaskId && selectedMatch) {
+      const optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
+        .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover);
+      coverLookupPendingRemoteSaves.set(acceptedTaskId, {
+        previousAlbum,
+        signature: optimisticEntry?.[0] || '',
+        optimisticCover: optimisticEntry?.[1],
+      });
+    }
+    if (ownsModal()) {
+      state.coverLookup.modal.saving = false;
+      state.coverLookup.modal.manualBusy = false;
+      state.coverLookup.modal.pendingLocalPath = '';
+      state.coverLookup.modal.selectedRemoteId = '';
+      closeCoverLookupModal();
     }
     await loadCoverLookupTasks({ toast: false });
     ensureCoverLookupPolling();
     renderCoverLookupDrawer();
   } catch (error) {
-    if (previousAlbum) {
-      markAlbumCoverPathsFresh([previousAlbum]);
-      syncCoverLookupAlbumReferences([previousAlbum]);
-      refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
+    if (ownsModal()) {
+      state.coverLookup.modal.saving = false;
+      syncCoverLookupSaveButton();
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save remote cover.', error);
     showToast(error.message || 'Failed to save selected cover art.', 'error', 2800);

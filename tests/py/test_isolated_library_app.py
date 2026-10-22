@@ -1989,6 +1989,68 @@ def test_materialized_album_art_is_independent_and_restart_reuse_preserves_promo
     assert rematerialized_other_art == first_other_art
 
 
+def test_generated_fixture_keeps_cover_scenario_identity_separate_from_asset_labels(
+    tmp_path,
+    monkeypatch,
+):
+    cover_paths = []
+    for name, payload in (
+        ("primary.jpg", b"primary"),
+        ("primary-other.jpg", b"primary-other"),
+        ("secondary.jpg", b"secondary"),
+        ("secondary-other.jpg", b"secondary-other"),
+    ):
+        path = tmp_path / name
+        path.write_bytes(payload)
+        cover_paths.append(path)
+    cover_specs = [
+        {
+            "cover_id": "synthetic-primary",
+            "staged_path": str(cover_paths[0]),
+            "other_art_staged_path": str(cover_paths[1]),
+            "artist": "Synthetic Cover Artist",
+            "album": "Canonical Cover Fixture",
+            "year": 2026,
+        },
+        {
+            "cover_id": "synthetic-secondary",
+            "staged_path": str(cover_paths[2]),
+            "other_art_staged_path": str(cover_paths[3]),
+            "artist": "Synthetic Cover Artist",
+            "album": "Secondary Cover Fixture",
+            "year": 2026,
+        },
+    ]
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "ensure_playable_loop_source",
+        lambda path: path.parent.mkdir(parents=True, exist_ok=True) or path.write_bytes(b"loop"),
+    )
+    _stub_joseph_cover(monkeypatch)
+
+    isolatedLibraryApp.build_file_cache(
+        isolatedLibraryApp.load_fixture_config(),
+        tmp_path / "media",
+        cover_specs,
+    )
+    assert cover_specs[0]["artist"] == "Synthetic Cover Artist"
+    assert cover_specs[0]["album"] == "Canonical Cover Fixture"
+    assert cover_specs[0]["year"] == 2026
+
+    expected = (
+        tmp_path
+        / "media"
+        / "Mastodon"
+        / "Crack The Skye Fixture 09"
+        / "cover.jpg"
+    ).resolve()
+    assert expected.is_file()
+    assert isolatedLibraryApp.restore_reused_fixture09_user_owned_cover(
+        tmp_path / "media",
+        cover_specs,
+    ) == expected
+
+
 def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_tracks(tmp_path, monkeypatch):
     cover_path = tmp_path / "fixture-cover.jpg"
     cover_path.write_bytes(b"cover")
@@ -2399,17 +2461,17 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
     compilation_album = built_albums[isolatedLibraryApp.COMPILATION_FAMILY_ALBUM]
     control_album = built_albums[isolatedLibraryApp.CONTROL_FAMILY_ALBUM]
     assert compilation_album.is_compilation is True
-    assert compilation_album.album_artist == " / ".join(
-        isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS
+    assert (
+        compilation_album.album_artist
+        == isolatedLibraryApp.COMPILATION_FAMILY_SOURCE_ARTIST
     )
     assert compilation_album.album_artist != isolatedLibraryApp.TRACK_CREDIT_ALBUM_ARTIST
-    assert set(compilation_album.artists) == set(
-        isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS
-    )
+    assert compilation_album.artists == [
+        isolatedLibraryApp.COMPILATION_FAMILY_SOURCE_ARTIST
+    ]
     assert control_album.is_compilation is True
-    assert control_album.album_artist == " / ".join(
-        isolatedLibraryApp.CONTROL_FAMILY_MEMBERS
-    )
+    assert control_album.album_artist == isolatedLibraryApp.CONTROL_FAMILY_SOURCE_ARTIST
+    assert control_album.artists == [isolatedLibraryApp.CONTROL_FAMILY_SOURCE_ARTIST]
     rating_fixture_albums = {
         str(entry["album"]): entry["album_rating"]
         for entry in file_cache.values()

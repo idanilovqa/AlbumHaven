@@ -352,6 +352,9 @@ PLAYBACK_START_BITRATE_KBPS = 128
 COVER_MATCHING_ARTIST = "Metallica"
 COVER_MATCHING_ALBUM = "Kill 'Em All"
 COVER_MATCHING_YEAR = 1983
+REUSED_FIXTURE09_ARTIST = "Mastodon"
+REUSED_FIXTURE09_ALBUM = "Crack The Skye"
+REUSED_FIXTURE09_YEAR = 2009
 COMPILATION_FAMILY_SOURCE_ARTIST = "Compilation Signal Lead"
 COMPILATION_FAMILY_ALBUM = "Compilation Cross-Credits"
 COMPILATION_FAMILY_MEMBERS = (
@@ -1360,8 +1363,8 @@ def restore_reused_fixture09_user_owned_cover(
         )
     persisted_cover_path = (
         library_root
-        / "Mastodon"
-        / "Crack The Skye Fixture 09"
+        / REUSED_FIXTURE09_ARTIST
+        / f"{REUSED_FIXTURE09_ALBUM} Fixture 09"
         / "cover.jpg"
     )
     if not persisted_cover_path.is_file():
@@ -1419,6 +1422,13 @@ def build_file_cache(
 ) -> tuple[dict[str, dict[str, object]], Path, int, int]:
     if not cover_specs:
         raise RuntimeError("The isolated E2E inventory requires at least one staged cover.")
+    cover_specs = [dict(spec) for spec in cover_specs]
+    # Functional fixture identities must not inherit sanitized asset-catalog labels.
+    cover_specs[0].update({
+        "artist": REUSED_FIXTURE09_ARTIST,
+        "album": REUSED_FIXTURE09_ALBUM,
+        "year": REUSED_FIXTURE09_YEAR,
+    })
     file_cache: dict[str, dict[str, object]] = {}
     cover_revisions_by_source: dict[Path, str] = {}
     album_count = 0

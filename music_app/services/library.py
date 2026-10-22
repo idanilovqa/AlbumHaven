@@ -286,6 +286,31 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         for entry in entries
         if str(entry.get("album_artist") or "").strip()
     ]
+    disc_numbers = {
+        disc_number
+        for entry in entries
+        if (disc_number := safe_int(entry.get("disc_number"))) is not None
+    }
+    main_disc_album_artist_values = [
+        _normalize_display_artist_name(entry.get("album_artist")).strip()
+        for entry in _main_disc_entries(entries)
+        if str(entry.get("album_artist") or "").strip()
+    ]
+    main_disc_album_artist_keys = {
+        _normalize_artist_key(value)
+        for value in main_disc_album_artist_values
+        if value
+    }
+    main_disc_album_artist = (
+        main_disc_album_artist_values[0]
+        if (
+            len(disc_numbers) > 1
+            and len(main_disc_album_artist_keys) == 1
+            and main_disc_album_artist_values
+            and not _is_various_artist(main_disc_album_artist_values[0])
+        )
+        else ""
+    )
     track_artist_values = [
         _normalize_display_artist_name(entry.get("artist")).strip()
         for entry in entries
@@ -303,17 +328,31 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         if value
     }
     unanimous_album_artist = (
-        album_artist_values[0]
-        if len(normalized_album_artist_keys) == 1 and album_artist_values
-        else ""
+        main_disc_album_artist
+        if main_disc_album_artist
+        else (
+            album_artist_values[0]
+            if len(normalized_album_artist_keys) == 1 and album_artist_values
+            else ""
+        )
     )
-    explicit_various = any(_is_various_artist(value) for value in album_artist_values)
-    album_artist_members = split_album_artist_members(album_artist_values[0]) if len({_normalize_artist_key(value) for value in album_artist_values if value}) <= 1 and album_artist_values else []
+    explicit_various = (
+        not main_disc_album_artist
+        and any(_is_various_artist(value) for value in album_artist_values)
+    )
+    album_artist_members = (
+        split_album_artist_members(unanimous_album_artist)
+        if unanimous_album_artist
+        else []
+    )
     matched_album_artist_members = [
         member for member in album_artist_members
         if any(_normalize_artist_key(member) == _normalize_artist_key(track_artist) or _are_probable_artist_typos(member, track_artist) for track_artist in distinct_track_artists)
     ]
-    primary_artist = next((value for value in album_artist_values if value.strip()), "")
+    primary_artist = main_disc_album_artist or next(
+        (value for value in album_artist_values if value.strip()),
+        "",
+    )
     if not primary_artist and distinct_track_artists:
         primary_artist = distinct_track_artists[0]
     dominant_track_artist = _dominant_track_artist(track_artist_counts)

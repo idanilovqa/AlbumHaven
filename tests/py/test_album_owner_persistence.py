@@ -195,6 +195,65 @@ def test_semicolon_track_credits_publish_exact_members_without_composite_artists
     }
 
 
+@pytest.mark.parametrize("reverse_rows", [False, True])
+def test_primary_disc_owner_survives_various_artist_bonus_disc(
+    monkeypatch,
+    reverse_rows,
+):
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    rows = [
+        (1, 1, "Release Owner", "Release Owner"),
+        (1, 2, "Release Owner", "Release Owner"),
+        (2, 1, "Various Artists", "Guest One"),
+        (2, 2, "Various Artists", "Guest Two"),
+        (2, 3, "Various Artists", "Guest Three"),
+    ]
+    if reverse_rows:
+        rows.reverse()
+    file_cache = {}
+    for disc_number, track_number, album_artist, track_artist in rows:
+        path = f"C:/Music/Owner Album/CD{disc_number}/{track_number:02}.flac"
+        file_cache[path] = {
+            "path": path,
+            "mtime": 1.0,
+            "size": 123,
+            "album": "Owner Album",
+            "album_artist": album_artist,
+            "artist": track_artist,
+            "title": f"Disc {disc_number} Track {track_number}",
+            "track_number": track_number,
+            "disc_number": disc_number,
+            "disc_number_raw": str(disc_number),
+            "year": 2020,
+            "duration_seconds": 100,
+        }
+
+    albums = build_albums_from_file_cache(file_cache)
+    assert len(albums) == 1
+    album = albums[0]
+    assert album.album_artist == "Release Owner"
+    assert album.artists == ["Release Owner"]
+    assert album.key == "release owner::owner album"
+
+    artist_rows, album_rows, featured_rows, _track_rows, _track_file_rows = (
+        scan_cache_persistence._inventory_rows_from_albums(file_cache, albums)
+    )
+    assert album_rows[0]["artist_key"] == "release owner"
+    assert {
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+    } == {
+        ("release owner", "owner"),
+        ("guest one", "featured_track_artist"),
+        ("guest two", "featured_track_artist"),
+        ("guest three", "featured_track_artist"),
+    }
+    assert "various artists" not in {
+        row["artist_key"]
+        for row in artist_rows
+    }
+
+
 def test_composite_one_off_credit_keeps_the_classified_owner_at_persistence(
     monkeypatch,
 ):

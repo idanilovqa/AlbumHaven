@@ -384,6 +384,13 @@ def create_asgi_app():
     from config import APP_NAME, APP_VERSION
     from music_app.services.lastfm_retry import start_lastfm_retry_worker, stop_lastfm_retry_worker
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_relocation import (
+        GeneratedPreviewRelocationWorker,
+    )
+    from music_app.services.generated_preview_storage_postgres import (
+        PostgresGeneratedPreviewStorageRepository,
+        is_generated_preview_storage_postgres_available,
+    )
     from music_app.services.auth_welcome_worker import start_welcome_retry_worker
     from music_app.services.library_reconciliation import (
         LibraryWatchService,
@@ -431,6 +438,13 @@ def create_asgi_app():
             logger=runtime.logger,
         )
         _app.state.cover_preview_backfill.start()
+        _app.state.generated_preview_relocation = None
+        if is_generated_preview_storage_postgres_available(runtime.config):
+            _app.state.generated_preview_relocation = GeneratedPreviewRelocationWorker(
+                PostgresGeneratedPreviewStorageRepository(runtime.config),
+                logger=runtime.logger,
+            )
+            _app.state.generated_preview_relocation.start()
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -455,6 +469,12 @@ def create_asgi_app():
                 (
                     "cover preview backfill",
                     _app.state.cover_preview_backfill.stop,
+                ),
+                (
+                    "generated preview relocation",
+                    _app.state.generated_preview_relocation.stop
+                    if _app.state.generated_preview_relocation is not None
+                    else lambda: None,
                 ),
                 (
                     "library warmup",

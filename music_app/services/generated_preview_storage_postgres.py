@@ -5,8 +5,6 @@ from contextlib import nullcontext
 from typing import Any
 from uuid import UUID
 
-from music_app.services.postgres_connections import pooled_connection as _pooled_connection
-
 try:  # pragma: no cover - optional outside the Postgres runtime.
     import psycopg
     from psycopg.rows import dict_row
@@ -24,6 +22,16 @@ class PreviewStorageConflict(RuntimeError):
     pass
 
 
+def is_generated_preview_storage_postgres_available(
+    config: Mapping[str, object] | None,
+) -> bool:
+    return bool(
+        config
+        and str(config.get(_DATABASE_URL_KEY) or "").strip()
+        and psycopg is not None
+    )
+
+
 class PostgresGeneratedPreviewStorageRepository:
     def __init__(
         self,
@@ -32,7 +40,6 @@ class PostgresGeneratedPreviewStorageRepository:
         connect: Callable[[str], Any] | None = None,
     ) -> None:
         self._database_url = str(config.get(_DATABASE_URL_KEY) or "").strip()
-        self._use_pool = connect is None
         self._connect = connect or _connect
 
     def load(self) -> dict[str, object]:
@@ -180,8 +187,6 @@ class PostgresGeneratedPreviewStorageRepository:
     def _connect_to_database(self):
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for preview storage.")
-        if self._use_pool:
-            return _pooled_connection(self._database_url, workload="default")
         return self._connect(self._database_url)
 
 
@@ -199,7 +204,7 @@ def serialize_preview_storage(
 def _connect(database_url: str):
     if psycopg is None:
         raise RuntimeError("psycopg is required for generated preview storage.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return psycopg.connect(database_url, row_factory=dict_row, connect_timeout=2)
 
 
 def _transaction(connection: Any):

@@ -294,6 +294,7 @@ function createContext() {
       },
     },
     AbortController,
+    URL,
     HTMLFormElement: function HTMLFormElement() {},
     HTMLImageElement: function HTMLImageElement() {},
     Promise,
@@ -6590,6 +6591,77 @@ test('explicit search retires a resumed utility startup refresh instead of repla
   assert.equal(context.state.view.query, 'Sixteen Horizons');
   assert.equal(context.state.view.selected_artist, 'Northlight');
   assert.equal(context.state.ui.pendingViewRequest, null);
+});
+
+test('resumed Settings hydration preserves a compilation search owner over a track contributor', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(
+    fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'),
+    context,
+  );
+  context.state.view = {
+    ...context.state.view,
+    query: 'Various Artists',
+    selected_artist: 'Various Artists',
+    search_context: {
+      selected_artist: 'Various Artists',
+      selected_artist_source: 'auto_top_match',
+    },
+    artist_groups: [{
+      artist: 'Various Artists',
+      albums: [{
+        key: 'featured-signal-collection',
+        name: 'Featured Signal Collection',
+        album_artist: 'Various Artists',
+        display_artist: 'Various Artists',
+      }],
+    }],
+  };
+  const initialHydration = context.fetchAndRender(
+    '/view-data?surface=albums&q=Various+Artists&payload_tier=full',
+    true,
+    {
+      startupRefresh: true,
+      startupHydrationTier: 'full',
+      preserveScroll: true,
+    },
+  );
+
+  context.deferActiveStartupViewForUtilityModal();
+  assert.equal(pendingRequests[0].options.signal.aborted, true);
+  assert.equal(await initialHydration, false);
+  assert.equal(context.resumeDeferredUtilityViewRequest(), true);
+  assert.match(pendingRequests[1].url, /(?:^|[?&])artist=Various\+Artists(?:&|$)/);
+
+  pendingRequests[1].resolveWith({
+    payload_tier: 'full',
+    query: 'Various Artists',
+    selected_artist: 'Various Artists',
+    search_context: {
+      selected_artist: 'Various Artists',
+      selected_artist_source: 'requested_artist',
+    },
+    artist_groups: [{
+      artist: 'Various Artists',
+      albums: [{
+        key: 'featured-signal-collection',
+        name: 'Featured Signal Collection',
+        album_artist: 'Various Artists',
+        display_artist: 'Various Artists',
+        tracks: [{ title: 'Man and Machine', artist: 'U.D.O.' }],
+      }],
+    }],
+  });
+  for (let attempt = 0; attempt < 5 && calls.applyViewPayload.length === 0; attempt += 1) {
+    await flushMicrotasks();
+  }
+
+  assert.equal(context.state.view.query, 'Various Artists');
+  assert.equal(context.state.view.selected_artist, 'Various Artists');
+  assert.equal(context.state.view.search_context.selected_artist, 'Various Artists');
+  assert.equal(context.state.view.artist_groups[0].artist, 'Various Artists');
+  assert.equal(context.state.view.artist_groups[0].albums[0].album_artist, 'Various Artists');
+  assert.equal(calls.pushBrowserViewState.at(-1).selected_artist, 'Various Artists');
 });
 
 

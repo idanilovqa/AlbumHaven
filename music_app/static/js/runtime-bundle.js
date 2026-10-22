@@ -26435,10 +26435,26 @@ function resumeDeferredUtilityViewRequest() {
     ...(deferredRequest.options || {}),
     interruptCurrent: false,
   };
+  let resumeUrl = deferredRequest.url;
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  const selectedArtistSource = String(
+    state.view?.search_context?.selected_artist_source || '',
+  ).trim();
+  if (selectedArtist && selectedArtistSource === 'auto_top_match') {
+    const parsedUrl = new URL(resumeUrl, window.location?.origin || 'http://localhost');
+    if (
+      parsedUrl.pathname === '/view-data'
+      && parsedUrl.searchParams.get('q') === String(state.view?.query || '').trim()
+      && !parsedUrl.searchParams.has('artist')
+    ) {
+      parsedUrl.searchParams.set('artist', selectedArtist);
+      resumeUrl = `${parsedUrl.pathname}${parsedUrl.search}`;
+    }
+  }
   if (state.busy || String(state.ui.activeViewRequestUrl || '').trim()) {
     if (state.ui.pendingViewRequest) return false;
     state.ui.pendingViewRequest = {
-      url: deferredRequest.url,
+      url: resumeUrl,
       push: deferredRequest.push,
       options: resumeOptions,
       originatingViewStateRevision,
@@ -26449,7 +26465,7 @@ function resumeDeferredUtilityViewRequest() {
     return true;
   }
   const restartPromise = fetchAndRender(
-    deferredRequest.url,
+    resumeUrl,
     deferredRequest.push,
     resumeOptions,
   );

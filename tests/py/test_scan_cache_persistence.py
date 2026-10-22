@@ -497,6 +497,55 @@ def test_targeted_album_rows_keep_an_automatic_year_identity():
     assert track_rows[0]["album_key"] == year_key
 
 
+def test_targeted_album_rows_keep_existing_identity_for_unresolved_track_years():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    paths = [
+        "C:/Music/DDT/Studio Records/02.flac",
+        "C:/Music/DDT/Studio Records/03.flac",
+    ]
+    generated_key = "yuri shevchuk / ddt::studio records::year::unresolved"
+    existing_key = "yuri shevchuk / ddt::studio records::canonical"
+    album_rows = [{
+        "artist_key": "yuri shevchuk / ddt",
+        "album_key": generated_key,
+        "title": "Studio Records",
+        "release_year": None,
+    }]
+    featured_rows = [{
+        "album_key": generated_key,
+        "artist_key": "yuri shevchuk / ddt",
+        "featured_kind": "owner",
+    }]
+    track_rows = [
+        {"album_key": generated_key, "track_key": path}
+        for path in paths
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": path,
+                "album_key": existing_key,
+                "album_title": "Studio Records",
+                "artist_key": "yuri shevchuk / ddt",
+                "release_year": 1999,
+            }
+            for path in paths
+        ],
+    )
+
+    assert album_rows[0]["album_key"] == existing_key
+    assert album_rows[0]["release_year"] == 1999
+    assert featured_rows[0]["album_key"] == existing_key
+    assert {row["album_key"] for row in track_rows} == {existing_key}
+
+
 def test_targeted_album_rows_accept_an_external_album_artist_correction():
     from music_app.services.scan_cache_persistence import (
         _remap_targeted_album_identity_rows,

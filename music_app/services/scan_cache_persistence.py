@@ -2480,7 +2480,7 @@ def _remap_targeted_album_identity_rows(
         if str(row.get("private_path") or "")
     }
     candidates_by_generated_key: dict[
-        str, set[tuple[str, str, str]]
+        str, set[tuple[str, str, str, int | None]]
     ] = {}
     for track_row in track_rows:
         generated_key = str(track_row.get("album_key") or "")
@@ -2503,7 +2503,8 @@ def _remap_targeted_album_identity_rows(
         release_key = album_separate_release_key(
             generated_artist_key, generated_title, generated_edition,
         )
-        if generated_key != release_key:
+        generated_year_is_unresolved = generated_key.endswith("::year::unresolved")
+        if generated_key != release_key and not generated_year_is_unresolved:
             continue
         if (
             generated_artist_key
@@ -2512,7 +2513,12 @@ def _remap_targeted_album_identity_rows(
             and existing_key
         ):
             candidates_by_generated_key.setdefault(generated_key, set()).add(
-                (existing_key, existing_artist_key, existing_title)
+                (
+                    existing_key,
+                    existing_artist_key,
+                    existing_title,
+                    safe_int(existing.get("release_year")),
+                )
             )
 
     remapped: dict[str, tuple[str, str, str]] = {
@@ -2525,7 +2531,9 @@ def _remap_targeted_album_identity_rows(
         target = remapped.get(generated_key)
         if target is None:
             continue
-        album_row["album_key"], album_row["artist_key"], album_row["title"] = target
+        album_row["album_key"], album_row["artist_key"], album_row["title"] = target[:3]
+        if generated_key.endswith("::year::unresolved") and target[3] is not None:
+            album_row["release_year"] = target[3]
     for featured_row in featured_artist_rows:
         generated_key = str(featured_row.get("album_key") or "")
         target = remapped.get(generated_key)

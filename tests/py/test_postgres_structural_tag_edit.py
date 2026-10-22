@@ -848,7 +848,7 @@ def _live_restore_rows(connection, *, track_ids, track_file_ids):
 
 @pytest.mark.parametrize("selected_count", [1, 9])
 def test_live_postgres_structural_recovery_subset_already_in_destination_is_idempotent(
-    selected_count,
+    monkeypatch, selected_count,
 ):
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:
@@ -857,6 +857,13 @@ def test_live_postgres_structural_recovery_subset_already_in_destination_is_idem
     from music_app.services.scan_cache_persistence import (
         PostgresScanCacheAdapter,
         _structural_destination_album_projection,
+    )
+    from music_app.services import gallery_projection_postgres
+
+    monkeypatch.setattr(
+        gallery_projection_postgres,
+        "schedule_gallery_projection_refresh",
+        lambda *_args, **_kwargs: None,
     )
 
     token = uuid4().hex

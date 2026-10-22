@@ -27,12 +27,17 @@ def physical_album_folder(path: object) -> str:
 def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[str, str]:
     """Exclude redundant subset copies while preserving distinct tagged releases."""
     from music_app.services.non_album_view_payloads import is_loose_track_album_value
-    from music_app.services.metadata import normalize_exception_value
+    from music_app.services.metadata import NON_ALBUM_EXCEPTION_VALUES, normalize_exception_value
 
     physical_sources: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
-    physical_roots_by_folder: dict[tuple[str, str], str] = {}
+    physical_folders: dict[tuple[str, str, str], list[Mapping[str, object]]] = defaultdict(list)
+    physical_roots_by_folder: dict[tuple[str, str, str], str] = {}
     for entry in entries:
-        if normalize_exception_value(entry.get("exception_type")) or is_loose_track_album_value(entry.get("album")):
+        if (
+            normalize_exception_value(entry.get("exception_type"))
+            in NON_ALBUM_EXCEPTION_VALUES.values()
+            or is_loose_track_album_value(entry.get("album"))
+        ):
             continue
         path = str(entry.get("path") or "")
         if path:
@@ -47,6 +52,7 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
                 )
                 if separator_index >= 0:
                     folder_identity = (
+                        str(entry.get("library_root_id") or ""),
                         "windows" if windows_path else "posix",
                         normalized_path[:separator_index],
                     )
@@ -60,6 +66,8 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
                 if folder_identity is not None:
                     physical_roots_by_folder[folder_identity] = physical_root
             physical_sources[(str(entry.get("library_root_id") or ""), physical_root)].append(entry)
+            if folder_identity is not None:
+                physical_folders[folder_identity].append(entry)
     rejected: dict[str, str] = {}
     sources: dict[tuple[str, str, str, str], list[list[Mapping[str, object]]]] = defaultdict(list)
 
@@ -85,6 +93,13 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
         for files, signatures in copies:
             if signatures and any(signatures < other for _files, other in copies):
                 rejected.update((str(entry["path"]), "Duplicate track outside album folder") for entry in files)
+    for files in physical_folders.values():
+        album_names = {_text(entry.get("album")) for entry in files} - {""}
+        if len(album_names) > 1 and any(str(entry["path"]) in rejected for entry in files):
+            rejected.update(
+                (str(entry["path"]), "Mixed album metadata in one folder")
+                for entry in files
+            )
     return rejected
 
 
@@ -217,7 +232,7 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
               when jsonb_typeof(membership_path_override.override_payload) = 'string' then membership_path_override.override_payload #>> '{}'
               when membership_track_override.override_payload ? 'exception_type' then membership_track_override.override_payload ->> 'exception_type'
               when jsonb_typeof(membership_track_override.override_payload) = 'string' then membership_track_override.override_payload #>> '{}'
-              else files.metadata #>> '{scan_cache,file_entry,exception_type}' end, ''))) in ('', 'none', 'null')
+              else files.metadata #>> '{scan_cache,file_entry,exception_type}' end, ''))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
         ),
         local_membership_mixed_roots as materialized (
           select library_id, library_root_id, physical_folder

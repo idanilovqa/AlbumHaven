@@ -1441,18 +1441,21 @@ def load_relation_source_rows_sql() -> str:
             nullif(album_facts.metadata ->> 'relation_evidence_kind', ''),
             ''
           ) as relation_evidence_kind,
-          null as track_file_id,
-          null as library_root_id,
-          null as root_kind,
-          null as root_path,
-          null as relative_path,
-          null as private_path
+          relation_locations.track_file_id,
+          relation_locations.library_root_id,
+          relation_locations.root_kind,
+          relation_locations.root_path,
+          relation_locations.relative_path,
+          relation_locations.private_path
         from album_facts
         join library.local_album_featured_artists
           on library.local_album_featured_artists.library_id = album_facts.library_id
          and library.local_album_featured_artists.album_id = album_facts.album_id
         left join library.local_artists as member_artist
-          on member_artist.id = library.local_album_featured_artists.artist_id;
+          on member_artist.id = library.local_album_featured_artists.artist_id
+        join relation_locations
+          on relation_locations.library_id = album_facts.library_id
+         and relation_locations.album_id = album_facts.album_id;
     """
 
 

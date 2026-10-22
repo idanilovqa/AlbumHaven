@@ -16537,7 +16537,7 @@ def test_postgres_album_detail_batch_loads_private_rating_and_keeps_tag_rating(m
     assert _RecordingAlbumRatingsService.instances[0].load_calls == [["numeric-album"]]
 
 
-def test_root_startup_gallery_and_search_sql_exclude_persisted_non_album_rarities_before_rollups():
+def test_root_startup_gallery_and_search_sql_exclude_supported_non_album_exceptions_before_rollups():
     from music_app.services.library_browse_postgres import (
         _root_album_browse_sql,
         _root_sidebar_sql,
@@ -16561,7 +16561,7 @@ def test_root_startup_gallery_and_search_sql_exclude_persisted_non_album_raritie
     for surface, sql in surfaces.items():
         compact_sql = " ".join(sql.lower().split())
         assert "library.exception_overrides" in compact_sql, surface
-        assert "in ('', 'none', 'null')" in compact_sql, surface
+        assert "not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')" in compact_sql, surface
         assert "library.local_track_files.private_path" in compact_sql, surface
 
 

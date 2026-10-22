@@ -361,7 +361,11 @@ def test_live_artist_search_projection_requires_matching_stale_authority(
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     fingerprint = "a" * 64
-    builder_version = "local-relation-builder-v10"
+    from music_app.services.relation_projection_postgres import (
+        RELATION_PROJECTION_BUILDER_VERSION,
+    )
+
+    builder_version = RELATION_PROJECTION_BUILDER_VERSION
     with isolatedPostgres._connect(setup_url) as connection:
         library_id = connection.execute(
             """

@@ -11,7 +11,7 @@ class _LoggerStub:
         self.verbose_calls.append((message, args))
 
 
-def test_select_background_cover_refresh_jobs_includes_missing_and_user_owned_covers():
+def test_select_background_cover_refresh_jobs_queues_missing_and_skips_adequate_user_owned_covers():
     logger = _LoggerStub()
     calls = []
     cover_cache = object()
@@ -39,12 +39,6 @@ def test_select_background_cover_refresh_jobs_includes_missing_and_user_owned_co
 
     assert jobs == [
         {"folder": "missing", "needs_cover_fetch": True, "cover_selection_origin": None},
-        {
-            "folder": "user",
-            "track_paths": ["track-2"],
-            "needs_cover_fetch": False,
-            "cover_selection_origin": "user",
-        },
     ]
     assert calls == [(
         {"track-1": {}, "track-2": {}, "track-3": {}},

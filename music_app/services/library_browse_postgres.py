@@ -8143,7 +8143,7 @@ def _eligible_album_tracks_cte_sql(
               else source_file_classification.exception_type
             end,
             ''
-          ))) in ('', 'none', 'null')
+          ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
           and coalesce(source_file_classification.local_album_membership_problem, '') = ''
           {track_grouping}
         )
@@ -8752,7 +8752,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
               else source_file_classification.exception_type
             end,
             ''
-          ))) in ('', 'none', 'null')
+          ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
           and coalesce(source_file_classification.local_album_membership_problem, '') = ''
         ),
         artist_album_rows as materialized (
@@ -8889,7 +8889,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
               else source_file_classification.exception_type
             end,
             ''
-          ))) in ('', 'none', 'null')
+          ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
           and coalesce(source_file_classification.local_album_membership_problem, '') = ''
           group by
             library.local_tracks.library_id,
@@ -9264,7 +9264,7 @@ def _selected_artist_preview_sql(
                 #>> '{{scan_cache,file_entry,exception_type}}'
             end,
             ''
-          ))) in ('', 'none', 'null')
+          ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
         ),
         {balanced_candidate_album_ids_sql if normalized_limit and balance_across_artists else ""}
         search_candidate_album_ids as materialized (
@@ -9514,7 +9514,7 @@ def _search_preview_sql(
                 #>> '{{scan_cache,file_entry,exception_type}}'
             end,
             ''
-          ))) in ('', 'none', 'null')
+          ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
         ),
         """
         if normalized_limit
@@ -9992,7 +9992,7 @@ def _search_preview_sql(
                   #>> '{{scan_cache,file_entry,exception_type}}'
               end,
               ''
-            ))) in ('', 'none', 'null')
+            ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
           ),
           search_result_rows as (
             select * from active_preview_rows
@@ -10446,7 +10446,7 @@ def _missing_albums_sql(
                then exception_override.override_payload ->> 'exception_type'
                else library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}' end,
           ''
-        ))) in ('', 'none', 'null')
+        ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
         order by library.local_albums.album_key, library.local_tracks.id;
     """.replace("__ARTIST_SCOPE__", artist_scope + (
         " and library.local_albums.album_key = any(%(album_keys)s::text[])" if scoped_albums else ""

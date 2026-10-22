@@ -232,7 +232,7 @@ def _non_album_candidates_sql(
       ''
     )"""
     effective_non_album_predicate = _non_album_value_predicate_sql(effective_album)
-    scanned_exception_predicate = "lower(btrim(coalesce(library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}', ''))) not in ('', 'none', 'null')"
+    scanned_exception_predicate = "lower(btrim(coalesce(library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}', ''))) in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')"
     artist_scope = """
         and (
             lower(btrim(coalesce(library.local_artists.name, ''))) = any(%(artist_names)s::text[])

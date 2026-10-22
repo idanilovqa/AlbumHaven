@@ -45,6 +45,81 @@ def test_targeted_release_year_matches_complete_surviving_members(watcher_repair
         assert album["metadata"]["release_date"] == "2004-07-16"
 
 
+def test_targeted_second_year_adopts_base_album_without_reversing_the_year_key(
+    watcher_repair_inventory,
+):
+    fixture = watcher_repair_inventory
+    original = {**fixture.entry("Owner/Original/song.flac"), "year": 2001}
+    reissue = {**fixture.entry("Owner/Reissue/song.flac"), "year": 2002}
+    fixture.seed(original)
+    selected_cover = str(Path(original["path"]).with_name("selected-cover.jpg"))
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        original_album = connection.execute(
+            """
+            update library.local_albums
+            set cover_path = %s,
+                metadata = metadata ||
+                    '{"cover_selection_origin":"user","fixture_state":"preserved"}'::jsonb
+            where album_key = 'owner::repair album'
+            returning id
+            """,
+            (selected_cover,),
+        ).fetchone()
+
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]["id"],
+        active_file_entries={reissue["path"]: reissue},
+    )
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        split_albums = connection.execute(
+            """
+            select id, album_key, cover_path, metadata
+            from library.local_albums
+            where title = 'Repair Album'
+            order by album_key
+            """
+        ).fetchall()
+
+    assert [row["album_key"] for row in split_albums] == [
+        "owner::repair album::year::2001",
+        "owner::repair album::year::2002",
+    ]
+    adopted_original = split_albums[0]
+    assert adopted_original["id"] == original_album["id"]
+    assert adopted_original["cover_path"] == selected_cover
+    assert adopted_original["metadata"]["fixture_state"] == "preserved"
+
+    Path(reissue["path"]).unlink()
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]["id"],
+        active_file_entries={},
+        deleted_paths=(reissue["path"],),
+    )
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]["id"],
+        active_file_entries={original["path"]: original},
+    )
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        active_album_keys = connection.execute(
+            """
+            select distinct album.album_key
+            from library.local_albums as album
+            join library.local_tracks as track on track.album_id = album.id
+            join library.local_track_files as file on file.track_id = track.id
+            where album.title = 'Repair Album'
+              and file.scan_cache_stale is false
+            order by album.album_key
+            """
+        ).fetchall()
+
+    assert [row["album_key"] for row in active_album_keys] == [
+        "owner::repair album::year::2001"
+    ]
+
+
 @pytest.mark.parametrize("operation", ["rename", "split", "merge"])
 def test_album_only_edit_preserves_full_display_date_with_different_raw_year(watcher_repair_inventory, operation):
     fixture = watcher_repair_inventory

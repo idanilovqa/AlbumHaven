@@ -421,6 +421,8 @@
       "media-copy:year-distinct-release-projection"
     ],
     "expectedContracts": [
+      "watcher-adds-second-year-without-full-rescan",
+      "legacy-base-album-row-adopts-to-first-year-identity",
       "year-distinct-folders-form-separate-releases",
       "year-distinct-releases-do-not-create-duplicate-sources",
       "year-distinct-release-identities-persist-after-restart"

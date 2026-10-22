@@ -382,6 +382,25 @@ def test_year_distinct_release_uses_the_bucket_year_when_its_first_track_has_non
     assert {album.key.rsplit("::year::", 1)[-1] for album in albums} == {"2001", "2002"}
 
 
+def test_conflicting_year_bucket_does_not_merge_into_resolved_release():
+    tracks = [
+        _track("main/clean"),
+        _track("main/clean", 2),
+        _track("main/clean", 3, year=None),
+        _track("main/conflicting", 4),
+        _track("main/conflicting", 5, year=2002),
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 2
+    albums_by_key = {album.key.rsplit("::year::", 1)[-1]: album for album in albums}
+    assert set(albums_by_key) == {"2001", "unresolved"}
+    assert albums_by_key["2001"].year == 2001
+    assert albums_by_key["unresolved"].year is None
+    assert {track.year for track in albums_by_key["unresolved"].tracks} == {2001, 2002}
+
+
 @pytest.mark.parametrize(
     ("duplicate_track_count", "expected_categories"),
     [

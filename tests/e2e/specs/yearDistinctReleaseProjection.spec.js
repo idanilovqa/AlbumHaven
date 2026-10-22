@@ -16,16 +16,18 @@ test(
     appBarActions,
     context,
     galleryActions,
+    libraryFilesystemWatcherActions,
     managedAppLifecycle,
     stepLogger,
     trackModalActions,
   }) => {
     test.setTimeout(240000);
     let fixture;
+    let baselineAlbumId;
     let originalFailure;
 
     try {
-      await stepLogger.step('Create two same-name releases with distinct years', async () => {
+      await stepLogger.step('Index the first release under the legacy base identity', async () => {
         await managedAppLifecycle.stop();
         fixture = await createWatchedAlbumFixture({
           artist: ARTIST,
@@ -38,16 +40,33 @@ test(
           context,
           managedAppLifecycle,
         });
+        await managedAppLifecycle.restart();
+        await galleryActions.goto('/?surface=albums');
+        await galleryActions.waitForGalleryReady();
+        await appBarActions.triggerFullRescanAndWait();
+        await appBarActions.waitForScanAndCoverRefreshIdle();
+
+        const persisted = await queryPersistedAlbumIdentity({
+          artist: ARTIST,
+          album: ALBUM,
+          year: RELEASES[0].year,
+        });
+        expect(persisted.album_keys).toEqual([`${ARTIST.toLowerCase()}::${ALBUM.toLowerCase()}`]);
+        expect(persisted.track_counts).toEqual([RELEASES[0].tracks.length]);
+        [baselineAlbumId] = persisted.album_ids;
+      });
+
+      await stepLogger.step('Add the second year through the filesystem watcher', async () => {
+        const status = await libraryFilesystemWatcherActions.readStatus();
         await fixture.createSiblingAlbum({
           album: ALBUM,
           folderName: `${ALBUM} (2016)`,
           year: RELEASES[1].year,
           trackTitles: RELEASES[1].tracks,
         });
-        await managedAppLifecycle.restart();
-        await galleryActions.goto('/?surface=albums');
-        await galleryActions.waitForGalleryReady();
-        await appBarActions.triggerFullRescanAndWait();
+        await libraryFilesystemWatcherActions.waitForRevisionAfter(
+          status.inventory_mutation_revision,
+        );
         await appBarActions.waitForScanAndCoverRefreshIdle();
       });
 
@@ -70,6 +89,9 @@ test(
           expect(persisted.album_ids).toHaveLength(1);
           expect(persisted.track_counts).toEqual([release.tracks.length]);
           expect(persisted.album_keys[0]).toMatch(new RegExp(`::year::${release.year}$`));
+          if (release.year === RELEASES[0].year) {
+            expect(persisted.album_ids[0]).toBe(baselineAlbumId);
+          }
         });
       }
 

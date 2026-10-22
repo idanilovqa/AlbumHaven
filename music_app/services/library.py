@@ -1513,9 +1513,21 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
         ).append(entry)
 
     classified_buckets: list[
-        tuple[list[dict[str, object]], bool, str, list[str], str, str, str | None, str, int | None]
+        tuple[
+            list[dict[str, object]],
+            bool,
+            str,
+            list[str],
+            str,
+            str,
+            str | None,
+            str,
+            int | None,
+            bool,
+        ]
     ] = []
     release_years_by_base_key: dict[str, set[int]] = {}
+    conflicting_year_release_keys: set[str] = set()
     for bucket_entries in grouped_entries.values():
         is_compilation, display_album_artist, member_artists = _classify_album_artists(bucket_entries)
         identity_album_artist = display_album_artist
@@ -1549,8 +1561,11 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             if (year := safe_int(entry.get("year"))) is not None and 1000 <= year <= 9999
         }
         bucket_release_year = next(iter(bucket_years)) if len(bucket_years) == 1 else None
+        bucket_has_conflicting_years = len(bucket_years) > 1
         if bucket_release_year is not None:
             release_years_by_base_key.setdefault(base_key, set()).add(bucket_release_year)
+        elif bucket_has_conflicting_years:
+            conflicting_year_release_keys.add(base_key)
         classified_buckets.append(
             (
                 bucket_entries,
@@ -1562,6 +1577,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                 edition,
                 base_key,
                 bucket_release_year,
+                bucket_has_conflicting_years,
             )
         )
 
@@ -1569,7 +1585,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
         base_key
         for base_key, release_years in release_years_by_base_key.items()
         if len(release_years) > 1
-    }
+    } | conflicting_year_release_keys
     construction_count = 0
     for (
         bucket_entries,
@@ -1581,10 +1597,13 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
         edition,
         base_key,
         bucket_release_year,
+        bucket_has_conflicting_years,
     ) in classified_buckets:
         for entry in bucket_entries:
             construction_count += 1
-            if base_key in separate_release_keys:
+            if bucket_has_conflicting_years:
+                key = f"{base_key}::year::unresolved"
+            elif base_key in separate_release_keys:
                 key = _album_key(identity_album_artist, album_name, edition, entry.get("year"))
             elif base_key in year_distinct_release_keys and bucket_release_year is not None:
                 key = _album_key(identity_album_artist, album_name, edition, bucket_release_year)
@@ -1620,8 +1639,12 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                     remote_cover_album_url=str(entry.get("remote_cover_album_url") or "").strip() or None,
                     remote_cover_width=safe_int(entry.get("remote_cover_width")),
                     remote_cover_height=safe_int(entry.get("remote_cover_height")),
-                    year=safe_int(entry.get("year")),
-                    release_date=str(entry.get("release_date") or "").strip() or None,
+                    year=None if bucket_has_conflicting_years else safe_int(entry.get("year")),
+                    release_date=(
+                        None
+                        if bucket_has_conflicting_years
+                        else str(entry.get("release_date") or "").strip() or None
+                    ),
                     edition=edition,
                     album_rating=safe_int(entry.get("album_rating")),
                     library_root_id=str(entry.get("library_root_id") or "").strip() or None,
@@ -1638,9 +1661,13 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             duration = safe_int(entry.get("duration_seconds")) or 0
             album = albums[key]
             album.total_duration_seconds += duration
-            if album.year is None:
+            if album.year is None and not bucket_has_conflicting_years:
                 album.year = safe_int(entry.get("year"))
-            if not getattr(album, "release_date", None) and entry.get("release_date"):
+            if (
+                not bucket_has_conflicting_years
+                and not getattr(album, "release_date", None)
+                and entry.get("release_date")
+            ):
                 album.release_date = str(entry.get("release_date")).strip() or None
             if album.edition is None and entry.get('edition'):
                 album.edition = str(entry.get('edition')).strip() or None

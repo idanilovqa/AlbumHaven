@@ -215,6 +215,14 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
             return cursor
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    semantic_adoption_calls = []
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "_execute_semantic_local_album_key_adoptions",
+        lambda active_connection, album_rows: semantic_adoption_calls.append(
+            (active_connection, album_rows)
+        ),
+    )
     connection = TargetedConnection()
     observed_separate_release_keys = []
 
@@ -278,6 +286,7 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     )
     assert lock_index < upsert_index < stale_index < revision_index
     assert connection.commit_calls == 1
+    assert semantic_adoption_calls == [(connection, semantic_adoption_calls[0][1])]
     stale_params = next(
         params
         for sql, params in connection.executed
@@ -446,6 +455,46 @@ def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
     assert featured_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
     assert featured_rows[0]["artist_key"] == "yuri shevchuk / ddt"
     assert track_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
+
+
+def test_targeted_album_rows_keep_an_automatic_year_identity():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/Owner/Album/01.flac"
+    year_key = "owner::album::year::2001"
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": year_key,
+            "title": "Album",
+            "release_year": 2001,
+        }
+    ]
+    featured_rows = [
+        {"album_key": year_key, "artist_key": "owner", "featured_kind": "owner"}
+    ]
+    track_rows = [{"album_key": year_key, "track_key": path}]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": path,
+                "album_key": "owner::album",
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2001,
+            }
+        ],
+    )
+
+    assert album_rows[0]["album_key"] == year_key
+    assert featured_rows[0]["album_key"] == year_key
+    assert track_rows[0]["album_key"] == year_key
 
 
 def test_targeted_album_rows_accept_an_external_album_artist_correction():

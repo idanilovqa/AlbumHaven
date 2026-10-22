@@ -491,6 +491,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .album-card .gallery-card-info { min-width: 0; container-type: inline-size; }
   .album-card :is(.album-title-button, .album-subtitle) { display: block; width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .album-card [data-gallery-metadata-text] { display: inline-block; white-space: nowrap; vertical-align: top; }
+  .album-card[data-gallery-display="cards"] .album-title-button { white-space: normal; }
+  .album-card[data-gallery-display="cards"] .album-title-button [data-gallery-metadata-text] { display: inline; white-space: normal; animation: none; }
   .album-card .is-card-text-overflowing > [data-gallery-metadata-text] { animation: gallery-card-text-pan var(--card-text-duration) linear infinite alternate; }
   .album-card :focus-visible > [data-gallery-metadata-text] { animation-play-state: paused; }
   .album-card .rating-row[data-rating-value="0"] { display: none; }

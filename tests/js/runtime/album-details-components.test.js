@@ -304,6 +304,22 @@ test('Editorial Album Details aligns the track table with its title and metadata
   );
 });
 
+test('Editorial Album Details wraps long titles without covering header actions', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/css/runtime/album-details-components.css'),
+    'utf8',
+  );
+
+  assert.match(
+    css,
+    /data-album-details-layout="editorial_canvas"\] \.album-details-header__primary\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s,
+  );
+  assert.match(
+    css,
+    /data-album-details-layout="editorial_canvas"\] \.album-details-header__actions\s*\{[^}]*grid-column:\s*2;/s,
+  );
+});
+
 test('Editorial mobile stacking wins the same-selector cascade after desktop layout rules', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/track-modal-and-lightbox.css'), 'utf8');
   const dialog = '.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"])';

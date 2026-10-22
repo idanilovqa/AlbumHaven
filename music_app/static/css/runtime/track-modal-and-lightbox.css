@@ -569,6 +569,7 @@
   display: grid; place-items: center; width: 44px; height: 44px;
   border: 0; border-radius: 6px; background: transparent;
   color: var(--lightbox-control-ink); cursor: pointer;
+  outline: none !important;
 }
 .image-lightbox-close svg { width: 26px; height: 26px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; }
 .image-lightbox-close:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--lightbox-control-ink) 10%, transparent); }
@@ -589,6 +590,12 @@
   font-size: 2rem;
   line-height: 1;
   z-index: 2;
+  outline: none !important;
+}
+.image-lightbox-close:focus-visible,
+.image-lightbox-nav:focus-visible {
+  outline: 2px solid var(--lightbox-control-accent) !important;
+  outline-offset: 2px !important;
 }
 .image-lightbox-nav:hover {
   border-color: var(--lightbox-control-accent);

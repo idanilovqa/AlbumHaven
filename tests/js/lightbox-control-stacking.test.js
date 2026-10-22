@@ -39,6 +39,18 @@ test('fullscreen close control stays above the transformed zoom image', () => {
   assert.match(closeRule, /z-index:\s*3\s*;/);
 });
 
+test('fullscreen artwork controls suppress resting outlines but retain keyboard focus', () => {
+  const closeRule = readRule('.image-lightbox-close');
+  const navRule = readRule('.image-lightbox-nav');
+
+  assert.match(closeRule, /outline:\s*none\s*!important\s*;/);
+  assert.match(navRule, /outline:\s*none\s*!important\s*;/);
+  assert.match(
+    stylesheet,
+    /\.image-lightbox-close:focus-visible,\s*\.image-lightbox-nav:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--lightbox-control-accent\)\s*!important\s*;[^}]*outline-offset:\s*2px\s*!important\s*;/s,
+  );
+});
+
 test('fullscreen cover retry stays above the image and inside the viewport', () => {
   const retryRule = readRule('.image-lightbox-retry');
   assert.match(overlayShell, /id="image-lightbox-retry"[^>]*type="button"[^>]*hidden>Retry full-size cover<\/button>/);

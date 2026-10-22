@@ -905,7 +905,7 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
   ]);
   assert.deepEqual(
     scheduledTimeouts.map(({ delayMs }) => delayMs),
-    [500, 5000],
+    [500, 0],
   );
   assert.equal(runtimeBootstrap.startupHydration.embeddedViewPatch, null);
   assert.equal(runtimeBootstrap.startupPayloadTiers.hydration.embeddedViewPatch, null);
@@ -1035,7 +1035,7 @@ test('delayed startup hydration yields to cover-display/source work without abor
 
   context.state.view.gallery_display_mode = 'covers';
   context.state.awaitingInitialDataRefresh = false;
-  scheduledTimeouts.find(({ delayMs }) => delayMs === 5000).callback();
+  scheduledTimeouts.find(({ delayMs }) => delayMs === 0).callback();
 
   assert.deepEqual(fetchedEndpoints, []);
   assert.equal(context.state.awaitingInitialDataRefresh, false);
@@ -1047,7 +1047,7 @@ test('delayed startup hydration clears readiness when cached artist navigation s
 
   context.state.ui.viewStateRevision += 1;
   context.state.view.selected_artist = 'Broadcast';
-  scheduledTimeouts.find(({ delayMs }) => delayMs === 5000).callback();
+  scheduledTimeouts.find(({ delayMs }) => delayMs === 0).callback();
 
   assert.deepEqual(fetchedEndpoints, []);
   assert.equal(context.state.awaitingInitialDataRefresh, false);
@@ -1173,7 +1173,7 @@ test('bootstrap init still queues the embedded sidebar-first hydration request w
 
   assert.deepEqual(
     scheduledTimeouts.map(({ delayMs }) => delayMs),
-    [500, 5000],
+    [500, 0],
   );
   scheduledTimeouts[1].callback();
   assert.equal(fetchedEndpoint, '/view-data?payload_tier=sidebar');

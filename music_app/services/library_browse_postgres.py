@@ -744,12 +744,53 @@ class PostgresLibraryBrowseRepository:
             payload.pop("artists_sidebar", None)
         return payload
 
+    def build_projected_root_sidebar_payload(
+        self,
+        *,
+        query_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        from music_app.services.gallery_projection_postgres import (
+            load_gallery_projection_sidebar,
+            schedule_gallery_projection_refresh,
+        )
+
+        connection = self._connect_to_database()
+        try:
+            connection.execute(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+            )
+            projected = load_gallery_projection_sidebar(
+                connection,
+                _root_sidebar_view_state(query_params),
+            )
+        finally:
+            try:
+                rollback = getattr(connection, "rollback", None)
+                if callable(rollback):
+                    rollback()
+            finally:
+                close = getattr(connection, "close", None)
+                if callable(close):
+                    close()
+        if projected is None:
+            schedule_gallery_projection_refresh(self._config, connect=self._connect)
+            raise GalleryProjectionPending("Gallery is being prepared.")
+        artists_sidebar, album_count = projected
+        return {
+            "artists_sidebar": artists_sidebar,
+            "artist_count": len(artists_sidebar),
+            "album_count": album_count,
+            "show_all_artists_sidebar_link": True,
+        }
+
     def build_root_startup_preview_payload(
         self,
         *,
         query_params: Mapping[str, object] | None = None,
         library_state: Mapping[str, object] | None = None,
         sidebar_only: bool = False,
+        bounded_gallery_only: bool = False,
+        queue_projection_refresh: bool = True,
     ) -> dict[str, object]:
         started_at = perf_counter()
         started_cpu = thread_time()
@@ -787,7 +828,7 @@ class PostgresLibraryBrowseRepository:
                 paged and projection_context and (cached_page is None or projection_stale)
                 and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
             )
-            if refresh_projection:
+            if refresh_projection and queue_projection_refresh:
                 schedule_gallery_projection_refresh(
                     self._config, connect=self._connect, view_state=view_state,
                 )
@@ -873,6 +914,26 @@ class PostgresLibraryBrowseRepository:
                         artist_display=_artist_tree_display_value(artist), albums=[], sections=[]))
                     group["albums"].append(album)
                 preview_artist_groups = list(groups.values())
+            elif bounded_gallery_only:
+                preview_rows = _canonicalize_artist_rows(
+                    self._load_root_startup_preview_rows(
+                        view_state,
+                        connection=connection,
+                    ),
+                    root_alias_to_canonical,
+                )
+                preview_artist_groups = _root_album_browse_artist_groups(preview_rows)[
+                    :_STARTUP_PREVIEW_ARTIST_LIMIT
+                ]
+                artists_sidebar = [
+                    {
+                        "artist": group["artist"],
+                        "artist_display": group["artist_display"],
+                        "count": len(group["albums"]),
+                    }
+                    for group in preview_artist_groups
+                ]
+                album_count = len(_album_identity_set(preview_rows))
             else:
                 sidebar_rows = _canonicalize_artist_rows(
                     self._load_root_sidebar_rows(
@@ -939,13 +1000,15 @@ class PostgresLibraryBrowseRepository:
             finally:
                 connection_stack.close()
 
-        if relation_alias_maps.get("projection_stale_reason"):
+        if relation_alias_maps.get("projection_stale_reason") or (
+            bounded_gallery_only and queue_projection_refresh
+        ):
             schedule_gallery_projection_refresh(self._config, connect=self._connect)
         elif prepared_snapshot is not None and projection_context:
             queue_gallery_projection_snapshot(
                 self._config, projection_context, view_state, prepared_snapshot, connect=self._connect)
 
-        if not paged:
+        if not paged and not bounded_gallery_only:
             artists_sidebar = [
                 {
                     "artist": sidebar_displays[artist_key],
@@ -1938,17 +2001,33 @@ class PostgresLibraryBrowseRepository:
                 **relation_alias_maps,
                 "projection_stale_reason": "",
             }
-        if relation_alias_maps.get("projection_stale_reason"):
+        projection_stale_reason = str(
+            relation_alias_maps.get("projection_stale_reason") or ""
+        )
+        rebuilding_complete_projection = (
+            projection_stale_reason == "projection_not_ready"
+            and relation_alias_maps.get("projection_structure_complete") is True
+        )
+        runtime_rebuild_exact_lookup = (
+            relation_alias_maps.get("projection_snapshot_missing") is True
+            and bool(query)
+            and not requested_all_artists
+            and isinstance(library_state, Mapping)
+            and library_state.get("relation_projection_ready") is False
+        )
+        if (
+            projection_stale_reason
+            and not rebuilding_complete_projection
+            and not runtime_rebuild_exact_lookup
+        ):
             raise SearchProjectionPending("Artist relationships are being prepared.")
         phase_ms["aliases"] = (perf_counter() - aliases_started_at) * 1000
         if query and not requested_all_artists:
             exact_match_started_at = perf_counter()
             exact_match_search_rows_ms = 0.0
             projected_artist_match = ""
-            projection_is_authoritative = (
-                relation_alias_maps.get("projection_stale_reason") == ""
-            )
-            if not relation_alias_maps.get("projection_stale_reason"):
+            projection_is_authoritative = projection_stale_reason == ""
+            if projection_is_authoritative:
                 projected_artist_match = _exact_projected_artist_match(
                     query,
                     alias_to_canonical,
@@ -1957,7 +2036,17 @@ class PostgresLibraryBrowseRepository:
                         "identity_to_canonical"
                     ),
                 )
-            exact_artist_match = projected_artist_match
+                exact_artist_match = projected_artist_match
+            else:
+                exact_artist_match = self._load_exact_artist_match(
+                    query,
+                    view_state,
+                    connection=connection,
+                )
+                if not exact_artist_match and not rebuilding_complete_projection:
+                    raise SearchProjectionPending(
+                        "Artist relationships are being prepared."
+                    )
             if exact_artist_match and _multi_values(params, "category"):
                 search_rows_started_at = perf_counter()
                 search_rows = self._load_search_rows(
@@ -1992,18 +2081,6 @@ class PostgresLibraryBrowseRepository:
                     for row in canonical_search_rows
                 ):
                     exact_artist_match = ""
-            if (
-                not projected_artist_match
-                and not exact_artist_match
-                and not projection_is_authoritative
-            ):
-                exact_artist_match = self._load_exact_artist_match(
-                    query,
-                    view_state,
-                    connection=connection,
-                )
-                if exact_artist_match:
-                    raise SearchProjectionPending("Artist relationships are being prepared.")
             phase_ms["aliases"] += max(
                 0.0,
                 (perf_counter() - exact_match_started_at) * 1000
@@ -3386,6 +3463,12 @@ class PostgresLibraryBrowseRepository:
                 relation_views.get("canonical_to_aliases")
             ),
             "projection_stale_reason": relation_projection_stale_reason(scan_cache),
+            "projection_structure_complete": (
+                payload.get("projection_structure_complete") is True
+            ),
+            "projection_snapshot_missing": (
+                payload.get("projection_snapshot_missing") is True
+            ),
         }
         loaded_fingerprint = (
             str(payload.get("library_id") or fingerprint[0]),
@@ -8572,19 +8655,25 @@ def _root_startup_preview_artist_names_sql(candidate_limit: int) -> str:
 {_eligible_album_tracks_cte_sql(materialized=False)}
 select library.local_artists.name as artist_name
 from library.local_artists
-        join bootstrap_context
-          on bootstrap_context.library_id = library.local_artists.library_id
-        where exists (
+        where library.local_artists.library_id = (
+          select library_id from bootstrap_context
+        )
+          and exists (
           select 1
-          from library.local_album_featured_artists
-    join library.local_albums
-      on library.local_albums.id = library.local_album_featured_artists.album_id
-     and ({_visible_album_clause("library.local_albums")})
-    join eligible_album_tracks
-      on eligible_album_tracks.library_id = library.local_albums.library_id
-     and eligible_album_tracks.album_id = library.local_albums.id
-    where library.local_album_featured_artists.library_id = library.local_artists.library_id
-            and library.local_album_featured_artists.artist_id = library.local_artists.id
+          from library.local_album_featured_artists featured
+          join library.local_albums album
+            on album.id = featured.album_id
+           and ({_visible_album_clause("album")})
+          where featured.library_id = library.local_artists.library_id
+            and featured.artist_id = library.local_artists.id
+            and exists (
+              select 1
+              from eligible_album_tracks eligible
+              where eligible.library_id = album.library_id
+                and eligible.album_id = album.id
+              offset 0
+            )
+          offset 0
         )
         order by
           lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)),
@@ -10149,29 +10238,9 @@ def _relation_alias_maps_cache_identity_sql() -> str:
         /* relation_alias_cache_identity */
         select
           library.libraries.id as library_id,
-          md5(jsonb_build_array(
-            coalesce(
-              library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}',
-              '{}'::jsonb
-            ),
-            coalesce(
-              library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}',
-              '{}'::jsonb
-            ),
-            coalesce(
-              library.libraries.metadata #> '{scan_cache,relation_projection}',
-              '{}'::jsonb
-            ),
-            coalesce(
-              jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}') = 'object'
-              and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}') = 'object'
-              and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,family_to_artists}') = 'object'
-              and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,folder_related}') = 'object'
-              and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists}') = 'array'
-              and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists_sidebar}') = 'array'
-              and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,sidebar_families}') = 'array',
-              false
-            )
+          md5(coalesce(
+            library.libraries.metadata #> '{scan_cache,relation_projection}',
+            '{}'::jsonb
           )::text) as relation_alias_fingerprint
         from app.bootstrap_owners
         join library.libraries
@@ -10197,29 +10266,9 @@ def _relation_alias_maps_sql() -> str:
         )
     select
       library.libraries.id as library_id,
-      md5(jsonb_build_array(
-        coalesce(
-          library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}',
-          '{}'::jsonb
-        ),
-        coalesce(
-          library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}',
-          '{}'::jsonb
-        ),
-        coalesce(
-          library.libraries.metadata #> '{scan_cache,relation_projection}',
-          '{}'::jsonb
-        ),
-        coalesce(
-          jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}') = 'object'
-          and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}') = 'object'
-          and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,family_to_artists}') = 'object'
-          and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,folder_related}') = 'object'
-          and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists}') = 'array'
-          and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists_sidebar}') = 'array'
-          and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,sidebar_families}') = 'array',
-          false
-        )
+      md5(coalesce(
+        library.libraries.metadata #> '{scan_cache,relation_projection}',
+        '{}'::jsonb
       )::text) as relation_alias_fingerprint,
       coalesce(
         library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}',
@@ -10233,6 +10282,16 @@ def _relation_alias_maps_sql() -> str:
         library.libraries.metadata #> '{scan_cache,relation_projection}',
         '{}'::jsonb
       ) as relation_projection,
+          (
+            not jsonb_path_exists(
+              library.libraries.metadata,
+              '$.scan_cache.relation_views'
+            )
+            and not jsonb_path_exists(
+              library.libraries.metadata,
+              '$.scan_cache.relation_projection'
+            )
+          ) as projection_snapshot_missing,
       coalesce(
         jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}') = 'object'
         and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}') = 'object'

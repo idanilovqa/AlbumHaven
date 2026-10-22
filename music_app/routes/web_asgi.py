@@ -339,6 +339,7 @@ def _build_startup_hydration_endpoint(
     active_surface: str = "albums",
     payload_tier: str = "",
     omit_sidebar: bool = False,
+    root_sidebar: bool = False,
     all_artists_active: bool = False,
 ) -> str:
     normalized_surface = resolve_active_view_surface(active_surface)
@@ -350,6 +351,8 @@ def _build_startup_hydration_endpoint(
         params.append(("payload_tier", normalized_payload_tier))
     if omit_sidebar:
         params.append(("omit_sidebar", "1"))
+    if root_sidebar:
+        params.append(("root_sidebar", "1"))
     if (
         normalized_surface == "albums"
         and normalized_payload_tier != "sidebar"
@@ -563,6 +566,12 @@ def _build_startup_hydration_contract(
             gallery_scale_percent,
             visible_library_categories,
             active_surface=normalized_surface,
+            root_sidebar=bool(
+                initial_view_partial
+                and normalized_surface == "albums"
+                and selected_artist
+                and not query_raw
+            ),
             all_artists_active=all_artists_active,
         ),
         "followupEndpoint": "",
@@ -602,21 +611,28 @@ def _build_postgres_root_startup_view(
     library_state: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, object] | None, float]:
     payload_started_at = time.perf_counter()
+    repository = PostgresLibraryBrowseRepository(config)
+    preview_query_params = QueryParams([
+        (key, value) for key, value in QueryParams(query_args).multi_items()
+        if key not in {"gallery_cursor", "gallery_page_size"}
+    ])
+    startup_query_params = QueryParams([
+        *preview_query_params.multi_items(),
+        *([] if str(query_args.get("surface") or "").strip().casefold() == "home"
+          else [("gallery_page_size", "8")]),
+    ])
     try:
-        payload = PostgresLibraryBrowseRepository(config).build_root_startup_preview_payload(
-            query_params=QueryParams([
-                (key, value) for key, value in QueryParams(query_args).multi_items()
-                if key not in {"gallery_cursor", "gallery_page_size"}
-            ] + ([] if str(query_args.get("surface") or "").strip().casefold() == "home"
-                 else [("gallery_page_size", "8")])),
+        payload = repository.build_root_startup_preview_payload(
+            query_params=startup_query_params,
             library_state=library_state,
+            queue_projection_refresh=False,
         )
     except GalleryProjectionPending:
-        initial_view = _build_empty_initial_view(
-            config=config, query_raw="", selected_artist="", active_surface="albums",
+        payload = repository.build_root_startup_preview_payload(
+            query_params=preview_query_params,
+            library_state=library_state,
+            bounded_gallery_only=True,
         )
-        initial_view["gallery_projection_pending"] = True
-        return initial_view, None, round((time.perf_counter() - payload_started_at) * 1000, 2)
     initial_view = build_initial_view_preview(payload)
     preview_sidebar = [
         dict(item)
@@ -655,27 +671,31 @@ def _build_postgres_selected_artist_startup_view(
         query_params=selected_query_args,
         library_state=library_state,
     )
-    root_sidebar: list[object] | None = None
     if not str(query_args.get("q") or "").strip():
-        root_sidebar_payload = repository.build_root_startup_preview_payload(
-            query_params=query_args,
-            library_state=library_state,
-            sidebar_only=True,
-        )
-        root_sidebar = list(
-            root_sidebar_payload.get("artists_sidebar") or []
-        )
-        payload["artists_sidebar"] = root_sidebar
-        payload["artist_count"] = int(
-            root_sidebar_payload.get("artist_count")
-            or len(root_sidebar)
-        )
-        payload["show_all_artists_sidebar_link"] = (
-            root_sidebar_payload.get("show_all_artists_sidebar_link") is not False
-        )
+        payload["initial_view_partial"] = True
+        if not list(payload.get("artists_sidebar") or []):
+            selected_artist = str(
+                payload.get("selected_artist") or query_args.get("artist") or ""
+            ).strip()
+            selected_groups = [
+                group
+                for group in list(payload.get("primary_artist_groups") or [])
+                if str(group.get("artist") or "").strip().casefold()
+                == selected_artist.casefold()
+            ]
+            if selected_artist:
+                payload["artists_sidebar"] = [{
+                    "artist": selected_artist,
+                    "artist_display": str(
+                        (selected_groups[0] if selected_groups else {}).get("artist_display")
+                        or selected_artist
+                    ),
+                    "count": sum(
+                        len(list(group.get("albums") or []))
+                        for group in selected_groups
+                    ),
+                }]
     initial_view = build_initial_view_preview(payload)
-    if root_sidebar is not None:
-        initial_view["artists_sidebar"] = root_sidebar
     payload_elapsed_ms = round((time.perf_counter() - payload_started_at) * 1000, 2)
     return initial_view, payload_elapsed_ms
 

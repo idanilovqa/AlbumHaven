@@ -206,6 +206,58 @@ def test_projection_occurrences_exclude_mutable_missing_details_and_private_path
     assert "missing_album" not in result[0]
 
 
+def test_gallery_page_reads_only_the_ready_header_revision():
+    from music_app.services import gallery_projection_postgres as projection
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def __init__(self):
+            self.occurrence_params = []
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split()).lower()
+            if "from library.gallery_projection_snapshots" in normalized:
+                return Cursor([{
+                    "revision": "a" * 64,
+                    "sidebar": [{"artist": "Artist", "count": 1}],
+                    "album_count": 1,
+                    "occurrence_count": 1,
+                }])
+            if "relation_alias_fingerprint" in normalized:
+                return Cursor([{"alias_to_canonical": {}}])
+            if "from library.gallery_projection_occurrences" in normalized:
+                assert "revision = %(revision)s" in normalized
+                self.occurrence_params.append(params)
+            if "select min(ordinal) as ordinal" in normalized:
+                return Cursor([{"ordinal": 0}])
+            if "select min(occurrence.ordinal) as first_ordinal" in normalized:
+                return Cursor([{"first_ordinal": 0, "end_ordinal": 1}])
+            if "select payload from library.gallery_projection_occurrences" in normalized:
+                return Cursor([{"payload": membership("Artist", "album")}])
+            raise AssertionError(f"Unexpected SQL: {sql}")
+
+    connection = Connection()
+    page, _sidebar, _count, _metadata = projection.load_gallery_projection_page(
+        connection,
+        {},
+        {"gallery_page_size": "1", "gallery_anchor_artist": "Artist"},
+        context={"library_id": 1, "generation": 2},
+    )
+
+    assert page[0]["album_key"] == "album"
+    assert len(connection.occurrence_params) >= 3
+    assert all(params["revision"] == "a" * 64 for params in connection.occurrence_params)
+
+
 @pytest.mark.parametrize(
     ("artist", "album", "album_artist"),
     [
@@ -645,6 +697,106 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
         assert len(hydrated) == 1 and len(hydrated[0]) == size
     assert load_options == [{"context": {"library_id": 1}, "allow_stale": True}]
     assert calls[-2:] == [("rollback", None), ("close", None)]
+
+
+def test_startup_projection_probe_can_defer_refresh_work(monkeypatch):
+    from music_app.services import gallery_projection_postgres as projection
+    from tests.py.test_library_browse_postgres import _EmptyAlbumRatingsService
+
+    class Cursor:
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def execute(self, _sql, _params=None):
+            return Cursor()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"},
+        connect=lambda _url: Connection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        projection, "gallery_projection_context", lambda _connection: {"library_id": 1}
+    )
+    monkeypatch.setattr(
+        projection, "load_gallery_projection_page", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        projection,
+        "schedule_gallery_projection_refresh",
+        lambda *_args, **_kwargs: pytest.fail(
+            "startup projection probe queued foreground-competing work"
+        ),
+    )
+
+    with pytest.raises(browse.GalleryProjectionPending):
+        repository.build_root_startup_preview_payload(
+            query_params={"gallery_page_size": "8"},
+            queue_projection_refresh=False,
+        )
+
+
+def test_selected_startup_sidebar_uses_only_current_gallery_projection(monkeypatch):
+    from music_app.services import gallery_projection_postgres as projection
+    from tests.py.test_library_browse_postgres import _EmptyAlbumRatingsService
+
+    events = []
+
+    class Connection:
+        def execute(self, sql, _params=None):
+            events.append(str(sql))
+            return None
+
+        def rollback(self):
+            events.append("rollback")
+
+        def close(self):
+            events.append("close")
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"},
+        connect=lambda _url: Connection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        projection,
+        "load_gallery_projection_sidebar",
+        lambda _connection, _state: (
+            [
+                {"artist": "Broadcast", "artist_display": "Broadcast", "count": 2},
+                {"artist": "Stereolab", "artist_display": "Stereolab", "count": 1},
+            ],
+            3,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_root_sidebar_rows",
+        lambda *_args, **_kwargs: pytest.fail("projected sidebar must not run the live root query"),
+    )
+
+    payload = repository.build_projected_root_sidebar_payload(
+        query_params={"category": ["main_library"]},
+    )
+
+    assert payload == {
+        "artists_sidebar": [
+            {"artist": "Broadcast", "artist_display": "Broadcast", "count": 2},
+            {"artist": "Stereolab", "artist_display": "Stereolab", "count": 1},
+        ],
+        "artist_count": 2,
+        "album_count": 3,
+        "show_all_artists_sidebar_link": True,
+    }
+    assert events[-2:] == ["rollback", "close"]
 
 
 @pytest.mark.parametrize("stale", [False, True])

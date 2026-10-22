@@ -572,7 +572,8 @@ def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
     default_root_gallery_page = (
-        _is_postgres_root_album_browse_request(request)
+        not _should_use_transient_scan_browse_state(library_state, browse_state)
+        and _is_postgres_root_album_browse_request(request)
         and not str(request.query_params.get("payload_tier") or "").strip()
     )
     if (
@@ -630,9 +631,20 @@ def view_data(request: Request) -> JSONResponse:
             library_state=_postgres_browse_library_state(request),
         )
         if _request_flag_value(request.query_params.get("root_sidebar")):
-            root_sidebar_payload = repository.build_root_sidebar_payload(
-                query_params=request.query_params,
-            )
+            try:
+                root_sidebar_payload = repository.build_projected_root_sidebar_payload(
+                    query_params=request.query_params,
+                )
+            except GalleryProjectionPending:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "gallery_projection_pending",
+                        "error": "Gallery is being prepared.",
+                    },
+                    status_code=503,
+                    headers={"Retry-After": "1", "Cache-Control": "no-store"},
+                )
             payload.update(
                 {
                     field: root_sidebar_payload[field]

@@ -512,8 +512,16 @@ def test_postgres_root_startup_embedded_patch_preserves_preview_gallery(monkeypa
         def __init__(self, _config):
             pass
 
-        def build_root_startup_preview_payload(self, *, query_params, library_state):
+        def build_root_startup_preview_payload(
+            self,
+            *,
+            query_params,
+            library_state,
+            queue_projection_refresh=True,
+        ):
             assert library_state is ready_library_state
+            assert query_params.get("gallery_page_size") == "8"
+            assert queue_projection_refresh is False
             return preview_payload
 
         def build_root_sidebar_payload(self, *, query_params):
@@ -676,23 +684,7 @@ def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypat
             pass
 
         def build_root_sidebar_payload(self, *, query_params):
-            assert query_params.get("artist") == "Broadcast"
-            return {
-                "artists_sidebar": [
-                    {
-                        "artist": "Broadcast",
-                        "artist_display": "Broadcast",
-                        "count": 1,
-                    },
-                    {
-                        "artist": "Stereolab",
-                        "artist_display": "Stereolab",
-                        "count": 1,
-                    },
-                ],
-                "artist_count": 2,
-                "show_all_artists_sidebar_link": True,
-            }
+            raise AssertionError("selected startup must defer the complete root sidebar")
 
         def build_selected_artist_payload(self, *, query_params=None, library_state=None):
             assert query_params.get("artist") == "Broadcast"
@@ -752,10 +744,12 @@ def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypat
 
     assert status == 200
     payload = _extract_bootstrap_payload_from_shell(body)
-    assert payload["bootstrap"]["startupPreview"]["mode"] == "full_view"
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
     assert payload["initial_view"]["selected_artist"] == "Broadcast"
     assert [group["artist"] for group in payload["initial_view"]["family_artist_groups"]] == ["Stereolab"]
-    assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&artist=Broadcast"
+    assert payload["bootstrap"]["startupHydration"]["endpoint"] == (
+        "/view-data?surface=albums&root_sidebar=1&artist=Broadcast"
+    )
 def test_index_surface_albums_uses_postgres_root_sidebar_startup_patch(asgi_app, monkeypatch):
     from music_app.routes import web_asgi
 

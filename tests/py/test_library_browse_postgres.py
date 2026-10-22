@@ -844,9 +844,19 @@ def test_relation_alias_cache_identity_tracks_only_relation_projection_state():
 
     assert "library.libraries.xmin" not in sql
     assert "relation_alias_fingerprint" in sql
-    assert "{scan_cache,relation_views,alias_to_canonical}" in sql
-    assert "{scan_cache,relation_views,canonical_to_aliases}" in sql
     assert "{scan_cache,relation_projection}" in sql
+    assert "md5(jsonb_build_array(" not in sql
+    assert "md5(coalesce( library.libraries.metadata #> '{scan_cache,relation_projection}'" in sql
+
+
+def test_relation_alias_query_distinguishes_missing_snapshot_from_malformed_projection():
+    from music_app.services.library_browse_postgres import _relation_alias_maps_sql
+
+    sql = " ".join(_relation_alias_maps_sql().lower().split())
+
+    assert "as projection_snapshot_missing" in sql
+    assert "jsonb_path_exists( library.libraries.metadata, '$.scan_cache.relation_views' )" in sql
+    assert "jsonb_path_exists( library.libraries.metadata, '$.scan_cache.relation_projection' )" in sql
 
 
 def test_family_preview_reuses_membership_snapshots_without_changing_results(monkeypatch):
@@ -3577,6 +3587,115 @@ def test_stale_projected_exact_alias_waits_for_current_projection(monkeypatch):
     assert delegated == []
 
 
+def test_structurally_complete_rebuilding_projection_keeps_exact_search_available(
+    monkeypatch,
+):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    connection = _NoopSearchSnapshotConnection()
+    exact_calls = []
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: connection,
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_relation_alias_maps",
+        lambda *, connection=None: {
+            "alias_to_canonical": {"Unrelated Alias": "Unrelated Artist"},
+            "canonical_to_aliases": {
+                "Unrelated Artist": ["Unrelated Artist", "Unrelated Alias"],
+            },
+            "projection_stale_reason": "projection_not_ready",
+            "projection_structure_complete": True,
+        },
+    )
+    monkeypatch.setattr(
+        repository,
+        "_artist_search_projection_is_authoritative",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_exact_artist_match",
+        lambda query, _state, *, connection=None: (
+            exact_calls.append((query, connection)) or "Overhead"
+        ),
+    )
+    monkeypatch.setattr(
+        repository,
+        "build_selected_artist_payload",
+        lambda **kwargs: {
+            "selected_artist": str(kwargs["query_params"]["artist"]),
+            "primary_artist_groups": [],
+            "family_artist_groups": [],
+        },
+    )
+
+    payload = repository.build_search_payload(
+        query_params={"q": "Overhead", "omit_sidebar": "1"},
+    )
+
+    assert payload["selected_artist"] == "Overhead"
+    assert exact_calls == [("Overhead", connection)]
+
+
+def test_missing_projection_during_runtime_rebuild_keeps_current_exact_search_available(
+    monkeypatch,
+):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    connection = _NoopSearchSnapshotConnection()
+    exact_calls = []
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: connection,
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_relation_alias_maps",
+        lambda *, connection=None: {
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+            "projection_stale_reason": "incomplete_projection",
+            "projection_structure_complete": False,
+            "projection_snapshot_missing": True,
+        },
+    )
+    monkeypatch.setattr(
+        repository,
+        "_artist_search_projection_is_authoritative",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_exact_artist_match",
+        lambda query, _state, *, connection=None: (
+            exact_calls.append((query, connection)) or "Ovderhead"
+        ),
+    )
+    monkeypatch.setattr(
+        repository,
+        "build_selected_artist_payload",
+        lambda **kwargs: {
+            "selected_artist": str(kwargs["query_params"]["artist"]),
+            "primary_artist_groups": [],
+            "family_artist_groups": [],
+        },
+    )
+
+    payload = repository.build_search_payload(
+        query_params={"q": "Ovderhead", "omit_sidebar": "1"},
+        library_state={
+            "relation_projection_ready": False,
+            "relation_projection_rebuild_reason": "not_checked",
+        },
+    )
+
+    assert payload["selected_artist"] == "Ovderhead"
+    assert exact_calls == [("Ovderhead", connection)]
+
+
 @pytest.mark.parametrize(
     "stale_reason", ["source_fingerprint_changed", "projection_not_ready"]
 )
@@ -3677,12 +3796,14 @@ def test_relation_alias_loader_reports_persisted_projection_authority(
         "alias_to_canonical": {"Alias": "Canonical"},
         "canonical_to_aliases": {"Canonical": ["Canonical", "Alias"]},
         "projection_stale_reason": expected_stale_reason,
+        "projection_structure_complete": projection_case == "current",
+        "projection_snapshot_missing": False,
     }
     assert len(sql_calls) == 2
     normalized_sql = " ".join(sql_calls[1][0].split()).lower()
     assert "'{scan_cache,relation_views}'" not in normalized_sql
-    assert normalized_sql.count("'{scan_cache,relation_views,alias_to_canonical}'") == 4
-    assert normalized_sql.count("'{scan_cache,relation_views,canonical_to_aliases}'") == 4
+    assert normalized_sql.count("'{scan_cache,relation_views,alias_to_canonical}'") == 2
+    assert normalized_sql.count("'{scan_cache,relation_views,canonical_to_aliases}'") == 2
     assert normalized_sql.count("'{scan_cache,relation_projection}'") == 2
     assert "projection_structure_complete" in normalized_sql
     assert "as alias_to_canonical" in normalized_sql
@@ -3984,7 +4105,8 @@ def test_root_startup_known_artist_prefix_keeps_bounded_balanced_preview(monkeyp
     })]
 
 
-def test_root_startup_preview_defers_complete_sidebar_and_background_projections(monkeypatch):
+def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payload_semantics(monkeypatch):
+    from music_app.services import gallery_projection_postgres as gallery_projection
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     repository = PostgresLibraryBrowseRepository(
@@ -4002,8 +4124,8 @@ def test_root_startup_preview_defers_complete_sidebar_and_background_projections
         repository,
         "_load_relation_alias_maps",
         lambda **_kwargs: {
-            "alias_to_canonical": {},
-            "canonical_to_aliases": {},
+            "alias_to_canonical": {"Broadcast Alias": "Broadcast"},
+            "canonical_to_aliases": {"Broadcast": ["Broadcast Alias"]},
             "projection_stale_reason": "",
         },
     )
@@ -4015,19 +4137,19 @@ def test_root_startup_preview_defers_complete_sidebar_and_background_projections
     monkeypatch.setattr(
         repository,
         "_load_root_startup_preview_rows",
-        lambda *_args, **_kwargs: [preview_row],
+        lambda *_args, candidate_artists=None, **_kwargs: (
+            [preview_row] if candidate_artists is None else pytest.fail(
+                "bounded preview must select its own eligible artists"
+            )
+        ),
         raising=False,
     )
     monkeypatch.setattr(
         repository,
         "_load_root_sidebar_rows",
-        lambda *_args, **_kwargs: [
-            {
-                "artist_name": "Broadcast",
-                "album_count": 1,
-                "album_ids": [10],
-            }
-        ],
+        lambda *_args, **_kwargs: pytest.fail(
+            "bounded startup preview loaded the complete sidebar"
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -4051,6 +4173,21 @@ def test_root_startup_preview_defers_complete_sidebar_and_background_projections
         lambda: pytest.fail("startup preview queued settings projections"),
     )
 
+    rating_calls = []
+    refresh_calls = []
+
+    monkeypatch.setattr(
+        gallery_projection,
+        "schedule_gallery_projection_refresh",
+        lambda config, **kwargs: refresh_calls.append((config, kwargs)),
+    )
+
+    def apply_ratings(albums, *, source_rows, connection):
+        rating_calls.append((albums, source_rows, connection))
+        albums[0]["rating"] = 4
+
+    monkeypatch.setattr(repository, "_apply_private_album_rating_overlays", apply_ratings)
+
     payload = repository.build_root_startup_preview_payload(
         library_state={
             "relation_projection_ready": True,
@@ -4058,15 +4195,20 @@ def test_root_startup_preview_defers_complete_sidebar_and_background_projections
                 "alias_to_canonical": {},
                 "canonical_to_aliases": {},
             },
-        }
+        },
+        bounded_gallery_only=True,
     )
 
     assert [group["artist"] for group in payload["artist_groups"]] == ["Broadcast"]
+    assert payload["artist_groups"][0]["albums"][0]["rating"] == 4
     assert payload["primary_artist_groups"] == []
     assert [item["artist"] for item in payload["artists_sidebar"]] == ["Broadcast"]
+    assert payload["artists_sidebar"][0]["count"] == 1
     assert payload["album_count"] == 1
     assert payload["artist_count"] == 1
     assert payload["initial_view_partial"] is True
+    assert rating_calls and rating_calls[0][1][0]["artist_name"] == "Broadcast"
+    assert len(refresh_calls) == 1
 
 
 def test_root_startup_preview_loads_relation_aliases_inside_repeatable_read_snapshot(monkeypatch):
@@ -5264,13 +5406,13 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     }
 
     assert str(executed[0]).strip() == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
-    assert executed[3] == {
-        "artist_name": "tender",
-        "artist_key": "tender",
-        "category_count": 1,
-        "visible_categories": ["main_library"],
-    }
-    assert executed[5] == {
+    search_sql_index = next(
+        index
+        for index, statement in enumerate(executed)
+        if isinstance(statement, str)
+        and "visible_album_ids as materialized" in statement
+    )
+    assert executed[search_sql_index + 1] == {
         "query_like": "%tender%",
         "query_utf8_prefilter": "tender",
         "include_missing": True,
@@ -5278,7 +5420,7 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
         "category_count": 1,
         "visible_categories": ["main_library"],
     }
-    sql = " ".join(str(executed[4]).split())
+    sql = " ".join(str(executed[search_sql_index]).split())
     assert "visible_album_ids as materialized" in sql.lower()
     assert "matched_album_ids as materialized" in sql.lower()
     assert "lower(btrim(coalesce(library.local_albums.title, ''))) like lower(%(query_like)s)" in sql
@@ -5479,7 +5621,12 @@ def test_postgres_search_payload_groups_featured_artist_results_without_rewritin
     assert [group["artist"] for group in payload["artist_groups"]] == ["Guest Singer"]
     assert payload["artist_groups"][0]["albums"][0]["album_artist"] == "Primary Artist"
     assert payload["search_context"]["direct_match_artists"] == ["Guest Singer"]
-    compact_sql = " ".join(str(executed[4]).split())
+    compact_sql = " ".join(next(
+        statement
+        for statement in executed
+        if isinstance(statement, str)
+        and "visible_album_ids as materialized" in statement
+    ).split())
     assert "library.local_artists.id = library.local_album_featured_artists.artist_id" in compact_sql
 
 
@@ -7116,6 +7263,27 @@ def test_root_startup_preview_applies_eligible_file_predicate_before_candidate_l
     assert "in ('', 'none', 'null')" in limited_candidates
 
 
+def test_root_startup_preview_uses_scalar_library_for_ordered_early_limit():
+    from music_app.services.library_browse_postgres import (
+        _root_startup_preview_artist_names_sql,
+    )
+
+    sql = " ".join(_root_startup_preview_artist_names_sql(24).lower().split())
+
+    assert "where library.local_artists.library_id = (" in sql
+    assert "select library_id from bootstrap_context" in sql
+    assert (
+        "join bootstrap_context on bootstrap_context.library_id = "
+        "library.local_artists.library_id"
+    ) not in sql
+    assert (
+        "and exists ( select 1 from eligible_album_tracks eligible "
+        "where eligible.library_id = album.library_id "
+        "and eligible.album_id = album.id offset 0 ) offset 0"
+    ) in sql
+    assert "join eligible_album_tracks" not in sql
+
+
 @pytest.mark.parametrize("selection", ["implicit", "related-only", "combined"])
 def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(monkeypatch, selection):
     from music_app.services import library_browse_postgres as browse_module
@@ -7980,7 +8148,11 @@ def test_postgres_search_payload_reuses_one_read_snapshot_for_every_projection(m
         repository,
         "_load_relation_alias_maps",
         lambda *, connection=None: seen.append(("aliases", connection))
-        or {"alias_to_canonical": {}, "canonical_to_aliases": {}},
+        or {
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+            "projection_stale_reason": "",
+        },
     )
     monkeypatch.setattr(
         repository,
@@ -8026,7 +8198,6 @@ def test_postgres_search_payload_reuses_one_read_snapshot_for_every_projection(m
     assert payload["query"] == "joseph"
     assert sorted(name for name, _connection in seen) == sorted([
         "aliases",
-        "exact",
         "search",
         "support",
         "family",
@@ -10124,7 +10295,12 @@ def test_postgres_direct_search_matches_album_ids_before_fetching_all_track_rows
     assert albums[0]["total_duration_display"] == "5m 16s"
     assert "tracks" not in albums[0]
 
-    sql = str(executed[4])
+    sql = next(
+        statement
+        for statement in executed
+        if isinstance(statement, str)
+        and "visible_album_ids as materialized" in statement
+    )
     assert "visible_album_ids as materialized (" in sql
     assert "matched_album_ids as materialized (" in sql
     assert "from matched_album_ids" in sql
@@ -17308,7 +17484,9 @@ def test_live_compact_alias_source_matches_full_join_for_multiroot_inventory(wat
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
         full_rows = list(connection.execute(projection.load_relation_source_rows_sql()).fetchall())
         compact_rows = list(connection.execute(projection.load_relation_alias_source_rows_sql()).fetchall())
-    assert len(compact_rows) < len(full_rows), 'source cardinality must not multiply files by artist memberships'
+    assert len(compact_rows) == len(full_rows), (
+        'compact and full sources must share album/root/directory location cardinality'
+    )
     expected = builder.build_postgres_relation_views(full_rows)
     actual = builder.build_postgres_relation_alias_views(compact_rows)
     for key in ('alias_to_canonical', 'canonical_to_aliases', 'artists_sidebar'):

@@ -3308,6 +3308,85 @@ test('functional fixture startup waits for a stable idle production status befor
   );
 });
 
+for (const pendingCode of ['search_projection_pending', 'gallery_projection_pending']) {
+  test(`functional fixture warmup retries ${pendingCode} until the gallery projection is ready`, async () => {
+    const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
+    const coverPath = path.join(mediaRoot, 'fixture-cover.jpg');
+    const viewRequests = [];
+    let now = 0;
+
+    const warmed = await _private.prewarmFunctionalFixture(4324, {
+      mediaRoot,
+      nowFn: () => now,
+      sleepFn: async (milliseconds) => { now += milliseconds; },
+      pollIntervalMs: 10,
+      timeoutMs: 100,
+      fetchHttpResponseCompleteFn: async (url) => {
+        if (!url.includes('/view-data?')) {
+          return { ok: true, statusCode: 200, body: '<!doctype html>' };
+        }
+        viewRequests.push(url);
+        if (viewRequests.length === 1) {
+          return {
+            ok: false,
+            statusCode: 503,
+            body: JSON.stringify({ ok: false, code: pendingCode }),
+          };
+        }
+        return {
+          ok: true,
+          statusCode: 200,
+          body: JSON.stringify({ albums: [{ cover_path: coverPath }] }),
+        };
+      },
+    });
+
+    assert.equal(warmed, true);
+    assert.equal(viewRequests.length, 2);
+    assert.equal(now, 10);
+  });
+}
+
+test('functional fixture warmup bounds each projection retry to the original deadline', async () => {
+  const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
+  const requestTimeouts = [];
+  let now = 0;
+  let viewAttempts = 0;
+
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    mediaRoot,
+    nowFn: () => now,
+    sleepFn: async (milliseconds) => { now += milliseconds; },
+    pollIntervalMs: 10,
+    timeoutMs: 100,
+    fetchHttpResponseCompleteFn: async (url, options) => {
+      if (!url.includes('/view-data?')) {
+        return { ok: true, statusCode: 200, body: '<!doctype html>' };
+      }
+      requestTimeouts.push(options.requestTimeoutMs);
+      viewAttempts += 1;
+      if (viewAttempts === 1) {
+        now = 80;
+        return {
+          ok: false,
+          statusCode: 503,
+          body: JSON.stringify({ ok: false, code: 'gallery_projection_pending' }),
+        };
+      }
+      return {
+        ok: true,
+        statusCode: 200,
+        body: JSON.stringify({
+          albums: [{ cover_path: path.join(mediaRoot, 'fixture-cover.jpg') }],
+        }),
+      };
+    },
+  });
+
+  assert.equal(warmed, true);
+  assert.deepEqual(requestTimeouts, [100, 10]);
+});
+
 test('functional fixture warmup derives only fixture-owned cover previews from the real gallery payload', async () => {
   const requests = [];
   const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');

@@ -1188,7 +1188,8 @@ def load_relation_alias_source_rows_sql() -> str:
         ), live_files as materialized (
           select tracks.album_id, files.library_root_id::text as library_root_id,
                  roots.root_kind::text as root_kind, roots.root_path,
-                 files.relative_path, files.private_path
+                 min(files.relative_path) as relative_path,
+                 min(files.private_path) as private_path
           from bootstrap_context
           join library.local_tracks as tracks
             on tracks.library_id = bootstrap_context.library_id
@@ -1199,6 +1200,21 @@ def load_relation_alias_source_rows_sql() -> str:
             on roots.id = files.library_root_id
            and roots.library_id = bootstrap_context.library_id
           where tracks.album_id is not null
+          group by
+            tracks.album_id,
+            files.library_root_id,
+            roots.root_kind,
+            roots.root_path,
+            regexp_replace(
+              replace(btrim(coalesce(files.relative_path, '')), chr(92), '/'),
+              '(^|/)[^/]*$',
+              ''
+            ),
+            regexp_replace(
+              replace(btrim(coalesce(files.private_path, '')), chr(92), '/'),
+              '(^|/)[^/]*$',
+              ''
+            )
         ), album_facts as materialized (
           select albums.id as album_id, albums.library_id,
                  owner.name as owner_artist_name,

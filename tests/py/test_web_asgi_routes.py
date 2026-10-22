@@ -429,19 +429,26 @@ def test_selected_artist_startup_requests_summary_without_losing_repeated_filter
 
         def build_selected_artist_payload(self, *, query_params, library_state):
             captured.append(query_params)
-            return {"selected_artist": "Broadcast", "artist_groups": []}
+            return {
+                "selected_artist": "Broadcast",
+                "artist_groups": [
+                    {
+                        "artist": "Broadcast",
+                        "artist_display": "Broadcast",
+                        "albums": [{"key": "album-1"}],
+                    },
+                ],
+                "primary_artist_groups": [
+                    {
+                        "artist": "Broadcast",
+                        "artist_display": "Broadcast",
+                        "albums": [{"key": "album-1"}],
+                    },
+                ],
+            }
 
-        def build_root_startup_preview_payload(
-            self,
-            *,
-            query_params,
-            library_state,
-            sidebar_only,
-        ):
-            captured.append(query_params)
-            assert library_state == {}
-            assert sidebar_only is True
-            return {}
+        def build_root_startup_preview_payload(self, **_kwargs):
+            raise AssertionError("selected startup must defer the complete root sidebar")
 
         def build_root_sidebar_payload(self, *, query_params):
             raise AssertionError("selected startup must not build the full root payload")
@@ -450,12 +457,17 @@ def test_selected_artist_startup_requests_summary_without_losing_repeated_filter
     params = [("artist", "Broadcast"), ("category", "hoard"), ("category", "main_library")]
     if requested_tier:
         params.append(("payload_tier", requested_tier))
-    web_asgi._build_postgres_selected_artist_startup_view(
+    initial_view, _elapsed_ms = web_asgi._build_postgres_selected_artist_startup_view(
         config={}, query_args=QueryParams(params), library_state={},
     )
     assert captured[0].get("payload_tier") == expected_tier
     assert captured[0].getlist("category") == ["hoard", "main_library"]
-    assert captured[1].getlist("category") == ["hoard", "main_library"]
+    assert len(captured) == 1
+    assert initial_view["selected_artist"] == "Broadcast"
+    assert initial_view["artists_sidebar"] == [
+        {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+    ]
+    assert initial_view["initial_view_partial"] is True
 
 
 def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_distinct(
@@ -485,22 +497,7 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             library_state=None,
             sidebar_only=False,
         ):
-            assert sidebar_only is True
-            payload = web_asgi._build_empty_initial_view(
-                config=self.config,
-                query_raw="",
-                selected_artist="",
-                active_surface="albums",
-            )
-            payload.update(
-                {
-                    "artists_sidebar": full_root_sidebar,
-                    "artist_count": len(full_root_sidebar),
-                    "album_count": 3,
-                    "payload_tier": "sidebar",
-                }
-            )
-            return payload
+            raise AssertionError("selected startup must defer the complete root sidebar")
 
         def build_selected_artist_payload(self, *, query_params=None, library_state=None):
             query = str((query_params or {}).get("q") or "").strip()
@@ -512,16 +509,26 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             )
             payload.update(
                 {
-                    "artists_sidebar": (
-                        filtered_search_sidebar
+                    **(
+                        {
+                            "artists_sidebar": filtered_search_sidebar,
+                            "artist_count": len(filtered_search_sidebar),
+                        }
                         if query
-                        else [full_root_sidebar[0]]
+                        else {}
                     ),
-                    "artist_count": len(filtered_search_sidebar) if query else 1,
                     "album_count": 1,
                     "payload_tier": "full",
                 }
             )
+            if not query:
+                selected_group = {
+                    "artist": "Broadcast",
+                    "artist_display": "Broadcast",
+                    "albums": [{"key": "album-1"}, {"key": "album-2"}],
+                }
+                payload["artist_groups"] = [selected_group]
+                payload["primary_artist_groups"] = [selected_group]
             if query:
                 payload["search_context"] = {
                     "committed_query": query,
@@ -565,8 +572,10 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
     )
 
     assert (no_query_status, query_status) == (200, 200)
-    no_query_view = _decode_json(no_query_body)["initial_view"]
-    query_view = _decode_json(query_body)["initial_view"]
+    no_query_payload = _decode_json(no_query_body)
+    query_payload = _decode_json(query_body)
+    no_query_view = no_query_payload["initial_view"]
+    query_view = query_payload["initial_view"]
     assert {
         "no_query": {
             "query": no_query_view["query"],
@@ -585,7 +594,7 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             "query": "",
             "has_search_context": False,
             "selected_artist": "Broadcast",
-            "artists_sidebar": full_root_sidebar,
+            "artists_sidebar": [full_root_sidebar[0]],
         },
         "with_query": {
             "query": "Tender Buttons",
@@ -597,6 +606,15 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             "selected_artist": "Broadcast",
             "artists_sidebar": filtered_search_sidebar,
         },
+    }
+    assert no_query_payload["bootstrap"]["startupHydration"] == {
+        "required": True,
+        "trigger": "after_runtime_boot",
+        "endpoint": "/view-data?surface=albums&root_sidebar=1&artist=Broadcast",
+        "followupEndpoint": "",
+        "embeddedViewPatch": None,
+        "tier": "full",
+        "reason": "preview_requires_full_view_fetch",
     }
 
 
@@ -1871,19 +1889,47 @@ def test_index_logs_actual_bootstrap_counts(app, monkeypatch):
     assert event["template_elapsed_ms"] + 0.02 >= (
         event["template_worker_wait_ms"] + event["template_work_elapsed_ms"])
 
-def test_pending_gallery_bootstrap_hydrates_without_starting_a_scan(app, monkeypatch):
+def test_pending_gallery_bootstrap_renders_bounded_preview_and_hydrates_without_scan(app, monkeypatch):
     from music_app.routes import web_asgi
 
     original_builder = web_asgi._build_postgres_root_startup_view
     _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
     monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", original_builder)
+    calls = []
 
     class PendingRepository:
         def __init__(self, _config):
             pass
 
-        def build_root_startup_preview_payload(self, **_kwargs):
-            raise web_asgi.GalleryProjectionPending("not ready")
+        def build_root_startup_preview_payload(
+            self, *, query_params, library_state, bounded_gallery_only=False,
+            queue_projection_refresh=True,
+        ):
+            calls.append((
+                query_params.get("gallery_page_size"),
+                bounded_gallery_only,
+                queue_projection_refresh,
+            ))
+            if query_params.get("gallery_page_size") is not None:
+                raise web_asgi.GalleryProjectionPending("not ready")
+            return {
+                "artist_groups": [{
+                    "artist": "Preview Artist",
+                    "artist_display": "Preview Artist",
+                    "albums": [{"key": "preview-album", "name": "Preview Album", "tracks": []}],
+                    "sections": [],
+                }],
+                "primary_artist_groups": [],
+                "family_artist_groups": [],
+                "artists_sidebar": [{
+                    "artist": "Preview Artist",
+                    "artist_display": "Preview Artist",
+                    "count": 1,
+                }],
+                "artist_count": 1,
+                "album_count": 1,
+                "initial_view_partial": True,
+            }
 
     monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", PendingRepository)
     monkeypatch.setattr(web_asgi.state_service, "start_background_refresh_for_state",
@@ -1892,9 +1938,12 @@ def test_pending_gallery_bootstrap_hydrates_without_starting_a_scan(app, monkeyp
     status, _, body = _run_asgi_request(asgi_app, "GET", "/")
     assert status == 200
     payload = _extract_bootstrap_payload_from_shell(body)
-    assert payload["bootstrap"]["startupPreview"]["mode"] == "empty_shell"
+    assert calls == [("8", False, False), (None, True, True)]
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
+    assert payload["initial_view"]["artist_groups"][0]["artist"] == "Preview Artist"
     hydration = payload["bootstrap"]["startupHydration"]
     assert hydration["required"] is True
-    assert "gallery_page_size=50" in hydration["endpoint"]
+    assert "payload_tier=sidebar" in hydration["endpoint"]
+    assert "gallery_page_size=50" in hydration["followupEndpoint"]
     assert asgi_app.state.library_state["cold_scan_pending"] is False
     assert asgi_app.state.library_state["cold_scan_handoff_status"] == "idle"

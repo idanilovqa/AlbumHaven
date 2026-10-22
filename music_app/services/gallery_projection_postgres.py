@@ -89,6 +89,19 @@ def _latest_compatible_header(connection, context, view_state):
     """, {**context, "scope_key": gallery_projection_scope_key(view_state), "builder_version": BUILDER_VERSION}))
 
 
+def load_gallery_projection_sidebar(connection, view_state, *, context=None):
+    context = context if context is not None else gallery_projection_context(connection)
+    if not context:
+        return None
+    header = _ready_header(connection, context, view_state)
+    if not header:
+        return None
+    return (
+        [dict(item) for item in list(header.get("sidebar") or [])],
+        int(header["album_count"]),
+    )
+
+
 def load_gallery_projection_page(connection, view_state, params, *, context=None, allow_stale=False):
     from music_app.services.library_browse_postgres import (
         _root_gallery_anchor_metadata, _root_gallery_cursor, _root_gallery_page_bounds,
@@ -118,10 +131,12 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
             select min(ordinal) as ordinal
             from library.gallery_projection_occurrences
             where library_id = %(library_id)s and scope_key = %(scope_key)s
+              and revision = %(revision)s
               and payload->>'artist_name' = %(anchor_artist)s
         """, {
             "library_id": context["library_id"],
             "scope_key": gallery_projection_scope_key(view_state),
+            "revision": header["revision"],
             "anchor_artist": anchor_artist,
         }))
         if anchor_row and anchor_row.get("ordinal") is not None:
@@ -144,6 +159,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
                 select payload->>'artist_id' as artist_id
                 from library.gallery_projection_occurrences
                 where library_id = %(library_id)s and scope_key = %(scope_key)s
+                  and revision = %(revision)s
                   and ordinal = %(ordinal)s
             )
             select min(occurrence.ordinal) as first_ordinal,
@@ -151,10 +167,12 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
             from library.gallery_projection_occurrences occurrence
             cross join target
             where occurrence.library_id = %(library_id)s and occurrence.scope_key = %(scope_key)s
+              and occurrence.revision = %(revision)s
               and occurrence.payload->>'artist_id' = target.artist_id
         """, {
             "library_id": context["library_id"],
             "scope_key": scope_key,
+            "revision": header["revision"],
             "ordinal": min(max(0, int(ordinal)), count - 1),
         }))
         if not boundary or boundary.get("first_ordinal") is None or boundary.get("end_ordinal") is None:
@@ -174,10 +192,11 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     rows = connection.execute("""
         select payload from library.gallery_projection_occurrences
         where library_id = %(library_id)s and scope_key = %(scope_key)s
+          and revision = %(revision)s
           and ordinal >= %(offset)s and ordinal < %(end)s
         order by ordinal
     """, {"library_id": context["library_id"], "scope_key": gallery_projection_scope_key(view_state),
-            "offset": offset, "end": end}).fetchall()
+            "revision": header["revision"], "offset": offset, "end": end}).fetchall()
     page = [dict(row["payload"]) for row in rows]
     if len(page) != end - offset:
         return None

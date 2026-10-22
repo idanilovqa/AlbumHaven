@@ -48,6 +48,12 @@ LOCALE_INDEPENDENT_SEARCH_PREFILTER_MIGRATION = (
 DUPLICATE_IDENTITY_LOOKUP_MIGRATION = (
     MIGRATIONS_DIR / "0093_add_duplicate_identity_lookup_index.sql"
 )
+NONBLOCKING_GALLERY_PUBLICATION_MIGRATION = (
+    MIGRATIONS_DIR / "0094_stage_gallery_projection_publication.sql"
+)
+ROOT_PREVIEW_ARTIST_ORDER_MIGRATION = (
+    MIGRATIONS_DIR / "0095_add_root_preview_artist_order_index.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -453,7 +459,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-53:] == [
+    assert migration_names[-55:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -507,6 +513,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0091_add_gallery_projection_artist_lookup_indexes.sql",
         "0092_add_locale_independent_search_prefilter.sql",
         "0093_add_duplicate_identity_lookup_index.sql",
+        "0094_stage_gallery_projection_publication.sql",
+        "0095_add_root_preview_artist_order_index.sql",
     ]
 
 
@@ -609,6 +617,45 @@ def test_gallery_projection_featured_role_migration_extends_field_allowlist():
     )
     assert occurrence_fields is not None
     assert "'featured_kind'" in occurrence_fields.group(1)
+
+
+def test_gallery_projection_publication_stages_rows_before_locking_source_state():
+    assert NONBLOCKING_GALLERY_PUBLICATION_MIGRATION.is_file()
+    sql = _normalized_sql(
+        NONBLOCKING_GALLERY_PUBLICATION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    stage_position = sql.index("insert into library.gallery_projection_occurrences")
+    state_lock_position = sql.index(
+        "from library.gallery_projection_state where library_id = target_library_id for update"
+    )
+    assert stage_position < state_lock_position
+    assert "pg_advisory_xact_lock" not in sql
+    assert "target_scope_key, content_revision" in sql
+    assert "revision = excluded.revision" in sql
+    assert "drop index if exists library.gallery_projection_occurrences_artist_name_ordinal_idx" in sql
+    assert "drop index if exists library.gallery_projection_occurrences_artist_id_ordinal_idx" in sql
+    assert (
+        "(library_id, scope_key, revision, (payload ->> 'artist_name'), ordinal)"
+    ) in sql
+    assert (
+        "(library_id, scope_key, revision, (payload ->> 'artist_id'), ordinal)"
+    ) in sql
+
+
+def test_root_preview_artist_order_migration_matches_startup_query():
+    sql = _normalized_sql(
+        ROOT_PREVIEW_ARTIST_ORDER_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create index if not exists local_artists_library_root_preview_order_idx" in sql
+    assert "on library.local_artists (" in sql
+    assert "library_id," in sql
+    assert "lower(coalesce(nullif(sort_name, ''), name))," in sql
+    assert "coalesce(nullif(sort_name, ''), name)," in sql
+    assert "lower(name)," in sql
+    assert "name" in sql
+    assert "include (id)" in sql
 
 
 def test_album_raw_artist_search_index_verifier_checks_the_complete_definition():

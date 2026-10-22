@@ -1149,6 +1149,10 @@ async function prewarmFunctionalFixture(port, options = {}) {
   const viewUrl = `${baseUrl}/view-data?surface=albums&omit_sidebar=1`;
   const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
     || fetchHttpResponseComplete;
+  const timeoutMs = Number(options.timeoutMs || MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS);
+  const pollIntervalMs = Number(options.pollIntervalMs || 1000);
+  const sleepFn = options.sleepFn || sleep;
+  const nowFn = options.nowFn || Date.now;
   const reportFailure = (stage, response = null) => {
     if (typeof options.diagnosticWriteFn !== 'function') return;
     const rawStatusCode = Number(response?.statusCode);
@@ -1166,13 +1170,32 @@ async function prewarmFunctionalFixture(port, options = {}) {
     reportFailure('index', indexResponse);
     return false;
   }
-  const viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
-    requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
-    headers: requestHeaders,
-  });
-  if (!viewResponse?.ok) {
-    reportFailure('view-data', viewResponse);
-    return false;
+  const deadline = nowFn() + timeoutMs;
+  let viewResponse;
+  while (true) {
+    const remainingMs = deadline - nowFn();
+    if (remainingMs <= 0) {
+      reportFailure('view-data', viewResponse);
+      return false;
+    }
+    viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
+      requestTimeoutMs: remainingMs,
+      headers: requestHeaders,
+    });
+    if (viewResponse?.ok) break;
+    let pendingCode = null;
+    try {
+      pendingCode = JSON.parse(String(viewResponse?.body || '')).code;
+    } catch {
+      // Non-JSON errors are terminal warmup failures.
+    }
+    if (Number(viewResponse?.statusCode) !== 503
+      || !['search_projection_pending', 'gallery_projection_pending'].includes(pendingCode)
+      || nowFn() >= deadline) {
+      reportFailure('view-data', viewResponse);
+      return false;
+    }
+    await sleepFn(Math.min(pollIntervalMs, Math.max(0, deadline - nowFn())));
   }
 
   let payload;

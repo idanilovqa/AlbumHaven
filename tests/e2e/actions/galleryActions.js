@@ -1502,6 +1502,10 @@ export class GalleryActions {
     return this.galleryPage.albumCard.coverImageByAlbumName(albumName);
   }
 
+  albumArtboxByName(albumName) {
+    return this.galleryPage.albumCard.artboxByAlbumName(albumName);
+  }
+
   async readAlbumKeyByName(albumName) {
     return String(
       await this.galleryPage.albumCard.visibleDetailsButtonByAlbumName(albumName).getAttribute('data-album-key')

@@ -1860,6 +1860,61 @@ def test_explicit_default_gallery_filters_still_target_root_albums_during_scan()
     assert web_asgi._request_targets_root_albums_surface(query_params, "", "") is True
 
 
+def test_active_scan_keeps_persisted_root_gallery_in_bootstrap(monkeypatch):
+    from music_app.routes import web_asgi
+    from starlette.datastructures import QueryParams
+
+    query_params = QueryParams([
+        ("surface", "albums"),
+        ("all_artists", "1"),
+        ("gallery_scope", "all"),
+        ("category", "main_library"),
+        ("category", "hoard"),
+        ("category", "new_arrivals"),
+    ])
+    persisted_view = {
+        "artist_groups": [{"artist": "Existing Artist", "albums": [{"name": "Existing Album"}]}],
+        "primary_artist_groups": [],
+        "family_artist_groups": [],
+        "artists_sidebar": [{"artist": "Existing Artist", "count": 1}],
+        "album_count": 14398,
+        "artist_count": 6240,
+        "query": "",
+        "selected_artist": "",
+        "related_filter_artists": [],
+        "primary_filter_active": False,
+        "selected_artist_family_display_mode": "grouped",
+        "gallery_scope": "all",
+        "gallery_display_mode": "cards",
+        "gallery_scale_percent": 100,
+        "visible_library_categories": ["main_library", "hoard", "new_arrivals"],
+        "initial_view_partial": False,
+    }
+    monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    monkeypatch.setattr(
+        web_asgi,
+        "_build_postgres_root_startup_view",
+        lambda **_kwargs: (persisted_view, None, 1.0),
+    )
+
+    payload, _, startup_preview = web_asgi._build_bootstrap_payload(
+        query_args=query_params,
+        config={"MUSIC_DIR": "C:/Music", "APP_NAME": "Album Haven"},
+        logger=None,
+        library_state={"scan_in_progress": True, "scan_phase": "metadata"},
+        query_raw="",
+        selected_artist="",
+        refreshed=False,
+        request_started_epoch_ms=1,
+    )
+
+    assert payload["initial_view"]["album_count"] == 14398
+    assert payload["initial_view"]["artist_count"] == 6240
+    assert payload["bootstrap"]["scanInProgress"] is True
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "full_view"
+    assert startup_preview["mode"] == "full_view"
+
+
 def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):
     from music_app.routes import web_asgi
     from starlette.datastructures import QueryParams

@@ -16,6 +16,8 @@ from music_app.services.album_note_read_seams import (
     build_visible_album_notes_payload,
 )
 from music_app.services.album_display_metadata import (
+    album_display_title,
+    album_display_year,
     build_album_display_metadata_payload,
     has_album_display_metadata_values,
 )
@@ -1031,6 +1033,7 @@ def _build_album_base_payload(
         "key": album.key,
         "album_ref": album_ref,
         "name": album.name,
+        "display_name": album_display_title(album.name),
         "album_artist": _album_artist_display_value(album.album_artist),
         "artists": list(getattr(album, "artists", []) or []),
         "is_compilation": bool(getattr(album, "is_compilation", False)),
@@ -1049,6 +1052,7 @@ def _build_album_base_payload(
         "remote_cover_height": getattr(album, "remote_cover_height", None),
         "year": album.year,
         "release_date": getattr(album, "release_date", None),
+        "display_year": album_display_year(album),
         "edition": album.edition,
         "album_rating": int(album.album_rating or 0),
         "album_preference": album_preference,
@@ -1078,6 +1082,8 @@ def _normalize_album_preview_payload(
 ) -> dict[str, object]:
     album_key = str(payload.get("key") or "").strip()
     payload["album_artist"] = _album_artist_display_value(payload.get("album_artist"))
+    payload["display_name"] = payload.get("display_name") or album_display_title(payload.get("name"))
+    payload["display_year"] = payload.get("display_year") or album_display_year(payload)
     payload.setdefault("album_ref", album_key)
     payload.setdefault("artists", list(payload.get("artists") or []))
     payload.setdefault("is_compilation", bool(payload.get("is_compilation", False)))

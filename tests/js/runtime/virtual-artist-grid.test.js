@@ -5522,3 +5522,21 @@ test('an immediate gallery render supersedes deferred window resize', () => {
 
   assert.equal(virtualGrid._deferredResizeOptions, null);
 });
+
+test('gallery cards prefer presentation-only title and year values', () => {
+  const { context } = createRuntimeContext();
+  const markup = context.albumCardHtml({
+    key: 'lost-final-season',
+    name: 'Lost: The Final Season: Original Television Soundtrack',
+    display_name: 'Lost: The Final Season (Original Television Soundtrack)',
+    album_artist: 'Michael Giacchino',
+    year: '2010-09-14',
+    display_year: '2010',
+  });
+
+  assert.match(
+    markup,
+    /data-gallery-metadata-text>Lost: The Final Season \(Original Television Soundtrack\)<\/span>/,
+  );
+  assert.match(markup, /data-gallery-metadata-text>Michael Giacchino · 2010<\/span>/);
+});

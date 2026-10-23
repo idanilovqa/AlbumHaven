@@ -1924,8 +1924,8 @@ function renderTrackModalRelease(album) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: album.album_artist || '',
-      album: album.name || 'Album',
-      year: album.year || '',
+      album: album.display_name || album.name || 'Album',
+      year: album.display_year || album.year || '',
       releaseType: album.release_type || 'ALBUM',
       tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,

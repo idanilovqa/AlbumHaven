@@ -14,6 +14,8 @@ function getAlbumCardVersionKey(album) {
 }
 
 function albumCardHtml(album, options = {}) {
+  const displayName = album?.display_name || album?.name || '';
+  const displayYear = album?.display_year || album?.year || '';
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
   const rating = getAlbumCardRating(album);
@@ -64,8 +66,8 @@ function albumCardHtml(album, options = {}) {
   const artboxHtml = buildAlbumArtboxHtml({
     state: albumMissing ? 'missing' : (albumHasDisplayCover(album) ? 'ready' : 'empty'),
     label: albumMissing
-      ? `${album.name} artwork unavailable. Album not found.`
-      : `Album cover for ${album.name}`,
+      ? `${displayName} artwork unavailable. Album not found.`
+      : `Album cover for ${displayName}`,
     coverHtml,
     actionHtml,
   });
@@ -75,10 +77,10 @@ function albumCardHtml(album, options = {}) {
     albumKey,
     albumVersionKey,
     albumFallback,
-    openLabel: `Open ${album.name} tracklist${albumMissing ? '. Album not found' : ''}`,
-    title: album.name,
+    openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
+    title: displayName,
     artist: album.album_artist,
-    year: album.year,
+    year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
@@ -110,8 +112,10 @@ function getAlbumCardRenderKey(album) {
     getAlbumCardNodeIdentity(album),
     getAlbumCardVersionKey(album),
     String(album?.name || ''),
+    String(album?.display_name || ''),
     String(album?.album_artist || ''),
     String(album?.year || ''),
+    String(album?.display_year || ''),
     getAlbumCardRating(album),
     Number(summary.trackCount || 0),
     String(summary.lengthDisplay || ''),
@@ -181,7 +185,7 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   const remoteCoverUrl = typeof options.remoteCoverUrl === 'string'
     ? options.remoteCoverUrl
     : escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
-  const coverAlt = escapeHtml(`Album cover for ${album.name}`);
+  const coverAlt = escapeHtml(`Album cover for ${album.display_name || album.name}`);
   return `<img loading="${loadingAttribute}" fetchpriority="${fetchPriorityAttribute}" decoding="async" data-gallery-cover-priority="${coverPriority}" data-gallery-cover-src="${coverSrc}" data-production-cover-src="${coverSrc}" data-cover-visual-state="pending" aria-hidden="true" alt="${coverAlt}" data-cover-path="${localCoverPath}" data-remote-cover-url="${remoteCoverUrl}" onload="handleAlbumDisplayCoverImageLoad(this)" onerror="handleAlbumDisplayCoverImageError(this)">`;
 }
 

@@ -191,7 +191,7 @@
     const trackCount = Number(album?.track_count_preview || (Array.isArray(album?.tracks) ? album.tracks.length : 0) || 0);
     const coverUrl = buildStartupCoverUrl(album);
     const albumKey = escapeHtml(String(album?.key || '').trim());
-    const albumName = escapeHtml(String(album?.name || 'Album'));
+    const albumName = escapeHtml(String(album?.display_name || album?.name || 'Album'));
     const localCoverPath = escapeHtml(String(album?.cover_path || '').trim());
     const remoteCoverUrl = escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
     const rating = getAlbumCardRating(album);
@@ -208,7 +208,7 @@
           <h3 class="album-title"><button class="album-open-trigger album-title-button" type="button" data-open-tracklist="1" data-album-key="${albumKey}">${albumName}</button></h3>
           <div class="album-meta-row">
             <div class="album-subtitle">${escapeHtml(String(album?.album_artist || ''))}</div>
-            <div class="album-year">${escapeHtml(String(album?.year || ''))}</div>
+            <div class="album-year">${escapeHtml(String(album?.display_year || album?.year || ''))}</div>
           </div>
           <div class="rating-row">
             <div class="stars" role="img" aria-label="${rating === null ? 'Album unrated' : `Album rating ${rating}/10`}">${renderStars(rating)}</div>

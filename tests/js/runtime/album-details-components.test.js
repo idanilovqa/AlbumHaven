@@ -341,3 +341,17 @@ test('missing Album Details host does not draw a second alert surface', () => {
   assert.match(css, /\.track-modal-missing-warning\s*\{[^}]*border:\s*0\s*;/s);
   assert.match(css, /\.track-modal-missing-warning\s*\{[^}]*background:\s*transparent\s*;/s);
 });
+
+test('Album Details callers use presentation-only title and year values', () => {
+  const runtimeRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime');
+  const tagEditorSource = fs.readFileSync(
+    path.join(runtimeRoot, 'tag-editor-and-optimistic-updates.js'),
+    'utf8',
+  );
+  const mobileSource = fs.readFileSync(path.join(runtimeRoot, 'album-details-components.js'), 'utf8');
+
+  assert.match(tagEditorSource, /album:\s*album\.display_name\s*\|\|\s*album\.name/);
+  assert.match(tagEditorSource, /year:\s*album\.display_year\s*\|\|\s*album\.year/);
+  assert.match(mobileSource, /title:\s*album\.display_name\s*\|\|\s*album\.name/);
+  assert.match(mobileSource, /album\.display_year\s*\|\|\s*album\.year/);
+});

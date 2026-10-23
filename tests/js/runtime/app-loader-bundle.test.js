@@ -245,3 +245,20 @@ test('startup fallback album cards render ten app-owned rating positions without
   assert.equal((unratedMarkup.match(/&#9734;/g) || []).length, 10);
   assert.doesNotMatch(unratedMarkup, /class="rating-text"|0\/10/);
 });
+
+test('startup album cards prefer presentation-only title and year values', () => {
+  const buildStartupAlbumCardHtml = loadStartupAlbumCardRenderer();
+  const markup = buildStartupAlbumCardHtml({
+    key: 'lost-season-3',
+    name: 'Lost, Season 3: Original Television Soundtrack',
+    display_name: 'Lost: Season 3 (Original Television Soundtrack)',
+    album_artist: 'Michael Giacchino',
+    year: '2008-05-06',
+    display_year: '2008',
+  });
+
+  assert.match(markup, /Lost: Season 3 \(Original Television Soundtrack\)/);
+  assert.doesNotMatch(markup, /Lost, Season 3: Original Television Soundtrack/);
+  assert.match(markup, /class="album-year">2008<\/div>/);
+  assert.doesNotMatch(markup, /2008-05-06/);
+});

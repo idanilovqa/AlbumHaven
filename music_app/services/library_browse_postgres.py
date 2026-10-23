@@ -10786,12 +10786,7 @@ def _problematic_files_sql(
                 and owner_files.private_path = any(%(file_paths)s::text[])
             )
         """
-    if candidate_summary and not selected_album_ids:
-        album_text_expressions = (
-            "coalesce(library.local_albums.title, '')",
-            "coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''), library.local_artists.name, '')",
-        )
-        candidate_ctes = """
+    duplicate_album_ids_cte = """
         duplicate_album_ids as (
           select distinct candidate.album_id
           from active_problem_rows candidate
@@ -10812,6 +10807,13 @@ def _problematic_files_sql(
             where octet_length(file_album) <> length(file_album)
           )
         ),
+    """
+    if candidate_summary and not selected_album_ids:
+        album_text_expressions = (
+            "coalesce(library.local_albums.title, '')",
+            "coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''), library.local_artists.name, '')",
+        )
+        candidate_ctes = duplicate_album_ids_cte + """
         active_album_rollup as (
           select
             active_problem_rows.album_id,
@@ -11406,6 +11408,7 @@ def _problematic_files_sql(
         ),
         {complete_container_ctes}
         {physical_file_ctes if not inventory_physical_context else ''}
+        {duplicate_album_ids_cte if selected_album_ids else ''}
         selected_tracks as (
           select
             library.local_tracks.id,

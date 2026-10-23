@@ -1048,6 +1048,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-034 keeps empty artist-scoped Non-album tracks disabled after hydration",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan",
               "area": "cover-providers"
             },

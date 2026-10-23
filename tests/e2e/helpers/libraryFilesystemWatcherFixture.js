@@ -14,6 +14,7 @@ const WATCHER_FIXTURE_DIRECTORIES = new Set([
   'watcher-punctuation-identity',
   'watcher-artist-collation',
   'watcher-joint-credit',
+  'watcher-empty-non-album',
   'watcher-possessive-identity',
   'watcher-featured-ownership',
   'watcher-local-cover-ranking',

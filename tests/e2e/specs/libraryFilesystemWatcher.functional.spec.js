@@ -778,6 +778,87 @@ test('FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both co
   }
 });
 
+test('FTC-SEARCH-NAV-034 keeps empty artist-scoped Non-album tracks disabled after hydration', {
+  tag: '@area:gallery-search',
+}, async ({
+  appBarActions,
+  artistPageSettingsActions,
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  navigationPanelActions,
+  searchToolbarActions,
+  stepLogger,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+
+  const artist = 'Watcher Empty Non-album Artist';
+  const album = 'Watcher Empty Non-album Release';
+  const verifyDisabledState = async () => {
+    await searchToolbarActions.search(album, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(album);
+    await navigationPanelActions.selectSidebarArtistByName(artist);
+    await navigationPanelActions.waitForSidebarSelection(artist);
+    await galleryActions.waitForAlbumVisible(album);
+    await artistPageSettingsActions.expectNoNonAlbumTracks();
+    await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksButton).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksButton).toHaveCSS(
+      'cursor',
+      'not-allowed',
+    );
+    await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksButton).toHaveCSS(
+      'opacity',
+      '0.55',
+    );
+  };
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add an ordinary album with no loose tracks', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      fixture = await createWatchedAlbumFixture({
+        artist,
+        album,
+        year: 2014,
+        trackTitles: ['Owned Album Track'],
+        fixtureDirectory: 'watcher-empty-non-album',
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+    });
+
+    await stepLogger.step('Keep the empty Non-album tracks action disabled and visibly inactive', async () => {
+      await verifyDisabledState();
+    });
+
+    await stepLogger.step('Keep the disabled state after restart', async () => {
+      await managedAppLifecycle.restart();
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await verifyDisabledState();
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
 test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On', {
   tag: '@area:gallery-search',
 }, async ({

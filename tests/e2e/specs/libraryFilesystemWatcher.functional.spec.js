@@ -105,6 +105,12 @@ const ARTIST_COLLATION_TARGETS = Object.freeze([
   Object.freeze({ artist: 'IZZ', album: 'Watcher Collation IZZ', year: 2011 }),
   Object.freeze({ artist: "'Til Tuesday", album: 'Watcher Collation Til', year: 2012 }),
 ]);
+const JOINT_CREDIT_TARGET = Object.freeze({
+  album: 'Watcher Joint Credit Release',
+  displayArtist: 'Jordsjø / Breidablik',
+  members: Object.freeze(['Jordsjø', 'Breidablik']),
+  year: 2013,
+});
 const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
   Object.freeze({
     artist: 'Belle Stars',
@@ -672,6 +678,97 @@ test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing 
         timeout: 60000,
         intervals: [250, 500, 1000],
       }).toEqual(expectedArtists);
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+test('FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both constituent artists', {
+  tag: '@area:gallery-search',
+}, async ({
+  appBarActions,
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  navigationPanelActions,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+
+  const verifyJointCredit = async () => {
+    const sidebarArtists = await navigationPanelActions.readHydratedSidebarArtistNames();
+    expect(sidebarArtists).not.toContain(JOINT_CREDIT_TARGET.displayArtist);
+    for (const member of JOINT_CREDIT_TARGET.members) expect(sidebarArtists).toContain(member);
+
+    await searchToolbarActions.search(JOINT_CREDIT_TARGET.album, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(JOINT_CREDIT_TARGET.album);
+    expect(await navigationPanelActions.readSidebarArtistNameCount(
+      JOINT_CREDIT_TARGET.displayArtist,
+    )).toBe(0);
+    for (const member of JOINT_CREDIT_TARGET.members) {
+      expect(await navigationPanelActions.readSidebarArtistNameCount(member)).toBe(1);
+      await navigationPanelActions.selectSidebarArtistByName(member);
+      await navigationPanelActions.waitForSidebarSelection(member);
+      await galleryActions.waitForAlbumVisible(JOINT_CREDIT_TARGET.album);
+      expect(await galleryActions.readAlbumCreditByName(JOINT_CREDIT_TARGET.album)).toBe(
+        JOINT_CREDIT_TARGET.displayArtist,
+      );
+      expect(await galleryActions.readAlbumIdentityCardCount({
+        artist: JOINT_CREDIT_TARGET.displayArtist,
+        album: JOINT_CREDIT_TARGET.album,
+        year: String(JOINT_CREDIT_TARGET.year),
+      })).toBe(1);
+    }
+  };
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add one two-track release with two explicit constituent artists', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      fixture = await createWatchedAlbumFixture({
+        artist: 'Watcher Joint Credits',
+        trackArtist: JOINT_CREDIT_TARGET.members[0],
+        albumArtist: 'Various Artists',
+        album: JOINT_CREDIT_TARGET.album,
+        year: JOINT_CREDIT_TARGET.year,
+        trackTitles: ['Northern Signal', 'Wasteland Signal'],
+        trackArtists: JOINT_CREDIT_TARGET.members,
+        fixtureDirectory: 'watcher-joint-credit',
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+    });
+
+    await stepLogger.step('Show one joint-credit album under each member without a synthetic artist', async () => {
+      await verifyJointCredit();
+      await galleryActions.clickAlbumDetailsByAlbumName(JOINT_CREDIT_TARGET.album);
+      await trackModalActions.waitForLoadedSummary();
+      await expect(trackModalActions.trackModal.trackRows).toHaveCount(2);
+      await trackModalActions.close();
+    });
+
+    await stepLogger.step('Keep constituent membership and one release after restart', async () => {
+      await managedAppLifecycle.restart();
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await verifyJointCredit();
     });
   } catch (error) {
     originalFailure = error;

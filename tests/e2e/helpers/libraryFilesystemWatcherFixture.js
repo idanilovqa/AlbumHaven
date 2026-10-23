@@ -13,6 +13,7 @@ const WATCHER_FIXTURE_DIRECTORIES = new Set([
   'watcher-reconciliation',
   'watcher-punctuation-identity',
   'watcher-artist-collation',
+  'watcher-joint-credit',
   'watcher-possessive-identity',
   'watcher-featured-ownership',
   'watcher-local-cover-ranking',

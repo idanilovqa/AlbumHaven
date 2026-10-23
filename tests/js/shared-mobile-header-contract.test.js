@@ -26,3 +26,16 @@ test('Gallery, Album Details, and Settings use one header component; primary bar
     'Settings must not override shared mobile-header position or spacing',
   );
 });
+
+test('desktop Settings content uses the Gallery surface header origin and horizontal gutter', () => {
+  const chromeCss = read('music_app/static/css/app-chrome.css');
+
+  assert.match(
+    chromeCss,
+    /\.settings-host \.settings-main\s*\{[^}]*padding:\s*6px 24px 60px/s,
+  );
+  assert.match(
+    chromeCss,
+    /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{[^}]*padding-top:\s*6px/s,
+  );
+});

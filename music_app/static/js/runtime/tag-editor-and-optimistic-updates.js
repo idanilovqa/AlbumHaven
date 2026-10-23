@@ -1036,10 +1036,9 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
-      restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
     }
     showRepairAlert(
-      String(error?.message || '').trim() || 'Failed to edit tags.',
+      'Failed to edit tags.',
       'error',
       null,
       {

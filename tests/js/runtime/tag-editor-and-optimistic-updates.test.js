@@ -2644,7 +2644,7 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   assert.strictEqual(context.state.view, navigatedView);
   assert.deepEqual(persistedEntries, [logEntry]);
   assert.equal(persistedEntries[0].error, logEntry.error);
-  assert.equal(alerts.at(-1)[0], logEntry.error);
+  assert.equal(alerts.at(-1)[0], 'Failed to edit tags.');
   assert.equal(alerts.at(-1)[1], 'error');
   assert.equal(alerts.at(-1)[2], null);
   assert.equal(alerts.at(-1)[3].logHistoryEntryId, logEntry.id);
@@ -2657,7 +2657,7 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   assert.deepEqual(restoredDrafts, [], 'navigation must not reopen a stale editor draft');
 });
 
-test('manual tag edit preserves the editor draft for retry after a failed POST', async () => {
+test('manual tag edit keeps the editor closed after an immediate failed POST', async () => {
   const trackPath = 'C:\\Music\\Axxis\\Black Edition\\01 - Kingdom.mp3';
   const album = {
     key: 'axxis::kingdom::black',
@@ -2707,10 +2707,10 @@ test('manual tag edit preserves the editor draft for retry after a failed POST',
 
   assert.strictEqual(context.state.tagEditor, originalDraft);
   assert.strictEqual(context.state.tagEditor.values, values);
-  assert.equal(closedModal.hidden, false);
+  assert.equal(closedModal.hidden, true);
   assert.equal(
     alerts.at(-1)[0],
-    'Source changed during the tag edit. Retry with the preserved values.',
+    'Failed to edit tags.',
   );
 });
 

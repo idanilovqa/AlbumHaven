@@ -195,11 +195,30 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
     await settingsModalAppBarActions.closeSettings();
     await page.setViewportSize({ width: 390, height: 844 });
     await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
+    // parity-check: allow-read-only-measurement-evaluate -- compare the live Gallery and Album Details surface offsets
+    const galleryPaddingTop = await galleryActions.galleryPage.gallerySurface
+      .evaluate(surface => getComputedStyle(surface).paddingTop);
     await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);
     await trackModalActions.waitForReady();
     const dialogBounds = await trackModalActions.trackModal.dialog.boundingBox();
     expect(dialogBounds).not.toBeNull();
     expect(dialogBounds.width).toBeLessThanOrEqual(390);
+    // parity-check: allow-read-only-measurement-evaluate -- read the production Album Details surface offset
+    const albumPaddingTop = await trackModalActions.trackModal.albumSurface
+      .evaluate(surface => getComputedStyle(surface).paddingTop);
+    // parity-check: allow-read-only-measurement-evaluate -- read the production pinned album identity spacing
+    const headerGap = await trackModalActions.trackModal.mobileSummary
+      .evaluate(summary => getComputedStyle(summary).marginTop);
+    // parity-check: allow-read-only-measurement-evaluate -- read the production in-body album identity spacing
+    const bodyGap = await trackModalActions.trackModal.identitySecondary
+      .evaluate(summary => getComputedStyle(summary).marginTop);
+    expect(albumPaddingTop).toBe(galleryPaddingTop);
+    expect(Number.parseFloat(headerGap)).toBeLessThanOrEqual(3);
+    expect(Number.parseFloat(bodyGap)).toBeLessThanOrEqual(3);
+    await expect(trackModalActions.trackModal.coverImage).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- prove the live Album Details image decoded real pixels
+    await expect.poll(async () => trackModalActions.trackModal.coverImage.evaluate(image => image.naturalWidth))
+      .toBeGreaterThan(0);
     await expect(trackModalActions.trackModal.albumTrackTable.rows.first()).toBeVisible();
     await expect(trackModalActions.trackModal.mobileArtworkActions).toBeVisible();
     await expect(trackModalActions.trackModal.artboxCoverTools).toHaveCount(0);

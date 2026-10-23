@@ -20,6 +20,9 @@ export class TrackModal extends BasePage {
     this.trackRows = page.locator(this.trackRowSelector);
     this.closeButton = page.locator(this.closeButtonSelector);
     this.mobilePage = page.locator('#track-modal.is-mobile-page');
+    this.albumSurface = page.locator('.shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"])');
+    this.mobileSummary = this.albumSurface.locator('#mobile-page-summary');
+    this.identitySecondary = this.albumSurface.locator('.album-details-header__secondary');
     this.mobileBackButton = page.locator('#mobile-back-button');
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);

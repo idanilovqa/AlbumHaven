@@ -99,6 +99,12 @@ const POSSESSIVE_PROJECT_TARGET = Object.freeze({
   album: 'Watcher Possessive Project Identity',
   year: 2008,
 });
+const ARTIST_COLLATION_TARGETS = Object.freeze([
+  Object.freeze({ artist: '!Air', album: 'Watcher Collation Air', year: 2009 }),
+  Object.freeze({ artist: "I'm with Her", album: 'Watcher Collation Apostrophe', year: 2010 }),
+  Object.freeze({ artist: 'IZZ', album: 'Watcher Collation IZZ', year: 2011 }),
+  Object.freeze({ artist: "'Til Tuesday", album: 'Watcher Collation Til', year: 2012 }),
+]);
 const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
   Object.freeze({
     artist: 'Belle Stars',
@@ -586,6 +592,86 @@ test('FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from
       expect(await navigationPanelActions.readSidebarArtistLabelCount(
         POSSESSIVE_PROJECT_TARGET.baseArtist,
       )).toBe(1);
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing display names", {
+  tag: '@area:gallery-search',
+}, async ({
+  appBarActions,
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  navigationPanelActions,
+  stepLogger,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+
+  const expectedArtists = ARTIST_COLLATION_TARGETS.map(({ artist }) => artist);
+  const targetArtists = new Set(expectedArtists);
+  const readTargetOrder = async () => (await navigationPanelActions.readSidebarArtistNames())
+    .filter((artist) => targetArtists.has(artist));
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add four watched albums spanning leading and internal punctuation', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      const [initial, ...siblings] = ARTIST_COLLATION_TARGETS;
+      fixture = await createWatchedAlbumFixture({
+        artist: initial.artist,
+        trackArtist: initial.artist,
+        albumArtist: initial.artist,
+        album: initial.album,
+        year: initial.year,
+        trackTitles: ['Collation Signal'],
+        fixtureDirectory: 'watcher-artist-collation',
+        context,
+        managedAppLifecycle,
+      });
+      for (const target of siblings) {
+        await fixture.createSiblingAlbum({
+          album: target.album,
+          year: target.year,
+          trackTitles: ['Collation Signal'],
+          trackArtist: target.artist,
+          albumArtist: target.artist,
+        });
+      }
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+    });
+
+    await stepLogger.step('Ignore leading punctuation for ordering but preserve every display name', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await expect.poll(readTargetOrder, {
+        timeout: 60000,
+        intervals: [250, 500, 1000],
+      }).toEqual(expectedArtists);
+    });
+
+    await stepLogger.step('Keep the same collation and display names after restart', async () => {
+      await managedAppLifecycle.restart();
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await expect.poll(readTargetOrder, {
+        timeout: 60000,
+        intervals: [250, 500, 1000],
+      }).toEqual(expectedArtists);
     });
   } catch (error) {
     originalFailure = error;

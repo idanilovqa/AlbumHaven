@@ -1489,6 +1489,8 @@ function closeUtilityModal(skipAppearanceGuard = false) {
   if (!els.overlay) return;
   utilityOpenGeneration += 1;
   if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
+  if (typeof disposeProblematicFilesVirtualList === 'function') disposeProblematicFilesVirtualList();
+  if (els.list) els.list.scrollTop = 0;
   state.utility.problemDropdownOpen = false;
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = true;

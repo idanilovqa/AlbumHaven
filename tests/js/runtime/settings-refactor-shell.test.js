@@ -398,6 +398,8 @@ test('S02 tab alignment observers and scroll listeners are disposed on close and
   context.document.body = { classList: { remove() {} } };
   context.resumeDeferredUtilityViewRequest = () => {};
   vm.runInContext(read('music_app/static/js/runtime/utility-renderers-and-actions.js'), context);
+  let problematicListDisposals = 0;
+  context.disposeProblematicFilesVirtualList = () => { problematicListDisposals += 1; };
   // Load the real close boundary without unrelated network loader initialization.
   const loaders = read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js');
   const close = loaders.slice(loaders.indexOf('function closeUtilityModal('), loaders.indexOf('let repairConfirmReturnFocus'));
@@ -406,8 +408,11 @@ test('S02 tab alignment observers and scroll listeners are disposed on close and
   context.syncUtilityTabAlignment(els);
   assert.equal(observers.length, 1, 'repeated rendering reuses one observer');
   assert.equal(listeners.size, 1);
+  els.list = { scrollTop: 720 };
   context.closeUtilityModal(true);
   assert.equal(els.overlay.hidden, true);
+  assert.equal(problematicListDisposals, 1, 'closing Settings disposes the retained Problematic Files window');
+  assert.equal(els.list.scrollTop, 0, 'closing Settings clears the retained Problematic Files window');
   assert.equal(observers[0].disconnected, true, 'hidden Settings releases its resize observer');
   assert.equal(listeners.size, 0, 'hidden Settings releases its scrolling listener');
   els.overlay.hidden = false;

@@ -4,12 +4,12 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
-import re
 from time import perf_counter
 from typing import Any, Protocol
 
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
 )
@@ -83,13 +83,6 @@ _TARGETED_STRUCTURAL_EDIT_FIELD_SETS = {
 _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
     {"title", "genre", "track_number", "disc_number"}
 )
-_OWNER_LED_FEATURE_RE = re.compile(
-    r"^(?P<owner>.+?)\s+(?:feat\.?|featuring|with|vs|x)\s+(?P<featured>.+)$",
-    re.IGNORECASE,
-)
-_NUMERIC_ARTIST_SLASH_RE = re.compile(r"(?<=\d)\s*/\s*(?=\d)")
-
-
 class ScanCachePublicationSuperseded(RuntimeError):
     """Raised when a newer inventory mutation makes a prepared scan stale."""
 
@@ -2681,10 +2674,14 @@ def _inventory_rows_from_albums(
             private_path = str(file_entry.get("path") or track_key).strip()
             represented_private_paths.add(private_path)
             track_artist_name = _text_or_none(getattr(track, "artist", None) or getattr(album, "album_artist", None))
-            track_artist_key = ensure_artist(track_artist_name)
-            attached_track_artist_names = _attached_track_artist_names(
+            attached_track_artist_names = track_artist_credit_members(
                 track_artist_name,
                 owner_name,
+            )
+            track_artist_key = ensure_artist(
+                attached_track_artist_names[0]
+                if attached_track_artist_names
+                else track_artist_name
             )
             track_artist_names.extend(attached_track_artist_names)
             for attached_artist_name in attached_track_artist_names:
@@ -2715,6 +2712,8 @@ def _inventory_rows_from_albums(
                             "source": _SOURCE,
                             "album": getattr(track, "album", None),
                             "album_artist": getattr(track, "album_artist", None),
+                            "artist": track_artist_name,
+                            "artists": attached_track_artist_names,
                             "root_provenance": getattr(track, "root_provenance", None),
                         }
                     ),
@@ -2869,22 +2868,6 @@ def _append_featured_artist_row(
             "metadata": _jsonb({"source": source}),
         }
     )
-
-
-def _attached_track_artist_names(track_artist_name: str | None, owner_name: str | None) -> list[str]:
-    artist_name = _text_or_none(track_artist_name)
-    if artist_name is None:
-        return []
-    owner = _text_or_none(owner_name)
-    if owner is None:
-        return [artist_name]
-    if same_artist_credit_spelling(artist_name, owner):
-        return [owner]
-    match = _OWNER_LED_FEATURE_RE.match(artist_name)
-    if match is None or not same_artist_credit_spelling(match.group("owner"), owner):
-        return [artist_name]
-    featured = _NUMERIC_ARTIST_SLASH_RE.sub("/", match.group("featured").strip())
-    return _deduped_artist_names([owner, featured])
 
 
 def _file_entries_by_path(file_cache: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:

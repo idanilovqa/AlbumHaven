@@ -20,6 +20,7 @@ from music_app.services.discovery_center_read_seams import (
 )
 from music_app.services.cache import load_cache_snapshot_from_disk
 from music_app.services.library import build_albums_from_file_cache
+from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.music_identity_matching import same_artist_credit_spelling
 from music_app.services.track_preferences import (
@@ -1873,14 +1874,18 @@ def _local_inventory_rows_from_file_cache(
             track_artist_name = str(
                 getattr(track, "artist", None) or getattr(album, "album_artist", None) or ""
             ).strip()
-            track_artist_key = ensure_artist(track_artist_name)
             track_key = normalize_track_ref(str(getattr(track, "path", "") or ""))
             if not track_key:
                 continue
             track_title = str(getattr(track, "title", "") or "").strip() or Path(track_key).stem
-            attached_track_artist_names = _attached_track_artist_names(
+            attached_track_artist_names = track_artist_credit_members(
                 track_artist_name,
                 owner_name,
+            )
+            track_artist_key = ensure_artist(
+                attached_track_artist_names[0]
+                if attached_track_artist_names
+                else track_artist_name
             )
             track_artist_names.extend(attached_track_artist_names)
             for attached_artist_name in attached_track_artist_names:
@@ -1927,6 +1932,8 @@ def _local_inventory_rows_from_file_cache(
                         "source": MIGRATION_NAME,
                         "album": getattr(track, "album", None),
                         "album_artist": getattr(track, "album_artist", None),
+                        "artist": track_artist_name,
+                        "artists": attached_track_artist_names,
                         "root_provenance": getattr(track, "root_provenance", None),
                     },
                 }
@@ -2029,26 +2036,6 @@ def _related_local_mbid_evidence(
             continue
         related.extend(row for row in evidence_rows if isinstance(row, dict))
     return related
-
-
-def _attached_track_artist_names(track_artist_name: str | None, owner_name: str | None) -> list[str]:
-    artist_name = str(track_artist_name or "").strip()
-    if not artist_name:
-        return []
-    owner = str(owner_name or "").strip()
-    if not owner:
-        return [artist_name]
-    if same_artist_credit_spelling(artist_name, owner):
-        return [owner]
-    match = re.match(
-        r"^(?P<owner>.+?)\s+(?:feat\.?|featuring|with|vs|x)\s+(?P<featured>.+)$",
-        artist_name,
-        re.IGNORECASE,
-    )
-    if match is None or not same_artist_credit_spelling(match.group("owner"), owner):
-        return [artist_name]
-    featured = re.sub(r"(?<=\d)\s*/\s*(?=\d)", "/", match.group("featured").strip())
-    return _deduped_artist_names([owner, featured])
 
 
 def _deduped_artist_names(values: list[object]) -> list[str]:

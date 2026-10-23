@@ -111,6 +111,90 @@ def test_unanimous_album_artist_owns_release_while_track_artists_stay_featured(
     }
 
 
+def test_semicolon_track_credits_publish_exact_members_without_composite_artists(
+    monkeypatch,
+):
+    track_artists = (
+        "Maroon 5; Megan Thee Stallion",
+        "Maroon 5",
+        "Maroon 5; Blackbear",
+        "Maroon 5",
+        "Maroon 5; Stevie Nicks",
+        "Maroon 5",
+        "Maroon 5; Bantu",
+        "Maroon 5; H.E.R.",
+        "Maroon 5",
+        "Maroon 5; Juice Wrld",
+        "Maroon 5",
+        "Maroon 5; Nipsey Hussle; YG",
+        "Maroon 5; Anuel Aa; Tainy",
+        "Jason Derulo; Adam Levine",
+    )
+    _album, rows = _published_rows(
+        monkeypatch,
+        album="JORDI",
+        album_artist="Maroon 5",
+        track_artists=track_artists,
+        is_compilation=False,
+    )
+    artist_rows, _album_rows, featured_rows, track_rows, _track_file_rows = rows
+
+    assert {row["artist_key"] for row in artist_rows} == {
+        "maroon 5",
+        "megan thee stallion",
+        "blackbear",
+        "stevie nicks",
+        "bantu",
+        "h.e.r.",
+        "juice wrld",
+        "nipsey hussle",
+        "yg",
+        "anuel aa",
+        "tainy",
+        "jason derulo",
+        "adam levine",
+    }
+    assert [row["artist_key"] for row in track_rows] == [
+        *("maroon 5" for _ in range(13)),
+        "jason derulo",
+    ]
+    assert [row["metadata"]["artist"] for row in track_rows] == list(track_artists)
+    assert [row["metadata"]["artists"] for row in track_rows] == [
+        ["Maroon 5", "Megan Thee Stallion"],
+        ["Maroon 5"],
+        ["Maroon 5", "Blackbear"],
+        ["Maroon 5"],
+        ["Maroon 5", "Stevie Nicks"],
+        ["Maroon 5"],
+        ["Maroon 5", "Bantu"],
+        ["Maroon 5", "H.E.R."],
+        ["Maroon 5"],
+        ["Maroon 5", "Juice Wrld"],
+        ["Maroon 5"],
+        ["Maroon 5", "Nipsey Hussle", "YG"],
+        ["Maroon 5", "Anuel Aa", "Tainy"],
+        ["Jason Derulo", "Adam Levine"],
+    ]
+    assert {
+        row["artist_key"]
+        for row in featured_rows
+        if row["featured_kind"] == "featured_track_artist"
+    } == {
+        "megan thee stallion",
+        "blackbear",
+        "stevie nicks",
+        "bantu",
+        "h.e.r.",
+        "juice wrld",
+        "nipsey hussle",
+        "yg",
+        "anuel aa",
+        "tainy",
+        "jason derulo",
+        "adam levine",
+    }
+
+
 def test_composite_one_off_credit_keeps_the_classified_owner_at_persistence(
     monkeypatch,
 ):

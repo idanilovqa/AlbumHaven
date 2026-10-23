@@ -7021,6 +7021,7 @@ def _selected_artist_album_payloads(
                 "title": str(row_payload.get("track_title") or "").strip(),
                 "artist": str(
                     file_entry.get("artist")
+                    or track_metadata.get("artist")
                     or row_payload.get("track_artist_name")
                     or album.get("album_artist")
                     or artist_display

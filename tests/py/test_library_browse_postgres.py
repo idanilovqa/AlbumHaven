@@ -1191,6 +1191,54 @@ def test_compact_non_album_metadata_projection_preserves_shaper_fallbacks():
     assert entry["cover_revision"] == 7
 
 
+def test_track_metadata_preserves_raw_semicolon_credit_for_display():
+    from music_app.services.library_browse_postgres import (
+        _non_album_entry_from_inventory_candidate,
+    )
+
+    entry = _non_album_entry_from_inventory_candidate(
+        {
+            "track_id": 42,
+            "track_title": "Convince Me Otherwise",
+            "track_metadata": {
+                "artist": "Jason Derulo; Adam Levine",
+                "artists": ["Jason Derulo", "Adam Levine"],
+            },
+            "artist_name": "Jason Derulo",
+            "album_id": None,
+            "private_path": r"D:\Music\JORDI\14.flac",
+            "file_entry": {},
+        }
+    )
+
+    assert entry["artist"] == "Jason Derulo; Adam Levine"
+
+
+def test_album_track_metadata_preserves_raw_semicolon_credit_for_display():
+    from music_app.services.library_browse_postgres import (
+        _selected_artist_album_payloads,
+    )
+
+    row = _exception_album_row(
+        track_id=42,
+        track_key="jordi-14",
+        title="Lifestyle",
+        track_number=14,
+        duration_seconds=180,
+        private_path=r"D:\Music\JORDI\14.flac",
+    )
+    row["file_entry"] = {}
+    row["track_artist_name"] = "Jason Derulo"
+    row["track_metadata"] = {
+        "artist": "Jason Derulo; Adam Levine",
+        "artists": ["Jason Derulo", "Adam Levine"],
+    }
+
+    albums = _selected_artist_album_payloads([row], "Exception Artist")
+
+    assert albums[0]["tracks"][0]["artist"] == "Jason Derulo; Adam Levine"
+
+
 def test_non_album_candidate_batch_builds_normalized_alias_lookup_once(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 

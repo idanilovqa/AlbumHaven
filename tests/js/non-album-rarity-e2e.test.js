@@ -63,7 +63,15 @@ test('rarity-edit scenario keeps selectors and interactions in POMs and actions'
   );
   assert.match(
     actions,
-    /const responseTaskCompleted = String\(payload\.save_task_status \|\| ''\) === 'completed';[\s\S]*if \(!responseTaskCompleted\)[\s\S]*\.toBe\('completed'\);[\s\S]*responseTaskCompleted[\s\S]*\? 'Tag changes saved\.'[\s\S]*: 'Library view updated from saved files\.'[\s\S]*expect\(this\.tagEditor\.repairAlert\)\.toBeVisible\(/,
+    /const responseTaskCompleted = String\(payload\.save_task_status \|\| ''\) === 'completed';[\s\S]*if \(!responseTaskCompleted\)[\s\S]*\.toBe\('completed'\);/,
+  );
+  assert.match(
+    actions,
+    /const expectedCompletionMessage = responseTaskCompleted[\s\S]*\? TAG_EDIT_SAVED_MESSAGE[\s\S]*: 'Library view updated from saved files\.';/,
+  );
+  assert.match(
+    actions,
+    /repairAlertMessage\)\.toHaveText\(expectedCompletionMessage[\s\S]*repairAlert\)\.toBeVisible\(/,
   );
   assert.match(pomExports, /export \{ TagEditor \} from '\.\/tagEditor\.js'/);
   assert.match(actionExports, /export \{ TagEditorActions \} from '\.\/tagEditorActions\.js'/);

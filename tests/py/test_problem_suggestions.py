@@ -39,7 +39,26 @@ def test_unique_reversible_encoding_preserves_casing_and_never_mutates_source(su
     assert value == before
 
 
-@pytest.mark.parametrize('text', ['Jos�', 'Jos??', '?', 'plain lower case'])
+@pytest.mark.parametrize(
+    'text',
+    [
+        'Jos�',
+        'Jos??',
+        '?',
+        'plain lower case',
+        'Moyen-Âge',
+        "Les Voyages De L'Âme",
+        'Ñanguita (Edit)',
+        'Trúbrot',
+        'Róróró',
+        'Án Þín',
+        'Väärä käärme',
+        'Belle Âme',
+        'J.S. Bach: Matthäus Passion',
+        '匀愀椀氀漀爠ᤀ猀 䰀愀洀攀渀琀',
+        '䤀琠ᤀ猀 䨀甀猀琀 愀 吀栀漀甀最栀琀',
+    ],
+)
 def test_lossy_or_valid_text_is_not_an_encoding_proposal(suggestions, text):
     assert not any(item['field'] == 'artist' for item in generate(suggestions, entry(artist=text)))
 

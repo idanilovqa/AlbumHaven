@@ -4569,9 +4569,13 @@ def _load_duplicate_candidate_album_ids(
     # Compare only compact tag identities before loading full file metadata. SQL
     # collation is not Python's NFC/casefold rule; broad Unicode SQL candidates
     # otherwise pull thousands of unrelated albums into every artist request.
-    if album_keys and _coerce_int(
-        getattr(getattr(connection, "info", None), "server_version", 0)
-    ) >= 180000:
+    if (
+        album_keys
+        and _coerce_int(
+            getattr(getattr(connection, "info", None), "server_version", 0)
+        ) >= 180000
+        and _duplicate_identity_helpers_available(connection)
+    ):
         return _load_duplicate_candidate_album_ids_for_keys(connection, album_keys)
     kind = "duplicate-identities"
     fingerprint = _duplicate_inventory_fingerprint(connection)
@@ -4606,6 +4610,16 @@ def _load_duplicate_candidate_album_ids(
         _cache_compact_inventory_payload(connection, repository, kind, fingerprint, {"index": index}, generation)
     candidate_ids = _duplicate_candidate_ids_from_index(index, album_keys)
     return candidate_ids
+
+
+def _duplicate_identity_helpers_available(connection: Any) -> bool:
+    row = _row_mapping(connection.execute("""
+        select (
+          to_regprocedure('library.duplicate_identity_text(text)') is not null
+          and to_regprocedure('library.duplicate_identity_year(text)') is not null
+        ) as available
+    """).fetchone())
+    return bool(row and row.get("available") is True)
 
 
 def _load_duplicate_candidate_album_ids_for_keys(

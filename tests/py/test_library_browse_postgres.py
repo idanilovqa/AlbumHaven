@@ -11714,6 +11714,7 @@ def test_duplicate_candidate_lookup_uses_requested_identity_index_before_global_
         "_load_duplicate_candidate_album_ids_for_keys",
         lambda _connection, album_keys: [7, 9] if album_keys == ["one"] else [],
     )
+    monkeypatch.setattr(browse, "_duplicate_identity_helpers_available", lambda _connection: True)
     monkeypatch.setattr(
         repository,
         "queue_utility_projection_prewarm",
@@ -11789,6 +11790,44 @@ def test_duplicate_candidate_lookup_uses_python_identity_before_postgres_18(monk
     assert browse._load_duplicate_candidate_album_ids(
         Connection(),
         ["one"],
+        repository=repository,
+    ) == [1, 2]
+
+
+def test_duplicate_candidate_lookup_uses_python_identity_before_helper_migration(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-pre-migration-test",
+    })
+    monkeypatch.setattr(
+        browse,
+        "_duplicate_inventory_fingerprint",
+        lambda _connection: {"fingerprint": (1,), "observed_at": 1},
+    )
+
+    class Connection:
+        info = type("Info", (), {"server_version": 180000})()
+
+        def execute(self, sql, _params=None):
+            normalized = " ".join(sql.split()).lower()
+            if "to_regprocedure" in normalized:
+                return type("Cursor", (), {"fetchone": lambda _self: {"available": False}})()
+            if "library.duplicate_identity_text" in normalized:
+                raise AssertionError("pre-migration databases must not use duplicate identity helpers")
+            return self
+
+        def fetchall(self):
+            return [
+                {"album_id": 1, "album_key": "one", "album_artist": "Artist",
+                 "album": "One", "year": 2001},
+                {"album_id": 2, "album_key": "two", "album_artist": "Artist",
+                 "album": "Two", "year": 2002},
+            ]
+
+    assert browse._load_duplicate_candidate_album_ids(
+        Connection(),
+        ["one", "two"],
         repository=repository,
     ) == [1, 2]
 

@@ -1,4 +1,5 @@
 import { expect, test } from '../support/baseFixtures.js';
+import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createSameAlbumArtwork, createUndersizedAlbumArtwork } from '../helpers/albumSourceOwnershipFixture.js';
@@ -961,6 +962,14 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     expect(competingBackCover.image.sha256).not.toBe(originalActiveCover.image.sha256);
     expect(competingBackCover.image.sha256).not.toBe(selectedLocalCover.image.sha256);
     expect(selectedLocalCover.sourcePath).not.toBe(originalActiveCover.sourcePath);
+  });
+
+  await stepLogger.step('Keep nested local-cover previews in app data', async () => {
+    const tempRoot = path.resolve(String(process.env.ALBUM_HAVEN_E2E_TEMP_ROOT || ''));
+    expect(String(process.env.ALBUM_HAVEN_E2E_TEMP_ROOT || '')).not.toBe('');
+    expect(selectedLocalCover.sourcePath).toMatch(/[\\/]Art[\\/]Front\.jpg$/i);
+    expect(fs.existsSync(path.join(tempRoot, 'app-data', 'display-cover-cache'))).toBe(true);
+    expect(fs.existsSync(path.join(path.dirname(selectedLocalCover.sourcePath), '.album-haven'))).toBe(false);
   });
 
   await stepLogger.step('Save nested Front.jpg over canonical cover.jpg and verify every immediate surface', async () => {

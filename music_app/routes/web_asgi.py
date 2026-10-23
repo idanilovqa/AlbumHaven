@@ -1298,7 +1298,10 @@ def _cover_response(
         return _not_found()
     if requested_size > 0:
         if cache_root is None:
-            cache_root = display_cover_variant_cache_root(resolved)
+            cache_root = display_cover_variant_cache_root(
+                resolved,
+                data_dir=config.get("DATA_DIR"),
+            )
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )

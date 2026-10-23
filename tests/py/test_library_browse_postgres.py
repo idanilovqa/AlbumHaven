@@ -16625,6 +16625,36 @@ def test_postgres_cover_variant_queue_uses_local_revision_cache(monkeypatch):
     ]
 
 
+def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypatch):
+    from music_app.services import covers as covers_module
+    from music_app.services.library_browse_postgres import (
+        _queue_display_cover_variants_for_groups,
+    )
+
+    queued: list[tuple[str, str, str | None]] = []
+    monkeypatch.setattr(
+        covers_module,
+        "queue_cover_display_variant_generation",
+        lambda source_path, *, cache_root, max_size, revision=None, **_kwargs: queued.append(
+            (str(source_path), str(cache_root), revision)
+        ),
+    )
+
+    _queue_display_cover_variants_for_groups(
+        {"DATA_DIR": r"C:\AlbumHavenData"},
+        [{"albums": [{"cover_path": r"N:\Music\Artist\Album\Art\Front.jpg"}]}],
+        limit=1,
+    )
+
+    assert queued == [
+        (
+            r"N:\Music\Artist\Album\Art\Front.jpg",
+            str(Path(r"C:\AlbumHavenData") / "display-cover-cache"),
+            None,
+        )
+    ]
+
+
 def test_live_search_alias_fallback_uses_compact_source_without_full_projection(monkeypatch):
     from music_app.services import relation_projection_postgres as projection
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository

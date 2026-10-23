@@ -98,7 +98,7 @@ class CoverPreviewBackfill:
                 source_path,
                 cache_root=display_cover_variant_cache_root(
                     source_path,
-                    data_dir=self._data_dir if cover_revision else None,
+                    data_dir=self._data_dir,
                 ),
                 max_size=_DISPLAY_COVER_SIZE,
                 priority="background",

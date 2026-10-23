@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
 from time import perf_counter
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -1040,6 +1041,11 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     task_id = str(payload.get("task_id") or "").strip()
     candidate_id = str(payload.get("candidate_id") or "").strip()
     snapshot_generation = str(payload.get("snapshot_generation") or "").strip()
+    if not task_id and snapshot_generation:
+        try:
+            task_id = UUID(snapshot_generation).hex
+        except ValueError:
+            pass
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))

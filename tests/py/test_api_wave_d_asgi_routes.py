@@ -2852,6 +2852,80 @@ def test_asgi_cover_lookup_save_remote_uses_requested_snapshot_candidate_when_ta
     assert queued_calls[0]["args"][4]["url"] == "https://images.example/saved.jpg"
 
 
+def test_asgi_cover_lookup_save_remote_recovers_task_from_snapshot_generation(
+    app,
+    monkeypatch,
+):
+    from uuid import UUID
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
+    reset_cover_lookup_runtime_state()
+    candidate = {
+        "id": "saved-candidate",
+        "art_kind": "cover",
+        "url": "https://images.example/saved.jpg",
+        "source": "apple",
+    }
+    task_id, _ = cover_lookup_tasks.create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+    )
+    cover_lookup_tasks.update_cover_lookup_task(
+        task_id,
+        status="running",
+        possible_matches=[candidate],
+    )
+    snapshot_generation = str(UUID(task_id))
+
+    class FakeRepository:
+        def __init__(self, selected_config):
+            assert selected_config is app.config
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            return {
+                "album_id": album_id,
+                "search_generation": snapshot_generation,
+                "search_kind": "manual",
+                "status": "running",
+                "revision": 1,
+                "candidates": [candidate],
+                "best_candidate_id": candidate["id"],
+            }
+
+    queued_task_ids = []
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeRepository)
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda queued_task_id, *_args, **_kwargs: queued_task_ids.append(queued_task_id),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": {**_album_payload(track_path), "album_id": 41},
+            "snapshot_generation": snapshot_generation,
+            "candidate_id": candidate["id"],
+        },
+    )
+
+    assert status == 200
+    assert _decode_json(body)["task"]["id"] == task_id
+    assert queued_task_ids == [task_id]
+
+
 def test_asgi_cover_lookup_save_remote_keeps_action_taken_through_background_completion(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import cover_lookup_tasks

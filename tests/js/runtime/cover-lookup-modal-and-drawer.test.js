@@ -417,6 +417,47 @@ require('node:test')('active-only polling merges updates without replacing loade
   );
 });
 
+require('node:test')('active-only polling refreshes the modal when partial candidates advance', async () => {
+  let galleryRefreshes = 0;
+  let pollCount = 0;
+  const { context } = createDrawerHarness({
+    fetch: async () => {
+      pollCount += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{
+            id: 'active',
+            status: 'running',
+            progress: 62,
+            possible_match_count: 1,
+            candidate_updated_at: pollCount === 1
+              ? '2026-10-23T13:07:20.000Z'
+              : '2026-10-23T13:07:23.563Z',
+          }],
+          next_cursor: null,
+          total_count: 1,
+          active_count: 1,
+          finished_count: 0,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.modal.taskId = 'active';
+  context.state.coverLookup.modal.candidateSnapshot = {
+    search_generation: 'active',
+    updated_at: '2026-10-23T13:07:20.000Z',
+    candidates: [{ id: 'existing', art_kind: 'cover' }],
+  };
+  context.refreshCoverLookupGallery = async () => { galleryRefreshes += 1; };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(galleryRefreshes, 1);
+});
+
 require('node:test')('active-only polling refreshes the first page when a running task disappears', async () => {
   const requestedUrls = [];
   const { context } = createDrawerHarness({

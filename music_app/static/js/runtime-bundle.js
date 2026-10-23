@@ -29987,6 +29987,7 @@ async function loadCoverLookupTasks(options = {}) {
       year: task.year,
       notification_action_taken: Boolean(task.notification_action_taken),
       possible_match_count: Number(task.possible_match_count || 0),
+      candidate_updated_at: String(task.candidate_updated_at || ''),
       selected_candidate_id: task.selected_candidate_id,
       possible_match_ids: buildCoverLookupCandidateSnapshot(task),
       updated_albums_count: Array.isArray(task.updated_albums) ? task.updated_albums.length : 0,
@@ -30010,7 +30011,15 @@ async function loadCoverLookupTasks(options = {}) {
           state.coverLookup.modal.candidateSnapshot,
         );
         applyCoverLookupCandidateSource(candidateSource);
-        if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
+      const partialCandidatesAdvanced = ['pending', 'running'].includes(taskStatus)
+        && (
+          Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0)
+          || coverLookupCandidateTimestamp(task.candidate_updated_at)
+            > coverLookupCandidateTimestamp(state.coverLookup.modal.candidateSnapshot?.updated_at)
+        );
+      if (partialCandidatesAdvanced) {
+        await refreshCoverLookupGallery(false);
+      } else if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
           if (options.refreshModalGallery !== false) {
             await refreshCoverLookupGallery(false);
           } else {

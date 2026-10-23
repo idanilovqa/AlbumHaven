@@ -5027,6 +5027,9 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 "_ignored_repair_keys": set(ignored_repair_keys),
                 "_separate_release_keys": set(separate_release_keys),
                 "_duplicate_file_counts": {},
+                "_has_exception_override": (
+                    row_payload.get("exception_override_present") is True
+                ),
                 "_duplicate_candidate": bool(row_payload.get("duplicate_candidate")),
             }
             albums[album_identity] = album
@@ -5037,6 +5040,10 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
             album["_duplicate_candidate"] = bool(
                 album.get("_duplicate_candidate")
                 or row_payload.get("duplicate_candidate")
+            )
+            album["_has_exception_override"] = bool(
+                album.get("_has_exception_override")
+                or row_payload.get("exception_override_present") is True
             )
 
         track_path = str(row_payload.get("file_private_path") or "").strip()
@@ -6211,7 +6218,11 @@ def _problematic_album_summary_payload(
         track_problem_rows=track_problem_rows,
     )
     repair_preview = _problematic_encoding_repair_preview(album, include_preview_rows=False)
-    if not reasons and not repair_preview["has_repairs"]:
+    if (
+        not reasons
+        and not repair_preview["has_repairs"]
+        and not album.get("_has_exception_override")
+    ):
         return None
     tracks = [
         {
@@ -10644,6 +10655,9 @@ def _problematic_files_sql(
     duplicate_candidates: bool = False,
     duplicate_sources_only: bool = False,
 ) -> str:
+    physical_album_container = _physical_album_container_sql(
+        "library.local_track_files.private_path"
+    )
     spotify_quota_cte = "" if duplicate_sources_only else """
         spotify_quota_albums as materialized (
           select tasks.task_key
@@ -10708,6 +10722,7 @@ def _problematic_files_sql(
     physical_file_ctes = r"""
         active_problem_rows as materialized (
           select library.local_track_files.id as file_id,
+            library.local_track_files.private_path,
             library.local_tracks.album_id, library.local_tracks.library_id,
             library.local_track_files.library_root_id,
             library.local_track_files.file_size_bytes as file_size,
@@ -10718,6 +10733,7 @@ def _problematic_files_sql(
               '/[^/]*$', ''
             ) as physical_parent,
             regexp_replace(replace(library.local_track_files.private_path, chr(92), '/'), '/[^/]*$', '') as source_directory,
+            __PHYSICAL_ALBUM_CONTAINER__ as physical_album_container,
             library.local_track_files.track_id,
             coalesce(nullif(library.local_tracks.disc_number, 0), 1) as disc_number,
             case when library.local_tracks.track_number > 0
@@ -10760,9 +10776,50 @@ def _problematic_files_sql(
            and mixed.library_root_id = files.library_root_id
            and mixed.physical_parent = files.physical_parent
         ),
+        exception_source_tracks as materialized (
+          select distinct
+            source_files.album_id as source_album_id,
+            exception_tracks.id,
+            exception_tracks.library_id,
+            exception_tracks.track_key,
+            exception_tracks.title,
+            exception_tracks.disc_number,
+            exception_tracks.track_number,
+            exception_tracks.duration_seconds
+          from library.exception_overrides
+          join active_problem_rows exception_files
+            on exception_files.library_id = library.exception_overrides.library_id
+           and (
+             exception_files.track_id = library.exception_overrides.track_id
+             or exception_files.private_path = library.exception_overrides.track_key
+           )
+          join library.local_tracks exception_tracks
+            on exception_tracks.id = exception_files.track_id
+           and exception_tracks.library_id = exception_files.library_id
+          join active_problem_rows source_files
+            on source_files.library_id = exception_files.library_id
+           and source_files.library_root_id = exception_files.library_root_id
+           and source_files.physical_album_container = exception_files.physical_album_container
+           and source_files.file_album = exception_files.file_album
+           and source_files.file_album_artist = exception_files.file_album_artist
+           and source_files.file_year is not distinct from exception_files.file_year
+           and source_files.album_id is not null
+          where nullif(btrim(
+              library.exception_overrides.override_payload ->> 'exception_type'
+          ), '') is not null
+            and exception_files.file_album is not null
+            and exception_files.file_album_artist is not null
+        ),
     """
-    physical_file_ctes = local_album_membership_ctes_sql() + "," + physical_scope_ctes + physical_file_ctes.replace(
-        "__PHYSICAL_SCOPE_JOIN__", physical_scope_join,
+    physical_file_ctes = (
+        local_album_membership_ctes_sql()
+        + ","
+        + physical_scope_ctes
+        + physical_file_ctes.replace(
+            "__PHYSICAL_SCOPE_JOIN__", physical_scope_join,
+        ).replace(
+            "__PHYSICAL_ALBUM_CONTAINER__", physical_album_container,
+        )
     )
     candidate_ctes = ""
     selected_album_join = ""
@@ -10898,6 +10955,10 @@ def _problematic_files_sql(
             or active_album_rollup.track_problem
             or library.local_artists.scan_name_problem_candidate is true
             or active_album_rollup.file_problem
+             or library.local_albums.id in (
+                 select exception_source_tracks.source_album_id
+                 from exception_source_tracks
+             )
             or least(
               active_album_rollup.min_file_album,
               case
@@ -11423,6 +11484,20 @@ def _problematic_files_sql(
           join selected_albums
             on selected_albums.id = library.local_tracks.album_id
            and selected_albums.library_id = library.local_tracks.library_id
+          union
+          select
+            exception_source_tracks.id,
+            exception_source_tracks.library_id,
+            exception_source_tracks.source_album_id as album_id,
+            exception_source_tracks.track_key,
+            exception_source_tracks.title,
+            exception_source_tracks.disc_number,
+            exception_source_tracks.track_number,
+            exception_source_tracks.duration_seconds
+          from exception_source_tracks
+          join selected_albums
+            on selected_albums.id = exception_source_tracks.source_album_id
+           and selected_albums.library_id = exception_source_tracks.library_id
         ),
         {selected_active_track_file_rows_sql}
         active_track_files as (

@@ -796,9 +796,14 @@ def queue_cover_display_variant_generation(
     )
 
 
-def image_dimensions(path: Path, *, raise_errors: bool = False) -> tuple[int, int]:
+def image_dimensions(
+    path: str | os.PathLike[str],
+    *,
+    raise_errors: bool = False,
+) -> tuple[int, int]:
     if Image is None:
         return (0, 0)
+    path = Path(path)
     normalized_path = str(path)
     signature = _image_dimensions_signature(path)
     with _IMAGE_DIMENSIONS_CACHE_LOCK:

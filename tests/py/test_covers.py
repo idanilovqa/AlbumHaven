@@ -33,6 +33,13 @@ def test_find_cover_image_prefers_front_filename_over_larger_booklet(tmp_path: P
     assert selected == front
 
 
+def test_image_dimensions_accepts_persisted_string_path(tmp_path: Path):
+    cover = tmp_path / "cover.jpg"
+    PILImage.new("RGB", (321, 654), color="navy").save(cover, format="JPEG")
+
+    assert covers_module.image_dimensions(str(cover)) == (321, 654)
+
+
 def test_production_cover_variant_lane_capacity_matches_gallery_scheduler_policy():
     assert covers_module._COVER_VARIANT_FOREGROUND_WORKERS == 5
     assert covers_module._COVER_VARIANT_INTERACTIVE_WORKERS == 1

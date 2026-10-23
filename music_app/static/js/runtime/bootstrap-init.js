@@ -250,7 +250,9 @@ renderLibraryLoader({
 });
 scheduleBrowserTimeout(pollStatus, 500);
 if (shouldStartImmediateHydration) {
-  const resolvedStartupHydrationFollowupEndpoint = resolveInitialHydrationEndpoint({
+  const resolvedStartupHydrationFollowupEndpoint = (
+    !startupHydrationFollowupEndpoint && startupHydrationTier !== 'sidebar'
+  ) ? '' : resolveInitialHydrationEndpoint({
     followupEndpoint: startupHydrationFollowupEndpoint,
   }, {
     ...galleryDisplayPreferenceResolutionOptions,

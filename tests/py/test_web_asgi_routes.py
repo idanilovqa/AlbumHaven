@@ -422,6 +422,7 @@ def test_selected_artist_startup_requests_summary_without_losing_repeated_filter
     from music_app.routes import web_asgi
 
     captured = []
+    projected = []
 
     class SummaryRepository:
         def __init__(self, _config):
@@ -453,6 +454,18 @@ def test_selected_artist_startup_requests_summary_without_losing_repeated_filter
         def build_root_sidebar_payload(self, *, query_params):
             raise AssertionError("selected startup must not build the full root payload")
 
+        def build_projected_root_sidebar_payload(self, *, query_params):
+            projected.append(query_params)
+            return {
+                "artists_sidebar": [
+                    {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+                    {"artist": "Mono", "artist_display": "Mono", "count": 2},
+                ],
+                "artist_count": 2,
+                "album_count": 3,
+                "show_all_artists_sidebar_link": True,
+            }
+
     monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", SummaryRepository)
     params = [("artist", "Broadcast"), ("category", "hoard"), ("category", "main_library")]
     if requested_tier:
@@ -461,11 +474,14 @@ def test_selected_artist_startup_requests_summary_without_losing_repeated_filter
         config={}, query_args=QueryParams(params), library_state={},
     )
     assert captured[0].get("payload_tier") == expected_tier
+    assert captured[0].get("root_sidebar") == "1"
     assert captured[0].getlist("category") == ["hoard", "main_library"]
     assert len(captured) == 1
+    assert projected[0].getlist("category") == ["hoard", "main_library"]
     assert initial_view["selected_artist"] == "Broadcast"
     assert initial_view["artists_sidebar"] == [
         {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+        {"artist": "Mono", "artist_display": "Mono", "count": 2},
     ]
     assert initial_view["initial_view_partial"] is True
 
@@ -498,6 +514,15 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             sidebar_only=False,
         ):
             raise AssertionError("selected startup must defer the complete root sidebar")
+
+        def build_projected_root_sidebar_payload(self, *, query_params=None):
+            assert not str((query_params or {}).get("q") or "").strip()
+            return {
+                "artists_sidebar": full_root_sidebar,
+                "artist_count": len(full_root_sidebar),
+                "album_count": 6,
+                "show_all_artists_sidebar_link": True,
+            }
 
         def build_selected_artist_payload(self, *, query_params=None, library_state=None):
             query = str((query_params or {}).get("q") or "").strip()
@@ -594,7 +619,7 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             "query": "",
             "has_search_context": False,
             "selected_artist": "Broadcast",
-            "artists_sidebar": [full_root_sidebar[0]],
+            "artists_sidebar": full_root_sidebar,
         },
         "with_query": {
             "query": "Tender Buttons",

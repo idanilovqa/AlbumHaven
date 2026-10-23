@@ -922,11 +922,14 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
 
 function createDelayedStartupHydrationHarness({
   selectedArtist = '',
+  startupHydrationEndpoint = '/view-data?payload_tier=sidebar',
+  startupHydrationFollowupEndpoint = '/view-data',
   startupHydrationTier = 'sidebar',
   renderedGalleryMarkup = false,
 } = {}) {
   const scheduledTimeouts = [];
   const fetchedEndpoints = [];
+  const fetchedOptions = [];
   let visibleRefreshCount = 0;
   const visibleRefreshDetails = [];
   const runtimeBootstrap = {
@@ -942,8 +945,8 @@ function createDelayedStartupHydrationHarness({
     },
     startupHydration: {
       required: true,
-      endpoint: '/view-data?payload_tier=sidebar',
-      followupEndpoint: '/view-data',
+      endpoint: startupHydrationEndpoint,
+      followupEndpoint: startupHydrationFollowupEndpoint,
       tier: startupHydrationTier,
       embeddedViewPatch: {
         artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
@@ -988,6 +991,9 @@ function createDelayedStartupHydrationHarness({
     applyViewPayload(view) {
       context.state.view = { ...context.state.view, ...view };
     },
+    buildApiUrl() {
+      return '/view-data?payload_tier=gallery_summary';
+    },
     readViewStateRevision() { return context.state.ui.viewStateRevision; },
     suppressRefocusViewportInteraction() {},
     suppressRefocusViewportClick() {},
@@ -1012,7 +1018,10 @@ function createDelayedStartupHydrationHarness({
       return scheduledTimeouts.length;
     },
     pollStatus() {},
-    fetchAndRender(endpoint) { fetchedEndpoints.push(endpoint); },
+    fetchAndRender(endpoint, _silent, options) {
+      fetchedEndpoints.push(endpoint);
+      fetchedOptions.push(options);
+    },
     isEffectivelyEmptyView() { return false; },
     hideVersionContextMenu() {},
     hideStatusContextMenu() {},
@@ -1042,6 +1051,7 @@ function createDelayedStartupHydrationHarness({
   return {
     context,
     fetchedEndpoints,
+    fetchedOptions,
     scheduledTimeouts,
     visibleRefreshCount,
     visibleRefreshDetails,
@@ -1065,6 +1075,22 @@ test('server-rendered selected gallery dismisses startup blocking before full hy
     source: 'startup_preview',
   }]);
   assert.equal(context.state.awaitingInitialDataRefresh, true);
+});
+
+test('full selected startup does not invent a gallery-summary follow-up after root-sidebar hydration', () => {
+  const {
+    fetchedEndpoints,
+    fetchedOptions,
+  } = createDelayedStartupHydrationHarness({
+    selectedArtist: 'Broadcast',
+    startupHydrationEndpoint: '/view-data?root_sidebar=1&artist=Broadcast',
+    startupHydrationFollowupEndpoint: '',
+    startupHydrationTier: 'full',
+    renderedGalleryMarkup: true,
+  });
+
+  assert.deepEqual(fetchedEndpoints, ['/view-data?root_sidebar=1&artist=Broadcast']);
+  assert.equal(fetchedOptions[0].startupHydrationFollowupEndpoint, '');
 });
 
 test('delayed startup hydration yields to cover-display/source work without aborting it', () => {

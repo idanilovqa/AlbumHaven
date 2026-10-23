@@ -2883,9 +2883,22 @@ def test_asgi_full_root_album_browse_uses_postgres_browse_without_flask_bridge(a
     assert payload["artist_count"] == 1
 
 
-@pytest.mark.parametrize("all_artists", [None, "1"])
+@pytest.mark.parametrize(
+    "extra_query",
+    [
+        {},
+        {"all_artists": "1"},
+        {"gallery_page_size": "50", "omit_sidebar": "1", "include_non_album": "1"},
+        {
+            "gallery_page_size": "50",
+            "omit_sidebar": "1",
+            "include_non_album": "1",
+            "include_library_wide_non_album": "1",
+        },
+    ],
+)
 def test_asgi_queryless_root_album_browse_defaults_to_bounded_gallery_page(
-    app, asgi_app, monkeypatch, all_artists
+    app, asgi_app, monkeypatch, extra_query
 ):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -2899,7 +2912,8 @@ def test_asgi_queryless_root_album_browse_defaults_to_bounded_gallery_page(
         def build_root_startup_preview_payload(self, *, query_params=None, library_state=None):
             assert query_params.get("surface") == "albums"
             assert query_params.get("gallery_page_size") == "50"
-            assert query_params.get("all_artists") == all_artists
+            for key, value in extra_query.items():
+                assert query_params.get(key) == value
             assert library_state is asgi_app.state.library_state
             return {
                 "surface": {"active_surface": "albums"},
@@ -2910,7 +2924,7 @@ def test_asgi_queryless_root_album_browse_defaults_to_bounded_gallery_page(
                 "artist_count": 1,
                 "query": "",
                 "selected_artist": "",
-                "all_artists_active": bool(all_artists),
+                "all_artists_active": bool(extra_query.get("all_artists")),
                 "payload_tier": "gallery_page",
                 "gallery_page": {"offset": 0, "has_more": True, "next_cursor": "next"},
                 "persistence_backend": "postgres",
@@ -2932,7 +2946,7 @@ def test_asgi_queryless_root_album_browse_defaults_to_bounded_gallery_page(
         "/view-data",
         query={
             "surface": "albums",
-            **({"all_artists": all_artists} if all_artists else {}),
+            **extra_query,
         },
     )
 

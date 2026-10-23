@@ -234,7 +234,13 @@ function createDrawerHarness(overrides = {}) {
   };
   const bodyElement = { innerHTML: '' };
   const badgeElement = { hidden: false, textContent: '' };
-  const buttonElement = { classList: { toggle: () => {} } };
+  const buttonClasses = new Set();
+  const buttonElement = {
+    classList: {
+      toggle: (name, enabled) => enabled ? buttonClasses.add(name) : buttonClasses.delete(name),
+      contains: (name) => buttonClasses.has(name),
+    },
+  };
   const clearElement = {
     hidden: false,
     disabled: false,
@@ -337,6 +343,23 @@ require('node:test')('notification startup loads authoritative counts without lo
   assert.equal(context.state.coverLookup.notificationCounts.total_count, 528);
   assert.equal(badgeElement.textContent, '528');
   assert.deepEqual(context.state.coverLookup.tasks || [], []);
+});
+
+require('node:test')('stale notification counts cannot hide a locally accepted lookup', () => {
+  const { context, badgeElement } = createDrawerHarness();
+  const buttonElement = context.document.getElementById('cover-lookup-drawer-button');
+  context.state.coverLookup.notificationCounts = {
+    total_count: 0,
+    active_count: 0,
+    finished_count: 0,
+  };
+  context.state.coverLookup.tasks = [{ id: 'accepted-task', status: 'pending' }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.equal(badgeElement.textContent, '1');
+  assert.equal(badgeElement.hidden, false);
+  assert.equal(buttonElement.classList.contains('has-active-lookups'), true);
 });
 
 require('node:test')('drawer page loads 50 summaries and retains its next cursor', async () => {

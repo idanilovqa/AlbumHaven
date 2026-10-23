@@ -745,7 +745,7 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     state.coverLookup.drawerOpen = !state.coverLookup.drawerOpen;
     ensureCoverLookupPolling();
-    loadCoverLookupTasks({ toast: false });
+    loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     renderCoverLookupDrawer();
     return;
   }
@@ -819,7 +819,7 @@ async function handleUtilityBootstrapClick(event) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
-    }).finally(() => loadCoverLookupTasks({ toast: false }));
+    }).finally(() => loadCoverLookupTasks({ toast: false, mergeFirstPage: true }));
     return;
   }
 

@@ -1282,9 +1282,15 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const loadedTerminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
   const counts = state.coverLookup.notificationCounts;
   const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
-  const activeCount = hasAuthoritativeCounts ? Number(counts.active_count || 0) : loadedActiveCount;
-  const terminalCount = hasAuthoritativeCounts ? Number(counts.finished_count || 0) : loadedTerminalCount;
-  const badgeCount = hasAuthoritativeCounts ? Number(counts.total_count || 0) : tasks.length;
+  const activeCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.active_count || 0), loadedActiveCount)
+    : loadedActiveCount;
+  const terminalCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
+    : loadedTerminalCount;
+  const badgeCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.total_count || 0), tasks.length)
+    : tasks.length;
   if (summary) {
     summary.textContent = [
       activeCount ? `${activeCount} active` : '',
@@ -2361,7 +2367,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
       { placement: 'top-center' },
     );
     if (backgroundOnly) {
-      await loadCoverLookupTasks({ toast: false });
+      await loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     }
   } catch (error) {
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);

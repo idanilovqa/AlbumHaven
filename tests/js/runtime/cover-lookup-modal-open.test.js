@@ -306,7 +306,11 @@ test('background lookup marks its trigger busy before the start request settles'
   context.renderCoverLookupDrawer = () => {};
   context.ensureCoverLookupPolling = () => {};
   let taskReloads = 0;
-  context.loadCoverLookupTasks = async () => { taskReloads += 1; };
+  let taskReloadOptions = null;
+  context.loadCoverLookupTasks = async (options) => {
+    taskReloads += 1;
+    taskReloadOptions = options;
+  };
 
   const startPromise = context.startCoverLookupForAlbum(album, {
     backgroundOnly: true,
@@ -332,6 +336,11 @@ test('background lookup marks its trigger busy before the start request settles'
   assert.equal(triggerButton.disabled, false);
   assert.equal(attributes.has('aria-busy'), false);
   assert.equal(taskReloads, 1, 'background lookup keeps its immediate status refresh');
+  assert.equal(
+    taskReloadOptions?.mergeFirstPage,
+    true,
+    'the status refresh must retain the accepted task until persistence catches up',
+  );
 });
 
 

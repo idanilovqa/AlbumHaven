@@ -38,6 +38,20 @@ const utilityLoadersPath = path.join(
   'utility-loaders-and-cover-lookup.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+
+test('opening the notification drawer retains accepted tasks during persistence lag', () => {
+  assert.match(
+    helperSource,
+    /state\.coverLookup\.drawerOpen = !state\.coverLookup\.drawerOpen;[\s\S]*?loadCoverLookupTasks\(\{ toast: false, mergeFirstPage: true \}\);/,
+  );
+});
+
+test('cancel refresh retains the task until its terminal state is persisted', () => {
+  assert.match(
+    helperSource,
+    /\.finally\(\(\) => loadCoverLookupTasks\(\{ toast: false, mergeFirstPage: true \}\)\);/,
+  );
+});
 const utilityListBuildersSource = fs.readFileSync(utilityListBuildersPath, 'utf8');
 const utilityLoadersSource = fs.readFileSync(utilityLoadersPath, 'utf8');
 const utilityRenderersSource = fs.readFileSync(path.join(

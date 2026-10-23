@@ -541,8 +541,9 @@ export class TagEditorActions {
   }
 
   async clearException() {
-    await this.tagEditor.exceptionSelect.fill('');
-    await this.tagEditor.exceptionSelect.blur();
+    await this.tagEditor.exceptionSelect.click();
+    await expect(this.tagEditor.exceptionNoneOption).toBeVisible();
+    await this.tagEditor.exceptionNoneOption.click();
     await expect(this.tagEditor.exceptionSelect).toHaveValue('');
   }
 

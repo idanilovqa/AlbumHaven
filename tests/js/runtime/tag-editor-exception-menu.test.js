@@ -98,6 +98,7 @@ test('exception listbox renders every library-scoped choice as a selectable opti
   ], 'Custom Collection');
 
   assert.match(html, /role="option"/);
+  assert.match(html, /aria-selected="false"[^>]+data-tag-editor-exception-option="">None<\/button>/);
   assert.match(html, /data-tag-editor-exception-option="Custom Collection"/);
   assert.match(html, /aria-selected="true"[^>]+data-tag-editor-exception-option="Custom Collection"/);
   assert.match(html, /Archive &amp; outtake/);

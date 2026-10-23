@@ -27355,8 +27355,9 @@ function isCustomCollectionException(value) {
 
 function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoices(), currentValue = '') {
   const selected = String(currentValue || '').trim();
-  return values.map((value) => (
-    `<button type="button" role="option" aria-selected="${value === selected ? 'true' : 'false'}" tabindex="-1" data-tag-editor-exception-option="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+  const choices = ['', ...values.filter((value) => String(value || '').trim())];
+  return choices.map((value) => (
+    `<button type="button" role="option" aria-selected="${value === selected ? 'true' : 'false'}" tabindex="-1" data-tag-editor-exception-option="${escapeHtml(value)}">${escapeHtml(value || 'None')}</button>`
   )).join('');
 }
 

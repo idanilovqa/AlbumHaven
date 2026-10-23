@@ -5,6 +5,7 @@ from music_app.services.log_history import resolve_media_host_history_scope
 import threading
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from os.path import normcase
 from pathlib import Path
 
@@ -332,6 +333,20 @@ def ensure_runtime_relation_projection_ready(
         library_state["last_error"] = str(exc)
         library_state["relation_projection_rebuild_reason"] = "startup_rebuild_failed"
         raise
+    startup_started_at = getattr(app, "relation_projection_startup_started_at", None)
+    try:
+        rebuilt_during_startup = (
+            isinstance(startup_started_at, datetime)
+            and datetime.fromisoformat(str(result.get("last_rebuild_timestamp") or ""))
+            >= startup_started_at
+        )
+    except (TypeError, ValueError):
+        rebuilt_during_startup = False
+    if not result.get("startup_rebuilt") and rebuilt_during_startup:
+        result["startup_rebuilt"] = True
+        result["rebuild_reason"] = str(
+            result.get("last_rebuild_reason") or result.get("rebuild_reason") or "healthy"
+        )
     library_state["relation_views"] = dict(result.get("relation_views") or {})
     library_state["relation_projection_ready"] = bool(result.get("ready"))
     library_state["relation_projection_builder_version"] = str(

@@ -1315,6 +1315,54 @@ def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_s
     assert library_state["relation_projection_duration_ms"] == 12.5
 
 
+@pytest.mark.parametrize(
+    ("build_timestamp", "expected_rebuilt", "expected_reason"),
+    [
+        ("2026-10-22T12:00:01+00:00", True, "missing_projection"),
+        ("2026-10-22T11:59:59+00:00", False, "healthy"),
+    ],
+)
+def test_runtime_relation_readiness_retains_rebuild_completed_during_startup(
+    monkeypatch,
+    build_timestamp,
+    expected_rebuilt,
+    expected_reason,
+):
+    from datetime import datetime
+
+    runtime = SimpleNamespace(
+        config={
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+            "SHARED_LIBRARY_BROWSE_ONLY": True,
+        },
+        logger=_LoggerStub(),
+        library_state={},
+        relation_projection_startup_started_at=datetime.fromisoformat(
+            "2026-10-22T12:00:00+00:00"
+        ),
+    )
+    monkeypatch.setattr(
+        state_module,
+        "ensure_relation_projection_ready",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "startup_rebuilt": False,
+            "rebuild_reason": "healthy",
+            "last_rebuild_reason": "missing_projection",
+            "last_rebuild_timestamp": build_timestamp,
+            "duration_ms": 1.0,
+            "relation_views": {},
+        },
+    )
+
+    result = state_module.ensure_runtime_relation_projection_ready(runtime)
+
+    assert result["startup_rebuilt"] is expected_rebuilt
+    assert result["rebuild_reason"] == expected_reason
+    assert runtime.library_state["relation_projection_startup_rebuilt"] is expected_rebuilt
+    assert runtime.library_state["relation_projection_rebuild_reason"] == expected_reason
+
+
 def test_postgres_relation_refresh_publishes_terminal_status_from_committed_artists(
     config,
     monkeypatch,

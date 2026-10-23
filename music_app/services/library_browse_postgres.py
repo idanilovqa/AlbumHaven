@@ -1022,8 +1022,8 @@ class PostgresLibraryBrowseRepository:
             finally:
                 connection_stack.close()
 
-        if relation_alias_maps.get("projection_stale_reason") or (
-            bounded_gallery_only and queue_projection_refresh
+        if queue_projection_refresh and (
+            relation_alias_maps.get("projection_stale_reason") or bounded_gallery_only
         ):
             schedule_gallery_projection_refresh(self._config, connect=self._connect)
         elif prepared_snapshot is not None and projection_context:

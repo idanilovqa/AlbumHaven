@@ -1254,6 +1254,7 @@ def test_ensure_relation_projection_ready_healthy_fast_path_loads_only_projectio
         fingerprint,
         reason="scan_publication",
         duration_ms=7,
+        built_at="2026-10-22T12:00:01+00:00",
         source_row_count=2,
         phase_timings_ms={"source_load": 3},
     )
@@ -1300,6 +1301,8 @@ def test_ensure_relation_projection_ready_healthy_fast_path_loads_only_projectio
     assert result["ready"] is True
     assert result["startup_rebuilt"] is False
     assert result["rebuild_reason"] == "healthy"
+    assert result["last_rebuild_reason"] == "scan_publication"
+    assert result["last_rebuild_timestamp"] == "2026-10-22T12:00:01+00:00"
     assert result["relation_views"] == relation_views
     assert result["source_row_count"] == 2
     assert result["phase_timings_ms"] == {"source_load": 3.0}

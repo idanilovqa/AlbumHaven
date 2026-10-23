@@ -1579,8 +1579,11 @@ def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration(monkey
         app.library_state["last_scan"] = 1609459200.0
 
     def ensure_relations(app, **_options):
+        from datetime import datetime
+
         calls.append("relations")
         assert app.library_state["last_scan"] == 1609459200.0
+        assert isinstance(app.relation_projection_startup_started_at, datetime)
         completed.set()
 
     def unexpected_inventory_hydration(_app):

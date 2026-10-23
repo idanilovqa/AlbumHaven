@@ -68,6 +68,7 @@ def _start_library_warmup(
     recover_persistence=None,
 ):
     stop_requested = threading.Event()
+    runtime.relation_projection_startup_started_at = datetime.now(timezone.utc)
     database_url = str(
         runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
     ).strip()

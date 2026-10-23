@@ -4105,7 +4105,15 @@ def test_root_startup_known_artist_prefix_keeps_bounded_balanced_preview(monkeyp
     })]
 
 
-def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payload_semantics(monkeypatch):
+@pytest.mark.parametrize(
+    ("queue_projection_refresh", "expected_refresh_count"),
+    [(True, 1), (False, 0)],
+)
+def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payload_semantics(
+    monkeypatch,
+    queue_projection_refresh,
+    expected_refresh_count,
+):
     from music_app.services import gallery_projection_postgres as gallery_projection
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -4126,7 +4134,7 @@ def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payl
         lambda **_kwargs: {
             "alias_to_canonical": {"Broadcast Alias": "Broadcast"},
             "canonical_to_aliases": {"Broadcast": ["Broadcast Alias"]},
-            "projection_stale_reason": "",
+            "projection_stale_reason": "missing_projection",
         },
     )
     monkeypatch.setattr(
@@ -4197,6 +4205,7 @@ def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payl
             },
         },
         bounded_gallery_only=True,
+        queue_projection_refresh=queue_projection_refresh,
     )
 
     assert [group["artist"] for group in payload["artist_groups"]] == ["Broadcast"]
@@ -4208,7 +4217,7 @@ def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payl
     assert payload["artist_count"] == 1
     assert payload["initial_view_partial"] is True
     assert rating_calls and rating_calls[0][1][0]["artist_name"] == "Broadcast"
-    assert len(refresh_calls) == 1
+    assert len(refresh_calls) == expected_refresh_count
 
 
 def test_root_startup_preview_loads_relation_aliases_inside_repeatable_read_snapshot(monkeypatch):

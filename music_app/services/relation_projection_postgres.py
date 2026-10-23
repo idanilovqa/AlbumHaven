@@ -908,6 +908,8 @@ def _projection_result(
         "builder_version": str(metadata.get("builder_version") or RELATION_PROJECTION_BUILDER_VERSION),
         "startup_rebuilt": bool(startup_rebuilt),
         "rebuild_reason": str(reason),
+        "last_rebuild_reason": str(metadata.get("rebuild_reason") or ""),
+        "last_rebuild_timestamp": str(metadata.get("build_timestamp") or ""),
         "duration_ms": round(max(float(duration_ms), 0.0), 2),
         "relation_views": dict(relation_views or {}),
     }

@@ -1306,11 +1306,6 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  if (!state.coverLookup.drawerOpen) {
-    body.innerHTML = '';
-    syncCoverLookupElapsedTimer();
-    return;
-  }
   const preserveSelectedNotificationText = preserveInteraction
     && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {

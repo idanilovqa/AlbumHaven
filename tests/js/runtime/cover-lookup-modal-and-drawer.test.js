@@ -1126,7 +1126,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
       }[id] || { hidden: true }),
     },
   });
-  context.state.coverLookup.drawerOpen = true;
+  context.state.coverLookup.drawerOpen = false;
   context.state.coverLookup.modal = { taskId: '' };
 
   await context.loadCoverLookupTasks({ toast: false });

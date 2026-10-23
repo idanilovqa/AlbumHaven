@@ -575,13 +575,14 @@ class PostgresScanCacheAdapter:
                 file_entry = _fallback_file_entry(row_payload)
             if not isinstance(file_entry, dict):
                 continue
-            path = str(file_entry.get("path") or row_payload.get("private_path") or "").strip()
+            path = str(row_payload.get("private_path") or file_entry.get("path") or "").strip()
             if not path:
                 continue
             try:
                 hydrated_entry = deserialize_file_entry(file_entry)
             except Exception:
                 hydrated_entry = dict(file_entry)
+            hydrated_entry["path"] = path
             if type(row_payload.get("album_is_compilation")) is bool:
                 hydrated_entry["is_compilation"] = row_payload[
                     "album_is_compilation"

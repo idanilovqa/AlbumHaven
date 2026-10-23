@@ -2708,7 +2708,12 @@ def rebase_preloaded_fixture_paths(
         connection.execute(
             """
             update library.local_track_files
-            set metadata = replace(metadata::text, %(old_json)s, %(new_json)s)::jsonb
+            set metadata = jsonb_set(
+              replace(metadata::text, %(old_json)s, %(new_json)s)::jsonb,
+              '{scan_cache,source}',
+              to_jsonb('runtime_scan_cache'::text),
+              true
+            )
             where position(%(old_json)s in metadata::text) > 0
             """,
             params,
@@ -2723,27 +2728,75 @@ def rebase_preloaded_fixture_paths(
         )
 
 
-def persist_preloaded_fixture_library_root(database_url: str, media_root: Path) -> None:
+def persist_preloaded_fixture_library_root(
+    database_url: str,
+    media_root: Path,
+    *,
+    connect=None,
+) -> None:
     from config import PERSISTENCE_BACKEND_POSTGRES
-    from music_app.services.library_roots import save_library_root_settings
+    from music_app.services.library_roots import (
+        library_root_cache_identity,
+        load_library_root_settings,
+        save_library_root_settings,
+    )
+
+    if connect is None:
+        import psycopg
+
+        connect = psycopg.connect
+
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+        "MUSIC_DIR": media_root,
+        "PERSISTENCE_BACKENDS": {"library_roots": PERSISTENCE_BACKEND_POSTGRES},
+    }
+    current_settings = load_library_root_settings(config)
+    current_main_roots = current_settings.get("main_library_roots")
+    current_root_id = (
+        str(current_main_roots[0].get("id") or "").strip()
+        if isinstance(current_main_roots, list)
+        and current_main_roots
+        and isinstance(current_main_roots[0], dict)
+        else ""
+    )
+    if not current_root_id:
+        raise RuntimeError("Preloaded fixture has no persisted main-library root.")
 
     rebase_preloaded_fixture_paths(database_url, media_root)
     save_library_root_settings(
-        {
-            "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
-            "MUSIC_DIR": media_root,
-            "PERSISTENCE_BACKENDS": {"library_roots": PERSISTENCE_BACKEND_POSTGRES},
-        },
+        config,
         {
             "main_library_roots": [
                 {
-                    "id": "isolated-e2e-root",
+                    "id": current_root_id,
                     "path": str(media_root),
                     "layout_mode": "artist",
                 }
             ]
         },
     )
+    with connect(database_url) as connection:
+        row = connection.execute(
+            """
+            update library.libraries
+            set metadata = jsonb_set(
+              coalesce(library.libraries.metadata, '{}'::jsonb),
+              '{scan_cache,library_root_identity}',
+              to_jsonb(%(root_identity)s::text),
+              true
+            )
+            from app.bootstrap_owners
+            where app.bootstrap_owners.account_id = library.libraries.owner_account_id
+              and app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+              and library.libraries.name = 'Local Library'
+              and library.libraries.library_kind = 'local'
+            returning library.libraries.id
+            """,
+            {"root_identity": library_root_cache_identity(config)},
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Preloaded fixture has no bootstrap local library.")
 
 
 def seed_functional_cover_search_cache(

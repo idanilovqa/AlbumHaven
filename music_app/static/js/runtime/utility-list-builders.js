@@ -2442,7 +2442,6 @@ async function watchSaveTask(taskId, context = {}) {
             hasCompletionWarning ? 8000 : 2000,
             {
               title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-              dismissible: hasCompletionWarning,
             },
           );
         } else if (!consumesProvidedTerminalPayload) {

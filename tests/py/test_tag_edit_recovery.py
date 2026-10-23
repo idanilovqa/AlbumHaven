@@ -379,6 +379,11 @@ def test_startup_recovery_uses_generic_persistence_for_album_and_year_change(
             id="album-and-album-artist-generic",
         ),
         pytest.param(
+            {"album": "New album", "exception_type": "Non-album rarity"},
+            "album",
+            id="album-and-exception-targeted",
+        ),
+        pytest.param(
             {"year": "2025", "edition": "Deluxe"},
             None,
             id="year-and-edition-generic",
@@ -397,6 +402,7 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
         "album_artist": "Old artist",
         "year": "2024",
         "edition": "",
+        "exception_type": "",
         "title": "Opening",
         "track_number": "1",
     }

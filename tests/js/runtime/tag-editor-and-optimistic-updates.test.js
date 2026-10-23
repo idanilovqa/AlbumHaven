@@ -1898,7 +1898,7 @@ test('completed save-task response reconciles immediately without starting a wat
       'Saved changes to 1 track in “Album”.',
       'success',
       2000,
-      { title: 'Tags updated', dismissible: false },
+      { title: 'Tags updated' },
     ],
   ]);
 });

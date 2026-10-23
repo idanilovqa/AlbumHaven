@@ -153,22 +153,48 @@ def test_preloaded_fixture_persists_its_exact_media_root(tmp_path, monkeypatch):
 
     media_root = (tmp_path / "fixture" / "media").resolve()
     recorded = {}
+    executed = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            executed.append((sql, params))
+            return SimpleNamespace(fetchone=lambda: (1,))
 
     def save(config, payload):
         recorded["config"] = config
         recorded["payload"] = payload
 
     monkeypatch.setattr(library_roots, "save_library_root_settings", save)
+    monkeypatch.setattr(
+        library_roots,
+        "load_library_root_settings",
+        lambda _config: {
+            "main_library_roots": [
+                {"id": "functional-core-root", "path": "C:/old", "layout_mode": "artist"}
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        library_roots,
+        "library_root_cache_identity",
+        lambda _config: "current-root-identity",
+    )
     rebased = []
     monkeypatch.setattr(
         isolatedLibraryApp,
         "rebase_preloaded_fixture_paths",
         lambda database_url, root: rebased.append((database_url, root)),
     )
-
     isolatedLibraryApp.persist_preloaded_fixture_library_root(
         "postgresql://fixture",
         media_root,
+        connect=lambda _database_url: Connection(),
     )
 
     assert recorded["config"]["ALBUM_HAVEN_APP_DATABASE_URL"] == "postgresql://fixture"
@@ -178,12 +204,15 @@ def test_preloaded_fixture_persists_its_exact_media_root(tmp_path, monkeypatch):
     assert recorded["payload"] == {
         "main_library_roots": [
             {
-                "id": "isolated-e2e-root",
+                "id": "functional-core-root",
                 "path": str(media_root),
                 "layout_mode": "artist",
             }
         ]
     }
+    assert len(executed) == 1
+    assert "library_root_identity" in executed[0][0]
+    assert executed[0][1] == {"root_identity": "current-root-identity"}
 
 
 def test_preloaded_fixture_rebases_persisted_track_and_cover_paths(tmp_path):
@@ -223,6 +252,7 @@ def test_preloaded_fixture_rebases_persisted_track_and_cover_paths(tmp_path):
     assert "private_path" in connection.operations[1][0].lower()
     assert "left(private_path" in connection.operations[1][0].lower()
     assert "metadata" in connection.operations[2][0].lower()
+    assert "runtime_scan_cache" in connection.operations[2][0].lower()
     assert "update library.local_albums" in connection.operations[3][0].lower()
     assert "left(cover_path" in connection.operations[3][0].lower()
     for _statement, params in connection.operations[1:]:

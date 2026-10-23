@@ -4217,7 +4217,7 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
         'Saved changes to 1 track in “New Album”. Canonical album reconciliation unavailable after persistence committed.',
         'warning',
         8000,
-        { title: 'Tags saved with warning', dismissible: true },
+        { title: 'Tags saved with warning' },
     ],
   ]);
 });
@@ -4292,7 +4292,7 @@ test('watchSaveTask reconciles a provided terminal payload without polling and e
     'Saved changes to 1 track in “Old Album”.',
     'success',
     2000,
-    { title: 'Tags updated', dismissible: false },
+    { title: 'Tags updated' },
   ]]);
   assert.deepEqual(settledClaims, [mutationClaim]);
 });

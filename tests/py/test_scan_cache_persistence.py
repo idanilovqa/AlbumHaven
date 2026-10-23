@@ -3186,6 +3186,47 @@ def test_postgres_scan_cache_metadata_schema_version_survives_inventory_hydratio
     assert library_state["scan_metadata_repair_required"] is False
 
 
+def test_postgres_scan_cache_load_uses_authoritative_private_path():
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    stale_path = "C:/FixtureTemplate/Artist/Album/01.mp3"
+    current_path = "C:/FixtureWork/Artist/Album/01.mp3"
+    connection = FakeConnection(
+        snapshot_rows=[
+            {
+                "scan_cache": {
+                    "library_root_identity": "root-identity",
+                    "last_scan": 5.0,
+                }
+            }
+        ],
+        file_rows=[
+            {
+                "private_path": current_path,
+                "file_entry": {
+                    "path": stale_path,
+                    "album": "Album",
+                    "album_artist": "Artist",
+                    "artist": "Artist",
+                    "title": "Track",
+                },
+            }
+        ],
+    )
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: connection,
+    )
+
+    file_cache, *_metadata = adapter.load_snapshot_strict(
+        Path("must-not-be-read.json"),
+        "root-identity",
+    )
+
+    assert set(file_cache) == {current_path}
+    assert file_cache[current_path]["path"] == current_path
+
+
 def test_postgres_scan_cache_adapter_ignores_mismatched_root_identity(monkeypatch):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter

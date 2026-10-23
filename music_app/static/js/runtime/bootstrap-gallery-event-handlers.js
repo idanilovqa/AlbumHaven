@@ -1961,7 +1961,17 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
 
 function tryRenderOptimisticSidebarArtistSelection(nextView, options = {}) {
   const query = String(state.view?.query || '').trim();
+  const selectedArtist = String(nextView.selected_artist || '').trim();
   const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
+  const selectedAlbums = optimisticGroups?.primaryGroups?.[0]?.albums;
+  const expectedAlbumCount = readSidebarAlbumCount(state.view?.artists_sidebar, selectedArtist);
+  if (
+    query
+    && String(state.view?.selected_artist || '').trim() === selectedArtist
+    && state.view?.search_context?.artist_name_match_artists?.includes(selectedArtist)
+    && Array.isArray(selectedAlbums)
+    && selectedAlbums.length === expectedAlbumCount
+  ) return true;
   const reusableSelectedArtistBrowseView = query
     && (!optimisticGroups || optimisticGroups.skipFetch)
     && typeof getReusableSelectedArtistBrowseView === 'function'

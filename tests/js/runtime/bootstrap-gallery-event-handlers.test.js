@@ -2124,6 +2124,49 @@ test('tree selection preserves search while reconciling a family artist that mat
   assert.equal(calls.pushBrowserViewState[0].selected_artist, 'Neal Morse');
 });
 
+test('exact artist-name search leaves its complete selected gallery mounted', () => {
+  const mountedAlbums = Array.from({ length: 18 }, (_, index) => ({
+    key: `transatlantic-${index + 1}`,
+    preview_only: index >= 12,
+  }));
+  const { context, calls } = createContext();
+  context.state.view = {
+    ...context.state.view,
+    query: 'transatlantic',
+    selected_artist: 'Transatlantic',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    search_context: {
+      selected_artist: 'Transatlantic',
+      selected_artist_source: 'auto_top_match',
+      artist_name_match_artists: ['Transatlantic'],
+    },
+    related_artists: ['Neal Morse'],
+    primary_artist_groups: [{
+      artist: 'Transatlantic',
+      albums: mountedAlbums,
+    }],
+    family_artist_groups: [{
+      artist: 'Neal Morse',
+      albums: [{ key: 'neal-transatlantic-demos' }],
+    }],
+    artist_groups: [],
+    artists_sidebar: [
+      { artist: 'Transatlantic', count: 18 },
+      { artist: 'Neal Morse', count: 1 },
+    ],
+  };
+  const { event } = createSidebarArtistEvent('Transatlantic');
+
+  context.handleSidebarArtistSelectionClick(event);
+
+  assert.equal(context.state.view.primary_artist_groups[0].albums.length, 18);
+  assert.deepEqual(calls.applyViewPayload, []);
+  assert.deepEqual(calls.renderView, []);
+  assert.deepEqual(calls.fetchAndRender, []);
+});
+
 test('handleSidebarArtistSelectionClick ignores a complete cached family view for a content-only search match', () => {
   const cachedSelectedArtistView = {
     query: '',

@@ -119,7 +119,7 @@ test(CASE, { tag: '@area:gallery-search' }, async ({ page, galleryActions, testA
   expect(requests.every(query => new URLSearchParams(query).has('gallery_cursor'))).toBe(true);
   // Compare the additive paged contract to the unchanged full-root API after
   // observing the native journey. This request cannot hydrate the browser view.
-  const fullResponse = await authenticatedPageGet(page, '/view-data?surface=albums');
+  const fullResponse = await authenticatedPageGet(page, '/view-data?surface=albums&payload_tier=full');
   expect(fullResponse.ok()).toBe(true);
   const full = await fullResponse.json();
   expect(initial.album_count).toBe(full.album_count);

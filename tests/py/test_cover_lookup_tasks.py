@@ -887,6 +887,35 @@ def test_persisted_running_snapshot_does_not_reappear_after_runtime_reset(config
     assert list_cover_lookup_tasks(config=config) == []
 
 
+def test_remote_save_transition_replaces_persisted_completed_lookup(config, monkeypatch):
+    persisted_tasks = _install_fake_notification_adapter(monkeypatch, config)
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    task_id, _ = create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
+    update_cover_lookup_task(
+        task_id,
+        config=config,
+        status="completed",
+        progress=100,
+        possible_matches=[{"id": "candidate-1", "url": "https://images.example/cover.jpg"}],
+        job_contract=build_cover_lookup_job_contract("candidate_lookup"),
+    )
+
+    update_cover_lookup_task(
+        task_id,
+        config=config,
+        status="running",
+        progress=92,
+        progress_label="Saving selected cover art...",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    persisted = next(task for task in persisted_tasks if task["id"] == task_id)
+    assert persisted["status"] == "running"
+    assert persisted["job_contract"]["job_kind"] == "save_remote_selection"
+
+
 def test_candidate_lookup_finalizer_cannot_overwrite_successful_remote_save(config, monkeypatch):
     _install_fake_notification_adapter(monkeypatch, config)
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()

@@ -628,7 +628,14 @@ def update_cover_lookup_task(
         task_snapshot = dict(task)
         task_revision = _COVER_LOOKUP_TASK_REVISIONS.get(task_id, 0) + 1
         _COVER_LOOKUP_TASK_REVISIONS[task_id] = task_revision
-    if is_terminal_cover_lookup_task(task_snapshot) or "possible_matches" in changes:
+    if (
+        is_terminal_cover_lookup_task(task_snapshot)
+        or "possible_matches" in changes
+        or (
+            requested_status == "running"
+            and requested_job_kind == "save_remote_selection"
+        )
+    ):
         _save_cover_lookup_notification_task(
             task_snapshot,
             config=config,

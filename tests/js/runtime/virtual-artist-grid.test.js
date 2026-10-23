@@ -5080,6 +5080,68 @@ test('Artist Tree settlement restores the same visible album after reflow virtua
   assert.notEqual(scrollEl.scrollTop, beforeScroll, 'Reflow must adjust scroll rather than keep obsolete row coordinates');
 });
 
+test('Artist Tree settlement measures mounted rows before declaring the original anchor stable', () => {
+  const { virtualGrid } = createResponsiveGalleryScenario(100, 1104, 60);
+  const anchor = { albumKey: 'responsive-29', offsetTop: 40, scrollTop: 2400 };
+  const calls = [];
+  virtualGrid.stabilizeScrollAfterMeasurement = (candidate) => calls.push(['stabilize', candidate]);
+  virtualGrid.render = () => calls.push(['render']);
+  virtualGrid.measureRenderedRows = () => calls.push(['measure']);
+
+  virtualGrid.stabilizeReflowAnchor(anchor);
+
+  assert.deepEqual(calls, [
+    ['stabilize', anchor],
+    ['render'],
+    ['measure'],
+    ['stabilize', anchor],
+  ]);
+});
+
+test('Artist Tree settlement keeps the semantic anchor captured before layout transition', () => {
+  const { virtualGrid } = createResponsiveGalleryScenario(100, 1104, 60);
+  const originalAnchor = { albumKey: 'responsive-29', offsetTop: 71.1875, scrollTop: 2718 };
+  const shiftedAnchor = { albumKey: 'responsive-5', offsetTop: -328.125, scrollTop: 2718 };
+  let visibleAnchor = originalAnchor;
+  let settledAnchor = null;
+  virtualGrid.captureScrollAnchor = () => visibleAnchor;
+  virtualGrid.applyArtistTreeSettlement = (_resizeOptions, anchor) => { settledAnchor = anchor; };
+
+  assert.equal(typeof virtualGrid.onArtistTreeToggleStarting, 'function');
+  virtualGrid.onArtistTreeToggleStarting();
+  visibleAnchor = shiftedAnchor;
+  virtualGrid.onArtistTreeSettled();
+
+  assert.equal(settledAnchor, originalAnchor);
+});
+
+test('Artist Tree reflow anchors the first visible artwork instead of metadata from the prior card', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const metadataOnly = context.createAlbumTitleButton(
+    'metadata-only',
+    { top: -80, bottom: -60 },
+    'artist:all:Previous Artist:0',
+  );
+  const visibleArtwork = context.createAlbumTitleButton(
+    'visible-artwork',
+    { top: 71, bottom: 371 },
+    'artist:all:Visible Artist:0',
+  );
+  const originalClosest = metadataOnly.closest?.bind(metadataOnly);
+  metadataOnly.closest = selector => selector === '.album-card'
+    ? { getBoundingClientRect: () => ({ top: -328, bottom: 56 }) }
+    : originalClosest?.(selector);
+  context.__albumTitleButtons = [metadataOnly, visibleArtwork];
+  let settledAnchor = null;
+  virtualGrid.applyArtistTreeSettlement = (_resizeOptions, anchor) => { settledAnchor = anchor; };
+
+  virtualGrid.onArtistTreeToggleStarting();
+  virtualGrid.onArtistTreeSettled();
+
+  assert.equal(settledAnchor.albumKey, 'visible-artwork');
+});
+
 test('Artist Tree settlement preserves absolute restoration and pending scroll resets', () => {
   const { scrollEl, virtualGrid } = createResponsiveGalleryScenario(100, 1104, 60);
   virtualGrid.captureScrollAnchor = () => ({ scrollTop: 300, offsetTop: 40 });

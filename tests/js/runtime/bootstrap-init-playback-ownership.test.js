@@ -1226,6 +1226,7 @@ test('bootstrap init still queues the embedded sidebar-first hydration request w
 test('bootstrap init completes a fully rendered startup exactly once after paint without hydration', () => {
   const scheduledAnimationFrames = [];
   const completedViews = [];
+  const renderOptions = [];
   let fetchedEndpoint = null;
   const context = {
     window: {
@@ -1265,6 +1266,9 @@ test('bootstrap init completes a fully rendered startup exactly once after paint
       getBootstrap() {
         return {
           partialView: false,
+          startupPreview: {
+            renderedGalleryMarkup: true,
+          },
           startupHydration: {
             required: false,
             endpoint: '/view-data?artist=Broadcast',
@@ -1307,7 +1311,10 @@ test('bootstrap init completes a fully rendered startup exactly once after paint
         completedViews.push(view);
       },
     },
-    renderView() {},
+    rebuildAlbumIndex() {},
+    renderView(options) {
+      renderOptions.push(options);
+    },
     updateStatusIndicator() {},
     renderLibraryLoader() {},
     scheduleBrowserTimeout() {
@@ -1353,6 +1360,9 @@ test('bootstrap init completes a fully rendered startup exactly once after paint
   vm.runInContext(helperSource, context, { filename: helperPath });
 
   assert.equal(fetchedEndpoint, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(renderOptions)), [
+    { preserveMountedGalleryChildren: true },
+  ]);
   assert.equal(completedViews.length, 0);
   assert.equal(scheduledAnimationFrames.length, 1);
 

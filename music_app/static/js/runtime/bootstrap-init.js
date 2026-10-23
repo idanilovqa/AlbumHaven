@@ -151,7 +151,14 @@ if (shouldTreatStartupPreviewAsVisibleReady) {
     ]
     : (Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : []);
   rebuildAlbumIndex(startupPreviewGroups);
-  renderView({ preserveMountedGallery: true });
+  renderView(
+    bootstrap.startupPreview?.renderedGalleryMarkup
+      && !bootstrap.partialView
+      && !startupHydrationRequired
+      && !state.view?.initial_view_partial
+      ? { preserveMountedGalleryChildren: true }
+      : { preserveMountedGallery: true },
+  );
 } else {
   renderView();
 }

@@ -552,6 +552,14 @@ export class GalleryActions {
     return this.galleryPage.artistHeadings.allTextContents();
   }
 
+  async readAppliedPrimaryArtistAlbumNames(artistName) {
+    const projection = await this.galleryPage.readAppliedAlbumTargetProjection({ artist: artistName });
+    return (projection.primary_artist_groups || [])
+      .flatMap((group) => group.albums || [])
+      .map((album) => String(album.name || album.title || '').trim())
+      .filter(Boolean);
+  }
+
   async readArtistHeadingOccurrencesAcrossGallery(options = {}) {
     if (options.expectedArtists !== undefined && (!Array.isArray(options.expectedArtists)
       || !options.expectedArtists.length
@@ -568,13 +576,23 @@ export class GalleryActions {
             return {
               artist: String(heading.textContent || '').trim(),
               sectionKey: String(section?.getAttribute('data-virtual-section-key') || '').trim(),
+              albumNames: Array.from(section?.querySelectorAll(selectors.albumTitleSelector) || [])
+                .map((title) => String(title.textContent || '').trim())
+                .filter(Boolean),
             };
           })
           .filter((entry) => entry.artist && entry.sectionKey)
       ), {
         artistHeadingSelector: this.galleryPage.artistHeadingSelector,
+        albumTitleSelector: this.galleryPage.albumTitleButtonWithinSectionSelector,
       });
-      mounted.forEach((entry) => occurrencesBySection.set(entry.sectionKey, entry));
+      mounted.forEach((entry) => {
+        const existing = occurrencesBySection.get(entry.sectionKey);
+        occurrencesBySection.set(entry.sectionKey, {
+          ...entry,
+          albumNames: [...new Set([...(existing?.albumNames || []), ...entry.albumNames])],
+        });
+      });
     };
 
     let scrollState = await this.readGalleryScrollState();

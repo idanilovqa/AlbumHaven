@@ -265,7 +265,12 @@ def _request_targets_root_albums_surface(query_args: Any, query_raw: str, select
         return False
     if normalize_gallery_scale_percent(query_args.get("gallery_scale_percent")) != DEFAULT_GALLERY_SCALE_PERCENT:
         return False
-    if any(str(value or "").strip() for value in query_args.getlist("category")):
+    requested_categories = [
+        value for value in query_args.getlist("category") if str(value or "").strip()
+    ]
+    if requested_categories and set(normalize_visible_categories(requested_categories, "all")) != set(
+        normalize_visible_categories([], "all")
+    ):
         return False
     if str(query_args.get("family_display") or "").strip():
         return False

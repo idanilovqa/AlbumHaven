@@ -1844,6 +1844,22 @@ def test_root_startup_requests_bounded_first_page_and_preserves_filters(monkeypa
     assert params.getlist("category") == ["local", "missing"]
 
 
+def test_explicit_default_gallery_filters_still_target_root_albums_during_scan():
+    from music_app.routes import web_asgi
+    from starlette.datastructures import QueryParams
+
+    query_params = QueryParams([
+        ("surface", "albums"),
+        ("all_artists", "1"),
+        ("gallery_scope", "all"),
+        ("category", "main_library"),
+        ("category", "hoard"),
+        ("category", "new_arrivals"),
+    ])
+
+    assert web_asgi._request_targets_root_albums_surface(query_params, "", "") is True
+
+
 def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):
     from music_app.routes import web_asgi
     from starlette.datastructures import QueryParams

@@ -53,7 +53,7 @@ test('rarity-edit scenario keeps selectors and interactions in POMs and actions'
   );
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|\.route\s*\(/);
   assert.match(pom, /class TagEditor extends BasePage/);
-  assert.match(pom, /select\[data-tag-field="exception_type"\]/);
+  assert.match(pom, /input\[data-tag-field="exception_type"\]/);
   assert.match(actions, /class TagEditorActions/);
   assert.match(actions, /\/utilities\/edit-tags/);
   assert.match(actions, /utilities\\\/save-task\\\//);

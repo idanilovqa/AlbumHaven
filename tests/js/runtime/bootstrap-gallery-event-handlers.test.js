@@ -1405,6 +1405,25 @@ test('library-home navigation clears active search state before opening All arti
   assert.deepEqual(calls.buildApiUrlOptions.at(-1), {});
 });
 
+test('library-home navigation opens Home on mobile instead of All artists', () => {
+  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  context.usesMobilePageLayout = () => true;
+  context.state.view.query = 'slow search';
+  context.state.view.selected_artist = 'The Flower Kings';
+  context.state.view.all_artists_active = false;
+
+  const { event, wasPrevented } = createAllArtistsEvent({ libraryHome: true });
+  context.handleGalleryBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.equal(context.document.getElementById('search-input').value, '');
+  assert.equal(calls.buildApiUrl.at(-1).surface.active, 'home');
+  assert.equal(calls.buildApiUrl.at(-1).surface_request, 'home');
+  assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
+  assert.equal(calls.buildApiUrl.at(-1).all_artists_active, false);
+  assert.equal(calls.fetchAndRender.at(-1).url, '/home-data');
+});
+
 test('library-home cached root refresh requests an authoritative Artist Tree', () => {
   const cachedRootView = {
     query: '',

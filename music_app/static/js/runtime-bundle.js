@@ -41981,6 +41981,11 @@ function handleGalleryBootstrapClick(event) {
   if (allArtistsLink) {
     event.preventDefault();
     const isLibraryHome = allArtistsLink.getAttribute?.('data-library-home') === '1';
+    const opensMobileHome = Boolean(
+      isLibraryHome
+      && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout()
+    );
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -41993,6 +41998,7 @@ function handleGalleryBootstrapClick(event) {
     ).trim().toLowerCase();
     const alreadyAtLibraryHome = Boolean(
       isLibraryHome
+      && !opensMobileHome
       && currentSurface === 'albums'
       && !String(state.view?.query || '').trim()
       && !String(state.view?.selected_artist || '').trim()
@@ -42052,9 +42058,16 @@ function handleGalleryBootstrapClick(event) {
     closeArtistsDrawer({ restoreFocus: false });
     const nextView = {
       ...state.view,
+      ...(opensMobileHome ? {
+        surface: {
+          ...(state.view?.surface || {}),
+          active: 'home',
+        },
+        surface_request: 'home',
+      } : {}),
       query: activeSearchQuery,
       selected_artist: '',
-      all_artists_active: true,
+      all_artists_active: !opensMobileHome,
       related_filter_artists: [],
       primary_filter_active: false,
       ...(isLibraryHome ? { search_context: null } : {}),
@@ -42062,8 +42075,8 @@ function handleGalleryBootstrapClick(event) {
     state.gallery.sidebarArtistsOverride = null;
     state.gallery.sidebarShowAllArtistsOverride = null;
     state.ui.pendingSidebarSelectedArtist = '';
-    state.ui.pendingSidebarAllArtistsActive = true;
-    const reusableRootBrowseView = typeof getReusableRootBrowseView === 'function'
+    state.ui.pendingSidebarAllArtistsActive = !opensMobileHome;
+    const reusableRootBrowseView = !opensMobileHome && typeof getReusableRootBrowseView === 'function'
       ? getReusableRootBrowseView(nextView)
       : null;
     if (reusableRootBrowseView) {

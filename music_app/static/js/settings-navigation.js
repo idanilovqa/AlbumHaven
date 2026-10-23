@@ -116,12 +116,14 @@
     };
     const reconcileNav = (incoming, url) => {
       closeDrawer(false);
-      const incomingUser = incoming.querySelector('[data-settings-section="users"]');
-      const currentUser = nav.querySelector('[data-settings-section="users"]');
-      if (currentUser && !incomingUser) currentUser.remove();
-      else if (!currentUser && incomingUser) {
-        const account = nav.querySelector('[data-settings-section="account"]');
-        account?.before(incomingUser.cloneNode(true));
+      for (const section of ['users', 'server']) {
+        const incomingItem = incoming.querySelector(`[data-settings-section="${section}"]`);
+        const currentItem = nav.querySelector(`[data-settings-section="${section}"]`);
+        if (currentItem && !incomingItem) currentItem.remove();
+        else if (!currentItem && incomingItem) {
+          const account = nav.querySelector('[data-settings-section="account"]');
+          account?.before(incomingItem.cloneNode(true));
+        }
       }
       const token = incoming.querySelector('[name="csrf_token"]');
       const currentToken = nav.querySelector('[name="csrf_token"]');

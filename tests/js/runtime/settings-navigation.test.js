@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const sourcePath = path.join(__dirname, '../../../music_app/static/js/settings-navigation.js');
 
-function harness({ library = false, initialPath = '/admin/members' } = {}) {
+function harness({ library = false, initialPath = '/admin/members', initialServer = true, width = 1440 } = {}) {
   const listeners = new Map();
   const attributes = (values = {}) => ({
     values, hidden: false, children: [], childNodes: [], style: {}, dataset: {},
@@ -31,7 +31,16 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
   server.dataset.settingsSection = 'server';
   account.dataset.settingsSection = 'account';
   const nav = attributes();
-  nav.querySelectorAll = () => [users, server, account];
+  const navItems = [users, ...(initialServer ? [server] : []), account];
+  nav.querySelectorAll = () => navItems;
+  nav.querySelector = (selector) => ({
+    '[data-settings-section="users"]': users,
+    '[data-settings-section="server"]': navItems.includes(server) ? server : null,
+    '[data-settings-section="account"]': account,
+  })[selector] || null;
+  account.before = (node) => {
+    if (!navItems.includes(node)) navItems.splice(navItems.indexOf(account), 0, node);
+  };
   const outlet = attributes();
   outlet.innerHTML = 'initial';
   outlet.querySelector = selector => (
@@ -68,7 +77,7 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
   const galleryPops = [];
   let serverMounts = 0;
   const window = {
-    document, location, URL, AbortController,
+    document, location, URL, AbortController, innerWidth: width,
     history: {
       get state() { return historyEntries[historyIndex].state; },
       pushState(state, title, url) {
@@ -115,11 +124,17 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
       content.innerHTML = html;
       content.children = [{ textContent: html }];
       content.childNodes = content.children;
+      const incomingNav = attributes();
+      incomingNav.querySelector = (selector) => ({
+        '[data-settings-section="users"]': users,
+        '[data-settings-section="server"]': server,
+        '[data-settings-section="account"]': account,
+      })[selector] || null;
       const parsedHost = attributes();
-      parsedHost.querySelector = (selector) => selector === '[data-settings-outlet]' ? content : selector === '[data-settings-nav]' ? nav : null;
+      parsedHost.querySelector = (selector) => selector === '[data-settings-outlet]' ? content : selector === '[data-settings-nav]' ? incomingNav : null;
       return {
         title: html,
-        querySelector(selector) { return ({ '[data-settings-host]': parsedHost, '[data-settings-outlet]': content, '[data-settings-nav]': nav })[selector] || null; },
+        querySelector(selector) { return ({ '[data-settings-host]': parsedHost, '[data-settings-outlet]': content, '[data-settings-nav]': incomingNav })[selector] || null; },
         querySelectorAll() { return []; },
       };
     }
@@ -160,6 +175,18 @@ test('server settings stays in the shared shell and mounts its controller', asyn
   assert.equal(await app.navigation.navigate('/admin/server'), true);
   assert.equal(app.server.getAttribute('aria-current'), 'page');
   assert.equal(app.serverMounts(), 1);
+});
+
+test('mobile Admin navigation adds the authorized Server link missing from the library shell', async () => {
+  const app = harness({ library: true, initialPath: '/', initialServer: false, width: 390 });
+  app.respond('Users', 'http://localhost:5000/admin/members');
+
+  assert.equal(await app.navigation.navigate('/admin/members'), true);
+  assert.equal(app.nav.querySelector('[data-settings-section="server"]'), app.server);
+  assert.deepEqual(
+    app.nav.querySelectorAll().map(item => item.dataset.settingsSection),
+    ['users', 'server', 'account'],
+  );
 });
 
 test('external, logout, API and unrelated routes are not fetched as settings content', async () => {

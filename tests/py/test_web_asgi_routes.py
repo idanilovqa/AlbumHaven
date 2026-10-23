@@ -788,6 +788,38 @@ def test_asgi_refresh_api_preserves_incremental_and_full_rescan_modes(
     assert asgi_app.state.library_state.get("rescan_ignore_existing_cache") is full_rescan
 
 
+def test_asgi_full_rescan_acknowledges_without_hydrating_legacy_runtime_albums(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "hydrate_library_state_for_config",
+        lambda *args, **kwargs: pytest.fail("full rescan route must not hydrate synchronously"),
+    )
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "start_background_refresh_for_state",
+        lambda *args, **kwargs: True,
+    )
+
+    asgi_app = _make_asgi_app()
+    asgi_app.state.library_state["albums"] = []
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/refresh-api",
+        json_body={"full_rescan": True},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {"ok": True, "full_rescan": True}
+
+
 def test_asgi_refresh_api_rejects_duplicate_full_rescan_without_resetting_active_progress(
     app,
     monkeypatch,

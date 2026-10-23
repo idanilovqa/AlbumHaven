@@ -1188,12 +1188,6 @@ async def refresh_api(request: Request) -> JSONResponse:
     full_rescan = bool(payload.get("full_rescan"))
     accepted_state_updates: dict[str, object] = {}
     if full_rescan:
-        if not library_state.get("albums"):
-            state_service.hydrate_library_state_for_config(
-                library_state,
-                config,
-                logger_for_prewarm=route_logger,
-            )
         accepted_state_updates = {
             "rescan_ignore_existing_cache": True,
             "scan_processed": 0,

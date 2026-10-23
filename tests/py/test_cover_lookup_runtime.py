@@ -381,7 +381,9 @@ def test_queue_cover_lookup_task_registers_background_future(config, logger, lib
     monkeypatch.setattr(
         cover_lookup_runtime,
         "register_cover_lookup_future",
-        lambda task_id, future: calls.setdefault("registered", (task_id, future)),
+        lambda task_id, future, **_kwargs: calls.setdefault(
+            "registered", (task_id, future)
+        ),
     )
 
     task_id = cover_lookup_runtime.queue_cover_lookup_task(
@@ -491,7 +493,11 @@ def test_queued_fifth_cover_lookup_gets_full_provider_budget_after_worker_satura
         "create_cover_lookup_task",
         lambda *_args, **_kwargs: ("task-fifth", Event()),
     )
-    monkeypatch.setattr(cover_lookup_runtime, "register_cover_lookup_future", lambda *_args: None)
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "register_cover_lookup_future",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(
         cover_lookup_runtime,
         "build_cover_lookup_provider_deadline_at",
@@ -553,7 +559,9 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
     monkeypatch.setattr(
         cover_lookup_runtime,
         "register_cover_lookup_future",
-        lambda task_id, future: calls.setdefault("registered", (task_id, future)),
+        lambda task_id, future, **_kwargs: calls.setdefault(
+            "registered", (task_id, future)
+        ),
     )
 
     cover_lookup_runtime.queue_cover_lookup_save_remote_task(
@@ -1593,6 +1601,7 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
     requested_track_paths = {str(track_path)}
     cancel_event = Event()
     updates: list[dict[str, object]] = []
+    candidate_publication_counts: list[int] = []
     candidate = {
         "id": "apple-before-deadline",
         "url": "https://images.example/apple-before-deadline.jpg",
@@ -1624,6 +1633,13 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
             assert callable(should_cancel)
             if callable(on_candidates):
                 on_candidates([candidate])
+                candidate_publication_counts.append(
+                    sum(update.get("possible_matches") == [candidate] for update in updates)
+                )
+                on_candidates([candidate])
+                candidate_publication_counts.append(
+                    sum(update.get("possible_matches") == [candidate] for update in updates)
+                )
             while not should_cancel():
                 time.sleep(0.005)
             time.sleep(0.05)
@@ -1679,6 +1695,7 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
         manual_urls=[],
     )
 
+    assert candidate_publication_counts == [1, 1]
     completed = updates[-1]
     assert completed["status"] == "completed"
     assert completed["result_kind"] == "possible-matches"
@@ -2258,6 +2275,7 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
         "changes": {
             "cover_path": None,
             "cover_selection_origin": "user",
+            "explicit_selection": True,
             "remote_cover_url": "https://images.example/cover.jpg",
             "remote_cover_thumbnail_url": "https://images.example/thumb.jpg",
             "remote_cover_source": "spotify",
@@ -2588,6 +2606,7 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
         "changes": {
             "cover_path": written_cover,
             "cover_selection_origin": "user",
+            "explicit_selection": True,
             "remote_cover_url": None,
             "remote_cover_thumbnail_url": None,
             "remote_cover_source": None,

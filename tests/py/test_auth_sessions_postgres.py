@@ -413,11 +413,30 @@ def test_resolve_below_activity_threshold_does_not_write(sessions):
         last_seen_at=NOW - timedelta(minutes=4, seconds=59)
     ),))
     assert _service(sessions, connection).resolve_session(RAW_TOKEN).account_id == 41
-    assert not any(item.startswith("update app.account_sessions") for item in _sql(connection))
+    sql = _sql(connection)
+    assert len(sql) == 1
+    assert "session_token_hash" in sql[0]
+    assert "for update" not in sql[0]
+    assert "from app.accounts" not in sql[0]
+    assert not any(item.startswith("update app.account_sessions") for item in sql)
+
+
+def test_resolve_with_caller_connection_uses_no_nested_transaction(sessions):
+    connection = RecordingConnection(session_rows=(_resolved_row(
+        last_seen_at=NOW - timedelta(minutes=4, seconds=59)
+    ),))
+
+    result = _service(sessions, connection).resolve_session(
+        RAW_TOKEN,
+        connection=connection,
+    )
+
+    assert result.account_id == 41
+    assert connection.events == []
 
 
 @pytest.mark.parametrize("method", ["resolve_session", "revoke_current"])
-def test_digest_operations_discover_then_lock_account_before_session(sessions, method):
+def test_writing_digest_operations_discover_then_lock_account_before_session(sessions, method):
     connection = RecordingConnection(session_rows=(_resolved_row(),))
     getattr(_service(sessions, connection), method)(RAW_TOKEN)
 

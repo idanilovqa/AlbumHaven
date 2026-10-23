@@ -11,6 +11,7 @@ from config import Config
 from music_app.services import cover_provider_http, cover_provider_matching
 from music_app.services import music_identity_matching
 from music_app.services.app_logging import log_app_event
+from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget_active
 from music_app.services.cover_provider_candidates import (
     CoverCandidate,
     dedupe_cover_candidates,
@@ -880,6 +881,7 @@ def collect_apple_matches(
     user_agent: str,
     *,
     enforce_year: bool,
+    api_only: bool = False,
     stop_on_sufficient: bool = True,
     http_get_json: HttpGetJson | None = None,
     http_get_text: HttpGetText | None = None,
@@ -898,6 +900,10 @@ def collect_apple_matches(
     query = urllib.parse.quote(query_text)
     url = _apple_api_url(f"search?term={query}&entity=album&limit=20")
     data = getter(url, user_agent, service="apple", context=f"search:{query_text}")
+    if automatic_cover_budget_active() and data is not None and (
+        not isinstance(data, dict) or not isinstance(data.get("results"), list)
+    ):
+        raise AutomaticCoverSearchFailed()
     if _canceled(should_cancel):
         return [], []
     if not data:
@@ -936,6 +942,8 @@ def collect_apple_matches(
             matches.append((score, api_candidate_url, {**item, "variant": "api-artwork"}))
     scored_results.sort(key=lambda item: item[0], reverse=True)
     deduped_api_matches = dedupe_apple_matches(matches)
+    if api_only:
+        return deduped_api_matches, [item for item in raw_results if isinstance(item, dict)]
     for score, api_candidate_url, item in deduped_api_matches[:2]:
         if _canceled(should_cancel):
             break
@@ -1090,6 +1098,8 @@ def search_apple(
     user_agent: str,
     *,
     allow_web_fallback: bool,
+    api_only: bool = False,
+    max_queries: int | None = None,
     should_cancel: ShouldCancel | None = None,
     build_query_variants: QueryVariants,
     match_score: MatchScore,
@@ -1120,6 +1130,7 @@ def search_apple(
             *,
             enforce_year: bool,
             stop_on_sufficient: bool = True,
+            api_only: bool = False,
         ) -> tuple[list[tuple[float, str, dict]], list[dict]]:
             return collect_apple_matches(
                 query_text,
@@ -1129,6 +1140,7 @@ def search_apple(
                 year,
                 user_agent,
                 enforce_year=enforce_year,
+                api_only=api_only,
                 stop_on_sufficient=stop_on_sufficient,
                 http_get_json=http_get_json,
                 http_get_text=http_get_text,
@@ -1203,19 +1215,22 @@ def search_apple(
     for query_artist, query_album, query_edition, query_year in build_query_variants(artist, album, edition, year):
         if _canceled(should_cancel):
             break
-        for query_text, query_mode, enforce_year in _build_search_queries(
+        queries = _build_search_queries(
             query_artist,
             query_album,
             query_edition,
             query_year,
             native_artist=artist,
             native_album=album,
-        ):
+        )
+        for query_text, query_mode, enforce_year in (queries[:1] if api_only else queries):
             if _canceled(should_cancel):
                 break
             normalized_query = " ".join(query_text.split()).strip()
             if not normalized_query or normalized_query in seen_queries:
                 continue
+            if max_queries is not None and len(seen_queries) >= max_queries:
+                return None
             seen_queries.add(normalized_query)
             matches, raw_results = collect_matches(
                 normalized_query,
@@ -1226,6 +1241,7 @@ def search_apple(
                 user_agent,
                 enforce_year=enforce_year,
                 stop_on_sufficient=True,
+                **({"api_only": True} if api_only else {}),
             )
             if _canceled(should_cancel):
                 return None
@@ -1243,6 +1259,8 @@ def search_apple(
                 if best_candidate:
                     return best_candidate
             log_miss(artist, album, year, matches, query_mode, raw_results, parse_year=parse_year, log_event=log_event, logger=logger)
+            if api_only:
+                continue
             artist_lookup_matches, artist_lookup_raw_results = collect_artist_lookup_matches(
                 query_artist,
                 artist,

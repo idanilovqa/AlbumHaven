@@ -6,7 +6,13 @@ import ssl
 import urllib.error
 from types import SimpleNamespace
 
+import pytest
+
 from music_app.services import cover_provider_http
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverSearchFailed,
+    automatic_cover_budget,
+)
 
 
 class FakeLogger:
@@ -15,6 +21,67 @@ class FakeLogger:
 
     def verbose(self, *args, **kwargs) -> None:
         self.verbose_calls.append((args, kwargs))
+
+
+@pytest.mark.parametrize("context", ["search:Album", "artist-search:Artist", "artist-id-search:Artist", "artist-lookup:Artist:123"])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 410])
+def test_automatic_apple_api_client_errors_are_failures(monkeypatch, context, status):
+    def fail(*_args, **_kwargs):
+        raise urllib.error.HTTPError("https://apple-api.test/search", status, "error", {}, None)
+
+    monkeypatch.setattr(cover_provider_http.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(cover_provider_http, "_http_ssl_context", lambda: None)
+    with automatic_cover_budget(2.0), pytest.raises(AutomaticCoverSearchFailed):
+        cover_provider_http._http_get_json(
+            "https://apple-api.test/search", "Tests/1.0", service="apple", context=context,
+        )
+
+
+@pytest.mark.parametrize("service,context", [("deezer", "probe:album:Artist - Album"), ("bandcamp", "account-home:https://guessed.bandcamp.com")])
+@pytest.mark.parametrize("status", [401, 403])
+def test_automatic_denied_cover_requests_are_failures(monkeypatch, service, context, status):
+    def fail(*_args, **_kwargs):
+        raise urllib.error.HTTPError("https://provider.test/cover", status, "denied", {}, None)
+
+    monkeypatch.setattr(cover_provider_http.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(cover_provider_http, "_http_ssl_context", lambda: None)
+    with automatic_cover_budget(2.0), pytest.raises(AutomaticCoverSearchFailed):
+        cover_provider_http._http_get_bytes(
+            "https://provider.test/cover", "Tests/1.0", service=service, context=context,
+        )
+
+
+@pytest.mark.parametrize("service,context", [
+    ("bandcamp", "account-home:https://guessed.bandcamp.com"),
+    ("bandcamp", "account-artists:https://guessed.bandcamp.com"),
+    ("apple", "probe:api-sufficiency:Artist - Album"),
+    ("apple", "album-page-discovery:https://music.apple.com/album/123"),
+    ("deezer", "probe:album:Artist - Album"),
+])
+@pytest.mark.parametrize("status", [404, 410])
+def test_automatic_discovery_and_artwork_misses_stay_empty(monkeypatch, service, context, status):
+    def fail(*_args, **_kwargs):
+        raise urllib.error.HTTPError("https://provider.test/missing", status, "missing", {}, None)
+
+    monkeypatch.setattr(cover_provider_http.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(cover_provider_http, "_http_ssl_context", lambda: None)
+    with automatic_cover_budget(2.0):
+        assert cover_provider_http._http_get_bytes(
+            "https://provider.test/missing", "Tests/1.0", service=service, context=context,
+        ) is None
+
+
+@pytest.mark.parametrize("service,context", [("apple", "search:Album"), ("deezer", "probe:album:Artist - Album"), ("bandcamp", "manual-album:https://artist.bandcamp.com/album/123")])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 410])
+def test_manual_client_errors_keep_existing_empty_result(monkeypatch, service, context, status):
+    def fail(*_args, **_kwargs):
+        raise urllib.error.HTTPError("https://provider.test/missing", status, "error", {}, None)
+
+    monkeypatch.setattr(cover_provider_http.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(cover_provider_http, "_http_ssl_context", lambda: None)
+    assert cover_provider_http._http_get_bytes(
+        "https://provider.test/missing", "Tests/1.0", service=service, context=context,
+    ) is None
 
 
 def test_http_get_bytes_uses_ssl_context(monkeypatch):

@@ -45,6 +45,7 @@ body {
 }
 .sidebar h2 { margin: 0 0 10px; font-size: 1rem; }
 .artist-list { display: flex; flex-direction: column; gap: 6px; }
+.sidebar-virtual-spacer { flex: 0 0 auto; width: 1px; pointer-events: none; }
 .artist-link {
   display: flex;
   justify-content: space-between;
@@ -64,6 +65,12 @@ body {
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.2;
+}
+.artist-list[data-sidebar-virtualized='true'] .artist-link { height: 41px; }
+.artist-list[data-sidebar-virtualized='true'] .artist-link .artist-name-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .artist-link:hover, .artist-link.active { background: var(--panel); border-color: var(--border); }
 .artist-count { color: var(--muted); font-size: 0.9rem; flex: 0 0 auto; white-space: nowrap; align-self: flex-start; }

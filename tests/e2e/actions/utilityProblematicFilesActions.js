@@ -37,6 +37,44 @@ export class UtilityProblematicFilesActions {
     });
   }
 
+  async waitForFirstVisible(options = {}) {
+    await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
+      const modal = document.querySelector(expected.modalSelector);
+      const visible = (element) => {
+        if (!element || !modal?.contains(element)) return false;
+        for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+          const style = getComputedStyle(ancestor);
+          if (ancestor.hidden || style.display === 'none' || style.visibility === 'hidden'
+            || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+        }
+        const rect = element.getBoundingClientRect();
+        const left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
+        const top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
+        if (right <= left || bottom <= top) return false;
+        const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+        return Boolean(hit && element.contains(hit));
+      };
+      const activeTab = modal?.querySelector(expected.activeTabSelector);
+      if (!visible(activeTab) || activeTab.getAttribute('data-utility-tab') !== 'problematic-files') return false;
+      const hasVisibleItem = Array.from(modal.querySelectorAll(expected.listItemSelector)).some(visible);
+      const selected = modal.querySelector(expected.activeListItemSelector);
+      const title = modal.querySelector(expected.detailTitleSelector);
+      if (hasVisibleItem && visible(selected) && visible(title) && String(title.textContent || '').trim()) return true;
+      if (expected.requirePopulated || (typeof state !== 'undefined' && state.utility?.loading)) return false;
+      return visible(modal.querySelector(expected.listEmptyStateSelector))
+        && visible(modal.querySelector(expected.detailEmptyStateSelector));
+    }, { timeout: options.timeout || 60000 }, {
+      requirePopulated: Boolean(options.requirePopulated),
+      modalSelector: this.utilityProblematicFilesTab.modalSelector,
+      activeTabSelector: this.utilityProblematicFilesTab.activeTabSelector,
+      listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
+      activeListItemSelector: this.utilityProblematicFilesTab.activeListItemSelector,
+      detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
+      listEmptyStateSelector: this.utilityProblematicFilesTab.listEmptyStateSelector,
+      detailEmptyStateSelector: this.utilityProblematicFilesTab.detailEmptyStateSelector,
+    });
+  }
+
   async expectCoreLayoutVisible(options = {}) {
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.sidebar.search);
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.searchSection.searchInput);

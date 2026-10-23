@@ -1,3 +1,4 @@
+import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
 import { expect, test } from '../support/performanceFixtures.js';
 
 import {
@@ -8,6 +9,8 @@ import {
   measureProblematicFilesSettingsOpenWithNetworkEvidence,
   partitionProblematicFilesRuntimeLogs,
   performanceTimingBudget,
+  readCompletedResponseDurationMs,
+  summarizeProblematicFilesDiagnostics,
 } from '../helpers/index.js';
 
 const CASE_ID = 'FTC-UTIL-PROBLEMS-010';
@@ -44,6 +47,11 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
           timeout: 120000,
           summaryPathname: SUMMARY_PATHNAME,
           detailPathname: DETAIL_PATHNAME,
+          onFirstVisible: (elapsed) => problematicFilesFocusedLocalReport.recordTextCheckpoint({
+            key: 'problematic-files-first-visible-observed',
+            label: 'Problematic Files first visible populated detail (diagnostic)',
+            valueText: `${elapsed} ms from the Settings click boundary`,
+          }),
         },
       )
     ));
@@ -51,11 +59,15 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       coverPreemptionWindow,
       detailRequestCount,
       readyMs,
+      firstVisibleMs,
       summaryResponse,
       viewPreemptionWindow,
     } = networkEvidence;
     expect(summaryResponse.ok()).toBe(true);
     const summary = await summaryResponse.json();
+    assertCompactProblematicSummary(summary);
+    assertCompactProblematicSummary(await networkEvidence.completeSummaryResponse.json());
+    expect(networkEvidence.summaryRequestCount, 'One bounded summary and one complete summary only').toBe(2);
     const firstSummary = summary.items[0];
     const detail = summary.initial_detail;
     let readinessOutcome;
@@ -89,6 +101,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       timingMs: readyMs,
       details: {
         phase: 'focused_utility_problematic_files',
+        firstVisibleMs,
         problematicItemCount: summary.items.length,
         firstSummaryDetailLoaded: firstSummary.detail_loaded,
         initialDetailKey: detail.key,
@@ -96,12 +109,17 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         readyTargetMs: READY_TARGET_MS,
         readyGraceMs: READY_GRACE_MS,
         readyHardCeilingMs: READY_TARGET_MS + READY_GRACE_MS,
-        readinessGraceUsed: readyMs > READY_TARGET_MS,
+        readinessGraceUsed: readinessOutcome.graceUsed,
         readinessPerformanceStatus: readinessOutcome.status,
         persistenceBackend: summary.persistence_backend,
         persistenceSeam: summary.persistence_seam,
         viewDataSource: summary.view_data_source,
       },
+    });
+    problematicFilesFocusedLocalReport.recordTextCheckpoint({
+      key: 'problematic-files-first-visible',
+      label: 'Problematic Files first visible populated detail (diagnostic)',
+      valueText: `${firstVisibleMs} ms from the same Settings click boundary; full readiness ${readyMs} ms`,
     });
     problematicFilesFocusedLocalReport.recordTextCheckpoint({
       key: 'problematic-files-focused-readiness-contract',
@@ -111,7 +129,18 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         readinessOutcome,
       ),
     });
+    const loadDiagnostics = await utilityProblematicFilesActions.readLoadDiagnostics();
+    problematicFilesFocusedLocalReport.recordTextCheckpoint({
+      key: 'problematic-files-load-diagnostics',
+      label: 'Problematic Files request, parse, state, and render timings',
+      valueText: summarizeProblematicFilesDiagnostics(loadDiagnostics),
+    });
     const focusedMetrics = {
+      firstVisibleMs,
+      boundedResponseMs: await readCompletedResponseDurationMs(summaryResponse),
+      completeResponseMs: await readCompletedResponseDurationMs(networkEvidence.completeSummaryResponse),
+      summaryRequestCount: networkEvidence.summaryRequestCount,
+      loadDiagnostics,
       problematicFilesApiMs: readyMs,
       problematicItemCount: summary.items.length,
       firstSummaryDetailLoaded: firstSummary.detail_loaded,
@@ -120,7 +149,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       readyTargetMs: READY_TARGET_MS,
       readyGraceMs: READY_GRACE_MS,
       readyHardCeilingMs: READY_TARGET_MS + READY_GRACE_MS,
-      readinessGraceUsed: readyMs > READY_TARGET_MS,
+      readinessGraceUsed: readinessOutcome.graceUsed,
       readinessPerformanceStatus: readinessOutcome.status,
       readinessTargetMet: readinessOutcome.targetMet,
       persistenceBackend: summary.persistence_backend,

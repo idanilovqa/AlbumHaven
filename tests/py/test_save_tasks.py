@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from music_app.services import save_tasks as save_tasks_module
+from music_app.services.edit_tag_timings import EditTagTimingRecorder
 from music_app.services.save_tasks import (
     create_save_task,
     finalize_save_task,
@@ -40,6 +41,37 @@ def _logger_stub() -> SimpleNamespace:
     )
 
 
+def test_structural_completion_lookup_is_private_and_time_scoped():
+    task_id = create_save_task("edit-tags")
+    resource_keys = {
+        "album:ovderhead::telepathic minds",
+        "path:c:\\music\\ovderhead\\telepathic minds\\05.mp3",
+    }
+    save_tasks_module.update_save_task(
+        task_id,
+        status="completed",
+        destination_album_id=24674,
+        destination_album_key="overhead::telepathic minds",
+        destination_artist="Overhead",
+        _structural_resource_keys=frozenset(resource_keys),
+        _structural_completed_monotonic=12.5,
+    )
+
+    assert save_tasks_module.latest_structural_tag_edit_destination(
+        resource_keys,
+        completed_after_monotonic=12.0,
+    ) == {
+        "destination_album_id": 24674,
+        "destination_album_key": "overhead::telepathic minds",
+        "destination_artist": "Overhead",
+    }
+    assert save_tasks_module.latest_structural_tag_edit_destination(
+        resource_keys,
+        completed_after_monotonic=13.0,
+    ) is None
+    assert not any(key.startswith("_") for key in save_task_result(task_id))
+
+
 def _durable_save_finalize_kwargs(
     tmp_path: Path,
     *,
@@ -67,6 +99,27 @@ def _durable_save_finalize_kwargs(
     }
 
 
+def test_finalize_save_task_only_requires_relation_state_for_relation_fields(tmp_path):
+    persistence: Future[dict[str, object]] = Future()
+    persistence.set_result({})
+    task_id = create_save_task("edit-tags")
+    finalize_kwargs = _durable_save_finalize_kwargs(
+        tmp_path,
+        schedule_cache_updates_save=lambda *_args, **_kwargs: persistence,
+    )
+    finalize_kwargs.update(
+        changed_field_names={"album", "year"},
+        structural_edit_fields={"album", "year"},
+    )
+
+    finalize_save_task(task_id, **finalize_kwargs)
+
+    payload = save_task_result(task_id)
+    assert payload["status"] == "completed"
+    assert payload["requires_view_refresh"] is True
+    assert "warnings" not in payload
+
+
 def test_create_save_task_returns_pending_payload():
     task_id = create_save_task("repair-tags")
 
@@ -76,6 +129,27 @@ def test_create_save_task_returns_pending_payload():
     assert payload["kind"] == "repair-tags"
     assert payload["status"] == "pending"
     assert payload["created_at"]
+
+
+def test_finalize_save_task_preserves_edit_tag_phase_timings(tmp_path):
+    persistence: Future[None] = Future()
+    persistence.set_result(None)
+    task_id = create_save_task("edit-tags")
+    timing_recorder = EditTagTimingRecorder(task_id)
+    timing_recorder.record("media_writes", 12.5)
+
+    finalize_save_task(
+        task_id,
+        **_durable_save_finalize_kwargs(
+            tmp_path,
+            schedule_cache_updates_save=lambda *_args, **_kwargs: persistence,
+        ),
+        timing_recorder=timing_recorder,
+    )
+
+    payload = save_task_result(task_id)
+    assert payload["status"] == "completed"
+    assert payload["phase_timings_ms"]["media_writes"] == 12.5
 
 
 def test_queue_finalize_save_task_can_complete_inline_before_return(tmp_path):
@@ -99,6 +173,29 @@ def test_queue_finalize_save_task_can_complete_inline_before_return(tmp_path):
 
     assert observed == ["persisted"]
     assert save_task_result(task_id)["status"] == "completed"
+
+
+def test_finalize_save_task_accepts_stale_relation_projection_after_commit(tmp_path):
+    task_id = create_save_task("edit-tags")
+    persistence = Future()
+    persistence.set_result(
+        {
+            "projection_mode": "stale",
+            "rebuild_reason": "structural_tag_edit_requires_full_projection",
+        }
+    )
+
+    finalize_save_task(
+        task_id,
+        **_durable_save_finalize_kwargs(
+            tmp_path,
+            schedule_cache_updates_save=lambda *_args, **_kwargs: persistence,
+        ),
+    )
+
+    terminal_task = save_task_result(task_id)
+    assert terminal_task["status"] == "completed"
+    assert "warnings" not in terminal_task
 
 
 def test_queue_finalize_save_task_inline_exposes_commit_failure_before_return(tmp_path):
@@ -1349,6 +1446,46 @@ def test_structural_tag_edit_save_task_completes_only_after_targeted_commit(tmp_
     assert "warnings" not in terminal_task
 
 
+def test_structural_tag_edit_schedules_stale_projection_rebuild_after_commit(tmp_path):
+    task_id = create_save_task("edit-tags")
+    scheduled: list[str] = []
+
+    finalize_structural_tag_edit_save_task(
+        task_id,
+        config=_explicit_config(tmp_path),
+        logger=_logger_stub(),
+        get_state=lambda: {"albums": [], "file_cache": {}},
+        rebuild_affected_albums_in_state=lambda *_args, **_kwargs: None,
+        persist_structural_tag_edit=lambda **_kwargs: {
+            "album_rows_updated": 1,
+            "projection_mode": "stale",
+            "rebuild_reason": "structural_tag_edit_requires_full_projection",
+        },
+        schedule_relation_projection_rebuild=scheduled.append,
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        find_albums_by_track_paths=lambda _paths: [],
+        find_problematic_album_by_track_paths=lambda _paths: None,
+        updated_file_cache={
+            "track-1.mp3": {"path": "track-1.mp3", "artist": "Overhead"},
+        },
+        previous_file_cache={
+            "track-1.mp3": {"path": "track-1.mp3", "artist": "Ovderhead"},
+        },
+        changed_paths={"track-1.mp3"},
+        requested_track_paths={"track-1.mp3"},
+        separate_release_keys=set(),
+        changed_field_names={"artist"},
+        structural_edit_fields={"artist"},
+        log_entry={"action": "Tags edited"},
+    )
+
+    assert scheduled == ["structural_tag_edit_requires_full_projection"]
+    terminal_task = save_task_result(task_id)
+    assert terminal_task["status"] == "completed"
+    assert "warnings" not in terminal_task
+
+
 def test_structural_year_edit_publishes_committed_separate_release_key_before_rebuild(
     tmp_path,
 ):
@@ -1490,6 +1627,15 @@ def test_structural_tag_edit_runtime_refresh_preserves_cover_selected_after_comm
 def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(tmp_path):
     task_id = create_save_task("edit-tags")
     compensations: list[dict[str, object]] = []
+    publication_attempts = {"history": 0, "event": 0}
+
+    def fail_history(*_args, **_kwargs):
+        publication_attempts["history"] += 1
+        raise RuntimeError("history unavailable")
+
+    def fail_event(*_args, **_kwargs):
+        publication_attempts["event"] += 1
+        raise RuntimeError("event log unavailable")
 
     finalize_structural_tag_edit_save_task(
         task_id,
@@ -1503,12 +1649,8 @@ def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(t
         compensate_structural_tag_edit=lambda **kwargs: compensations.append(
             dict(kwargs)
         ),
-        append_log_history=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("history unavailable")
-        ),
-        log_app_event=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("event log unavailable")
-        ),
+        append_log_history=fail_history,
+        log_app_event=fail_event,
         find_albums_by_track_paths=lambda _paths: [
             {"key": "canonical-new-album", "name": "New Album"}
         ],
@@ -1541,9 +1683,13 @@ def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(t
         {"key": "canonical-new-album", "name": "New Album"}
     ]
     assert compensations == []
+    replayed_payload = save_task_result(task_id)
+    assert replayed_payload["status"] == "completed"
+    assert replayed_payload["completed_at"] == payload["completed_at"]
+    assert publication_attempts == {"history": 1, "event": 1}
 
 
-def test_structural_tag_edit_canonical_reconciliation_error_cannot_publish_success(
+def test_structural_tag_edit_canonical_lookup_failure_after_commit_reports_completed_warning(
     tmp_path,
 ):
     task_id = create_save_task("edit-tags")
@@ -1558,7 +1704,11 @@ def test_structural_tag_edit_canonical_reconciliation_error_cannot_publish_succe
             "memory-rebuilt"
         ),
         persist_structural_tag_edit=lambda **_kwargs: events.append("committed") or {
-            "album_rows_updated": 1
+            "album_rows_updated": 1,
+            "destination_album_id": 42,
+            "destination_album_key": "album:telepathic-minds",
+            "destination_artist_name": "Overhead",
+            "orphaned_source_artists": ["Ovderhead"],
         },
         append_log_history=lambda *_args, **_kwargs: None,
         log_app_event=lambda *_args, **_kwargs: None,
@@ -1582,9 +1732,17 @@ def test_structural_tag_edit_canonical_reconciliation_error_cannot_publish_succe
 
     assert events == ["committed", "memory-rebuilt"]
     terminal_task = save_task_result(task_id)
-    assert terminal_task["status"] == "failed"
-    assert terminal_task["error"] == "canonical album reconciliation unavailable"
-    assert terminal_task.get("updated_albums") in (None, [])
+    assert terminal_task["status"] == "completed"
+    assert terminal_task["reconciliation_pending"] is True
+    assert "canonical album reconciliation unavailable" in " ".join(
+        terminal_task["warnings"]
+    )
+    assert "error" not in terminal_task
+    assert terminal_task["updated_albums"] == []
+    assert terminal_task["destination_album_id"] == 42
+    assert terminal_task["destination_album_key"] == "album:telepathic-minds"
+    assert terminal_task["destination_artist"] == "Overhead"
+    assert terminal_task["orphaned_source_artists"] == ["Ovderhead"]
 
 
 def test_structural_tag_edit_save_task_fails_without_publishing_memory_on_commit_error(
@@ -2127,3 +2285,77 @@ def test_cancelled_queued_finalizer_releases_intent_session_and_structural_reser
     assert releases == []
     assert future.cancel()
     assert releases == ["intent", "structural"]
+
+
+@pytest.mark.parametrize("structural", [False, True])
+def test_successful_tag_save_does_not_prewarm_settings_on_the_foreground_browse_pool(
+    tmp_path,
+    monkeypatch,
+    structural,
+):
+    events: list[str] = []
+    expected_config: dict[str, object] | None = None
+
+    class RecordingBrowseRepository:
+        def __init__(self, config):
+            assert config is expected_config
+
+        def queue_settings_projection_prewarm(self):
+            events.append("prewarm-queued")
+
+    monkeypatch.setattr(
+        "music_app.services.problematic_albums.invalidate_problematic_albums_payload_cache",
+        lambda _state: events.append("problematic-invalidated"),
+    )
+    monkeypatch.setattr(
+        "music_app.services.utility_rules.invalidate_utility_rules_payload_cache",
+        lambda _state: events.append("rules-invalidated"),
+    )
+    monkeypatch.setattr(
+        "music_app.services.library_browse_postgres.PostgresLibraryBrowseRepository",
+        RecordingBrowseRepository,
+    )
+
+    task_id = create_save_task("edit-tags")
+    if not structural:
+        durable_write: Future[None] = Future()
+        durable_write.set_result(None)
+        finalize_kwargs = _durable_save_finalize_kwargs(
+            tmp_path,
+            schedule_cache_updates_save=lambda *_args: durable_write,
+        )
+        expected_config = finalize_kwargs["config"]
+        finalize_save_task(task_id, **finalize_kwargs)
+    else:
+        state = {"albums": [], "file_cache": {}}
+        expected_config = _explicit_config(tmp_path)
+        finalize_structural_tag_edit_save_task(
+            task_id,
+            config=expected_config,
+            logger=_logger_stub(),
+            get_state=lambda: state,
+            rebuild_affected_albums_in_state=lambda *_args: None,
+            persist_structural_tag_edit=lambda **_kwargs: {"album_rows_updated": 1},
+            append_log_history=lambda *_args, **_kwargs: None,
+            log_app_event=lambda *_args, **_kwargs: None,
+            find_albums_by_track_paths=lambda _paths: [],
+            find_problematic_album_by_track_paths=lambda _paths: None,
+            updated_file_cache={
+                "track-1.mp3": {"path": "track-1.mp3", "album": "New Album"}
+            },
+            previous_file_cache={
+                "track-1.mp3": {"path": "track-1.mp3", "album": "Old Album"}
+            },
+            changed_paths={"track-1.mp3"},
+            requested_track_paths={"track-1.mp3"},
+            separate_release_keys=set(),
+            changed_field_names={"album"},
+            structural_edit_fields={"album"},
+            log_entry={"action": "Album name tag changed"},
+        )
+
+    assert save_task_result(task_id)["status"] == "completed"
+    assert events == [
+        "problematic-invalidated",
+        "rules-invalidated",
+    ]

@@ -101,6 +101,11 @@ class PolicyEvaluator:
             for grant in actor.capability_grants
             if isinstance(grant, CapabilityGrant)
         )
+        if (
+            context.action.startswith("system.preview_storage.")
+            and not actor.is_bootstrap_owner
+        ):
+            return False, "bootstrap_only"
         if not client_allows_action(
             context.action, context.client_surface_class, administrator=administrator
         ):

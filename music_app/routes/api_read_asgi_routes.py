@@ -36,8 +36,12 @@ from music_app.services.page_resource_seams import (
 )
 from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.album_cover_candidate_snapshots_postgres import (
+    AlbumCoverCandidateSnapshotRepository,
+)
+from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
-    PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
+    GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
@@ -52,6 +56,7 @@ from music_app.services.scan_state import resolve_active_scan_browse_state
 from music_app.services.view_payloads import (
     build_home_payload,
     build_view_payload,
+    compact_selected_artist_wire_payload,
     project_library_watch_health,
     project_missing_album_actions,
 )
@@ -61,6 +66,31 @@ from config import PERSISTENCE_BACKEND_POSTGRES
 
 router = APIRouter()
 
+_ALBUM_DETAIL_QUERY_PARAMS = frozenset(
+    {"album_key", "client_surface", "client_surface_class"}
+)
+
+
+def _repair_album_detail_cover_identity(
+    config: Mapping[str, object],
+    payload: dict[str, object],
+) -> None:
+    track_paths = {
+        str(track.get("path") or "").strip()
+        for track in payload.get("tracks", [])
+        if isinstance(track, Mapping) and str(track.get("path") or "").strip()
+    }
+    if not track_paths:
+        return
+    try:
+        resolved_album_id = AlbumCoverCandidateSnapshotRepository(
+            config
+        ).resolve_album_id_for_track_paths(track_paths=track_paths)
+    except Exception:
+        return
+    if resolved_album_id is not None:
+        payload["album_id"] = resolved_album_id
+
 
 def _project_missing_album_actions_for_request(
     request: Request,
@@ -68,12 +98,18 @@ def _project_missing_album_actions_for_request(
 ) -> object:
     allowed_actions = allowed_actions_for_request(
         request,
-        ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch"),
+        ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch", "library.paths.read"),
     )
 
     def visit(value: object) -> None:
         if isinstance(value, dict):
-            if "suggested_edits" in value:
+            if isinstance(value.get("duplicate_sources"), list):
+                value["duplicate_source_count"] = len(value["duplicate_sources"])
+                if not allowed_actions.as_payload().get("library.paths.read"):
+                    value["duplicate_sources"] = []
+            if "suggested_edits" in value or (
+                "album_id" in value and value.get("key") and "album_artist" in value
+            ):
                 value["allowed_actions"] = allowed_actions.as_payload()
             if value.get("inventory_status") == "missing":
                 value.update(project_missing_album_actions(value, allowed_actions))
@@ -137,6 +173,8 @@ _POSTGRES_SELECTED_ARTIST_PARAMS = {
     "timeline_at",
     "client_surface",
     "client_surface_class",
+    "include_library_wide_non_album",
+    "include_non_album",
 }
 
 _FILE_BACKED_SELECTED_ARTIST_HYDRATION_PARAMS = _POSTGRES_SELECTED_ARTIST_PARAMS | {
@@ -447,8 +485,11 @@ def _state_percent(library_state: dict[str, object], *, processed_key: str, tota
 
 
 def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[str, object]:
+    from music_app.services.cover_refresh_runtime import build_cover_progress_status
+
     browse_state = resolve_active_scan_browse_state(library_state)
     return {
+        **build_cover_progress_status(library_state),
         "scan_in_progress": bool(library_state.get("scan_in_progress")),
         "scan_generation": int(library_state.get("scan_generation") or 0),
         "scan_processed": int(library_state.get("scan_processed") or 0),
@@ -460,6 +501,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         ),
         "scan_current_path": library_state.get("scan_current_path") or "",
         "scan_elapsed_seconds": float(library_state.get("scan_elapsed_seconds") or 0.0),
+        "scan_stage_elapsed_seconds": resolve_scan_stage_elapsed_seconds(library_state),
         "scan_estimated_remaining_seconds": float(library_state.get("scan_estimated_remaining_seconds") or 0.0),
         "scan_files_per_second": float(library_state.get("scan_files_per_second") or 0.0),
         "scan_album_folders_processed": int(library_state.get("scan_album_folders_processed") or 0),
@@ -486,6 +528,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         },
         "covers_in_progress": bool(library_state.get("covers_in_progress")),
         "covers_processed": int(library_state.get("covers_processed") or 0),
+        "covers_completed": int(library_state.get("covers_completed", library_state.get("covers_processed")) or 0),
         "covers_total": int(library_state.get("covers_total") or 0),
         "covers_downloaded": int(library_state.get("covers_downloaded") or 0),
         "covers_current_folder": library_state.get("covers_current_folder") or "",
@@ -514,6 +557,7 @@ def _transient_scan_view_response(
         payload = build_transient_root_gallery_page(
             payload, page_params, scan_generation=int(browse_state.get("scan_generation") or 0)
         )
+    payload["view_data_source"] = "transient_scan_state"
     _apply_transient_scan_album_rating_overlays(
         request,
         _transient_view_album_payloads(payload),
@@ -527,7 +571,16 @@ def _transient_scan_view_response(
 def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
-    if "gallery_page_size" in request.query_params or "gallery_cursor" in request.query_params:
+    default_root_gallery_page = (
+        not _should_use_transient_scan_browse_state(library_state, browse_state)
+        and _is_postgres_root_album_browse_request(request)
+        and not str(request.query_params.get("payload_tier") or "").strip()
+    )
+    if (
+        "gallery_page_size" in request.query_params
+        or "gallery_cursor" in request.query_params
+        or default_root_gallery_page
+    ):
         params = dict(request.query_params)
         params.pop("gallery_page_size", None)
         params.pop("gallery_cursor", None)
@@ -538,7 +591,8 @@ def view_data(request: Request) -> JSONResponse:
             return JSONResponse({"ok": False, "error": "Gallery paging requires the library root."}, status_code=400)
         # Existing route selection still validates the remaining browse parameters.
         allowed = {"surface", "payload_tier", "gallery_scope", "gallery_display", "gallery_display_mode",
-                   "gallery_scale_percent", "category", "omit_sidebar", "all_artists", "q", "artist"}
+                   "gallery_scale_percent", "gallery_anchor_artist", "gallery_page_direction", "category", "omit_sidebar",
+                   "all_artists", "q", "artist"}
         if set(params) - allowed:
             return JSONResponse({"ok": False, "error": "Invalid gallery paging parameters."}, status_code=400)
         from starlette.datastructures import QueryParams
@@ -548,6 +602,12 @@ def view_data(request: Request) -> JSONResponse:
                 return _transient_scan_view_response(request, browse_state, page_params)
             payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_startup_preview_payload(
                 query_params=page_params, library_state=library_state)
+        except GalleryProjectionPending:
+            return JSONResponse(
+                {"ok": False, "code": "gallery_projection_pending",
+                 "error": "Gallery is being prepared."},
+                status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
+            )
         except ValueError as error:
             restart = "restart required" in str(error)
             return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
@@ -571,9 +631,20 @@ def view_data(request: Request) -> JSONResponse:
             library_state=_postgres_browse_library_state(request),
         )
         if _request_flag_value(request.query_params.get("root_sidebar")):
-            root_sidebar_payload = repository.build_root_sidebar_payload(
-                query_params=request.query_params,
-            )
+            try:
+                root_sidebar_payload = repository.build_projected_root_sidebar_payload(
+                    query_params=request.query_params,
+                )
+            except GalleryProjectionPending:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "gallery_projection_pending",
+                        "error": "Gallery is being prepared.",
+                    },
+                    status_code=503,
+                    headers={"Retry-After": "1", "Cache-Control": "no-store"},
+                )
             payload.update(
                 {
                     field: root_sidebar_payload[field]
@@ -586,7 +657,7 @@ def view_data(request: Request) -> JSONResponse:
                 }
             )
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -597,13 +668,22 @@ def view_data(request: Request) -> JSONResponse:
             level="info",
             query=query,
         )
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_search_payload(
-            query_params=request.query_params,
-            library_state=_postgres_browse_library_state(request),
-        )
+        try:
+            payload = PostgresLibraryBrowseRepository(_app_config(request)).build_search_payload(
+                query_params=request.query_params,
+                library_state=_postgres_browse_library_state(request),
+            )
+        except SearchProjectionPending:
+            from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+            schedule_gallery_projection_refresh(_app_config(request))
+            return JSONResponse(
+                {"ok": False, "code": "search_projection_pending",
+                 "error": "Artist relationships are being prepared."},
+                status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
+            )
         _log_view_data_request_from_asgi(request, payload, request_started_at)
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_root_album_browse_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
             query_params=request.query_params,
@@ -637,6 +717,7 @@ def view_data(request: Request) -> JSONResponse:
 
 def _is_postgres_root_sidebar_request(request: Request) -> bool:
     allowed_root_sidebar_params = {
+        "gallery_offset",
         "payload_tier",
         "surface",
         "gallery_scope",
@@ -662,7 +743,7 @@ def _is_postgres_selected_artist_request(request: Request) -> bool:
     if not artist:
         return False
     payload_tier = str(request.query_params.get("payload_tier") or "").strip().casefold()
-    if payload_tier not in {"", "full"}:
+    if payload_tier not in {"", "full", "gallery_summary"}:
         return False
     if str(request.query_params.get("surface") or "").strip().casefold() not in {"", "albums"}:
         return False
@@ -809,8 +890,11 @@ def _is_postgres_root_album_browse_request(request: Request) -> bool:
         "gallery_scale_percent",
         "category",
         "omit_sidebar",
+        "payload_tier",
     }
     if any(str(key) not in allowed_root_album_browse_params for key in request.query_params.keys()):
+        return False
+    if str(request.query_params.get("payload_tier") or "").strip().casefold() not in {"", "full"}:
         return False
     if str(request.query_params.get("surface") or "").strip().casefold() != "albums":
         return False
@@ -911,6 +995,20 @@ async def home_data(request: Request) -> JSONResponse:
 
 @router.get("/album-details")
 async def album_details(request: Request) -> JSONResponse:
+    unsupported_params = sorted(
+        str(key)
+        for key in request.query_params.keys()
+        if str(key) not in _ALBUM_DETAIL_QUERY_PARAMS
+    )
+    if unsupported_params:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Unsupported album-details query parameter",
+                "unsupported_parameters": unsupported_params,
+            },
+            status_code=400,
+        )
     album_key = str(request.query_params.get("album_key") or "").strip()
     if not album_key:
         return JSONResponse({"ok": False, "error": "Missing album_key"}, status_code=400)
@@ -930,12 +1028,19 @@ async def album_details(request: Request) -> JSONResponse:
     browse_state = resolve_active_scan_browse_state(_library_state(request))
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload(
+        repository = PostgresLibraryBrowseRepository(_app_config(request))
+        payload = await run_in_threadpool(
+            repository.build_album_detail_payload,
             album_key,
             client_surface_class=client_surface_class,
         )
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
+        await run_in_threadpool(
+            _repair_album_detail_cover_identity,
+            _app_config(request),
+            payload,
+        )
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse({"ok": True, "album": payload})
 
@@ -962,12 +1067,10 @@ def _should_use_postgres_album_detail_path(
     selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
     if selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES:
         return False
-    allowed_detail_params = {
-        "album_key",
-        "client_surface",
-        "client_surface_class",
-    }
-    if any(str(key) not in allowed_detail_params for key in request.query_params.keys()):
+    if any(
+        str(key) not in _ALBUM_DETAIL_QUERY_PARAMS
+        for key in request.query_params.keys()
+    ):
         return False
     album_key = str(request.query_params.get("album_key") or "").strip()
     if not album_key or album_key.startswith("non-album::"):

@@ -1,5 +1,6 @@
 /* Responsive shell navigation. Existing components retain their data and event owners. */
 const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
+const mobileLiveGalleryParents = new WeakMap();
 const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal' });
 
 function isMobileClient() {
@@ -114,29 +115,154 @@ function resolveMobileParentScrollPosition(descriptor, previous, snapshot = {}, 
   if (!position || !Number.isFinite(position.scrollTop) || !Number.isFinite(position.scrollLeft)) return null;
   return { scrollTop: Math.max(0, position.scrollTop), scrollLeft: Math.max(0, position.scrollLeft) };
 }
+
+function resolveMobileParentScrollAnchor(descriptor, previous, snapshot = {}, captured = null) {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey)
+    : null;
+  const anchor = previous?.parentScrollAnchor ?? restored?.parentScrollAnchor ?? captured;
+  if (!anchor || !Number.isFinite(anchor.scrollTop) || !Number.isFinite(anchor.scrollLeft)) return null;
+  return {
+    ...anchor,
+    scrollTop: Math.max(0, anchor.scrollTop),
+    scrollLeft: Math.max(0, anchor.scrollLeft),
+  };
+}
 function resolveMobileParentViewUrl(descriptor, previous, snapshot = {}, viewUrl = '') {
   const restored = Array.isArray(snapshot.mobilePages)
     ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
   return previous?.parentViewUrl ?? restored?.parentViewUrl ?? viewUrl;
+}
+function resolveMobileParentGalleryAnchorArtist(descriptor, previous, snapshot = {}, captured = '') {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  return String(
+    previous?.parentGalleryAnchorArtist ?? restored?.parentGalleryAnchorArtist ?? captured,
+  ).trim();
+}
+function captureMobileParentGalleryAnchorArtist() {
+ const requestedArtist = String(state.view?.gallery_page?.anchor_artist || '').trim();
+ const renderedArtist = String(
+ state.view?.gallery_page?.anchor_group_artist || requestedArtist,
+ ).trim();
+ if (!requestedArtist || !renderedArtist) return '';
+ const scroll = document.getElementById('albums-scroll');
+ const heading = [...document.querySelectorAll(
+ '#artist-groups .family-artist-header[data-scroll-artist]',
+ )].find(candidate => candidate.getAttribute('data-scroll-artist') === renderedArtist);
+ const section = heading?.closest('.artist-section');
+ const rows = section?.querySelector('.artist-rows');
+ const firstCard = section?.querySelector('.album-card');
+ if (!scroll || !rows || !firstCard) return '';
+  const scrollTop = scroll.getBoundingClientRect().top + Number(scroll.clientTop || 0);
+  return rows.getBoundingClientRect().top === scrollTop
+    && firstCard.getBoundingClientRect().top >= scrollTop
+ ? requestedArtist
+ : '';
+}
+function mobileGalleryParentIsSettled() {
+  return !state.busy && !state.ui?.pendingInventoryMutationViewRefresh
+    && !state.ui?.activeViewRequestController && !state.ui?.pendingViewRequest;
 }
 function restoreMobileGalleryParent(descriptor) {
   const parentPosition = descriptor?.parentPosition;
   const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
   const atParent = !Number.isSafeInteger(parentPosition) || !Number.isSafeInteger(destinationPosition)
     || parentPosition === destinationPosition;
-  const position = atParent ? descriptor?.parentScrollPosition : null;
-  const options = { preserveScroll: true };
+  const galleryAnchorArtist = atParent
+    ? String(descriptor?.parentGalleryAnchorArtist || '').trim()
+    : '';
+  const liveParent = descriptor && mobileLiveGalleryParents.get(descriptor);
+  const canReuseLiveParent = atParent && liveParent && mobileGalleryParentIsSettled()
+    && liveParent.revision === state.status?.inventory_mutation_revision
+    && descriptor.parentViewUrl === buildUrl(state.view)
+    && (
+      typeof virtualGrid === 'undefined'
+      || !virtualGrid?.hasDeferredMountedGroupUpdate?.()
+    );
+  let jumpScrollAnchor = null;
+  if (
+    galleryAnchorArtist
+    && !descriptor?.parentScrollAnchor
+    && typeof state !== 'undefined'
+    && galleryAnchorArtist === String(state.view?.gallery_page?.anchor_artist || '').trim()
+  ) {
+    const mountedGalleryArtist = String(
+      state.view?.gallery_page?.anchor_group_artist || galleryAnchorArtist,
+    ).trim();
+    if (
+      typeof virtualGrid !== 'undefined'
+      && virtualGrid?.scrollToArtist?.(mountedGalleryArtist)
+    ) {
+      stabilizeRootGalleryArtistAlignment(mountedGalleryArtist);
+      if (canReuseLiveParent) {
+        if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+        return;
+      }
+      jumpScrollAnchor = virtualGrid?.captureScrollAnchor?.() || null;
+    }
+  }
+  const semanticScrollAnchor = atParent
+    ? descriptor?.parentScrollAnchor || jumpScrollAnchor
+    : null;
+  const position = semanticScrollAnchor
+    ? null
+    : atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
+  const preserveParentScroll = !galleryAnchorArtist || Boolean(semanticScrollAnchor);
+  const options = {
+    preserveScroll: preserveParentScroll,
+    preserveMountedGalleryChildren: preserveParentScroll,
+  };
   // Root '/' can display the canonical album gallery as well as Home. Retain
   // the owning view route, not its data, through this page's history entry.
   if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
+  if (galleryAnchorArtist) {
+    options.galleryAnchorArtist = galleryAnchorArtist;
+  }
+  if (semanticScrollAnchor) {
+    options.semanticScrollAnchor = semanticScrollAnchor;
+    const ownerGeneration = virtualGrid?.getUserScrollIntentGeneration?.();
+    if (Number.isSafeInteger(ownerGeneration)) {
+      options.semanticScrollOwnerGeneration = ownerGeneration;
+    }
+  }
   if (position) {
     options.preserveAbsoluteScroll = true;
     options.absoluteScrollPosition = position;
     // Restore before the request too: equivalent responses may retain the mounted
     // gallery. The virtual grid already owns stabilization and row materialization.
     if (typeof virtualGrid !== 'undefined' && virtualGrid?.restoreOwnedAbsoluteScrollPosition(position)) {
+      options.absoluteScrollPositionApplied = true;
       virtualGrid.render(true);
     }
+  }
+  let semanticScrollPositionApplied = false;
+  if (
+    semanticScrollAnchor
+    && typeof virtualGrid !== 'undefined'
+    && typeof virtualGrid?.restoreOwnedScrollAnchor === 'function'
+  ) {
+    virtualGrid.render(true);
+    virtualGrid.restoreOwnedScrollAnchor(semanticScrollAnchor);
+    const ownerGeneration = options.semanticScrollOwnerGeneration;
+    if (Number.isSafeInteger(ownerGeneration) && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        if (
+          mobilePageState.pages.length
+          || virtualGrid?.getUserScrollIntentGeneration?.() !== ownerGeneration
+        ) return;
+        virtualGrid.restoreOwnedScrollAnchor(semanticScrollAnchor);
+        if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+      });
+    }
+    semanticScrollPositionApplied = true;
+  }
+  if (
+    canReuseLiveParent
+    && (semanticScrollPositionApplied || (position && options.absoluteScrollPositionApplied))
+  ) {
+    if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+    return;
   }
   handleGalleryBootstrapPopState(options);
 }
@@ -149,9 +275,32 @@ function presentMobilePage(descriptor) {
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
     mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
+  descriptor.parentScrollAnchor = resolveMobileParentScrollAnchor(
+    descriptor,
+    previous,
+    window.history.state || {},
+    mobilePageState.pages.length || typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.(),
+  );
   descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
     mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
+  descriptor.parentGalleryAnchorArtist = resolveMobileParentGalleryAnchorArtist(
+    descriptor,
+    previous,
+    window.history.state || {},
+ mobilePageState.pages.length ? '' : captureMobileParentGalleryAnchorArtist(),
+  );
   const active = mobilePageState.pages.at(-1);
+  // Only a live, settled parent can be reused. History reconstruction must fetch.
+  const inheritedParent = mobileLiveGalleryParents.get(previous || mobilePageState.pages[0] || {});
+  if (!mobilePageState.restoring && inheritedParent) mobileLiveGalleryParents.set(descriptor, inheritedParent);
+  else if (!mobilePageState.restoring && !mobilePageState.pages.length && mobileGalleryParentIsSettled()
+    && Number.isSafeInteger(state.status?.inventory_mutation_revision)) {
+    mobileLiveGalleryParents.set(descriptor, {
+      view: state.view, groups: state.view?.artist_groups, revision: state.status.inventory_mutation_revision,
+    });
+  }
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
     syncMobilePageShell();
@@ -713,7 +862,8 @@ function syncMobileAlbumHeader() {
   // One Back button: beside the cover initially, in the pinned bar after handoff.
   const back = document.getElementById('mobile-back-button');
   const overview = document.querySelector('#track-modal .mobile-album-overview');
-  const backHost = presentation.bodyOwnsIdentity && overview ? overview : header;
+  const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
+  const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');

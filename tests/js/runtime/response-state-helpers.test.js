@@ -7,6 +7,25 @@ const test = require('node:test');
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'response-state-helpers.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
+test('compact selected-artist responses rebuild gallery groups from shared sections', () => {
+  const context = loadHelpers();
+  const primary = { artist: 'Primary', albums: [{ key: 'primary' }] };
+  const family = { artist: 'Family', albums: [{ key: 'family' }] };
+  const payload = {
+    selected_artist: 'Primary',
+    artist_groups_from_selected_sections: true,
+    primary_artist_groups: [primary],
+    family_artist_groups: [family],
+  };
+
+  const expanded = context.expandCompactSelectedArtistGroups(payload);
+
+  assert.equal(expanded, payload);
+  assert.deepEqual(Array.from(expanded.artist_groups, (group) => group.artist), ['Primary', 'Family']);
+  assert.equal(expanded.artist_groups[0], primary);
+  assert.equal(expanded.artist_groups[1], family);
+});
+
 require('node:test')('search normalization preserves, inherits, and explicitly clears artist-name matches', () => {
   const context = loadHelpers();
   const matches = (source, fallback) => Array.from(
@@ -199,6 +218,31 @@ function loadHelpers() {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
+
+test('status normalization preserves completed results and explicit zero instead of queue position', () => {
+  const { normalizeStatusPayload } = loadHelpers();
+  const previous = { covers_processed: 100, covers_completed: 25, covers_total: 100 };
+  assert.equal(normalizeStatusPayload({ covers_processed: 90, covers_completed: '3' }, previous).covers_completed, 3);
+  assert.equal(normalizeStatusPayload({ covers_processed: 90, covers_completed: 0 }, previous).covers_completed, 0);
+});
+
+test('legacy status without completed results falls back to its queue position', () => {
+  const { normalizeStatusPayload } = loadHelpers();
+  const normalized = normalizeStatusPayload({ covers_processed: 7, covers_total: 10 },
+    { covers_processed: 100, covers_completed: 25, covers_total: 100 });
+  assert.equal(normalized.covers_completed, 7);
+});
+
+test('new cover run explicit zero discards previous completed count', () => {
+  const { normalizeStatusPayload } = loadHelpers();
+  const normalized = normalizeStatusPayload({ covers_in_progress: true,
+    covers_processed: 0, covers_completed: 0, covers_total: 20, covers_downloaded: 0 },
+  { covers_in_progress: false, covers_processed: 100, covers_completed: 100,
+    covers_total: 100, covers_downloaded: 80 });
+  assert.equal(normalized.covers_completed, 0);
+  assert.equal(normalized.covers_processed, 0);
+  assert.equal(normalized.covers_total, 20);
+});
 
 {
   const { normalizeViewPayload } = loadHelpers();
@@ -587,6 +631,7 @@ function loadHelpers() {
     relations_source: 'local',
     covers_in_progress: false,
     covers_processed: 0,
+    covers_completed: 0,
     covers_total: 0,
     covers_downloaded: 0,
     covers_current_folder: '42',

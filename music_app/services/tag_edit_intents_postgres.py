@@ -132,7 +132,16 @@ class PostgresTagEditIntentRepository:
         last_error: str | None = None,
     ) -> None:
         normalized_updates = {
-            str(path or "").strip(): str(value or "").strip()
+            str(path or "").strip(): (
+                {
+                    "exception_type": str(value.get("exception_type") or "").strip(),
+                    "custom_collection_name": str(
+                        value.get("custom_collection_name") or ""
+                    ).strip(),
+                }
+                if isinstance(value, Mapping)
+                else {"exception_type": str(value or "").strip()}
+            )
             for path, value in (exception_updates or {}).items()
             if str(path or "").strip()
         }
@@ -141,13 +150,13 @@ class PostgresTagEditIntentRepository:
                 raise RuntimeError(
                     "Postgres tag edit intent requires the bootstrap local library context."
                 )
-            for track_key, exception_type in sorted(normalized_updates.items()):
+            for track_key, override_payload in sorted(normalized_updates.items()):
                 connection.execute(
                     _upsert_exception_override_sql(),
                     {
                         "track_key": track_key,
                         "override_payload": _jsonb(
-                            {"exception_type": exception_type}
+                        override_payload
                         ),
                     },
                 )

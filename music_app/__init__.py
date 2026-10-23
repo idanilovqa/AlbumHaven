@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import AsyncIterator
+
+
+_POSTGRES_RELATION_WARMUP_DELAY_SECONDS = 5.0
 
 
 class _BoundedExecutorAdmission:
@@ -64,6 +68,7 @@ def _start_library_warmup(
     recover_persistence=None,
 ):
     stop_requested = threading.Event()
+    runtime.relation_projection_startup_started_at = datetime.now(timezone.utc)
     database_url = str(
         runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
     ).strip()
@@ -93,7 +98,7 @@ def _start_library_warmup(
                         raise
                     except Exception:
                         runtime.logger.exception("Postgres scan timestamp hydration failed.")
-                if stop_requested.is_set():
+                if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
                     return
                 ensure_relations(runtime, cancel_requested=stop_requested)
                 return
@@ -323,7 +328,10 @@ def _configure_asgi_app(app, runtime) -> None:
 
     @app.middleware("http")
     async def require_runtime_javascript_revalidation(request, call_next):
-        if not request.url.path.startswith("/static/"):
+        if (
+            not request.url.path.startswith("/static/")
+            and request.url.path != "/status"
+        ):
             cover_preview_backfill = getattr(
                 app.state,
                 "cover_preview_backfill",
@@ -377,6 +385,17 @@ def create_asgi_app():
     from config import APP_NAME, APP_VERSION
     from music_app.services.lastfm_retry import start_lastfm_retry_worker, stop_lastfm_retry_worker
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_relocation import (
+        GeneratedPreviewRelocationWorker,
+    )
+    from music_app.services.generated_preview_storage import (
+        preview_storage_policy_from_mapping,
+        record_generated_preview,
+    )
+    from music_app.services.generated_preview_storage_postgres import (
+        PostgresGeneratedPreviewStorageRepository,
+        is_generated_preview_storage_postgres_available,
+    )
     from music_app.services.auth_welcome_worker import start_welcome_retry_worker
     from music_app.services.library_reconciliation import (
         LibraryWatchService,
@@ -386,6 +405,7 @@ def create_asgi_app():
     from music_app.services.library_event_coordinator import (
         CoordinatorProblem,
         LibraryEventCoordinator,
+        TargetedReconciliationRequest,
     )
     from music_app.services.exception_overrides import load_exception_overrides
     from music_app.services.runtime_shutdown import create_daemon_executor
@@ -394,7 +414,11 @@ def create_asgi_app():
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,
     )
+    from music_app.services.targeted_reconciliation_scheduler import (
+        TargetedReconciliationScheduler,
+    )
     from music_app.services.runtime_shutdown import request_runtime_shutdown
+    from music_app.services.runtime_asset_versions import runtime_asset_version_cache
     from music_app.services.postgres_connections import prewarm_connection_pool
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
@@ -414,11 +438,64 @@ def create_asgi_app():
         from music_app.services.log_history import resolve_media_host_history_scope
         host_scope = resolve_media_host_history_scope(runtime.config)
         _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
+        preview_storage_repository = None
+        if is_generated_preview_storage_postgres_available(runtime.config):
+            preview_storage_repository = PostgresGeneratedPreviewStorageRepository(
+                runtime.config
+            )
+        _app.state.generated_preview_storage_repository = preview_storage_repository
+        preview_storage_state = None
+        if preview_storage_repository is not None:
+            try:
+                preview_storage_state = preview_storage_repository.load()
+            except Exception:
+                runtime.logger.exception(
+                    "Generated preview storage state was unavailable at startup."
+                )
+        preview_inventory_recorder = None
+        if preview_storage_repository is not None:
+            def preview_inventory_recorder(source_path, preview_path) -> None:
+                try:
+                    record_generated_preview(
+                        preview_storage_repository, source_path, preview_path
+                    )
+                except Exception:
+                    runtime.logger.exception(
+                        "Generated preview inventory record failed for %s.",
+                        preview_path,
+                    )
+
+        _app.state.generated_preview_inventory_recorder = preview_inventory_recorder
+        runtime.config["_GENERATED_PREVIEW_INVENTORY_RECORDER"] = (
+            preview_inventory_recorder
+        )
+        _app.state.generated_preview_storage_policy = (
+            preview_storage_policy_from_mapping(preview_storage_state)
+        )
+        runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = (
+            _app.state.generated_preview_storage_policy
+        )
         _app.state.cover_preview_backfill = CoverPreviewBackfill(
             runtime.config,
             logger=runtime.logger,
         )
         _app.state.cover_preview_backfill.start()
+        _app.state.generated_preview_relocation = None
+        if preview_storage_repository is not None:
+            def update_preview_storage_policy(state) -> None:
+                policy = preview_storage_policy_from_mapping(state)
+                _app.state.generated_preview_storage_policy = policy
+                runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = policy
+
+            _app.state.generated_preview_relocation = GeneratedPreviewRelocationWorker(
+                preview_storage_repository,
+                logger=runtime.logger,
+                on_state=update_preview_storage_policy,
+                discover_inventory=(
+                    _app.state.cover_preview_backfill.inventory_existing_previews
+                ),
+            )
+            _app.state.generated_preview_relocation.start()
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -445,6 +522,12 @@ def create_asgi_app():
                     _app.state.cover_preview_backfill.stop,
                 ),
                 (
+                    "generated preview relocation",
+                    _app.state.generated_preview_relocation.stop
+                    if _app.state.generated_preview_relocation is not None
+                    else lambda: None,
+                ),
+                (
                     "library warmup",
                     _app.state.library_warmup_thread.stop,
                 ),
@@ -469,6 +552,7 @@ def create_asgi_app():
                 ),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
+                ("runtime asset versions", runtime_asset_version_cache.close),
                 ("runtime", lambda: request_runtime_shutdown(runtime)),
             )
             for stage, shutdown in shutdown_stages:
@@ -495,7 +579,7 @@ def create_asgi_app():
                     max_workers=1,
                     thread_name_prefix="albumhaven-targeted-reconciliation",
                 ),
-                max_outstanding=256,
+                max_outstanding=1,
             )
             targeted_reconciler = TargetedLibraryReconciler(
                 runtime.config,
@@ -541,34 +625,7 @@ def create_asgi_app():
                     )
 
         def submit_targeted_reconciliation(request) -> None:
-            affected_root_ids = targeted_request_root_ids(request)
-            future = targeted_executor.submit(reconcile_targeted_request, request)
-            if future is None:
-                runtime.logger.error(
-                    "Targeted library reconciliation backlog is full."
-                )
-                for root_id in affected_root_ids:
-                    persist_library_watch_problem(
-                        CoordinatorProblem("overflow", root_id)
-                    )
-                return
-
-            def report_reconciliation_failure(completed) -> None:
-                try:
-                    completed.result()
-                except Exception:
-                    runtime.logger.exception(
-                        "Targeted library reconciliation failed."
-                    )
-                    for root_id in affected_root_ids:
-                        persist_library_watch_problem(
-                            CoordinatorProblem(
-                                "reconciliation_failed",
-                                root_id,
-                            )
-                        )
-
-            future.add_done_callback(report_reconciliation_failure)
+            targeted_executor.submit(request)
 
         def persist_library_watch_health(event) -> None:
             try:
@@ -586,11 +643,65 @@ def create_asgi_app():
                     "Unable to persist library watcher health problem."
                 )
 
+        automatic_recovery_started_at: dict[frozenset[str], str] = {}
+
+        def catch_up_library_roots(root_ids: frozenset[str]) -> None:
+            recovery_started_at = datetime.now(timezone.utc).isoformat()
+            roots_by_id = {
+                str(root.get("id") or ""): dict(root)
+                for root in get_library_roots(runtime.config)
+            }
+            for root_id in sorted(root_ids):
+                root = roots_by_id.get(root_id)
+                if root is None:
+                    raise RuntimeError(
+                        f"Library watcher catch-up root is no longer configured: {root_id}"
+                    )
+                root_path = Path(str(root.get("path") or ""))
+                if not root_path.is_dir():
+                    raise OSError(
+                        f"Library watcher catch-up root is unavailable: {root_id}"
+                    )
+                result = targeted_reconciler.reconcile(
+                    TargetedReconciliationRequest(
+                        root_id=root_id,
+                        paths=frozenset({root_path}),
+                        deleted_subtrees=frozenset({root_path}),
+                    ),
+                    root_healthy=True,
+                    publication_guard=(
+                        runtime.library_watch_health_service
+                        .recovery_publication_guard(recovery_started_at)
+                    ),
+                )
+                if getattr(result, "health", None) != "healthy":
+                    raise RuntimeError(
+                        f"Library watcher catch-up failed for root {root_id}."
+                    )
+            automatic_recovery_started_at[root_ids] = recovery_started_at
+
+        def clear_recovered_library_roots(root_ids: frozenset[str]) -> None:
+            recovery_started_at = automatic_recovery_started_at.pop(root_ids)
+            runtime.library_watch_health_service.clear_after_reconciliation(
+                observed_root_ids=root_ids,
+                reconciliation_started_at=recovery_started_at,
+            )
+
+        targeted_executor = TargetedReconciliationScheduler(
+            reconcile=reconcile_targeted_request,
+            catch_up=catch_up_library_roots,
+            record_problem=persist_library_watch_problem,
+            clear_recovered=clear_recovered_library_roots,
+            executor=targeted_executor,
+            logger=runtime.logger,
+        )
+
         try:
             runtime.library_event_coordinator = LibraryEventCoordinator(
                 emit_request=submit_targeted_reconciliation,
                 emit_health_event=persist_library_watch_health,
                 emit_problem=persist_library_watch_problem,
+                drain_at_capacity=True,
                 auto_schedule=True,
             )
             runtime.library_watch_service = LibraryWatchService(

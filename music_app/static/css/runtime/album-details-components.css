@@ -10,9 +10,16 @@
 .album-details-header__primary { margin: 0; min-width: 0; font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-details-header__secondary,
 .album-details-header__tags { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.74rem; }
-.album-details-header__release-type { display: inline-flex; align-items: center; min-height: 24px; color: var(--muted); font-size: 0.7rem; font-weight: 750; letter-spacing: 0.12em; text-transform: uppercase; }
+.album-details-header__release-type,
 .album-details-header__tag { --album-details-tag-accent: var(--appearance-player-accent, #55c7ff); display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--album-details-tag-accent) 42%, transparent); border-radius: 999px; color: var(--album-details-tag-accent); font-weight: 750; }
 .album-details-header__tag--missing { --album-details-tag-accent: var(--appearance-error, #ef5350); }
+.album-details-source-markers { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.album-details-cover-source-markers { justify-content: flex-start; min-height: 24px; margin: 8px 0 0; }
+.album-details-source-marker { display: inline-grid; place-items: center; width: 24px; height: 24px; color: var(--muted); pointer-events: none; }
+.album-details-source-marker svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.album-details-source-marker--hoard { color: var(--library-source-hoard); }
+.album-details-source-marker--new_arrivals { color: var(--library-source-arrivals); }
+:root[data-library-source-icons="false"] .album-details-source-markers { display: none; }
 .album-details-header__actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
 .album-details-header__action-icon {
   display: block;
@@ -49,4 +56,15 @@
 @media (max-width: 720px) {
   .album-details-header__tags { display: none; }
   .album-details-header__primary { font-size: 0.95rem; }
+}
+
+.album-details-header__primary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.album-details-header__quality-alert {
+  flex: 0 0 auto;
 }

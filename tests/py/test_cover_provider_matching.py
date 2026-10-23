@@ -386,6 +386,95 @@ def test_match_score_rejects_collaborator_and_project_artist_identities(candidat
     ) == 0.0
 
 
+@pytest.mark.parametrize("candidate_artist", ["Susanne Sundfør", "Kit Downes"])
+def test_match_score_accepts_provider_artist_component_from_composite_target_credit(candidate_artist):
+    assert matching.match_score(
+        target_artist="Susanne Sundfør with Kit Downes",
+        target_album="Revelations of Divine Love",
+        target_edition=None,
+        target_year=2026,
+        candidate_artist=candidate_artist,
+        candidate_album="Revelations of Divine Love",
+        candidate_year=2026,
+    ) > 0.0
+
+
+@pytest.mark.parametrize("separator", [" with ", " feat. ", " featuring ", " & "])
+def test_match_score_accepts_supported_composite_artist_separators(separator):
+    assert matching.match_score(
+        target_artist=f"Primary Artist{separator}Guest Artist",
+        target_album="Shared Album",
+        target_edition=None,
+        target_year=2026,
+        candidate_artist="Primary Artist",
+        candidate_album="Shared Album",
+        candidate_year=2026,
+    ) > 0.0
+
+
+def test_match_score_rejects_unrelated_provider_artist_for_composite_target_credit():
+    assert matching.match_score(
+        target_artist="Susanne Sundfør with Kit Downes",
+        target_album="Revelations of Divine Love",
+        target_edition=None,
+        target_year=2026,
+        candidate_artist="Unrelated Artist",
+        candidate_album="Revelations of Divine Love",
+        candidate_year=2026,
+    ) == 0.0
+
+
+def test_match_score_preserves_album_variant_guard_for_composite_target_credit():
+    assert matching.match_score(
+        target_artist="Susanne Sundfør with Kit Downes",
+        target_album="Revelations of Divine Love",
+        target_edition=None,
+        target_year=2026,
+        candidate_artist="Susanne Sundfør",
+        candidate_album="Revelations of Divine Love (Remix)",
+        candidate_year=2026,
+    ) == 0.0
+
+
+def test_match_score_prefers_full_composite_credit_over_component_fallback():
+    shared = {
+        "target_artist": "Susanne Sundfør with Kit Downes",
+        "target_album": "Revelations of Divine Love",
+        "target_edition": None,
+        "target_year": 2026,
+        "candidate_album": "Revelations of Divine Love",
+        "candidate_year": 2026,
+    }
+
+    exact_score = matching.match_score(
+        **shared,
+        candidate_artist="Susanne Sundfør with Kit Downes",
+    )
+    component_score = matching.match_score(
+        **shared,
+        candidate_artist="Susanne Sundfør",
+    )
+
+    assert component_score > 0.0
+    assert exact_score > component_score
+
+
+def test_match_score_preserves_year_penalty_for_composite_target_credit():
+    shared = {
+        "target_artist": "Susanne Sundfør with Kit Downes",
+        "target_album": "Revelations of Divine Love",
+        "target_edition": None,
+        "target_year": 2026,
+        "candidate_artist": "Susanne Sundfør",
+        "candidate_album": "Revelations of Divine Love",
+    }
+
+    exact_year_score = matching.match_score(**shared, candidate_year=2026)
+    far_year_score = matching.match_score(**shared, candidate_year=2016)
+
+    assert exact_year_score > far_year_score > 0.0
+
+
 def test_match_score_allows_guarded_same_shape_fuzzy_artist_identity():
     assert matching.match_score(
         target_artist="Flaming Rows",

@@ -44,6 +44,9 @@ class Connection:
     def __exit__(self, exc_type, exc, tb):
         return False
 
+    def transaction(self):
+        return self
+
     def execute(self, sql, params=None):
         self.operations.append((" ".join(sql.casefold().split()), params))
         return Cursor(self.rows)
@@ -53,9 +56,11 @@ class Sessions:
     def __init__(self, resolved):
         self.resolved = resolved
         self.received = []
+        self.connections = []
 
-    def resolve_session(self, raw):
+    def resolve_session(self, raw, *, connection=None):
         self.received.append(raw)
+        self.connections.append(connection)
         return self.resolved
 
 
@@ -149,6 +154,7 @@ def test_active_actor_loads_bootstrap_memberships_and_grants_in_one_snapshot(act
     actor = _resolver(actors, sessions, connection).resolve(RAW_SESSION)
 
     assert sessions.received == [RAW_SESSION]
+    assert sessions.connections == [connection]
     assert actor.state is actors.ActorState.ACTIVE
     assert actor.is_authenticated is True
     assert actor.account_id == 41

@@ -94,10 +94,12 @@ class _PendingGroupUpdate:
 
 
 class LibraryEventCoordinator:
-    """Bound pending groups and retained entries, including coalesced moves.
+    """Coordinate bounded event batches, including coalesced moves.
 
     Each active path, deleted path, deleted subtree, and move counts as one
     entry. A file-typed deletion retained in both deletion sets counts twice.
+    ``drain_at_capacity`` makes the bounds lossless batch-flush thresholds;
+    otherwise capacity exhaustion retains the legacy overflow signal.
     """
 
     def __init__(
@@ -110,6 +112,7 @@ class LibraryEventCoordinator:
         wait: Callable[[float], None] | None = None,
         max_pending_groups: int = 256,
         max_pending_entries: int = 4096,
+        drain_at_capacity: bool = False,
         max_stable_attempts: int = 4,
         stable_sample_interval: float = 0.1,
         debounce_seconds: float = 0.5,
@@ -126,6 +129,7 @@ class LibraryEventCoordinator:
         self._wait = wait or self._stop_event.wait
         self._max_pending_groups = max(1, int(max_pending_groups))
         self._max_pending_entries = max(1, int(max_pending_entries))
+        self._drain_at_capacity = bool(drain_at_capacity)
         self._max_stable_attempts = max(2, int(max_stable_attempts))
         self._stable_sample_interval = max(0.0, float(stable_sample_interval))
         self._debounce_seconds = max(0.0, float(debounce_seconds))
@@ -150,6 +154,7 @@ class LibraryEventCoordinator:
             self._emit_health_event(event)
             return True
         overflow_events: tuple[LibraryEvent, ...] = ()
+        flush_at_capacity = False
         with self._lock:
             if self._stopped:
                 return False
@@ -174,10 +179,12 @@ class LibraryEventCoordinator:
                 - int(update.group.entry_count > 0)
                 for update in updates.values()
             )
-            if (
+            over_capacity = (
                 len(self._pending) + group_delta > self._max_pending_groups
                 or self._pending_entry_count + entry_delta > self._max_pending_entries
-            ):
+            )
+            flush_at_capacity = over_capacity and self._drain_at_capacity
+            if over_capacity and not flush_at_capacity:
                 affected_roots = {event.root_id: event.path.parent}
                 if event.kind is LibraryEventKind.MOVED and event.destination is not None:
                     affected_roots[
@@ -198,12 +205,17 @@ class LibraryEventCoordinator:
                     else:
                         self._pending.pop(group_key, None)
                 self._pending_entry_count += entry_delta
-                if self._auto_schedule:
+                if self._auto_schedule and not flush_at_capacity:
                     self._schedule_flush_locked()
-                return True
+                if not flush_at_capacity:
+                    return True
         for overflow_event in overflow_events:
             self._emit_health_event(overflow_event)
-        return False
+        if overflow_events:
+            return False
+        if flush_at_capacity:
+            self.flush()
+        return True
 
     def _group_update(self, updates, root_id: str, directory: Path) -> _PendingGroupUpdate:
         group_key = (root_id, directory)

@@ -300,6 +300,17 @@ test('resolveLibraryScanPhaseStates keeps reached work bright and terminal state
   });
 });
 
+test('terminal cover stage uses completed jobs with absent-field legacy fallback', () => {
+  const { resolveLibraryScanPhaseStates } = loadHelpers();
+  for (const outcome of ['failed', 'cancelled']) {
+    const status = { scan_outcome: outcome, covers_processed: 10, covers_total: 10 };
+    assert.equal(resolveLibraryScanPhaseStates({ ...status, covers_completed: 0 }).covers, 'future');
+    assert.equal(resolveLibraryScanPhaseStates({ ...status, covers_completed: 3 }).covers, 'future');
+    assert.equal(resolveLibraryScanPhaseStates({ ...status, covers_completed: 10 }).covers, 'complete');
+    assert.equal(resolveLibraryScanPhaseStates(status).covers, 'complete');
+  }
+});
+
 test('renderLibraryLoader keeps the scan title through finalizing, cover, and relation work', () => {
   for (const status of [
     { scan_in_progress: true, scan_phase: 'finalizing' },
@@ -313,7 +324,7 @@ test('renderLibraryLoader keeps the scan title through finalizing, cover, and re
       state.ui.scanPageReturnContext = { view: state.view };
       renderLibraryLoader(scanStatus, { scanPageVisible: true });
     `, context);
-    assert.equal(title.textContent, 'Scanning the library');
+    assert.equal(title.textContent, status.covers_in_progress ? 'Fetching covers' : 'Scanning the library');
   }
 });
 
@@ -381,7 +392,7 @@ test('buildLoaderStatusLines exposes cover and relation work on the explicit Sca
     relations_total: 9,
   });
 
-  assert.equal(coverLines[0].title, 'Updating cover art');
+  assert.equal(coverLines[0].title, 'Fetching covers');
   assert.equal(relationLines[0].title, 'Building artist families');
 });
 

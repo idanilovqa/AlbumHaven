@@ -84,7 +84,10 @@ test('Appearance cleanup sends fresh CSRF and revision and verifies the restored
   let reads = 0, observe, sent;
   const page = {
     url: () => 'http://127.0.0.1:5001/',
-    context: () => ({ cookies: async () => [{ name: '__Host-album_haven_session', value: 'owned-session', domain: '127.0.0.1', path: '/' }] }),
+    context: () => ({ cookies: async () => [
+      { name: '__Host-album_haven_session', value: 'owned-session', domain: '127.0.0.1', path: '/' },
+      { name: '__Host-album_haven_csrf', value: 'fresh-token', domain: '127.0.0.1', path: '/' },
+    ] }),
     request: {
       get: async () => ({ ok: () => true, json: async () => (++reads === 1 ? original : current) }),
       put: async (url, options) => {
@@ -101,7 +104,7 @@ test('Appearance cleanup sends fresh CSRF and revision and verifies the restored
   assert.equal(sent.url, 'http://127.0.0.1:5001/account/appearance');
   assert.equal(sent.headers['X-Album-Haven-CSRF'], 'fresh-token');
   assert.equal(sent.headers.Origin, 'http://127.0.0.1:5001');
-  assert.equal(sent.headers.Cookie, '__Host-album_haven_session=owned-session');
+  assert.equal(sent.headers.Cookie, '__Host-album_haven_session=owned-session; __Host-album_haven_csrf=fresh-token');
   assert.equal(sent.data.expected_revision, 3);
   assert.equal(sent.data.palette_id, 'navy');
   assert.equal(sent.data.album_details_layout, 'stacked_bar');

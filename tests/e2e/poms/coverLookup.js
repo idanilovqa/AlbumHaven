@@ -178,6 +178,14 @@ export class CoverLookup extends BasePage {
     return '#cover-lookup-drawer-body .cover-lookup-task-card';
   }
 
+  get taskCardWithinDrawerSelector() {
+    return '.cover-lookup-task-card';
+  }
+
+  get taskSpacerWithinDrawerSelector() {
+    return '.cover-lookup-task-spacer';
+  }
+
   get taskTitleWithinCardSelector() {
     return '.cover-lookup-task-title';
   }

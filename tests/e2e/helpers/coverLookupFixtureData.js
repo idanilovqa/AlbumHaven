@@ -64,6 +64,11 @@ export const COVER_LOOKUP_TEST_TARGETS = Object.freeze({
     album: 'Crack The Skye Fixture 10',
     year: '2009',
   }),
+  performanceInteractions: Object.freeze({
+    artist: 'ДДТ',
+    album: 'Ремиксы',
+    year: '2000',
+  }),
   notificationNoResult: Object.freeze({
     artist: 'Flaming Row',
     album: 'The Pure Shine',

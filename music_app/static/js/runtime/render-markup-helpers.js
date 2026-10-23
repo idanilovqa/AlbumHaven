@@ -58,6 +58,68 @@ function resolveSidebarArtistCount(view = {}, sidebarArtists = []) {
   return sidebarArtists.length;
 }
 
+const SIDEBAR_VIRTUALIZATION_THRESHOLD = 200;
+const SIDEBAR_VIRTUAL_WINDOW_SIZE = 160;
+const SIDEBAR_VIRTUAL_OVERSCAN = 40;
+const SIDEBAR_VIRTUAL_ROW_EXTENT = 47;
+
+function getSidebarVirtualSpacerHeight(rowCount) {
+  return Math.max(0, rowCount * SIDEBAR_VIRTUAL_ROW_EXTENT - 6);
+}
+
+function resolveSidebarVirtualWindow(sidebarArtists = [], options = {}) {
+  const total = sidebarArtists.length;
+  if (total <= SIDEBAR_VIRTUALIZATION_THRESHOLD) {
+    return { virtualized: false, start: 0, end: total, before: 0, after: 0 };
+  }
+  const maxStart = Math.max(0, total - SIDEBAR_VIRTUAL_WINDOW_SIZE);
+  const scrollTop = Math.max(0, Number(options.scrollTop) || 0);
+  const visibleStart = Math.floor(scrollTop / SIDEBAR_VIRTUAL_ROW_EXTENT);
+  const visibleCount = Math.max(
+    1,
+    Math.ceil((Number(options.viewportHeight) || SIDEBAR_VIRTUAL_ROW_EXTENT) / SIDEBAR_VIRTUAL_ROW_EXTENT),
+  );
+  const previousWindow = options.previousWindow;
+  const retainedMargin = Math.floor(SIDEBAR_VIRTUAL_OVERSCAN / 2);
+  if (
+    !options.forceSelected
+    && previousWindow?.virtualized
+    && (previousWindow.start === 0 || visibleStart >= previousWindow.start + retainedMargin)
+    && (
+      previousWindow.end === total
+      || visibleStart + visibleCount <= previousWindow.end - retainedMargin
+    )
+  ) {
+    return {
+      virtualized: true,
+      start: previousWindow.start,
+      end: previousWindow.end,
+      before: getSidebarVirtualSpacerHeight(previousWindow.start),
+      after: getSidebarVirtualSpacerHeight(total - previousWindow.end),
+    };
+  }
+  let start = Math.max(
+    0,
+    visibleStart - SIDEBAR_VIRTUAL_OVERSCAN,
+  );
+  const selectedArtist = String(options.selectedArtist || '').trim();
+  if (options.forceSelected && selectedArtist) {
+    const selectedIndex = sidebarArtists.findIndex(item => String(item?.artist || '') === selectedArtist);
+    if (selectedIndex >= 0) {
+      start = selectedIndex - Math.floor(SIDEBAR_VIRTUAL_WINDOW_SIZE / 2);
+    }
+  }
+  start = Math.min(maxStart, Math.max(0, start));
+  const end = Math.min(total, start + SIDEBAR_VIRTUAL_WINDOW_SIZE);
+  return {
+    virtualized: true,
+    start,
+    end,
+    before: getSidebarVirtualSpacerHeight(start),
+    after: getSidebarVirtualSpacerHeight(total - end),
+  };
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -70,11 +132,18 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     ? Boolean(options.allArtistsActiveOverride)
     : Boolean(activeSurface === 'albums' && (view.all_artists_active || (!view.query && !selectedArtist)));
   const renderItem = window.NavigationTree.renderItem;
+  const virtualWindow = options.virtualWindow?.virtualized
+    ? options.virtualWindow
+    : { virtualized: false, start: 0, end: sidebarArtists.length, before: 0, after: 0 };
+  const visibleArtists = sidebarArtists.slice(virtualWindow.start, virtualWindow.end);
   let html = showAllArtistsLink ? renderItem({
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
   }) : '';
-  html += sidebarArtists.map(item => renderItem({
+  if (virtualWindow.virtualized && virtualWindow.before > 0) {
+    html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
+  }
+  html += visibleArtists.map((item, offset) => renderItem({
     label: item.artist_display || item.artist, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
@@ -82,8 +151,17 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
       selected_artist: item.artist,
       all_artists_active: Boolean(view.query) ? Boolean(view.all_artists_active) : false,
     }),
-    attributes: { 'data-nav': '1', 'data-sidebar-artist': item.artist },
+    attributes: {
+      'data-nav': '1',
+      'data-sidebar-artist': item.artist,
+      ...(virtualWindow.virtualized
+        ? { 'data-sidebar-virtual-index': virtualWindow.start + offset }
+        : {}),
+    },
   })).join('');
+  if (virtualWindow.virtualized && virtualWindow.after > 0) {
+    html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="after" aria-hidden="true" style="height:${virtualWindow.after}px"></div>`;
+  }
   return html;
 }
 
@@ -97,7 +175,10 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
-  return `${showAllArtistsLink}\u001d${artistSignature}`;
+  const virtualWindow = options.virtualWindow?.virtualized
+    ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
+    : 'all';
+  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {

@@ -76,8 +76,8 @@
   const fetch = (url, init) => nativeFetch(url, { ...init, ...(requests ? { signal: requests.signal } : {}) });
   const cleanup = () => { active = false; requests?.abort(); disposeMemberMenus(); removePlacementListeners(); removeSurfaceListener(); removeDismissalListener(); };
   const navigate = (url) => {
-    if (!active) return Promise.resolve(false);
-    return options.navigate ? options.navigate(url) : window.location.assign(url);
+    if (!active || typeof options.navigate !== 'function') return Promise.resolve(false);
+    return options.navigate(url);
   };
 
   document.querySelectorAll('[data-password-toggle]').forEach((button) => {

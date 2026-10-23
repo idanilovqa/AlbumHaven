@@ -298,7 +298,7 @@ class Config:
     LASTFM_API_ROOT = os.environ.get("LASTFM_API_ROOT", "https://ws.audioscrobbler.com/2.0/").strip()
     LASTFM_API_ENABLED = bool(LASTFM_API_KEY and LASTFM_API_SECRET)
     ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED = (
-        os.environ.get("ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED", "1")
+        os.environ.get("ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED", "0")
         .strip()
         .lower()
         not in {"0", "false", "no"}

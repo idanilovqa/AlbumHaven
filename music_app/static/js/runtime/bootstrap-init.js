@@ -1,10 +1,18 @@
-const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 5000;
+const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 0;
 
 restorePlayerAppearance();
 attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof loadCoverLookupNotificationCounts === 'function') {
+  void loadCoverLookupNotificationCounts({ toast: false });
+}
+document.getElementById('cover-lookup-drawer-body')?.addEventListener(
+  'scroll',
+  handleCoverLookupDrawerScroll,
+  { passive: true },
+);
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();
@@ -109,8 +117,11 @@ const shouldApplyEmbeddedSidebarHydration = Boolean(
   && embeddedStartupViewPatch.artists_sidebar.length
 );
 const shouldTreatStartupPreviewAsVisibleReady = Boolean(
-  shouldApplyEmbeddedSidebarHydration
-  && startupHydrationFollowupEndpoint
+  bootstrap.startupPreview?.renderedGalleryMarkup
+  || (
+    shouldApplyEmbeddedSidebarHydration
+    && startupHydrationFollowupEndpoint
+  )
 );
 if (shouldStartImmediateHydration) {
   startupMetrics.beginInitialRefresh();
@@ -185,7 +196,7 @@ if (
   && typeof startupMetrics?.completeVisibleInitialRefresh === 'function'
 ) {
   startupMetrics.completeVisibleInitialRefresh(state.view, {
-    hydrationTier: 'sidebar',
+    hydrationTier: startupHydrationTier,
     source: 'startup_preview',
   });
 }
@@ -203,6 +214,7 @@ updateStatusIndicator({
   relations_source: 'local',
   covers_in_progress: Boolean(bootstrap.coversInProgress),
   covers_processed: 0,
+  covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
   last_scan_display: bootstrap.lastScanDisplay || ''
@@ -301,6 +313,17 @@ if (shouldStartImmediateHydration) {
 
 
 document.addEventListener('contextmenu', (event) => {
+  const sidebarArtist = event.target.closest('[data-sidebar-artist]');
+  if (sidebarArtist) {
+    event.preventDefault();
+    clearArtistTreeLongPressGesture();
+    showArtistTreeContextMenu(
+      event.clientX,
+      event.clientY,
+      sidebarArtist.getAttribute('data-sidebar-artist') || '',
+    );
+    return;
+  }
   const versionTab = event.target.closest('[data-version-context-key]');
   if (versionTab) {
     event.preventDefault();
@@ -315,6 +338,9 @@ document.addEventListener('contextmenu', (event) => {
 });
 
 document.addEventListener('click', (event) => {
+  if (!event.target.closest('#artist-tree-context-menu') && typeof hideArtistTreeContextMenu === 'function') {
+    hideArtistTreeContextMenu();
+  }
   if (!event.target.closest('#status-context-menu')) {
     hideStatusContextMenu();
   }
@@ -359,8 +385,7 @@ document.addEventListener('contextmenu', (event) => {
 
 document.addEventListener('click', (event) => {
   const insideAlbumMenu = event.target.closest('#album-card-context-menu');
-  const insideAlbumCard = event.target.closest('.album-card');
-  if (!insideAlbumMenu && !insideAlbumCard) {
+  if (!insideAlbumMenu) {
     hideAlbumCardContextMenu();
   }
 });
@@ -393,6 +418,11 @@ window.addEventListener('focus', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    if (typeof reconcileBrowserPlaybackOnForeground === 'function') {
+      void Promise.resolve(reconcileBrowserPlaybackOnForeground()).catch((error) => {
+        console.warn('[AlbumHaven][Playback] Foreground recovery failed.', error);
+      });
+    }
     reconcileLoopEditSessionExpiry();
     handleViewportRefocusVisibilityChange();
     return;

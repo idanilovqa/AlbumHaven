@@ -60,6 +60,79 @@ test(`new search resets the viewport only when full results apply (equivalent to
 });
 }
 
+test('same-query preserve-scroll response retains mounted children for scroll deferral', async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  const previousGroups = [{
+    artist: 'Neal Morse',
+    albums: [
+      { key: 'neal::testimony', name: 'Testimony' },
+      { key: 'neal::one', name: 'One' },
+    ],
+  }];
+  context.state.view = {
+    ...context.state.view,
+    query: 'Neal Morse',
+    artist_groups: previousGroups,
+  };
+
+  const refresh = context.fetchAndRender('/view-data?q=Neal%20Morse', false, {
+    preserveScroll: true,
+    restartIfSameUrl: true,
+  });
+  pendingRequests[0].resolveWith({
+    query: 'Neal Morse',
+    artist_groups: [{
+      artist: 'Neal Morse',
+      albums: [{ key: 'neal::testimony', name: 'Testimony' }],
+    }],
+    payload_tier: 'full',
+  });
+  await refresh;
+
+  assert.equal(calls.renderView.length, 1);
+  assert.equal(calls.renderView[0].preserveMountedGallery, undefined);
+  assert.equal(calls.renderView[0].preserveMountedGalleryChildren, true);
+});
+
+test('post-scan search refresh rejects a transient active-scan snapshot', async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  const scheduledRetries = [];
+  const previousGroups = [{
+    artist: 'Neal Morse',
+    albums: [
+      { key: 'neal::testimony', name: 'Testimony' },
+      { key: 'neal::one', name: 'One' },
+    ],
+  }];
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduledRetries.push({ callback, delayMs });
+    return scheduledRetries.length;
+  };
+  context.state.view = {
+    ...context.state.view,
+    query: 'Neal Morse',
+    selected_artist: 'Neal Morse',
+    artist_groups: previousGroups,
+    album_count: 2,
+  };
+  context.state.ui.pendingScanCompletionViewRefresh = true;
+
+  const refresh = context.dispatchPendingScanCompletionViewRefresh();
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    query: 'Neal Morse',
+    artist_groups: [],
+    album_count: 0,
+    view_data_source: 'transient_scan_state',
+  });
+  await refresh;
+
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(context.state.view.artist_groups, previousGroups);
+  assert.equal(context.state.ui.pendingScanCompletionViewRefresh, true);
+  assert.deepEqual(scheduledRetries.map(({ delayMs }) => delayMs), [1000]);
+});
+
 for (const initialContext of ['root', 'requested_artist', 'mobile_utility']) {
 test(`repeated Enter while search is pending preserves the active result owner (${initialContext})`, async () => {
   const { context, calls, pendingRequests } = createSearchOwnerContext();
@@ -406,6 +479,9 @@ function createContext() {
             resolve({
               ok: payload?.responseOk ?? (payload?.ok !== false),
               status: payload?.status || 200,
+              clone() {
+                return { json: async () => payload };
+              },
               async json() {
                 return payload;
               },
@@ -584,6 +660,116 @@ test('fetchAndRender rejects JSON HTTP errors without applying their payload', a
 
   await assert.rejects(request, /Search unavailable/);
   assert.equal(calls.applyViewPayload.length, 0);
+});
+
+for (const pendingCode of ['search_projection_pending', 'gallery_projection_pending']) {
+test(`pending search retries and applies only the recovered payload (${pendingCode})`, async () => {
+  const { context, pendingRequests, calls } = createContext();
+  const timers = [];
+  context.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+  const request = context.fetchAndRender('/view-data?q=recover', false);
+  pendingRequests[0].resolveWith({ status: 503, ok: false, code: pendingCode });
+  await new Promise(setImmediate);
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(timers.length, 1);
+  timers.shift()();
+  await new Promise(setImmediate);
+  assert.equal(pendingRequests.length, 2);
+  const payload = { query: 'recover', artist_groups: [] };
+  pendingRequests[1].resolveWith(payload);
+  await request;
+  assert.deepEqual(calls.applyViewPayload, [payload]);
+});
+
+test(`pending search cancellation clears its retry timer without another request (${pendingCode})`, async () => {
+  const { context, pendingRequests } = createContext();
+  const controller = new AbortController();
+  const cleared = [];
+  context.setTimeout = () => 17;
+  context.clearTimeout = (timer) => cleared.push(timer);
+  const response = { status: 503, clone: () => ({ json: async () => ({ code: pendingCode }) }) };
+  const request = context.retryPendingGalleryViewResponse(response, '/view-data?q=old', controller.signal);
+  await new Promise(setImmediate);
+  controller.abort();
+  await assert.rejects(request, { name: 'AbortError' });
+  assert.deepEqual(cleared, [17]);
+  assert.equal(pendingRequests.length, 0);
+});
+
+test(`a superseding query cancels pending recovery and never applies the old search (${pendingCode})`, async () => {
+  const { context, pendingRequests, calls } = createContext();
+  const timers = [];
+  const cleared = [];
+  context.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+  context.clearTimeout = (timer) => cleared.push(timer);
+  const oldRequest = context.fetchAndRender('/view-data?q=old', false);
+  pendingRequests[0].resolveWith({ status: 503, ok: false, code: pendingCode });
+  await new Promise(setImmediate);
+  const newRequest = context.fetchAndRender('/view-data?q=new', false);
+  await new Promise(setImmediate);
+  assert.equal(pendingRequests.length, 2);
+  const payload = { query: 'new', artist_groups: [] };
+  pendingRequests[1].resolveWith(payload);
+  await Promise.all([oldRequest, newRequest]);
+  assert.deepEqual(calls.applyViewPayload, [payload]);
+  assert.deepEqual(cleared, [1]);
+});
+
+test(`pending search recovery stops retrying at its deadline (${pendingCode})`, async () => {
+  const { context, pendingRequests } = createContext();
+  let now = 0;
+  context.Date = { now: () => now };
+  context.setTimeout = (callback) => {
+    now += 60000;
+    queueMicrotask(callback);
+    return 1;
+  };
+  const response = { status: 503, clone: () => ({ json: async () => ({ code: pendingCode }) }) };
+  const request = context.retryPendingGalleryViewResponse(response, '/view-data?q=missing');
+  await new Promise(setImmediate);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({ status: 503, ok: false, code: pendingCode });
+  const result = await request;
+  assert.equal(result.status, 503);
+  assert.equal(pendingRequests.length, 1);
+});
+
+}
+
+test('unrelated service errors never schedule search recovery', async () => {
+  const { context, pendingRequests } = createContext();
+  context.setTimeout = () => { throw new Error('unexpected retry'); };
+  const response = { status: 503, clone: () => ({ json: async () => ({ error: 'unavailable' }) }) };
+  assert.equal(await context.retryPendingGalleryViewResponse(response, '/view-data'), response);
+  assert.equal(pendingRequests.length, 0);
+});
+
+test('fetchAndRender skips the loaded-album snapshot when no album modal is open', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.modalReleases = [];
+  context.state.modalReleaseIndex = 0;
+  context.flattenVisibleAlbums = () => {
+    throw new Error('the loaded gallery must not be flattened');
+  };
+
+  const refresh = context.fetchAndRender('/view-data', false);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  assert.equal(await refresh, true);
+});
+
+test('fetchAndRender uses the open-modal snapshot without flattening the loaded gallery', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.modalReleases = [{ key: 'artist::album', cover_path: 'cover.jpg' }];
+  context.state.modalReleaseIndex = 0;
+  context.flattenVisibleAlbums = () => {
+    throw new Error('the loaded gallery must not be flattened');
+  };
+
+  const refresh = context.fetchAndRender('/view-data', false);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  assert.equal(await refresh, true);
 });
 
 test('fetchAndRender rejects JSON application errors without applying their payload', async () => {
@@ -1264,7 +1450,6 @@ test('dropping a stale queued family request still dispatches pending scan recon
     return `/view-data?artist=Morse%20Portnoy%20George${relatedArtist ? `&related_artist=${encodeURIComponent(relatedArtist)}` : ''}`;
   };
   context.state.ui.pendingScanCompletionViewRefresh = true;
-
   const activeRequest = context.fetchAndRender('/view-data?artist=Morse%20Portnoy%20George', false, {
     preserveScroll: true,
   });
@@ -2196,6 +2381,63 @@ test('fetchAndRender schedules a full startup followup after sidebar-only hydrat
   ]);
 });
 
+test('fetchAndRender schedules sidebar hydration after gallery-first startup without replacing the gallery', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const scheduledTimeouts = [];
+  const applyOptions = [];
+  const applyViewPayload = context.applyViewPayload;
+  context.applyViewPayload = (payload, options) => {
+    applyOptions.push(options);
+    applyViewPayload(payload, options);
+  };
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduledTimeouts.push({ callback, delayMs });
+    return scheduledTimeouts.length;
+  };
+  context.isEffectivelyEmptyView = () => false;
+
+  const galleryPromise = context.fetchAndRender('/view-data?omit_sidebar=1', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'full',
+    startupHydrationFollowupEndpoint: '/view-data?payload_tier=sidebar',
+  });
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+    artist_count: 1,
+    album_count: 1,
+    gallery_page: { has_more: false },
+    payload_tier: 'gallery_page',
+  });
+  await galleryPromise;
+  await flushMicrotasks();
+
+  assert.equal(context.startupMetrics.completed, 0);
+  assert.equal(scheduledTimeouts.length, 1);
+  assert.equal(scheduledTimeouts[0].delayMs, 350);
+  scheduledTimeouts[0].callback();
+  await flushMicrotasks();
+
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Broadcast', count: 3 }],
+    artist_count: 6274,
+    payload_tier: 'sidebar',
+  });
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.deepEqual(context.state.view.artist_groups, [
+    { artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] },
+  ]);
+  assert.deepEqual(context.state.view.artists_sidebar, [{ artist: 'Broadcast', count: 3 }]);
+  assert.equal(calls.applyViewPayload.length, 2);
+  assert.strictEqual(calls.applyViewPayload[1].artist_groups, calls.applyViewPayload[0].artist_groups);
+  assert.equal(applyOptions[1].preserveMountedGalleryChildren, true);
+});
+
 test('fetchAndRender still schedules the full startup followup when sidebar hydration leaves a non-empty root view', async () => {
   const { context, calls, pendingRequests } = createContext();
   const scheduledTimeouts = [];
@@ -2284,6 +2526,39 @@ test('fetchAndRender marks visible startup readiness after sidebar hydration wit
   });
 });
 
+test('fetchAndRender completes selected artist startup through its sidebar followup', async () => {
+  const { context, pendingRequests } = createContext();
+  const fetchAndRender = context.fetchAndRender;
+  let followupRequest;
+  context.fetchAndRender = (...args) => {
+    const result = fetchAndRender(...args);
+    if (args[0] === '/view-data?payload_tier=sidebar') followupRequest = result;
+    return result;
+  };
+  const scheduled = [];
+  context.scheduleBrowserTimeout = (callback) => { scheduled.push(callback); return scheduled.length; };
+  context.state.view.selected_artist = 'Broadcast';
+  const request = context.fetchAndRender('/view-data?artist=Broadcast', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'full',
+    startupHydrationFollowupEndpoint: '/view-data?payload_tier=sidebar',
+  });
+  pendingRequests[0].resolveWith({
+    selected_artist: 'Broadcast', query: '', artist_groups: [], payload_tier: 'full',
+  });
+  await request;
+  for (const callback of scheduled.splice(0)) callback();
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }], payload_tier: 'sidebar',
+  });
+  await followupRequest;
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(context.state.view.selected_artist, 'Broadcast');
+});
+
 test('fetchAndRender completes startup refresh after sidebar hydration when no followup endpoint is present', async () => {
   const { context, pendingRequests } = createContext();
 
@@ -2352,6 +2627,39 @@ test('fetchAndRender clears queued startup followup state before a user request 
     artist_groups: [{ artist: 'Broadcast' }],
   });
   await requestPromise;
+});
+
+test('dispatchStartupHydrationFollowup dispatches sidebar hydration for the retained selected artist', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.view.selected_artist = 'Selected artist';
+  context.queueStartupHydrationFollowup('/view-data?payload_tier=sidebar', {
+    startupHydrationTier: 'sidebar',
+    retainMountedSelectedViewState: { ...context.state.view },
+  });
+  context.dispatchStartupHydrationFollowup(context.state.ui.pendingStartupHydrationFollowup);
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/view-data?payload_tier=sidebar');
+});
+
+test('dispatchStartupHydrationFollowup cancels retained sidebar hydration after navigation changes', async () => {
+  for (const change of [
+    (context) => { context.state.view.selected_artist = 'Another artist'; },
+    (context) => { context.state.view.query = 'Another query'; },
+    (context) => { context.state.ui.viewStateRevision += 1; },
+  ]) {
+    const { context, pendingRequests } = createContext();
+    context.state.view.selected_artist = 'Selected artist';
+    context.queueStartupHydrationFollowup('/view-data?payload_tier=sidebar', {
+      startupHydrationTier: 'sidebar',
+      retainMountedSelectedViewState: { ...context.state.view },
+    });
+    change(context);
+    context.dispatchStartupHydrationFollowup(context.state.ui.pendingStartupHydrationFollowup);
+    await flushMicrotasks();
+    assert.equal(pendingRequests.length, 0);
+    assert.equal(context.state.ui.pendingStartupHydrationFollowup, null);
+  }
 });
 
 test('dispatchStartupHydrationFollowup retries a queued startup followup when the first dispatch sees the app still busy', async () => {
@@ -3236,6 +3544,7 @@ test('idle pollStatus waits for real foreground cover idle and retries immediate
   assert.equal(pendingRequests[0].url, '/status');
   pendingRequests[0].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });
@@ -3311,6 +3620,7 @@ test('pollStatus does not refresh the populated root browse when cover work fini
   assert.equal(pendingRequests.length, 1);
   pendingRequests[0].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });
@@ -3319,10 +3629,36 @@ test('pollStatus does not refresh the populated root browse when cover work fini
 
   assert.equal(pendingRequests.length, 1);
   assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
+  assert.deepEqual(calls.showToast, []);
+});
+
+test('pollStatus reports an interrupted cover run without claiming covers were updated', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.view = {
+    ...context.state.view,
+    query: '',
+    selected_artist: '',
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+  };
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.wasCoverPollingBusy = true;
+  context.state.wasPollingBusy = false;
+
+  const statusPromise = context.pollStatus();
+  pendingRequests[0].resolveWith({
+    covers_in_progress: false,
+    covers_outcome: '',
+    scan_in_progress: false,
+    relations_in_progress: false,
+  });
+  await statusPromise;
+  await flushMicrotasks();
+
   assert.deepEqual(calls.showToast, [{
-    message: 'Album covers updated.',
-    level: 'success',
-    durationMs: 3200,
+    message: 'Cover search was interrupted.',
+    level: 'warning',
+    durationMs: 4800,
   }]);
 });
 
@@ -3347,6 +3683,7 @@ test('pollStatus defers cover reconciliation until an in-flight selected-artist 
   assert.equal(pendingRequests[1].url, '/status');
   pendingRequests[1].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });
@@ -3381,11 +3718,7 @@ test('pollStatus defers cover reconciliation until an in-flight selected-artist 
     '/status',
     '/view-data?artist=A.C.T',
   ]);
-  assert.deepEqual(calls.showToast, [{
-    message: 'Album covers updated.',
-    level: 'success',
-    durationMs: 3200,
-  }]);
+  assert.deepEqual(calls.showToast, []);
 });
 
 test('pollStatus refreshes the current loaded gallery when a background scan completes', async () => {
@@ -3805,6 +4138,12 @@ test('pollStatus refreshes a selected artist after pending sidebar navigation se
 
 test('scan completion reissues against the current family filter when the first refresh loses revision ownership', async () => {
   const { context, pendingRequests } = createArtistFamilyOwnershipContext();
+  const backgroundRefreshOptions = [];
+  const fetchAndRender = context.fetchAndRender;
+  context.fetchAndRender = (url, pushHistory, options) => {
+    backgroundRefreshOptions.push(options);
+    return fetchAndRender(url, pushHistory, options);
+  };
   seedMorseArtistFamily(context);
   context.buildApiUrl = (view) => {
     const relatedArtist = Array.isArray(view?.related_filter_artists)
@@ -3844,6 +4183,7 @@ test('scan completion reissues against the current family filter when the first 
   });
 
   assert.equal(await refreshPromise, true);
+  assert.equal(backgroundRefreshOptions.at(-1).preserveMountedGalleryChildren, true);
   assert.equal(context.state.ui.pendingScanCompletionViewRefresh, false);
   assert.equal(context.state.ui.pendingScanCompletionViewRefreshRetryCount, 0);
   assert.deepEqual(Array.from(context.state.view.related_filter_artists), ['Neal Morse']);
@@ -6132,10 +6472,12 @@ test('pollStatus preserves valid status when the server returns malformed JSON',
   const previousStatus = context.state.status;
   const previousView = context.state.view;
   await context.pollStatus();
-  assert.equal(context.state.status, previousStatus);
+  assert.equal(context.state.status.total_albums, previousStatus.total_albums);
+  assert.equal(context.state.status.allowed_actions, previousStatus.allowed_actions);
+  assert.equal(context.state.status.status_connection_lost, true);
   assert.equal(context.state.view, previousView);
   assert.equal(calls.updateStatusIndicator.length, 0);
-  assert.equal(calls.renderLibraryLoader.length, 0);
+  assert.equal(calls.renderLibraryLoader.length, 1);
 });
 
 for (const failure of [
@@ -6154,10 +6496,12 @@ test(`pollStatus preserves valid status and gallery on error ${failure.status}/$
   const pending = context.pollStatus();
   pendingRequests[0].resolveWith(failure);
   await pending;
-  assert.equal(context.state.status, previousStatus);
+    assert.equal(context.state.status.total_albums, previousStatus.total_albums);
+    assert.equal(context.state.status.allowed_actions, previousStatus.allowed_actions);
+    assert.equal(context.state.status.status_connection_lost, true);
   assert.equal(context.state.view, previousView);
   assert.equal(calls.updateStatusIndicator.length, 0);
-  assert.equal(calls.renderLibraryLoader.length, 0);
+    assert.equal(calls.renderLibraryLoader.length, 1);
   assert.deepEqual(navigations, failure.status === 401 ? ['/login'] : []);
 });
 }
@@ -6360,6 +6704,70 @@ test('restoring a cached root view schedules bounded viewport filling without a 
   assert.equal(pendingRequests.length, 0);
 });
 
+test('late gallery refresh does not restore an obsolete mobile return position after user scroll', () => {
+  const { context, runtimeRenderView } = createContext();
+  const galleryScroll = { scrollTop: 1480, scrollLeft: 0 };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? galleryScroll : originalGetElementById(id)
+  );
+  const renders = [];
+  context.renderArtistGroups = (options) => renders.push(options);
+
+  runtimeRenderView({
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPositionApplied: true,
+    absoluteScrollPosition: { scrollTop: 800, scrollLeft: 0 },
+  });
+
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].preserveScroll, true);
+  assert.equal(renders[0].preserveAbsoluteScroll, false);
+  assert.equal(renders[0].absoluteScrollPosition, undefined);
+  assert.equal(renders[0].absoluteScrollPositionApplied, undefined);
+});
+
+test('late mobile return refresh preserves the visible album after initial coordinates were applied', () => {
+  const { context, runtimeRenderView } = createContext();
+  const galleryScroll = { scrollTop: 800, scrollLeft: 0 };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'albums-scroll' ? galleryScroll : originalGetElementById(id);
+  const renders = [];
+  context.renderArtistGroups = options => renders.push(options);
+  runtimeRenderView({
+    preserveScroll: true, preserveAbsoluteScroll: true,
+    absoluteScrollPositionApplied: true,
+    absoluteScrollPosition: { scrollTop: 800, scrollLeft: 0 },
+  });
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].preserveScroll, true);
+  assert.equal(renders[0].preserveAbsoluteScroll, false,
+    'after immediate restoration, refreshed leading content must preserve the visible album instead of old pixels');
+  assert.equal(renders[0].absoluteScrollPosition, undefined);
+});
+
+test('unmounted gallery may apply its requested mobile return position after data arrives', () => {
+  const { context, runtimeRenderView } = createContext();
+  const galleryScroll = { scrollTop: 0, scrollLeft: 0 };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? galleryScroll : originalGetElementById(id)
+  );
+  const renders = [];
+  context.renderArtistGroups = (options) => renders.push(options);
+
+  runtimeRenderView({
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollTop: 800, scrollLeft: 0 },
+  });
+
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].preserveAbsoluteScroll, true);
+  assert.deepEqual(renders[0].absoluteScrollPosition, { scrollTop: 800, scrollLeft: 0 });
+});
+
 
 function boundedRootRefreshFixture() {
   const fixture = createContext();
@@ -6386,8 +6794,8 @@ function boundedRootRefreshPage(start, length = 50, revision = 'fresh', hasMore 
     query: '', selected_artist: '', surface_request: 'albums',
     artist_groups: [{ artist: 'A', albums: Array.from({ length }, (_, i) => ({ key: `${revision}-${start + i}` })) }],
     album_count: 300,
-    artist_count: 1,
-    artists_sidebar: [{ artist: 'A', count: 300 }],
+    artist_count: 2,
+    artists_sidebar: [{ artist: 'A', count: 150 }, { artist: 'B', count: 150 }],
     gallery_page: { revision, next_cursor: hasMore ? `${revision}-${start + length}` : null, has_more: hasMore, page_size: 50 },
   };
 }
@@ -6396,6 +6804,16 @@ async function resolveBoundedRootRefreshPage(fixture, index, payload) {
   assert.ok(fixture.pendingRequests[index], `expected bounded page request ${index}`);
   fixture.pendingRequests[index].resolveWith(payload);
   await new Promise(resolve => setImmediate(resolve));
+}
+
+async function resolveBoundedRootRefreshEndpoint(fixture, index, revision = 'fresh') {
+  const url = new URL(fixture.pendingRequests[index].url, 'http://localhost');
+  assert.equal(url.searchParams.get('gallery_anchor_artist'), 'A');
+  assert.equal(url.searchParams.has('gallery_cursor'), false);
+  assertBoundedRootRefreshUnapplied(fixture);
+  const payload = boundedRootRefreshPage(0, 150, revision);
+  Object.assign(payload.gallery_page, { anchor_artist: 'A', anchor_group_artist: 'A', anchor_offset: 0 });
+  await resolveBoundedRootRefreshPage(fixture, index, payload);
 }
 
 function assertBoundedRootRefreshUnapplied(fixture) {
@@ -6413,9 +6831,10 @@ test('bounded root refresh reconstructs loaded coverage atomically with fresh al
   await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
   assertBoundedRootRefreshUnapplied(f);
   await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+  await resolveBoundedRootRefreshEndpoint(f, 3);
   assert.equal(await request, true);
-  assert.equal(f.pendingRequests.length, 3, 'stop after covering the previous108 albums');
-  for (const item of f.pendingRequests.slice(1)) {
+  assert.equal(f.pendingRequests.length, 4, 'three contiguous pages and one endpoint lookup cover the retained artist');
+  for (const item of f.pendingRequests.slice(1, 3)) {
     const url = new URL(item.url, 'http://localhost');
     assert.equal(url.searchParams.get('gallery_page_size'), '50');
     assert.ok(url.searchParams.get('gallery_cursor'));
@@ -6430,6 +6849,564 @@ test('bounded root refresh reconstructs loaded coverage atomically with fresh al
   assert.equal(new Set(albums.map(album => album.key)).size, 150);
   assert.ok(albums.every(album => album.key.startsWith('fresh-')), 'deleted/changed old rows must not be merged back');
   assert.equal(f.context.state.view.gallery_page.next_cursor, 'fresh-150');
+});
+
+function anchoredRefreshGroups(artists) {
+  return artists.map(artist => ({
+    artist,
+    albums: [{ key: `album-${artist}`, name: `Album ${artist}` }],
+  }));
+}
+
+async function resolveAuthoritativeAnchorRefresh(fixture, artists) {
+  // Model the real endpoint's anchor contract: missing artists are errors;
+  // an anchored window cannot contain artists preceding its requested start.
+  for (let index = 0; index < 5 && fixture.pendingRequests[index]; index += 1) {
+    const url = new URL(fixture.pendingRequests[index].url, 'http://localhost');
+    const anchor = url.searchParams.get('gallery_anchor_artist');
+    if (anchor && !artists.includes(anchor)) {
+      await resolveBoundedRootRefreshPage(fixture, index, {
+        status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+      });
+    } else {
+      const groups = anchoredRefreshGroups(anchor ? artists.slice(artists.indexOf(anchor)) : artists);
+      await resolveBoundedRootRefreshPage(fixture, index, {
+        ...boundedRootRefreshPage(0, groups.length, 'fresh', false),
+        artist_groups: groups,
+        artist_count: artists.length,
+        album_count: artists.length,
+      });
+    }
+  }
+}
+
+test('bounded root refresh retains earlier groups prepended after an artist jump', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.state.view.artist_groups = anchoredRefreshGroups(['A', 'B', 'C', 'D']);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page,
+    anchor_artist: 'C', anchor_group_artist: 'C', has_previous: false,
+  };
+  // B is the visible album after scrolling upward from the original C jump.
+  const visibleAlbumKey = f.context.state.view.artist_groups[1].albums[0].key;
+  const request = f.start();
+  await resolveAuthoritativeAnchorRefresh(f, ['A', 'B', 'C', 'D']);
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['A', 'B', 'C', 'D']);
+  assert.ok(f.context.state.view.artist_groups.some(group => group.albums.some(album => album.key === visibleAlbumKey)),
+    'refresh must retain the currently visible album, not replace it with the old jump window');
+  assert.equal(f.calls.showToast.length, 0);
+});
+
+test('bounded root refresh retains the trailing artist when inserted albums fill the old count', async () => {
+  const f = boundedRootRefreshFixture();
+  const retained = Array.from({ length: 75 }, (_, index) => `Artist ${String(index).padStart(3, '0')}`);
+  const inserted = Array.from({ length: 50 }, (_, index) => `Artist 000 inserted ${String(index).padStart(3, '0')}`);
+  const refreshed = [retained[0], ...inserted, ...retained.slice(1)];
+  f.context.state.view.artist_groups = anchoredRefreshGroups(retained);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page,
+    anchor_artist: retained[0], anchor_group_artist: retained[0],
+  };
+  const request = f.start();
+  await resolveBoundedRootRefreshPage(f, 0, {
+    ...boundedRootRefreshPage(0, 50, 'fresh', true),
+    artist_groups: anchoredRefreshGroups(refreshed.slice(0, 50)),
+  });
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 1, {
+    ...boundedRootRefreshPage(50, 50, 'fresh', true),
+    artist_groups: anchoredRefreshGroups(refreshed.slice(50, 100)),
+  });
+  assert.equal(f.pendingRequests.length, 3,
+    'inserted albums must not satisfy coverage while the retained trailing artist is missing');
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 2, {
+    ...boundedRootRefreshPage(100, 25, 'fresh', false),
+    artist_groups: anchoredRefreshGroups(refreshed.slice(100)),
+  });
+  assert.equal(await request, true);
+  assert.ok(f.context.state.view.artist_groups.some(group => group.artist === retained.at(-1)));
+});
+
+test('bounded root refresh reaches the retained trailing artist beyond the old page budget', async () => {
+  const f = boundedRootRefreshFixture();
+  const retained = Array.from({ length: 75 }, (_, index) => `Artist ${String(index).padStart(3, '0')}`);
+  const inserted = Array.from({ length: 76 }, (_, index) => `Artist 000 inserted ${String(index).padStart(3, '0')}`);
+  const refreshed = [retained[0], ...inserted, ...retained.slice(1)];
+  f.context.state.view.artist_groups = anchoredRefreshGroups(retained);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page,
+    anchor_artist: retained[0], anchor_group_artist: retained[0],
+  };
+  assert.equal(await resolveRootRefreshCatalog(f, f.start(), refreshed), true);
+  assert.equal(f.pendingRequests.filter(item => new URL(item.url, 'http://localhost')
+    .searchParams.has('gallery_cursor')).length, 3,
+  'refresh must fetch all three contiguous continuation pages to reach the surviving endpoint');
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), refreshed);
+  assert.equal(f.calls.showToast.length, 0);
+});
+
+async function resolveRootRefreshCatalog(fixture, request, artists, aliases = {}) {
+  let finished = false;
+  request.then(() => { finished = true; }, () => { finished = true; });
+  for (let index = 0; index < 20 && !finished; index += 1) {
+    assertBoundedRootRefreshUnapplied(fixture);
+    const pending = fixture.pendingRequests[index];
+    assert.ok(pending, `expected catalog request ${index}`);
+    const url = new URL(pending.url, 'http://localhost');
+    const cursor = url.searchParams.get('gallery_cursor');
+    const requested = url.searchParams.get('gallery_anchor_artist');
+    const canonical = aliases[requested] || requested;
+    const anchorOffset = requested && !cursor ? artists.indexOf(canonical) : null;
+    if (anchorOffset === -1) {
+      await resolveBoundedRootRefreshPage(fixture, index, {
+        status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+      });
+      continue;
+    }
+    // One album per artist makes production's complete-group page bounds exact.
+    const start = cursor ? Number(cursor.slice('fresh-'.length))
+      : anchorOffset === null ? 0 : Math.max(0, Math.min(anchorOffset - 16, artists.length - 50));
+    const selected = artists.slice(start, start + 50);
+    const payload = boundedRootRefreshPage(start, selected.length, 'fresh', start + selected.length < artists.length);
+    payload.artist_groups = anchoredRefreshGroups(selected);
+    payload.album_count = artists.length;
+    payload.artist_count = artists.length;
+    payload.artists_sidebar = artists.map(artist => ({ artist, count: 1 }));
+    if (anchorOffset !== null) Object.assign(payload.gallery_page, {
+      anchor_artist: requested, anchor_group_artist: canonical, anchor_offset: anchorOffset,
+    });
+    await resolveBoundedRootRefreshPage(fixture, index, payload);
+  }
+  assert.equal(finished, true, 'catalog recovery must terminate within a bounded request count');
+  return request;
+}
+
+test('bounded root refresh retains surviving artists when the trailing artist is deleted', async () => {
+  const f = boundedRootRefreshFixture();
+  const retained = Array.from({ length: 75 }, (_, index) => `Artist ${String(index).padStart(3, '0')}`);
+  const catalog = Array.from({ length: 300 }, (_, index) => `Artist ${String(index).padStart(3, '0')}`)
+    .filter(artist => artist !== retained.at(-1));
+  f.context.state.view.artist_groups = anchoredRefreshGroups(retained);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page, anchor_artist: retained[0], anchor_group_artist: retained[0],
+  };
+  assert.equal(await resolveRootRefreshCatalog(f, f.start(), catalog), true);
+  const displayed = Array.from(f.context.state.view.artist_groups, group => group.artist);
+  assert.deepEqual(displayed.slice(0, 74), retained.slice(0, -1));
+  assert.ok(!displayed.includes(retained.at(-1)), 'deleted artists must not be merged back');
+  assert.equal(f.calls.applyViewPayload.length, 1, 'the replacement must apply atomically');
+  assert.equal(f.calls.showToast.length, 0);
+});
+
+test('normal bounded root refresh falls back when the first retained artist is deleted', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+
+  const request = f.start();
+  assert.equal(new URL(f.pendingRequests[0].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Deleted');
+  await resolveBoundedRootRefreshPage(f, 0, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+
+  assert.equal(new URL(f.pendingRequests[1].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Survivor');
+  await resolveBoundedRootRefreshPage(f, 1, survivingRootRefreshPayload());
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['Survivor']);
+  assert.equal(f.calls.applyViewPayload.length, 1);
+  assert.equal(f.calls.showToast.length, 0);
+});
+
+function configureDeletedFirstRootRefresh(fixture) {
+  fixture.context.state.view.artist_groups = anchoredRefreshGroups(['Deleted', 'Survivor']);
+  fixture.context.state.view.gallery_page = {
+    ...fixture.context.state.view.gallery_page,
+    anchor_artist: 'Deleted', anchor_group_artist: 'Deleted',
+  };
+}
+
+function survivingRootRefreshPayload() {
+  const payload = boundedRootRefreshPage(0, 1, 'fresh', false);
+  payload.artist_groups = anchoredRefreshGroups(['Survivor']);
+  Object.assign(payload.gallery_page, {
+    anchor_artist: 'Survivor', anchor_group_artist: 'Survivor', anchor_offset: 0,
+  });
+  return payload;
+}
+
+test('normal bounded root refresh permits one revision restart after deleted-anchor fallback', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+
+  await resolveBoundedRootRefreshPage(f, 0, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+  await resolveBoundedRootRefreshPage(f, 1, { status: 409, ok: false });
+  assert.equal(new URL(f.pendingRequests[2].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Survivor');
+  await resolveBoundedRootRefreshPage(f, 2, survivingRootRefreshPayload());
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['Survivor']);
+  assert.equal(f.calls.applyViewPayload.length, 1);
+});
+
+test('normal bounded root refresh falls back after its one revision restart loses the anchor', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+
+  await resolveBoundedRootRefreshPage(f, 0, { status: 409, ok: false });
+  assert.equal(new URL(f.pendingRequests[1].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Deleted');
+  await resolveBoundedRootRefreshPage(f, 1, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+  assert.equal(new URL(f.pendingRequests[2].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Survivor');
+  await resolveBoundedRootRefreshPage(f, 2, survivingRootRefreshPayload());
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['Survivor']);
+  assert.equal(f.calls.applyViewPayload.length, 1);
+});
+
+test('normal bounded root refresh rejects later churn after its first-page revision restart', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const pending = f.start();
+  const request = assert.rejects(pending, /changed again/);
+
+  await resolveBoundedRootRefreshPage(f, 0, { status: 409, ok: false });
+  const replacement = boundedRootRefreshPage(0, 1, 'replacement', true);
+  replacement.artist_groups = anchoredRefreshGroups(['Deleted']);
+  Object.assign(replacement.gallery_page, {
+    anchor_artist: 'Deleted', anchor_group_artist: 'Deleted', anchor_offset: 0,
+  });
+  await resolveBoundedRootRefreshPage(f, 1, replacement);
+  await resolveBoundedRootRefreshPage(f, 2, { status: 409, ok: false });
+
+  await request;
+  assert.equal(f.pendingRequests.length, 3, 'the refresh must not start a third snapshot');
+  assert.equal(f.calls.applyViewPayload.length, 0);
+});
+
+test('normal bounded root refresh drops revision recovery after ownership changes', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+
+  await resolveBoundedRootRefreshPage(f, 0, { status: 409, ok: false });
+  f.context.state.ui.viewStateRevision += 1;
+  await resolveBoundedRootRefreshPage(f, 1, survivingRootRefreshPayload());
+
+  assert.equal(await request, false);
+  assert.equal(f.calls.applyViewPayload.length, 0);
+});
+
+test('normal bounded root refresh aborts deleted-anchor fallback with its request owner', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+
+  await resolveBoundedRootRefreshPage(f, 0, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+  f.context.claimLocalViewStateNavigation();
+  assert.equal(f.pendingRequests[1].options.signal.aborted, true);
+  await resolveBoundedRootRefreshPage(f, 1, survivingRootRefreshPayload());
+
+  assert.equal(await request, false);
+  assert.equal(f.calls.applyViewPayload.length, 0);
+});
+
+test('continuation revision restart falls back when its retained anchor was deleted', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+  const initial = boundedRootRefreshPage(0, 1, 'fresh', true);
+  initial.artist_groups = anchoredRefreshGroups(['Deleted']);
+  Object.assign(initial.gallery_page, {
+    anchor_artist: 'Deleted', anchor_group_artist: 'Deleted', anchor_offset: 0,
+  });
+  await resolveBoundedRootRefreshPage(f, 0, initial);
+
+  await resolveBoundedRootRefreshPage(f, 1, { status: 409, ok: false });
+  assert.equal(new URL(f.pendingRequests[2].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Deleted');
+  await resolveBoundedRootRefreshPage(f, 2, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+  assert.equal(new URL(f.pendingRequests[3].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Survivor');
+  await resolveBoundedRootRefreshPage(f, 3, survivingRootRefreshPayload());
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['Survivor']);
+  assert.equal(f.calls.applyViewPayload.length, 1);
+});
+
+test('bounded root refresh resolves a renamed trailing artist through canonical anchor metadata', async () => {
+  const f = boundedRootRefreshFixture();
+  const retained = Array.from({ length: 75 }, (_, index) => `Artist ${String(index).padStart(3, '0')}`);
+  const renamed = `${retained.at(-1)} canonical`;
+  const catalog = Array.from({ length: 300 }, (_, index) => `Artist ${String(index).padStart(3, '0')}`)
+    .map(artist => artist === retained.at(-1) ? renamed : artist);
+  f.context.state.view.artist_groups = anchoredRefreshGroups(retained);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page, anchor_artist: retained[0], anchor_group_artist: retained[0],
+  };
+  assert.equal(await resolveRootRefreshCatalog(f, f.start(), catalog, { [retained.at(-1)]: renamed }), true);
+  const displayed = Array.from(f.context.state.view.artist_groups, group => group.artist);
+  assert.deepEqual(displayed.slice(0, 75), [...retained.slice(0, -1), renamed]);
+  assert.ok(!displayed.includes(retained.at(-1)), 'the old display name must not be merged back');
+  assert.equal(f.calls.applyViewPayload.length, 1, 'the replacement must apply atomically');
+  assert.equal(f.calls.showToast.length, 0);
+});
+
+test('bounded root refresh locates its endpoint after the unanchored first artist disappears', async () => {
+  const f = boundedRootRefreshFixture();
+  const retained = Array.from({ length: 75 }, (_, index) => `Artist ${String(index).padStart(3, '0')}`);
+  const inserted = Array.from({ length: 77 }, (_, index) => `Artist 000 inserted ${String(index).padStart(3, '0')}`);
+  const refreshed = [...inserted, ...retained.slice(1)];
+  f.context.state.view.artist_groups = anchoredRefreshGroups(retained);
+  assert.equal(await resolveRootRefreshCatalog(f, f.start(), refreshed), true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), refreshed);
+  assert.equal(f.calls.showToast.length, 0);
+});
+
+test('unanchored root refresh retains the complete trailing artist after insertions', async () => {
+  const f = boundedRootRefreshFixture();
+  const preceding = boundedRootRefreshPage(0).artist_groups[0];
+  const original = Array.from({ length: 50 }, (_, index) => ({ key: `target-${index}` }));
+  const inserted = Array.from({ length: 25 }, (_, index) => ({ key: `inserted-${index}` }));
+  const target = { artist: 'Target', albums: [...inserted, ...original] };
+  f.context.state.view.artist_groups = [preceding, { artist: 'Target', albums: original }];
+  const request = f.start();
+  await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+  await resolveBoundedRootRefreshPage(f, 1, {
+    ...boundedRootRefreshPage(50),
+    artist_groups: [{ artist: 'Target', albums: target.albums.slice(0, 50) }],
+  });
+  assertBoundedRootRefreshUnapplied(f);
+  const endpointUrl = new URL(f.pendingRequests[2].url, 'http://localhost');
+  assert.equal(endpointUrl.searchParams.get('gallery_anchor_artist'), 'Target');
+  await resolveBoundedRootRefreshPage(f, 2, {
+    ...boundedRootRefreshPage(50, 75),
+    artist_groups: [target],
+    gallery_page: {
+      ...boundedRootRefreshPage(50, 75).gallery_page,
+      anchor_artist: 'Target', anchor_group_artist: 'Target', anchor_offset: 50,
+    },
+  });
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 3, {
+    ...boundedRootRefreshPage(100, 50),
+    artist_groups: [
+      { artist: 'Target', albums: target.albums.slice(50) },
+      { artist: 'U', albums: Array.from({ length: 25 }, (_, index) => ({ key: `u-${index}` })) },
+    ],
+  });
+  assert.equal(await request, true);
+  const refreshed = f.context.state.view.artist_groups.find(group => group.artist === 'Target');
+  assert.deepEqual(Array.from(refreshed.albums, album => album.key), target.albums.map(album => album.key));
+  assert.equal(f.calls.applyViewPayload.length, 1, 'apply only the complete contiguous replacement');
+});
+
+test('refresh endpoint lookup discards a response after ownership changes during JSON decoding', async () => {
+  const f = boundedRootRefreshFixture();
+  let owns = true;
+  f.context.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => {
+      owns = false;
+      return {
+        artist_groups: anchoredRefreshGroups(['Target']),
+        gallery_page: { anchor_group_artist: 'Target', anchor_offset: 50, revision: 'fresh' },
+      };
+    },
+  });
+  const result = await f.context.resolveRootGalleryRefreshEndpoint(
+    '/view-data?surface=albums', ['Target'], new AbortController(), () => owns,
+  );
+  assert.equal(result, null);
+  assertBoundedRootRefreshUnapplied(f);
+});
+
+test('refresh endpoint lookup requests a restart on revision conflict', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.fetch = async () => ({ ok: false, status: 409 });
+  const result = await f.context.resolveRootGalleryRefreshEndpoint(
+    '/view-data?surface=albums', ['Target'], new AbortController(), () => true,
+  );
+  assert.equal(result.restart, true);
+  assertBoundedRootRefreshUnapplied(f);
+});
+
+test('refresh endpoint lookup exhausts missing artists once without replacing the gallery', async () => {
+  const f = boundedRootRefreshFixture();
+  const requested = [];
+  f.context.fetch = async url => {
+    requested.push(new URL(url, 'http://localhost').searchParams.get('gallery_anchor_artist'));
+    return { ok: false, status: 400, json: async () => ({ error: 'Gallery artist anchor is unavailable.' }) };
+  };
+  await assert.rejects(f.context.resolveRootGalleryRefreshEndpoint(
+    '/view-data?surface=albums', ['Earlier', 'Target', 'Target'], new AbortController(), () => true,
+  ), /previously viewed gallery artists are unavailable/);
+  assert.deepEqual(requested, ['Target', 'Earlier']);
+  assertBoundedRootRefreshUnapplied(f);
+});
+
+test('refresh endpoint lookup caps consecutive missing retained artist probes', async () => {
+  const f = boundedRootRefreshFixture();
+  const requested = [];
+  const retainedArtists = Array.from({ length: 20 }, (_, index) => `Missing ${index}`);
+  f.context.fetch = async url => {
+    requested.push(new URL(url, 'http://localhost').searchParams.get('gallery_anchor_artist'));
+    return {
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'Gallery artist anchor is unavailable.' }),
+    };
+  };
+
+  await assert.rejects(f.context.resolveRootGalleryRefreshEndpoint(
+    '/view-data?surface=albums', retainedArtists, new AbortController(), () => true,
+  ), /previously viewed gallery artists are unavailable/i);
+  assert.deepEqual(requested, retainedArtists.slice().reverse().slice(0, 8));
+  assertBoundedRootRefreshUnapplied(f);
+});
+
+test('bounded root refresh permits an anchor ordinal inside its rendered alias group', async () => {
+  const f = boundedRootRefreshFixture();
+  const first = { artist: 'Display A', albums: [{ key: 'alias-a' }, { key: 'canonical-a' }] };
+  const tail = anchoredRefreshGroups(Array.from({ length: 100 }, (_, index) => `Inserted ${index}`));
+  const endpoint = anchoredRefreshGroups(['Target'])[0];
+  const initial = {
+    ...boundedRootRefreshPage(0, 2), artist_groups: [first],
+    gallery_page: { ...boundedRootRefreshPage(0, 2).gallery_page,
+      anchor_artist: 'Display A', anchor_group_artist: 'Display A', anchor_offset: 1 },
+  };
+  const request = f.context.collectRootGalleryRefresh(initial,
+    '/view-data?surface=albums&gallery_anchor_artist=Display+A', 3, new AbortController(),
+    () => true, 'Display A', 'Target', ['Display A', 'Target'])
+    .then(value => ({ value }), error => ({ error }));
+  await resolveBoundedRootRefreshPage(f, 0, {
+    ...boundedRootRefreshPage(2), artist_groups: tail.slice(0, 50),
+  });
+  assert.equal(new URL(f.pendingRequests[1].url, 'http://localhost').searchParams.get('gallery_anchor_artist'), 'Target');
+  await resolveBoundedRootRefreshPage(f, 1, {
+    ...boundedRootRefreshPage(53, 50, 'fresh', false), artist_groups: [...tail.slice(51), endpoint],
+    gallery_page: { ...boundedRootRefreshPage(53, 50, 'fresh', false).gallery_page,
+      anchor_artist: 'Target', anchor_group_artist: 'Target', anchor_offset: 102 },
+  });
+  await resolveBoundedRootRefreshPage(f, 2, {
+    ...boundedRootRefreshPage(52), artist_groups: tail.slice(50),
+  });
+  assert.equal(f.pendingRequests.length, 4, 'an alias ordinal must not undercount the remaining contiguous range');
+  await resolveBoundedRootRefreshPage(f, 3, {
+    ...boundedRootRefreshPage(102, 1, 'fresh', false), artist_groups: [endpoint],
+  });
+  const result = await request;
+  assert.ifError(result.error);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.value.artist_groups)), [first, ...tail, endpoint]);
+});
+
+test('bounded root refresh does not count leading context toward retained window coverage', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.state.view.artist_groups = anchoredRefreshGroups(['B', 'C', 'D', 'E']);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page, anchor_artist: 'C', anchor_group_artist: 'C',
+  };
+  const request = f.start();
+  // The production endpoint includes leading context before the requested B.
+  // Four returned albums therefore cover only three of the retained albums.
+  await resolveBoundedRootRefreshPage(f, 0, {
+    ...boundedRootRefreshPage(0, 4, 'fresh', true),
+    artist_groups: anchoredRefreshGroups(['A', 'B', 'C', 'D']),
+  });
+  assert.equal(f.pendingRequests.length, 2,
+    'leading context must not cause refresh to discard the retained trailing artist');
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 1, {
+    ...boundedRootRefreshPage(4, 1, 'fresh', false),
+    artist_groups: anchoredRefreshGroups(['E']),
+  });
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['A', 'B', 'C', 'D', 'E']);
+});
+
+test('bounded root refresh survives rename of the original jump artist', async () => {
+  const f = boundedRootRefreshFixture();
+  // Optimistic reconciliation has replaced D with F; E remains visible.
+  // The historical jump metadata is deliberately still D.
+  f.context.state.view.artist_groups = anchoredRefreshGroups(['E', 'F']);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page, anchor_artist: 'D', anchor_group_artist: 'D',
+  };
+  const request = f.start();
+  await resolveAuthoritativeAnchorRefresh(f, ['E', 'F']);
+
+  assert.equal(await request, true, 'a deleted historical anchor must not fail the refreshed gallery');
+  assert.equal(f.calls.applyViewPayload.length, 1, 'the authoritative replacement must actually apply');
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['E', 'F']);
+  assert.equal(f.context.state.view.artist_groups[0].albums[0].key, 'album-E');
+  assert.equal(f.calls.showToast.length, 0);
+});
+
+test('bounded root refresh retains transient anchor metadata through continuation pages', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.state.view.artist_groups[0].artist = 'Battlelore';
+  f.context.state.view.gallery_page.anchor_artist = 'Battlelore';
+  f.context.state.view.gallery_page.anchor_group_artist = 'Battlelore';
+  const originalStart = f.start;
+  f.start = (...args) => {
+    const pending = originalStart(...args);
+    assert.equal(new URL(f.pendingRequests[0].url, 'http://localhost').searchParams.get('gallery_anchor_artist'), 'Battlelore');
+    return pending;
+  };
+
+  const request = f.start();
+  for (const [index, start] of [0, 50, 100].entries()) {
+    const page = boundedRootRefreshPage(start);
+    page.artist_groups[0].artist = 'Battlelore';
+    await resolveBoundedRootRefreshPage(f, index, page);
+  }
+
+  assert.equal(await request, true);
+  assert.equal(f.context.state.view.gallery_page.anchor_artist, 'Battlelore');
+  assert.equal(f.context.state.view.gallery_page.anchor_group_artist, 'Battlelore');
+});
+
+test('bounded root refresh prefers an authoritative replacement anchor before retaining it through continuations', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.state.view.gallery_page.anchor_artist = 'Artist A';
+  f.context.state.view.gallery_page.anchor_offset = 100;
+  f.context.state.view.gallery_page.anchor_group_artist = 'Artist A';
+
+  const first = boundedRootRefreshPage(0);
+  first.gallery_page = {
+    ...first.gallery_page,
+    anchor_artist: 'Artist B',
+    anchor_offset: 200,
+    anchor_group_artist: 'Artist B',
+  };
+
+  const request = f.start();
+  await resolveBoundedRootRefreshPage(f, 0, first);
+  await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
+  await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+
+  assert.equal(await request, true);
+  assert.equal(f.context.state.view.gallery_page.anchor_artist, 'Artist B');
+  assert.equal(f.context.state.view.gallery_page.anchor_offset, 200);
+  assert.equal(f.context.state.view.gallery_page.anchor_group_artist, 'Artist B');
 });
 
 test('bounded root refresh accepts authoritative terminal shrink without fetching the whole catalog', async () => {
@@ -6516,6 +7493,7 @@ for (const stale of ['409', 'revision mismatch']) {
       } else {
         assertBoundedRootRefreshUnapplied(f);
         await resolveBoundedRootRefreshPage(f, 4, boundedRootRefreshPage(100, 50, 'replacement'));
+        await resolveBoundedRootRefreshEndpoint(f, 5, 'replacement');
         assert.equal(await request, true);
         assert.equal(f.calls.applyViewPayload.length, 1);
         assert.ok(f.context.state.view.artist_groups[0].albums.every(album => album.key.startsWith('replacement-')));
@@ -6540,6 +7518,7 @@ for (const presentation of ['gallery_display=list', 'gallery_scale_percent=80'])
     await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
     assertBoundedRootRefreshUnapplied(f);
     await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+    await resolveBoundedRootRefreshEndpoint(f, 3);
     assert.equal(await request, true);
     assert.equal(f.context.state.view.artist_groups[0].albums.length, 150);
     for (const item of f.pendingRequests) {

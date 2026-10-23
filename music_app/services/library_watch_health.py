@@ -108,6 +108,39 @@ def guard_destructive_library_publication(connection, root_ids):
         raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
     yield
 
+
+@contextmanager
+def guard_recovery_library_publication(
+    connection,
+    root_ids,
+    *,
+    detected_before: str,
+):
+    """Allow recovery over known warnings while rejecting newer failures."""
+
+    row = connection.execute(
+        _LOAD_LIBRARY_WATCH_HEALTH_SQL.rstrip().rstrip(";")
+        + " for update of libraries;"
+    ).fetchone()
+    payload = _row_value(row, "library_watch_health")
+    if not isinstance(payload, Mapping):
+        raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
+    for root_id in root_ids:
+        problem = payload.get(str(root_id))
+        if not isinstance(problem, Mapping):
+            continue
+        detected_at = str(problem.get("detected_at") or "")
+        try:
+            normalized_detected_at = _normalized_cutoff(
+                detected_at,
+                fallback=lambda: datetime.max.replace(tzinfo=timezone.utc),
+            )
+        except (TypeError, ValueError):
+            raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE) from None
+        if not detected_at or normalized_detected_at > detected_before:
+            raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
+    yield
+
 _CLEAR_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """
 /* watch_health_clear */
 update library.libraries
@@ -351,6 +384,31 @@ class LibraryWatchHealthService:
             with guard_destructive_library_publication(connection, roots):
                 yield
 
+    def recovery_publication_guard(self, reconciliation_started_at: object):
+        detected_before = _normalized_cutoff(
+            reconciliation_started_at,
+            fallback=self._now,
+        )
+
+        @contextmanager
+        def guard(connection, root_ids):
+            roots = tuple(str(root_id) for root_id in root_ids)
+            with self._lock:
+                if any(
+                    problem.detected_at > detected_before
+                    for root_id in roots
+                    if (problem := self._pending.get(root_id)) is not None
+                ):
+                    raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
+                with guard_recovery_library_publication(
+                    connection,
+                    roots,
+                    detected_before=detected_before,
+                ):
+                    yield
+
+        return guard
+
     def clear_after_scan(
         self,
         *,
@@ -360,15 +418,41 @@ class LibraryWatchHealthService:
     ) -> int:
         if str(scan_mode or "").strip() != "manual_full_rescan":
             return 0
+        return self._clear_recovered(
+            observed_root_ids,
+            detected_before=_normalized_cutoff(
+                scan_started_at,
+                fallback=self._now,
+            ),
+        )
+
+    def clear_after_reconciliation(
+        self,
+        *,
+        observed_root_ids: Iterable[object],
+        reconciliation_started_at: object,
+    ) -> int:
+        """Clear only warnings that predate a successful root catch-up."""
+
+        return self._clear_recovered(
+            observed_root_ids,
+            detected_before=_normalized_cutoff(
+                reconciliation_started_at,
+                fallback=self._now,
+            ),
+        )
+
+    def _clear_recovered(
+        self,
+        observed_root_ids: Iterable[object],
+        *,
+        detected_before: str,
+    ) -> int:
         normalized = {
             root_id
             for value in observed_root_ids
             if (root_id := str(value or "").strip())
         }
-        detected_before = _normalized_cutoff(
-            scan_started_at,
-            fallback=self._now,
-        )
         with self._persistence_lock:
             cleared = self._store.clear(
                 normalized,

@@ -1,5 +1,7 @@
 import { expect, test } from '../support/baseFixtures.js';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { createSameAlbumArtwork, createUndersizedAlbumArtwork } from '../helpers/albumSourceOwnershipFixture.js';
 import {
   buildFixtureManualUrls,
   COVER_LOOKUP_TEST_TARGETS,
@@ -1409,6 +1411,25 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
   let upgradedAlbum = null;
   let upgradedCover = null;
 
+  await stepLogger.step('Explicitly confirm the seeded artwork through the real Save flow', async () => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(USER_OWNED_IMPROVEMENT_TARGET);
+    const artwork = await createSameAlbumArtwork(opened.album.cover_path, randomUUID().replaceAll('-', ''));
+    try {
+      await trackModalActions.waitForLoadedSummary();
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      const selected = await coverLookupActions.selectLocalCoverByNameAndSave(path.basename(artwork.artworkPath));
+      expect(selected.updatedAlbum.cover_selection_origin).toBe('user');
+      expect(selected.updatedAlbum.local_cover_width).toBe(640);
+      expect(selected.updatedAlbum.local_cover_height).toBe(640);
+      await trackModalActions.close();
+    } finally {
+      await artwork.cleanup();
+    }
+  });
+
   await stepLogger.step('Capture the smaller user-owned cover and its linked metadata', async () => {
     await coverLookupActions.setProviderFixtureMode('same-art-improvement');
     await coverLookupActions.resetProviderFixtureEvidence();
@@ -1421,7 +1442,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     expect(baselineAlbum.cover_selection_origin).toBe('user');
     expect(baselineAlbum.local_cover_width).toBe(640);
     expect(baselineAlbum.local_cover_height).toBe(640);
-    expect(USER_COVER_LINKED_FIELDS.every((field) => baselineAlbum[field] !== null)).toBe(true);
+    expect(USER_COVER_LINKED_FIELDS.every((field) => baselineAlbum[field] == null)).toBe(true);
     await trackModalActions.waitForLoadedSummary();
     baselineCover = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage,
@@ -1433,6 +1454,40 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     );
     await trackModalActions.waitForCoverLookupImprovementIndicator(false);
     await trackModalActions.close();
+  });
+
+  await stepLogger.step('Keep different artwork suggestion-only while the explicit cover remains undersized', async () => {
+    await coverLookupActions.setProviderFixtureMode('automatic-scan');
+    await coverLookupActions.resetProviderFixtureEvidence();
+    await appBarActions.triggerIncrementalScanAndWait();
+    await coverLookupActions.waitForAutomaticProviderSearch(USER_OWNED_IMPROVEMENT_TARGET);
+    await appBarActions.waitForScanAndCoverRefreshIdle();
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(USER_OWNED_IMPROVEMENT_TARGET);
+    expect(opened.album.cover_path).toBe(baselineAlbum.cover_path);
+    expect(opened.album.cover_revision).toBe(baselineAlbum.cover_revision);
+    expect(opened.album.cover_selection_origin).toBe('user');
+    await trackModalActions.waitForLoadedSummary();
+    const retained = await coverLookupActions.readDisplayedImageEvidence(trackModalActions.trackModal.detailedCoverImage,
+      'undersized selection after different-art lookup', { expectedCoverPath: baselineAlbum.cover_path, expectedCoverRevision: baselineAlbum.cover_revision });
+    expect(retained.sha256).toBe(baselineCover.sha256);
+    await trackModalActions.waitForCoverLookupImprovementIndicator(true);
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    await coverLookupActions.waitForRemoteCandidateCountAtLeast(1);
+    expect((await coverLookupActions.readRemoteCandidateSummaries())
+      .some(candidate => candidate.imageSrc.includes('user-owned-improvement-primary'))).toBe(true);
+    await trackModalActions.waitForCoverLookupImprovementIndicator(false);
+    await coverLookupActions.closeModal();
+    const retainedAfterView = await coverLookupActions.readDisplayedImageEvidence(
+      trackModalActions.trackModal.detailedCoverImage, 'explicit selection after viewing a different-art suggestion',
+      { expectedCoverPath: baselineAlbum.cover_path, expectedCoverRevision: baselineAlbum.cover_revision },
+    );
+    expect(retainedAfterView.sha256).toBe(baselineCover.sha256);
+    await trackModalActions.close();
+    await coverLookupActions.setProviderFixtureMode('same-art-improvement');
+    await coverLookupActions.resetProviderFixtureEvidence();
   });
 
   await stepLogger.step('Apply a better version of the same artwork while preserving user ownership', async () => {
@@ -1474,41 +1529,23 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await trackModalActions.close();
   });
 
-  await stepLogger.step('Keep different automatic artwork suggestion-only and show its indicator', async () => {
+  await stepLogger.step('Skip automatic provider queries once the selected same-art upgrade is adequate', async () => {
     await appBarActions.waitForScanAndCoverRefreshIdle();
     await coverLookupActions.setProviderFixtureMode('automatic-scan');
     await coverLookupActions.resetProviderFixtureEvidence();
     await appBarActions.triggerIncrementalScanAndWait();
-    await coverLookupActions.waitForAutomaticProviderSearch(USER_OWNED_IMPROVEMENT_TARGET);
+    await appBarActions.waitForScanAndCoverRefreshIdle();
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
-    const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(
-      USER_OWNED_IMPROVEMENT_TARGET,
-    );
+    const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(USER_OWNED_IMPROVEMENT_TARGET);
     expect(opened.album.cover_selection_origin).toBe('user');
     expect(opened.album.cover_path).toBe(upgradedAlbum.cover_path);
     expect(opened.album.cover_revision).toBe(upgradedAlbum.cover_revision);
-    for (const field of USER_COVER_LINKED_FIELDS) {
-      expect(opened.album[field]).toBeNull();
-    }
-    await trackModalActions.waitForLoadedSummary();
-    const preservedCover = await coverLookupActions.readDisplayedImageEvidence(
-      trackModalActions.trackModal.detailedCoverImage,
-      'same-art upgrade after different-art automatic lookup',
-      {
-        expectedCoverPath: upgradedAlbum.cover_path,
-        expectedCoverRevision: upgradedAlbum.cover_revision,
-      },
-    );
-    expect(preservedCover.sha256).toBe(upgradedCover.sha256);
-    await trackModalActions.waitForCoverLookupImprovementIndicator(true);
-    await trackModalActions.openCoverLookup();
-    await coverLookupActions.waitForModalReady();
-    await coverLookupActions.waitForRemoteCandidateCountAtLeast(1);
-    expect((await coverLookupActions.readRemoteCandidateSummaries())
-      .some((candidate) => candidate.imageSrc.includes('user-owned-improvement-primary'))).toBe(true);
+    expect(opened.album.local_cover_width).toBeGreaterThanOrEqual(1200);
+    expect(opened.album.local_cover_height).toBeGreaterThanOrEqual(1200);
+    const evidence = await coverLookupActions.readProviderFixtureEvidence();
+    expect((evidence.apple_search_terms || []).some(term => String(term).toLowerCase().includes(USER_OWNED_IMPROVEMENT_TARGET.album.toLowerCase()))).toBe(false);
     await trackModalActions.waitForCoverLookupImprovementIndicator(false);
-    await coverLookupActions.closeModal();
     await trackModalActions.close();
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
@@ -1522,6 +1559,24 @@ test('FTC-COVERS-019 later automatic improvement restores the unseen indicator',
   thirdPartyRequestEvidence,
   trackModalActions,
 }) => {
+  await stepLogger.step('Independently select undersized artwork through the real Save flow', async () => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(USER_OWNED_IMPROVEMENT_TARGET);
+    const artwork = await createUndersizedAlbumArtwork(opened.album.cover_path, randomUUID().replaceAll('-', ''));
+    try {
+      await trackModalActions.waitForLoadedSummary();
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      const selected = await coverLookupActions.selectLocalCoverByNameAndSave(path.basename(artwork.artworkPath));
+      expect(selected.updatedAlbum.cover_selection_origin).toBe('user');
+      expect(selected.updatedAlbum.local_cover_width).toBe(640);
+      expect(selected.updatedAlbum.local_cover_height).toBe(640);
+      await trackModalActions.close();
+    } finally {
+      await artwork.cleanup();
+    }
+  });
   await stepLogger.step('Prepare a distinct later automatic improvement', async () => {
     await coverLookupActions.setProviderFixtureMode('alternate-improvement');
     await coverLookupActions.resetProviderFixtureEvidence();

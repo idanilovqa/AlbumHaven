@@ -5,6 +5,7 @@ from music_app.services.log_history import resolve_media_host_history_scope
 import threading
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from os.path import normcase
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from music_app.services.cover_refresh_jobs import (
     select_manual_track_cover_refresh_jobs,
 )
 from music_app.services.cover_refresh_runtime import (
+    PreparedCoverRefresh,
     refresh_cover_artwork_for_track_paths_request,
     refresh_cover_artwork_request,
     refresh_unsuccessful_cover_artwork_request,
@@ -57,6 +59,7 @@ from music_app.services.scan_state import refresh_library_state
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
+    _raise_if_projection_cancelled,
     ensure_relation_projection_ready,
 )
 
@@ -65,6 +68,9 @@ _SCAN_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="album
 _HYDRATE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-hydrate")
 _COVER_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cover")
 _MBID_ASSERTION_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-mbid")
+_RELATION_REBUILD_LOCK = threading.Lock()
+_RELATION_REBUILD_PENDING = False
+_RELATION_REBUILD_REQUEST_GENERATION = 0
 _BULK_COVER_JOB_WORKERS = 1
 _SCAN_FILE_ERROR_HISTORY_LIMIT = 50
 
@@ -235,6 +241,7 @@ def init_state(app) -> None:
         "hydrate_in_progress": False,
         "covers_in_progress": False,
         "covers_processed": 0,
+        "covers_completed": 0,
         "covers_total": 0,
         "covers_downloaded": 0,
         "covers_current_folder": "",
@@ -326,6 +333,20 @@ def ensure_runtime_relation_projection_ready(
         library_state["last_error"] = str(exc)
         library_state["relation_projection_rebuild_reason"] = "startup_rebuild_failed"
         raise
+    startup_started_at = getattr(app, "relation_projection_startup_started_at", None)
+    try:
+        rebuilt_during_startup = (
+            isinstance(startup_started_at, datetime)
+            and datetime.fromisoformat(str(result.get("last_rebuild_timestamp") or ""))
+            >= startup_started_at
+        )
+    except (TypeError, ValueError):
+        rebuilt_during_startup = False
+    if not result.get("startup_rebuilt") and rebuilt_during_startup:
+        result["startup_rebuilt"] = True
+        result["rebuild_reason"] = str(
+            result.get("last_rebuild_reason") or result.get("rebuild_reason") or "healthy"
+        )
     library_state["relation_views"] = dict(result.get("relation_views") or {})
     library_state["relation_projection_ready"] = bool(result.get("ready"))
     library_state["relation_projection_builder_version"] = str(
@@ -349,7 +370,58 @@ def ensure_runtime_relation_projection_ready(
             raise
         except Exception:
             app.logger.exception("Gallery summary preparation failed; computed browse remains available")
+        else:
+            _raise_if_projection_cancelled(cancel_requested)
+            PostgresLibraryBrowseRepository(app.config).queue_settings_projection_prewarm()
     return result
+
+
+def _run_scheduled_relation_projection_rebuild(
+    config: dict[str, object],
+    logger: object | None,
+    reason: str,
+) -> None:
+    global _RELATION_REBUILD_PENDING
+    while True:
+        with _RELATION_REBUILD_LOCK:
+            requested_generation = _RELATION_REBUILD_REQUEST_GENERATION
+        try:
+            if logger is not None:
+                logger.info("Deferred relation projection rebuild started: %s", reason)
+            ensure_relation_projection_ready(config, logger=logger)
+        except Exception:
+            if logger is not None:
+                logger.exception("Deferred relation projection rebuild failed: %s", reason)
+        with _RELATION_REBUILD_LOCK:
+            if requested_generation != _RELATION_REBUILD_REQUEST_GENERATION:
+                continue
+            _RELATION_REBUILD_PENDING = False
+            return
+
+
+def schedule_relation_projection_rebuild(
+    config: dict[str, object],
+    *,
+    reason: str,
+    logger: object | None = None,
+) -> None:
+    global _RELATION_REBUILD_PENDING, _RELATION_REBUILD_REQUEST_GENERATION
+    with _RELATION_REBUILD_LOCK:
+        _RELATION_REBUILD_REQUEST_GENERATION += 1
+        if _RELATION_REBUILD_PENDING:
+            return
+        _RELATION_REBUILD_PENDING = True
+    try:
+        _HYDRATE_EXECUTOR.submit(
+            _run_scheduled_relation_projection_rebuild,
+            dict(config),
+            logger,
+            str(reason or "structural_tag_edit_requires_full_projection"),
+        )
+    except Exception:
+        with _RELATION_REBUILD_LOCK:
+            _RELATION_REBUILD_PENDING = False
+        raise
 
 def scan_percent_for_state(library_state: dict[str, object]) -> int:
     total = int(library_state.get("scan_total") or 0)
@@ -388,12 +460,27 @@ def refresh_cached_cover_paths_for_state(
         )
 
 
-def cover_file_cache_snapshot_for_state(library_state: dict[str, object]) -> dict[str, dict[str, object]]:
+def cover_file_cache_snapshot_for_state(
+    library_state: dict[str, object],
+    config: dict[str, object] | None = None,
+) -> dict[str, dict[str, object]]:
     with _CACHE_LOCK:
-        return {
+        snapshot = {
             path: dict(entry) if isinstance(entry, dict) else entry
             for path, entry in dict(library_state.get("file_cache") or {}).items()
         }
+    if snapshot or config is None:
+        return snapshot
+
+    persisted, _last_scan, _relations, _relations_built, error = (
+        select_scan_cache_adapter(config).load_snapshot(
+            Path(config["CACHE_PATH"]),
+            library_root_cache_identity(config),
+        )
+    )
+    if error:
+        raise RuntimeError(error)
+    return persisted
 
 
 def hydrate_library_state_for_config(
@@ -528,7 +615,11 @@ def refresh_relation_views_for_state(
                 commit_action,
             )
         )
+    publication_generation = int(library_state.get("scan_generation") or 0)
+    repaired_cover_published = False
+
     def save_relation_snapshot() -> None:
+        nonlocal repaired_cover_published
         committed_relation_state = save_cache_to_disk_for_config(
             config,
             config["CACHE_PATH"],
@@ -537,6 +628,25 @@ def refresh_relation_views_for_state(
             float(target_state.get("last_scan") or 0.0),
             **snapshot_options,
         )
+        repaired_entries = (committed_relation_state or {}).get("repaired_cover_entries")
+        if isinstance(repaired_entries, dict) and repaired_entries:
+            from music_app.services.library import build_albums_from_file_cache
+
+            with _CACHE_LOCK:
+                # A manual Save advances the generation under this same lock.
+                # Its newer selection must survive even after this snapshot committed.
+                if int(library_state.get("scan_generation") or 0) != publication_generation:
+                    raise ScanCancelled()
+                current_entries = dict(target_state.get("file_cache") or {})
+                target_state["file_cache"] = {
+                    path: {**entry, **repaired_entries[path]} if path in repaired_entries else entry
+                    for path, entry in current_entries.items()
+                }
+                target_state["albums"] = build_albums_from_file_cache(
+                    target_state["file_cache"],
+                    set(target_state.get("separate_release_keys") or set()),
+                )
+                repaired_cover_published = True
         if postgres_relation_projection:
             if not isinstance(committed_relation_state, dict) or not isinstance(
                 committed_relation_state.get("relation_views"),
@@ -567,6 +677,9 @@ def refresh_relation_views_for_state(
         with _CACHE_LOCK:
             if int(library_state.get("scan_generation") or 0) != expected_scan_generation:
                 raise ScanCancelled()
+            if repaired_cover_published:
+                library_state["file_cache"] = target_state["file_cache"]
+                library_state["albums"] = target_state["albums"]
             for key in (
                 "relation_views",
                 "relations_in_progress",
@@ -727,6 +840,7 @@ def refresh_unsuccessful_cover_artwork_for_state(
     logger: object,
     *,
     force_search: bool = False,
+    prepared: PreparedCoverRefresh | None = None,
 ) -> dict[str, object]:
     return refresh_unsuccessful_cover_artwork_request(
         get_state=lambda: library_state,
@@ -735,6 +849,7 @@ def refresh_unsuccessful_cover_artwork_for_state(
         logger=logger,
         log_app_event=log_app_event,
         force_search=force_search,
+        prepared=prepared,
         select_manual_bulk_cover_refresh_jobs=select_manual_bulk_cover_refresh_jobs,
         build_cover_jobs=build_cover_refresh_jobs,
         run_cover_jobs=run_cover_jobs,
@@ -749,9 +864,9 @@ def refresh_unsuccessful_cover_artwork_for_state(
 
 def _queue_problematic_albums_prewarm_for_state(library_state, config, logger) -> None:
     if library_browse_postgres_is_effective(config):
-        PostgresLibraryBrowseRepository(config).queue_utility_projection_prewarm(
-            "problematic-files"
-        )
+        repository = PostgresLibraryBrowseRepository(config)
+        repository.queue_utility_projection_prewarm("problematic-files")
+        repository.queue_utility_projection_prewarm("duplicate-identities")
         return
     __import__(
         "music_app.services.problematic_albums",
@@ -865,6 +980,7 @@ def refresh_library_for_state(
         ),
         refresh_relation_views=refresh_relation_views,
         start_manual_cover_refresh=lambda *, force_search=False: start_manual_cover_refresh_request(
+            cache_lock=_CACHE_LOCK,
             config=config,
             logger=logger,
             get_state=lambda: library_state,
@@ -877,16 +993,18 @@ def refresh_library_for_state(
             ),
             get_file_cache_snapshot=lambda: cover_file_cache_snapshot_for_state(library_state),
             submit_cover_job=_COVER_EXECUTOR.submit,
-            refresh_unsuccessful_cover_artwork=lambda *, force_search=False: refresh_unsuccessful_cover_artwork_for_state(
+            refresh_unsuccessful_cover_artwork=lambda *, force_search=False, prepared=None: refresh_unsuccessful_cover_artwork_for_state(
                 library_state,
                 config,
                 logger,
                 force_search=force_search,
+                prepared=prepared,
             ),
             force_search=force_search,
         ),
         start_background_cover_refresh=lambda: start_background_cover_refresh_request(
             get_state=lambda: library_state,
+            cache_lock=_CACHE_LOCK,
             submit_cover_job=_COVER_EXECUTOR.submit,
             refresh_cover_artwork=lambda: refresh_cover_artwork_request(
                 get_state=lambda: library_state,

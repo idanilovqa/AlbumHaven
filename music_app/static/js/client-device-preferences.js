@@ -34,7 +34,7 @@
     const requestedColumns = Number(options.columns);
     const columns = options.mode === 'list' ? 1 : [1, 2, 3].includes(requestedColumns) ? requestedColumns : 3;
     const gap = Math.max(0, Number(options.gap) || 0);
-    const cardTrackWidth = Math.max(1, Math.floor(((width - (columns - 1) * gap) / columns) * 1000) / 1000);
+    const cardTrackWidth = Math.max(1, Math.floor((width - (columns - 1) * gap) / columns));
     return {
       columns,
       cardTrackWidth,

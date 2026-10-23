@@ -78,6 +78,50 @@ test('non-album tag-editor collections preserve blank track-owned identity field
   assert.equal(values.album, '');
 });
 
+test('collection names roundtrip through initial values and name-only edit payloads', () => {
+  const context = loadHelpers();
+  const track = { path: 'C:/Music/Random/song.mp3', exception_type: 'Custom Collection', custom_collection_name: 'Old name' };
+  const initial = context.getTrackTagInitialValues(track, { tag_editor_collection: true });
+  assert.equal(initial.custom_collection_name, 'Old name');
+  const updates = context.buildChangedTagEditorUpdates({}, [track], {
+    [track.path]: { ...initial, custom_collection_name: 'Road trip' },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(updates)), {
+    [track.path]: { custom_collection_name: 'Road trip' },
+  });
+});
+
+test('exception suggestions come from the currently loaded library scope', () => {
+  const context = loadHelpers();
+  context.state = {
+    view: {
+      non_album_tracks: [
+        { exception_type: 'Archive outtake' },
+        { exception_type: 'Interview' },
+      ],
+    },
+  };
+  assert.deepEqual(Array.from(context.getLibraryExceptionTypeChoices()), [
+    'Interview',
+    'Non-album rarity',
+    'Custom Collection',
+    'Archive outtake',
+  ]);
+  context.state.view.non_album_tracks = [{ exception_type: 'Main-library bootleg' }];
+  assert.ok(!context.getLibraryExceptionTypeChoices().includes('Archive outtake'));
+});
+
+test('name-only edits immediately regroup an existing loose custom collection', () => {
+  const context = loadHelpers();
+  const track = { path: 'C:/Music/Random/song.mp3', album: 'Random', exception_type: 'Custom Collection', custom_collection_name: 'Old name' };
+  context.state = { view: { non_album_tracks: [track] } };
+  const tracks = context.applyTagEditsToNonAlbumView({ tracks: [track] }, {
+    [track.path]: { custom_collection_name: 'Road trip' },
+  });
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].custom_collection_name, 'Road trip');
+});
+
 test('album detail tag editor preserves an explicitly blank track Album', () => {
   const context = loadHelpers();
   const values = context.getTrackTagInitialValues({

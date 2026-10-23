@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import random
 import shutil
 import signal
@@ -194,7 +195,11 @@ def classify_fixture_profile_mode(fixture_profile: str) -> str:
 def fixture_profile_requires_provider_storage_policy_fixture(
     fixture_profile: str,
 ) -> bool:
-    return str(fixture_profile).strip() not in GENERATED_FIXTURE_PROFILES
+    normalized_profile = str(fixture_profile).strip()
+    return (
+        normalized_profile not in GENERATED_FIXTURE_PROFILES
+        and normalized_profile != "utility-problematic-files"
+    )
 
 
 DDT_STUDIO_RECORDS_FIXTURE_TRACKS = tuple(
@@ -2654,6 +2659,93 @@ def configure_preloaded_fixture() -> Path:
     return media_root
 
 
+def rebase_preloaded_fixture_paths(
+    database_url: str,
+    media_root: Path,
+    *,
+    connect=None,
+) -> None:
+    if connect is None:
+        import psycopg
+
+        connect = psycopg.connect
+    new_root = media_root.resolve(strict=False)
+    with connect(database_url) as connection:
+        row = connection.execute(
+            """
+            select private_path, relative_path
+            from library.local_track_files
+            where nullif(relative_path, '') is not null
+            order by id
+            limit 1
+            """
+        ).fetchone()
+        if row is None:
+            return
+        private_path, relative_path = row
+        relative_parts = PurePosixPath(str(relative_path)).parts
+        if not relative_parts or any(part in {"", ".", ".."} for part in relative_parts):
+            raise RuntimeError("Prepared fixture contains an invalid relative media path.")
+        old_root = Path(str(private_path)).resolve(strict=False)
+        for _part in relative_parts:
+            old_root = old_root.parent
+        if old_root == new_root:
+            return
+        params = {
+            "old_root": str(old_root),
+            "new_root": str(new_root),
+            "old_json": json.dumps(str(old_root))[1:-1],
+            "new_json": json.dumps(str(new_root))[1:-1],
+        }
+        connection.execute(
+            """
+            update library.local_track_files
+            set private_path = %(new_root)s || substring(private_path from length(%(old_root)s) + 1)
+            where left(private_path, length(%(old_root)s)) = %(old_root)s
+            """,
+            params,
+        )
+        connection.execute(
+            """
+            update library.local_track_files
+            set metadata = replace(metadata::text, %(old_json)s, %(new_json)s)::jsonb
+            where position(%(old_json)s in metadata::text) > 0
+            """,
+            params,
+        )
+        connection.execute(
+            """
+            update library.local_albums
+            set cover_path = %(new_root)s || substring(cover_path from length(%(old_root)s) + 1)
+            where left(cover_path, length(%(old_root)s)) = %(old_root)s
+            """,
+            params,
+        )
+
+
+def persist_preloaded_fixture_library_root(database_url: str, media_root: Path) -> None:
+    from config import PERSISTENCE_BACKEND_POSTGRES
+    from music_app.services.library_roots import save_library_root_settings
+
+    rebase_preloaded_fixture_paths(database_url, media_root)
+    save_library_root_settings(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+            "MUSIC_DIR": media_root,
+            "PERSISTENCE_BACKENDS": {"library_roots": PERSISTENCE_BACKEND_POSTGRES},
+        },
+        {
+            "main_library_roots": [
+                {
+                    "id": "isolated-e2e-root",
+                    "path": str(media_root),
+                    "layout_mode": "artist",
+                }
+            ]
+        },
+    )
+
+
 def seed_functional_cover_search_cache(
     setup_database_url: str,
     cache_path: Path,
@@ -2954,6 +3046,8 @@ def persist_provider_storage_policy_candidates(
     setup_database_url: str,
     provider_port: int,
     provider_spec: dict[str, object] | None,
+    *,
+    fixture_profile: str,
 ) -> None:
     if provider_spec is None:
         raise RuntimeError("The provider storage-policy fixture requires a cover spec.")
@@ -2980,28 +3074,6 @@ def persist_provider_storage_policy_candidates(
         ("youtube_music", "YouTube Music", "https://music.youtube.com/browse/fixture-10"),
         ("spotify", "Spotify", "https://open.spotify.com/album/fixture10"),
     )
-    live_candidates = [
-        cover_candidate_to_lookup_match(
-            CoverCandidate(
-                source=source,
-                url=f"{image_url}?provider={source}",
-                width=900,
-                height=900,
-                score=0.99 - (index * 0.01),
-                matched_artist="Mastodon",
-                matched_album="Crack The Skye",
-                matched_year=2009,
-                debug_payload={
-                    "source_label": source_label,
-                    "thumbnail_url": f"{image_url}?provider={source}",
-                    "album_url": album_url,
-                    "variant": "isolated-provider-storage-policy",
-                },
-            ),
-            lookup_group="services",
-        )
-        for index, (source, source_label, album_url) in enumerate(provider_contracts)
-    ]
     persisted_candidate_fields = {
         "id",
         "source",
@@ -3020,43 +3092,81 @@ def persist_provider_storage_policy_candidates(
         "art_label",
         "display_only",
     }
-    candidates = [
-        {key: value for key, value in candidate.items() if key in persisted_candidate_fields}
-        for candidate in live_candidates
-    ]
+
+    def build_candidates(
+        matched_artist: str,
+        matched_album: str,
+        matched_year: int,
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                key: value
+                for key, value in cover_candidate_to_lookup_match(
+                    CoverCandidate(
+                        source=source,
+                        url=f"{image_url}?provider={source}",
+                        width=900,
+                        height=900,
+                        score=0.99 - (index * 0.01),
+                        matched_artist=matched_artist,
+                        matched_album=matched_album,
+                        matched_year=matched_year,
+                        debug_payload={
+                            "source_label": source_label,
+                            "thumbnail_url": f"{image_url}?provider={source}",
+                            "album_url": album_url,
+                            "variant": "isolated-provider-storage-policy",
+                        },
+                    ),
+                    lookup_group="services",
+                ).items()
+                if key in persisted_candidate_fields
+            }
+            for index, (source, source_label, album_url) in enumerate(provider_contracts)
+        ]
+
+    if fixture_profile == "synthetic-large-library":
+        target_artist = DDT_STUDIO_RECORDS_FIXTURE_ARTIST
+        target_album = DDT_REMIXES_FIXTURE_ALBUM
+        target_year = DDT_REMIXES_FIXTURE_YEAR
+    else:
+        target_artist = "Mastodon"
+        target_album = "Crack The Skye"
+        target_year = 2009
+    candidates = build_candidates(target_artist, target_album, target_year)
 
     with psycopg.connect(setup_database_url) as connection:
         result = connection.execute(
             """
             insert into library.local_album_cover_candidate_snapshots (
-              album_id,
-              search_generation,
-              search_kind,
-              status,
-              revision,
-              candidates,
-              best_candidate_id,
-              started_at,
-              updated_at,
-              finished_at
+                album_id,
+                search_generation,
+                search_kind,
+                status,
+                revision,
+                candidates,
+                best_candidate_id,
+                started_at,
+                updated_at,
+                finished_at
             )
             select
-              library.local_albums.id,
-              '00000000-0000-0000-0000-000000000010'::uuid,
-              'manual',
-              'completed',
-              1,
-              %s::jsonb,
-              %s,
-              now(),
-              now(),
-              now()
+                library.local_albums.id,
+                '00000000-0000-0000-0000-000000000010'::uuid,
+                'manual',
+                'completed',
+                1,
+                %s::jsonb,
+                %s,
+                now(),
+                now(),
+                now()
             from library.local_albums
             join library.local_artists
               on library.local_artists.id = library.local_albums.artist_id
-            where library.local_artists.name = 'Mastodon'
-              and library.local_albums.title = 'Crack The Skye'
-              and library.local_albums.release_year = 2009
+            where library.local_artists.name = %s
+              and library.local_albums.title = %s
+              and library.local_albums.release_year = %s
             on conflict (album_id) do update
             set candidates = excluded.candidates,
                 best_candidate_id = excluded.best_candidate_id,
@@ -3065,12 +3175,19 @@ def persist_provider_storage_policy_candidates(
                 updated_at = excluded.updated_at,
                 finished_at = excluded.finished_at;
             """,
-            (json.dumps(candidates), candidates[0]["id"]),
+            (
+                json.dumps(candidates),
+                candidates[0]["id"],
+                target_artist,
+                target_album,
+                target_year,
+            ),
         )
-        if result.rowcount != 1:
-            raise RuntimeError(
-                "The provider storage-policy fixture must resolve exactly one local album."
-            )
+    if result.rowcount != 1:
+        raise RuntimeError(
+            "The provider storage-policy fixture must resolve "
+            f"1 owned local album; resolved {result.rowcount}."
+        )
 
 
 def persist_legacy_ignored_album_contract(setup_database_url: str) -> None:
@@ -3950,6 +4067,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 4000,
             "candidate_fixture_mode": "user-owned-improvement",
         })
+        self.cover_lookup_owned_album_target = None
         same_art_source = dict(cover_specs[1] if len(cover_specs) > 1 else cover_specs[0])
         self.cover_lookup_same_art_improvement_spec = prepare_provider_artwork_spec({
             **same_art_source,
@@ -4173,6 +4291,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "automatic-scan",
             "same-art-improvement",
             "alternate-improvement",
+            "owned-legacy-repair",
         }:
             raise ValueError(f"Unsupported cover lookup fixture mode: {normalized_mode}")
         with self.cover_lookup_mode_lock:
@@ -4183,6 +4302,14 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
     def get_cover_lookup_mode(self) -> str:
         with self.cover_lookup_mode_lock:
             return self.cover_lookup_mode
+
+    def set_owned_legacy_cover_target(self, payload) -> None:
+        artist = str(payload.get("artist") or "")
+        album = str(payload.get("album") or "")
+        if not re.fullmatch(r"E2E Album Source Ownership [a-z0-9]+", artist) or album != "Real Album":
+            raise ValueError("Cover repair provider requires the generated owned album.")
+        self.cover_lookup_owned_album_target = {"artist": artist, "album": album, "year": 2026}
+        self.set_cover_lookup_mode("owned-legacy-repair")
 
     def set_itunes_search_delay(self, delay_seconds: object) -> None:
         if isinstance(delay_seconds, bool):
@@ -4395,6 +4522,12 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             except ValueError:
                 self.send_error(400)
                 return
+        elif action == "set-owned-legacy-repair":
+            try:
+                self.server.set_owned_legacy_cover_target(payload)
+            except ValueError:
+                self.send_error(400)
+                return
         else:
             self.send_error(400)
             return
@@ -4541,14 +4674,19 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def _matching_specs(self, query_text: object) -> list[dict[str, Any]]:
+        normalized_query = _normalize_provider_query(query_text)
         mode = self.server.get_cover_lookup_mode()
+        if mode == "owned-legacy-repair":
+            target = self.server.cover_lookup_owned_album_target
+            if target and _normalize_provider_query(f"{target['artist']} {target['album']}") in normalized_query:
+                return [{**dict(self.server.cover_lookup_user_improvement_spec), **target}]
+            return []
         if mode == "no-results":
             return []
         if mode == "metallica-mismatch":
             return [dict(spec) for spec in self.server.cover_lookup_matching_specs]
         if mode == "artist-conjunction":
             return [dict(self.server.cover_lookup_artist_conjunction_spec)]
-        normalized_query = _normalize_provider_query(query_text)
         if mode == "automatic-coverless":
             if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
                 return [dict(self.server.cover_lookup_automatic_candidate_spec)]
@@ -5186,6 +5324,8 @@ def main() -> None:
             materialize_fixture_track_files(file_cache, loop_source)
             track_count = len(file_cache)
         database_lock.acquire()
+        if is_preloaded_fixture:
+            persist_preloaded_fixture_library_root(setup_database_url, library_root)
         if fixture_profile == "functional-core":
             seed_functional_cover_search_cache(
                 setup_database_url,
@@ -5196,20 +5336,17 @@ def main() -> None:
             database_preparation_started = True
             prepare_isolated_database(setup_database_url, runtime_database_url)
             persist_fixture_inventory(setup_database_url, library_root, file_cache)
-            if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
-                provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
-                persist_provider_storage_policy_candidates(
-                    setup_database_url,
-                    provider_port,
-                    provider_storage_policy_spec,
-                )
             materialize_rating_scan_discovery_track(library_root, loop_source)
             seed_fixture_lastfm_timezone()
-        elif (
-            not is_preloaded_fixture
-            and fixture_profile_requires_provider_storage_policy_fixture(fixture_profile)
-        ):
-            ensure_provider_storage_policy_cover_spec(cover_specs)
+
+        if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
+            provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
+            persist_provider_storage_policy_candidates(
+                setup_database_url,
+                provider_port,
+                provider_storage_policy_spec,
+                fixture_profile=fixture_profile,
+            )
 
         configure_performance_auth_environment(args.port)
         provision_performance_auth_owner(runtime_database_url, seed_expanded_artist_tree=True)

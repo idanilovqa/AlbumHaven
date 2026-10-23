@@ -28,6 +28,48 @@ export function parseArtistAlbumCount(value) {
   return albumCount;
 }
 
+export function readAppliedGalleryProjectionSnapshot(target = {}) {
+  const view = state.view || {};
+  const expectedArtist = String(target.artist || '').trim();
+  const expectedAlbum = String(target.album || '').trim();
+  const compactGroups = (groups) => {
+    if (!expectedArtist && !expectedAlbum) return groups;
+    return (Array.isArray(groups) ? groups : []).flatMap((group) => {
+      const artist = String(group?.artist || group?.artist_display || '').trim();
+      if (expectedArtist && artist !== expectedArtist) return [];
+      const albums = (Array.isArray(group?.albums) ? group.albums : []).filter((album) => (
+        !expectedAlbum
+        || String(album?.name || album?.title || '').trim() === expectedAlbum
+      ));
+      if (expectedAlbum && !albums.length) return [];
+      return [{ ...group, albums }];
+    });
+  };
+  return {
+    artist_groups: compactGroups(view.artist_groups),
+    primary_artist_groups: compactGroups(view.primary_artist_groups),
+    family_artist_groups: compactGroups(view.family_artist_groups),
+    gallery_page: view.gallery_page,
+    query: view.query,
+    selected_artist: view.selected_artist,
+    gallery_scope: view.gallery_scope,
+    visible_library_categories: view.visible_library_categories,
+    related_filter_artists: view.related_filter_artists,
+    primary_filter_active: view.primary_filter_active,
+    busy: Boolean(state.busy),
+    pendingViewTransition: Boolean(state.ui?.pendingViewTransition),
+    viewRevision: Number(state.ui?.viewStateRevision || 0),
+    surface: typeof resolveViewSurface === 'function'
+      ? resolveViewSurface(view)
+      : String(view.surface_request || 'albums'),
+    locationQuery: new URL(window.location.href).searchParams.get('q') || '',
+    locationArtist: new URL(window.location.href).searchParams.get('artist') || '',
+    authoritativeMountedFamily: Boolean(view.selected_artist)
+      && typeof buildOptimisticSidebarArtistSelectionGroups === 'function'
+      && buildOptimisticSidebarArtistSelectionGroups(view.selected_artist)?.skipFetch === true,
+  };
+}
+
 export function hasSettledVirtualGalleryRender(args = {}) {
   const gallery = document.querySelector(args.galleryScrollSelector);
   if (!(gallery instanceof HTMLElement)) return false;
@@ -87,6 +129,8 @@ function readDecodedProductionCardWindow(args = {}) {
   const galleryScroll = document.querySelector(args.galleryScrollSelector);
   const emptyState = {
     candidateCount: 0,
+    visibleCardKeys: [],
+    visibleCardOccurrenceKeys: [],
     decodedCards: [],
     schedulerSettled: false,
     terminalCount: 0,
@@ -112,12 +156,36 @@ function readDecodedProductionCardWindow(args = {}) {
       && cardBounds.top < galleryBounds.bottom;
     const image = card.querySelector(args.coverImageSelector);
     const key = String(card.getAttribute('data-gallery-card-key') || '').trim();
+    const sectionKey = String(card.closest?.('[data-virtual-section-key]')
+      ?.getAttribute('data-virtual-section-key') || '').trim();
     const productionSrc = image instanceof HTMLImageElement
       ? String(image.getAttribute('data-production-cover-src') || '').trim()
       : '';
+    const artboxState = String(
+      card.querySelector('[data-album-artbox-state]')
+        ?.getAttribute('data-album-artbox-state') || '',
+    ).trim().toLowerCase();
+    let album = {};
+    try {
+      album = JSON.parse(String(
+        card.querySelector('[data-open-tracklist="1"][data-album]')?.getAttribute('data-album') || '{}',
+      ));
+    } catch (_error) {
+      album = {};
+    }
+    const expectedCover = Boolean(
+      productionSrc
+      || String(album?.cover_path || '').trim()
+      || String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim()
+    );
     return {
       key,
+      occurrenceKey: sectionKey && key ? `${sectionKey}\u0000${key}` : '',
       productionSrc,
+      expectedCover,
+      intentionalNoCover: !expectedCover
+        && !(image instanceof HTMLImageElement)
+        && artboxState === 'empty',
       intersects,
       decoded: image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
       terminal: intersects
@@ -126,23 +194,56 @@ function readDecodedProductionCardWindow(args = {}) {
         && image.naturalWidth < 1
         && schedulerSettled,
     };
-  }).filter((entry) => entry.key && entry.productionSrc && entry.intersects);
+  }).filter((entry) => entry.key && entry.intersects);
+  const visibleCardKeys = entries.map(({ key }) => key);
+  const expectedCoverEntries = entries.filter((entry) => entry.expectedCover);
+  const coveredEntries = expectedCoverEntries.filter((entry) => entry.productionSrc);
   const windowState = {
-    candidateCount: entries.length,
-    decodedCards: entries.filter((entry) => entry.decoded).map(({ key, productionSrc }) => ({
+    visibleCardKeys,
+    visibleCardOccurrenceKeys: entries.map(({ occurrenceKey }) => occurrenceKey).filter(Boolean),
+    candidateCount: expectedCoverEntries.length,
+    decodedCards: coveredEntries.filter((entry) => entry.decoded).map(({ key, productionSrc }) => ({
       key,
       productionSrc,
     })),
     schedulerSettled,
-    terminalCount: entries.filter((entry) => entry.terminal).length,
+    terminalCount: coveredEntries.filter((entry) => entry.terminal).length,
   };
   if (args.snapshot) return windowState;
-  return windowState.candidateCount > 0
-    && windowState.decodedCards.length >= minimumDecodedCount
-    && windowState.decodedCards.length + windowState.terminalCount === windowState.candidateCount;
+  if (windowState.candidateCount === 0) {
+    return Boolean(
+      args.allowIntentionalNoCoverWindow
+      && entries.length > 0
+      && entries.every((entry) => entry.intentionalNoCover)
+    );
+  }
+  return coveredEntries.length === expectedCoverEntries.length
+    && (args.requireEveryExpectedCoverDecoded
+      ? windowState.decodedCards.length === windowState.candidateCount
+      : windowState.decodedCards.length >= minimumDecodedCount
+        && windowState.decodedCards.length + windowState.terminalCount === windowState.candidateCount);
 }
 
-export { readDecodedProductionCardWindow };
+function hasFirstDecodedVisibleGalleryCover(args = {}) {
+  const galleryScroll = document.querySelector(args.galleryScrollSelector);
+  if (!(galleryScroll instanceof HTMLElement)) return false;
+  const galleryBounds = galleryScroll.getBoundingClientRect();
+  return [...document.querySelectorAll(args.cardSelector)].some((card) => {
+    const bounds = card.getBoundingClientRect();
+    const image = card.querySelector(args.coverImageSelector);
+    return image instanceof HTMLImageElement
+      && image.complete
+      && image.naturalWidth > 0
+      && bounds.width > 0
+      && bounds.height > 0
+      && bounds.right > galleryBounds.left
+      && bounds.left < galleryBounds.right
+      && bounds.bottom > galleryBounds.top
+      && bounds.top < galleryBounds.bottom;
+  });
+}
+
+export { hasFirstDecodedVisibleGalleryCover, readDecodedProductionCardWindow };
 
 export class GalleryPage extends BasePage {
   constructor(page, testInfo = null) {
@@ -458,25 +559,34 @@ export class GalleryPage extends BasePage {
     };
   }
 
-  async readViewGenerationState() {
+
+  readViewGenerationState(artistName = '') {
     const observation = this.productionViewObserver.read();
+    const error = observation.latestFullPayloadError || observation.latestGalleryPageError;
+    if (error) throw new Error(`Production view observation failed: ${error}`);
+    if (artistName) {
+      return {
+        revision: Number(observation.topologyRevision || 0),
+        activityRevision: Number(observation.stateRevision || 0),
+        artistTopology: observation.galleryArtistTopologies?.[artistName] ?? null,
+        settled: Number(observation.activeRequestCount || 0) === 0
+          && Number(observation.pendingPayloadReadCount || 0) === 0,
+      };
+    }
     // parity-check: allow-read-only-measurement-evaluate -- correlate production request and render generations
-    const browserState = await this.page.evaluate(() => ({
+    return this.page.evaluate(() => ({
       nowMs: performance.now(),
       query: new URL(location.href).searchParams.get('q') || '',
       renderGeneration: Number(
         globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__?.latestRender?.renderGeneration || 0,
       ),
-    }));
-    return {
-      nowMs: browserState.nowMs,
-      query: browserState.query,
-      renderGeneration: browserState.renderGeneration,
+    })).then((browserState) => ({
+      ...browserState,
       requestGeneration: Number(observation.requestGeneration || 0),
       revision: Number(observation.stateRevision || 0),
       settled: Number(observation.activeRequestCount || 0) === 0
         && Number(observation.pendingPayloadReadCount || 0) === 0,
-    };
+    }));
   }
 
   async startSearchFirstVisibleObservation(expectedQuery, options = {}) {
@@ -748,30 +858,12 @@ export class GalleryPage extends BasePage {
 
   async readAppliedGalleryProjection() {
     // parity-check: allow-read-only-measurement-evaluate -- inspect the applied production projection and pure family-reuse diagnostic without fetching or mutating it
-    return this.page.evaluate(() => {
-      const view = state.view || {};
-      return {
-        artist_groups: view.artist_groups,
-        primary_artist_groups: view.primary_artist_groups,
-        family_artist_groups: view.family_artist_groups,
-        gallery_page: view.gallery_page,
-        query: view.query,
-        selected_artist: view.selected_artist,
-        gallery_scope: view.gallery_scope,
-        visible_library_categories: view.visible_library_categories,
-        related_filter_artists: view.related_filter_artists,
-        primary_filter_active: view.primary_filter_active,
-        busy: Boolean(state.busy),
-        pendingViewTransition: Boolean(state.ui?.pendingViewTransition),
-        viewRevision: Number(state.ui?.viewStateRevision || 0),
-        surface: typeof resolveViewSurface === 'function' ? resolveViewSurface(view) : String(view.surface_request || 'albums'),
-        locationQuery: new URL(window.location.href).searchParams.get('q') || '',
-        locationArtist: new URL(window.location.href).searchParams.get('artist') || '',
-        authoritativeMountedFamily: Boolean(view.selected_artist)
-          && typeof buildOptimisticSidebarArtistSelectionGroups === 'function'
-          && buildOptimisticSidebarArtistSelectionGroups(view.selected_artist)?.skipFetch === true,
-      };
-    });
+    return this.page.evaluate(readAppliedGalleryProjectionSnapshot);
+  }
+
+  async readAppliedAlbumTargetProjection(expected) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect only the queried production album target without transferring the complete gallery projection
+    return this.page.evaluate(readAppliedGalleryProjectionSnapshot, expected);
   }
 
   async readStatusPayload() {
@@ -792,25 +884,38 @@ export class GalleryPage extends BasePage {
     const location = observation.onlyRootContinuationsPending ? new URL(this.page.url()) : null;
     const rootContinuation = location && !['q', 'artist', 'playlist'].some(key => location.searchParams.get(key))
       && (!location.searchParams.get('surface') || location.searchParams.get('surface') === 'albums');
+ if (idle && observation.bootstrapPresenceEligible === false && !rootContinuation) return null;
     if (idle || rootContinuation) {
       const bootstrap = await this.readProductionBootstrapPayload();
       const payload = bootstrap?.startup_payload?.first_paint_view || bootstrap?.initial_view;
       if (payload && ['full', 'gallery_page'].includes(String(payload.payload_tier || 'full'))
-          && (idle || (payload.gallery_page && !payload.query && !payload.selected_artist))) return payload;
+          && (idle || (payload.gallery_page && !payload.query && !payload.selected_artist))) {
+        this.productionViewObserver.acceptBootstrapPresence(payload, observation.stateRevision);
+        return payload;
+      }
     }
     throw new Error('Expected an observed production view response or settled SSR payload before reading browse telemetry.');
   }
 
   async readAlbumTargetState(expected = {}) {
-    const initialObservation = this.productionViewObserver.read();
-    if (initialObservation.latestFullPayloadError) {
-      throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError}`);
+    let initialObservation = this.productionViewObserver.read();
+    if (initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError) {
+      throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError}`);
     }
     const initiallyBusy = initialObservation.activeRequestCount > 0
       || initialObservation.pendingPayloadReadCount > 0;
-    const bootstrapPayload = !initialObservation.latestFullPayload && !initiallyBusy
+ let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
+      && !initialObservation.latestFullPayload && !initiallyBusy
       ? await this.readProductionBootstrapPayload()
       : null;
+    if (bootstrapPayload) {
+      const accepted = this.productionViewObserver.acceptBootstrapPresence(
+        bootstrapPayload.startup_payload?.first_paint_view || bootstrapPayload.initial_view,
+        initialObservation.stateRevision,
+      );
+      if (!accepted) bootstrapPayload = null;
+      initialObservation = this.productionViewObserver.read();
+    }
     const payload = initialObservation.latestFullPayload
       || bootstrapPayload?.startup_payload?.first_paint_view
       || bootstrapPayload?.initial_view
@@ -822,7 +927,26 @@ export class GalleryPage extends BasePage {
       : String(expected.query || '').trim();
     const expectedArtist = String(expected.artist || '').trim();
     const expectedAlbum = String(expected.album || '').trim();
-    const projection = await this.readAppliedGalleryProjection();
+    const canReadAppliedProjection = typeof this.page.evaluate === 'function'
+      || Object.prototype.hasOwnProperty.call(this, 'readAppliedGalleryProjection');
+    const readAppliedProjection = () => (
+      expectedQuery && typeof this.page.evaluate === 'function'
+        ? this.readAppliedAlbumTargetProjection({
+          artist: expectedArtist,
+          album: expectedAlbum,
+        })
+        : this.readAppliedGalleryProjection()
+    );
+    const projection = canReadAppliedProjection
+      ? await readAppliedProjection()
+      : {
+        ...(payload || {}),
+        busy: false,
+        pendingViewTransition: false,
+        surface: 'albums',
+        locationQuery: new URL(this.page.url()).searchParams.get('q') || '',
+        locationArtist: new URL(this.page.url()).searchParams.get('artist') || '',
+      };
     const targetLocation = new URL(this.page.url());
     const rootLocation = !['q', 'artist', 'playlist'].some(key => targetLocation.searchParams.get(key));
     const rootBootstrap = projection.gallery_page && rootLocation && !matchesAccumulatedRootProjection(payload, projection)
@@ -856,7 +980,9 @@ export class GalleryPage extends BasePage {
     const attachedArtists = (await this.artistHeadings.allTextContents())
       .map((artist) => String(artist || '').trim())
       .filter(Boolean);
-    const startupHydrating = payload === null || Boolean(
+    const payloadObserved = payload !== null || initialObservation.galleryPayloadObserved === true
+      || Boolean(initialObservation.latestCompletedSaveTaskPayload);
+    const startupHydrating = !payloadObserved || Boolean(
       bootstrapPayload?.bootstrap?.startupHydration?.required,
     );
     const finalAttachedMatch = await this.albumCard
@@ -866,10 +992,12 @@ export class GalleryPage extends BasePage {
       .map((artist) => String(artist || '').trim())
       .filter(Boolean);
     const finalObservation = this.productionViewObserver.read();
-    if (finalObservation.latestFullPayloadError) {
-      throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError}`);
+    if (finalObservation.latestFullPayloadError || finalObservation.latestGalleryPageError) {
+      throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError || finalObservation.latestGalleryPageError}`);
     }
-    const finalProjection = await this.readAppliedGalleryProjection();
+    const finalProjection = canReadAppliedProjection
+      ? await readAppliedProjection()
+      : projection;
     const observationChanged = finalObservation.stateRevision !== initialObservation.stateRevision
       || finalProjection.viewRevision !== projection.viewRevision
       || finalProjection.query !== projection.query
@@ -890,7 +1018,7 @@ export class GalleryPage extends BasePage {
       finalAttachedArtists,
       {
         loaderVisible,
-        payloadPresent: payload !== null,
+        payloadPresent: payloadObserved,
         settledEmpty,
       },
     );
@@ -905,6 +1033,8 @@ export class GalleryPage extends BasePage {
       canonicalMatch: canonicalEvidence.canonicalMatch,
       canonicalReadyMatch: canonicalEvidence.canonicalReadyMatch,
       canonicalSource: canonicalEvidence.canonicalSource,
+      canonicalScopeComplete: initialObservation.canonicalScopeComplete === true
+        && String(payload?.query || '').trim() === expectedQuery,
       canonicalQuery,
       expectedAlbum,
       expectedArtist,
@@ -941,6 +1071,8 @@ export class GalleryPage extends BasePage {
       coverImageSelector: this.albumCard.coverImageWithinCardSelector,
       galleryScrollSelector: this.galleryScrollSelector,
       minimumDecodedCount: options.minimumDecodedCount,
+      allowIntentionalNoCoverWindow: options.allowIntentionalNoCoverWindow === true,
+      requireEveryExpectedCoverDecoded: options.requireEveryExpectedCoverDecoded === true,
     };
     try {
       await this.waitForPageCondition(
@@ -987,6 +1119,9 @@ export class GalleryPage extends BasePage {
           cards: [...document.querySelectorAll(args.cardSelector)].map((card) => {
             const image = card.querySelector(args.coverImageSelector);
             const bounds = rect(card);
+            const productionSrc = image instanceof HTMLImageElement
+              ? String(image.getAttribute('data-production-cover-src') || '').trim()
+              : '';
             return {
               title: String(card.querySelector('.album-title-button')?.textContent || '').trim(),
               bounds,
@@ -998,8 +1133,21 @@ export class GalleryPage extends BasePage {
               loading: image instanceof HTMLImageElement
                 ? String(image.getAttribute('data-gallery-cover-loading') || '')
                 : '',
+              productionSrc,
+              gallerySrc: image instanceof HTMLImageElement
+                ? String(image.getAttribute('data-gallery-cover-src') || '').trim()
+                : '',
+              currentSrc: image instanceof HTMLImageElement ? image.currentSrc : '',
+              imageHtml: image instanceof HTMLImageElement ? image.outerHTML : '',
+              renderKey: String(card.getAttribute('data-gallery-card-render-key') || ''),
+              sectionKey: String(card.closest?.('[data-virtual-section-key]')
+                ?.getAttribute('data-virtual-section-key') || ''),
+              cacheActive: productionSrc && typeof galleryCoverPreviewCache !== 'undefined'
+                ? galleryCoverPreviewCache.hasActive(productionSrc)
+                : null,
             };
           }),
+          coverCache: { ...(globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__ || {}) },
           scheduler: { ...(globalThis.__ALBUM_HAVEN_GALLERY_COVER_SCHEDULER__ || {}) },
           virtualGrid: { ...(globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ || {}) },
         };
@@ -1017,21 +1165,33 @@ export class GalleryPage extends BasePage {
     });
   }
 
+  async waitForFirstDecodedVisibleCover(options = {}) {
+    await this.waitForPageCondition(hasFirstDecodedVisibleGalleryCover, {
+      timeout: options.timeout || 10000,
+    }, {
+      cardSelector: this.albumCard.cardSelector,
+      coverImageSelector: this.albumCard.coverImageWithinCardSelector,
+      galleryScrollSelector: this.galleryScrollSelector,
+    });
+  }
+
   async waitForRootGalleryBoundaryProgress(previous, options = {}) {
     const timeout = Math.min(5000, (options.deadline ?? Date.now() + 5000) - Date.now());
     if (timeout <= 0) throw new Error('Root gallery boundary exceeded its original deadline.');
-    await this.waitForPageCondition(({ galleryScrollSelector, previousMaxScrollTop, cursor }) => {
+    await this.waitForPageCondition(({ galleryScrollSelector, previousMaxScrollTop, cursor, revision }) => {
       const gallery = document.querySelector(galleryScrollSelector);
       const page = state.view?.gallery_page;
       return Boolean(gallery) && (
         Math.max(0, gallery.scrollHeight - gallery.clientHeight) > previousMaxScrollTop + 2
         || !page?.has_more
         || String(page.next_cursor || '') !== cursor
+        || String(page.revision || '') !== revision
       );
     }, { timeout }, {
       galleryScrollSelector: this.galleryScrollSelector,
       previousMaxScrollTop: previous.maxScrollTop,
       cursor: previous.pageCursor,
+      revision: previous.pageRevision,
     });
   }
 
@@ -1081,14 +1241,20 @@ export class GalleryPage extends BasePage {
     return this.page.evaluate(async (url) => {
       const diagnostics = globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__;
       const cache = await globalThis.caches.open(String(diagnostics?.cacheName || ''));
-      const response = await cache.match(url);
+      const cacheKey = new URL(url);
+      cacheKey.searchParams.delete('v');
+      const response = await cache.match(cacheKey.href);
+      const cachedProductionUrl = String(
+        response?.headers?.get?.('X-Album-Haven-Cover-Production-Url') || '',
+      );
+      const exactResponse = cachedProductionUrl === url ? response : null;
       return {
         active: Array.isArray(diagnostics?.activeProductionUrls)
           && diagnostics.activeProductionUrls.includes(url),
         activeCount: Number(diagnostics?.activeCount || 0),
-        cached: Boolean(response),
-        cachedStatus: Number(response?.status || 0),
-        cachedType: String(response?.headers?.get?.('content-type') || ''),
+        cached: Boolean(exactResponse),
+        cachedStatus: Number(exactResponse?.status || 0),
+        cachedType: String(exactResponse?.headers?.get?.('content-type') || ''),
       };
     }, productionUrl);
   }

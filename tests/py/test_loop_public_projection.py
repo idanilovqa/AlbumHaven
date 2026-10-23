@@ -61,8 +61,9 @@ def test_loop_cover_resolves_scope_before_bytes_and_hides_foreign_or_removed_ids
         assert identity=='same-id' and scope=={'account_id':7,'library_id':9}
         calls.append('scope')
         return copy.deepcopy(PRIVATE) if available else None
-    def cover_response(_request,path,size):
+    def cover_response(_request,path,size,revision):
         assert calls==['scope'] and path==PRIVATE['cover_path']
+        assert revision == ''
         calls.append('bytes')
         return Response(b'owned-cover',media_type='image/jpeg')
     monkeypatch.setattr(web,'get_loop',get,raising=False)

@@ -1,6 +1,7 @@
 // Keep this file as a thin registration seam; feature logic belongs in
 // feature-owned bootstrap handler files rather than accumulating here.
 document.addEventListener('click', (event) => {
+  if (consumeArtistTreeLongPressClick(event)) return;
   const closeScanPageButton = event.target?.closest?.('[data-close-scan-page]') || null;
   if (closeScanPageButton) {
     event.preventDefault();
@@ -42,8 +43,8 @@ document.addEventListener('pointermove', (event) => {
   handleGalleryBootstrapPointerMove(event);
 });
 
-document.addEventListener('pointerup', () => {
-  handleGalleryBootstrapPointerUp();
+document.addEventListener('pointerup', (event) => {
+  handleGalleryBootstrapPointerUp(event);
 });
 
 document.addEventListener('pointercancel', () => {

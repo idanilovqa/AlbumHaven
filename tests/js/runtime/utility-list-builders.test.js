@@ -190,6 +190,7 @@ function loadHelpers() {
   };
   vm.createContext(context);
   context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'view-state-helpers.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(
     orderAlbumTracksHelperSource,
@@ -2448,6 +2449,344 @@ test('updateOpenTrackModalAfterTagEdit keeps source aliases on the remaining alb
   assert.deepEqual(destinationCache.aliases, []);
 });
 
+test('reconcileCommittedTagEditDestination selects the committed artist and removes only confirmed orphans', async () => {
+  const context = loadHelpers();
+  const destinationAlbum = {
+    key: 'album:telepathic-minds',
+    identity_key: 'album:telepathic-minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Overhead',
+    tracks: [{ path: 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac' }],
+  };
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Ovderhead',
+    artists_sidebar: [
+      { artist: 'Ovderhead', count: 1 },
+      { artist: 'Overhead', count: 1 },
+      { artist: 'Retained Artist', count: 1 },
+    ],
+    artist_groups: [{ artist: 'Ovderhead', albums: [] }],
+    primary_artist_groups: [{ artist: 'Ovderhead', albums: [] }],
+    family_artist_groups: [],
+  };
+  const requests = [];
+  const historyCalls = [];
+  context.buildApiUrl = (view) => {
+    requests.push(JSON.parse(JSON.stringify(view)));
+    return `/api/library?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  };
+  context.fetchAndRender = async (_url, _push, options) => {
+    assert.equal(options.restartIfSameUrl, true);
+    assert.equal(options.shouldApplyResponse(), true);
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artists_sidebar: [
+        { artist: 'Overhead', count: 1 },
+        { artist: 'Retained Artist', count: 1 },
+      ],
+      artist_groups: [{ artist: 'Overhead', albums: [destinationAlbum] }],
+      primary_artist_groups: [{ artist: 'Overhead', albums: [destinationAlbum] }],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+  context.buildUrl = (view) => `/albums?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.window.history = {
+    state: { retained: true },
+    replaceState(snapshot, _unused, url) {
+      historyCalls.push({ snapshot, url });
+    },
+  };
+
+  const reconciled = await context.reconcileCommittedTagEditDestination({
+    ok: true,
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_key: destinationAlbum.identity_key,
+    orphaned_source_artists: ['Ovderhead'],
+    updated_albums: [destinationAlbum],
+  }, {
+    shouldApplyResponse: () => true,
+  });
+
+  assert.equal(reconciled, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].selected_artist, 'Overhead');
+  assert.equal(context.state.view.selected_artist, 'Overhead');
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Overhead', 'Retained Artist'],
+  );
+  assert.equal(context.collectVisibleAlbumsUnique()[0].identity_key, destinationAlbum.identity_key);
+  assert.equal(historyCalls.length, 1);
+  assert.equal(historyCalls[0].url, '/albums?artist=Overhead');
+});
+
+test('reconcileCommittedTagEditDestination inserts a newly committed artist into a stale sidebar', async () => {
+  const context = loadHelpers();
+  const destinationAlbum = {
+    album_id: 14712,
+    identity_key: 'overhead::telepathic minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Overhead',
+    tracks: [{ path: 'D:\\Synthetic Music\\Overhead\\Telepathic Minds\\01.flac' }],
+  };
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Ovderhead',
+    artists_sidebar: [
+      { artist: 'Ovderhead', count: 1 },
+      { artist: 'Retained Artist', count: 1 },
+    ],
+  };
+  context.buildApiUrl = () => '/api/library?artist=Overhead';
+  context.buildUrl = () => '/albums?artist=Overhead';
+  context.window.history = { state: {}, replaceState() {} };
+  context.fetchAndRender = async () => {
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_id: 14712,
+    destination_album_key: destinationAlbum.identity_key,
+    orphaned_source_artists: ['Ovderhead'],
+  }), true);
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Overhead', 'Retained Artist'],
+  );
+  assert.equal(context.state.view.artists_sidebar[0].count, 1);
+});
+
+test('reconcileCommittedTagEditDestination accepts the destination album after its key is canonicalized', async () => {
+  const context = loadHelpers();
+  const trackPath = 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac';
+  const destinationAlbum = {
+    album_id: 14712,
+    key: 'overhead::telepathic minds',
+    identity_key: 'overhead::telepathic minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Overhead',
+    year: 1999,
+    tracks: [{ path: trackPath }],
+  };
+  context.state.view.selected_artist = 'Ovderhead';
+  context.buildApiUrl = () => '/api/library?artist=Overhead';
+  context.buildUrl = (view) => `/albums?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  const historyCalls = [];
+  context.window.history = {
+    state: {},
+    replaceState(_snapshot, _unused, url) {
+      historyCalls.push(url);
+    },
+  };
+  context.fetchAndRender = async () => {
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_id: 14712,
+    destination_album_key: 'overhead::telepathic minds::year::1999',
+    updated_albums: [destinationAlbum],
+  }), true);
+  assert.deepEqual(historyCalls, ['/albums?artist=Overhead']);
+});
+
+test('reconcileCommittedTagEditDestination rejects an unrelated album by the destination artist', async () => {
+  const context = loadHelpers();
+  const unrelatedAlbum = {
+    album_id: 14713,
+    key: 'overhead::unrelated',
+    identity_key: 'overhead::unrelated',
+    name: 'Unrelated',
+    album_artist: 'Overhead',
+    tracks: [{ path: 'D:\\Synthetic Music\\Overhead\\Unrelated\\01.flac' }],
+  };
+  context.buildApiUrl = () => '/api/library?artist=Overhead';
+  context.fetchAndRender = async () => {
+    const destinationGroup = { artist: 'Overhead', albums: [unrelatedAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_id: 14712,
+    destination_album_key: 'overhead::telepathic minds::year::1999',
+    updated_albums: [unrelatedAlbum],
+  }), false);
+});
+
+test('reconcileCommittedTagEditDestination keeps a retained source artist', async () => {
+  const context = loadHelpers();
+  const destinationAlbum = {
+    identity_key: 'album:telepathic-minds',
+    album_artist: 'Overhead',
+    tracks: [{ path: 'track.flac' }],
+  };
+  context.state.view.artists_sidebar = [
+    { artist: 'Ovderhead', count: 1 },
+    { artist: 'Overhead', count: 1 },
+  ];
+  context.buildApiUrl = () => '/api/library?artist=Overhead';
+  context.buildUrl = () => '/albums?artist=Overhead';
+  context.window.history = { state: {}, replaceState() {} };
+  context.fetchAndRender = async () => {
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artists_sidebar: [
+        { artist: 'Ovderhead', count: 1 },
+        { artist: 'Overhead', count: 1 },
+      ],
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_key: destinationAlbum.identity_key,
+    orphaned_source_artists: [],
+  }), true);
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Ovderhead', 'Overhead'],
+  );
+});
+
+test('reconcileCommittedTagEditDestination cannot overwrite superseding navigation', async () => {
+  const context = loadHelpers();
+  context.state.view.selected_artist = 'Newer Navigation';
+  let refreshCount = 0;
+  context.fetchAndRender = async () => {
+    refreshCount += 1;
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_key: 'album:telepathic-minds',
+    orphaned_source_artists: ['Ovderhead'],
+  }, {
+    shouldApplyResponse: () => false,
+  }), false);
+  assert.equal(refreshCount, 0);
+  assert.equal(context.state.view.selected_artist, 'Newer Navigation');
+});
+
+test('watchSaveTask routes a committed typo rename through destination reconciliation', async () => {
+  const context = loadHelpers();
+  const trackPath = 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac';
+  const originalAlbum = {
+    key: 'album:telepathic-minds-old',
+    name: 'Telepathic Minds',
+    album_artist: 'Ovderhead',
+    tracks: [{ path: trackPath }],
+  };
+  const destinationAlbum = {
+    key: 'album:telepathic-minds',
+    identity_key: 'album:telepathic-minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Overhead',
+    tracks: [{ path: trackPath }],
+  };
+  const sourceGroup = { artist: 'Ovderhead', albums: [originalAlbum] };
+  Object.assign(context.state, {
+    ui: { viewStateRevision: 7 },
+    view: {
+      ...context.state.view,
+      selected_artist: 'Ovderhead',
+      artists_sidebar: [
+        { artist: 'Ovderhead', count: 1 },
+        { artist: 'Overhead', count: 1 },
+      ],
+      artist_groups: [sourceGroup],
+      primary_artist_groups: [sourceGroup],
+      family_artist_groups: [],
+    },
+  });
+  const destinationRequests = [];
+  context.buildApiUrl = (view) => {
+    destinationRequests.push(JSON.parse(JSON.stringify(view)));
+    return `/api/library?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  };
+  context.buildUrl = (view) => `/albums?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.window.history = { state: {}, replaceState() {} };
+  context.fetchAndRender = async (_url, _push, options) => {
+    if (!options.shouldApplyResponse()) return false;
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artists_sidebar: [{ artist: 'Overhead', count: 1 }],
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('typo-rename-task', {
+    originalAlbum,
+    originatingViewStateRevision: 7,
+    tagEdits: { [trackPath]: { artist: 'Overhead', album_artist: 'Overhead' } },
+    terminalPayload: {
+      ok: true,
+      save_task_id: 'typo-rename-task',
+      save_task_status: 'completed',
+      requires_view_refresh: true,
+      destination_artist: 'Overhead',
+      destination_album_key: destinationAlbum.identity_key,
+      orphaned_source_artists: ['Ovderhead'],
+      updated_albums: [destinationAlbum],
+    },
+  });
+
+  assert.equal(destinationRequests.length, 1);
+  assert.equal(destinationRequests[0].selected_artist, 'Overhead');
+  assert.equal(context.state.view.selected_artist, 'Overhead');
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Overhead'],
+  );
+});
+
 test('watchSaveTask reconciles an open destination modal locally after a structural merge', async () => {
   const context = loadHelpers();
   const destinationTrackPath = 'D:\\Synthetic Music\\Merge Artist\\Destination\\01 Existing.mp3';
@@ -3823,6 +4162,10 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
         ok: true,
         status: 'completed',
         requires_view_refresh: true,
+          reconciliation_pending: true,
+          warnings: [
+            'Canonical album reconciliation unavailable after persistence committed.',
+          ],
         updated_albums: [canonicalAlbum],
       };
     },
@@ -3844,6 +4187,9 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
   await context.watchSaveTask('queued-rename-terminal', {
     originalAlbum: staleAlbum,
     originatingViewStateRevision: 12,
+    tagEditAlert: {
+      completionMessage: 'Saved changes to 1 track in “New Album”.',
+    },
     tagEdits: {
       [trackPath]: { album: 'New Album', year: '2026' },
     },
@@ -3865,13 +4211,18 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
     ['Hydrated Track'],
     'canonical identity adoption must retain hydrated modal membership',
   );
-  assert.deepEqual(alerts, [
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
     ['Tag changes queued. Finalizing library view...', 'info', null],
-    ['Library view updated from saved files.', 'success', 1000],
+    [
+        'Saved changes to 1 track in “New Album”. Canonical album reconciliation unavailable after persistence committed.',
+        'warning',
+        8000,
+        { title: 'Tags saved with warning', dismissible: true },
+    ],
   ]);
 });
 
-test('watchSaveTask reconciles a provided terminal payload without polling or emitting async success', async () => {
+test('watchSaveTask reconciles a provided terminal payload without polling and emits one final success', async () => {
   const context = loadHelpers();
   const trackPath = 'D:\\Synthetic Music\\Terminal Artist\\Old Album\\01 Track.mp3';
   const originalAlbum = {
@@ -3921,6 +4272,7 @@ test('watchSaveTask reconciles a provided terminal payload without polling or em
     originatingViewStateRevision: 7,
     tagEditMutationClaim: mutationClaim,
     tagEdits: { [trackPath]: { album: 'New Album', year: '2026' } },
+    tagEditAlert: { completionMessage: 'Saved changes to 1 track in “Old Album”.' },
     problematicMutationOriginKey: '',
     terminalPayload: {
       ok: true,
@@ -3936,7 +4288,12 @@ test('watchSaveTask reconciles a provided terminal payload without polling or em
   assert.equal(context.state.view.artist_groups[0].albums[0].key, canonicalAlbum.key);
   assert.equal(invalidatedAlbums.includes(originalAlbum), true);
   assert.equal(invalidatedAlbums.includes(canonicalAlbum), true);
-  assert.deepEqual(alerts, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [[
+    'Saved changes to 1 track in “Old Album”.',
+    'success',
+    2000,
+    { title: 'Tags updated', dismissible: false },
+  ]]);
   assert.deepEqual(settledClaims, [mutationClaim]);
 });
 
@@ -4131,9 +4488,15 @@ test('watchSaveTask keeps optimistic state without an error when polling exhaust
 
   await context.watchSaveTask('never-terminal');
 
-  assert.equal(fetchCount, 40);
-  assert.deepEqual(alerts, [
+  assert.equal(fetchCount, 120);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
     ['Tag changes queued. Finalizing library view...', 'info', null],
+    [
+      'Tag changes are still being finalized. Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    ],
   ]);
   assert.equal(settledClaims.length, 1, 'poll exhaustion must retain the optimistic result');
   assert.deepEqual(releasedClaims, [], 'running status must not use failed-task cleanup');
@@ -4142,6 +4505,25 @@ test('watchSaveTask keeps optimistic state without an error when polling exhaust
     false,
     'running status without a server error must not emit an error alert',
   );
+});
+
+test('watchSaveTask does not let an exhausted older edit overwrite a newer notification', async () => {
+  const context = loadHelpers();
+  const alerts = [];
+  let fetchCount = 0;
+  context.fetch = async () => {
+    fetchCount += 1;
+    return { ok: true, async json() { return { ok: true, status: 'running' }; } };
+  };
+  context.waitForBrowserTimeout = async () => {};
+  context.showRepairAlert = (...args) => alerts.push(args);
+  context.tagEditViewMutationStillOwnsResources = () => false;
+  context.settleTagEditViewMutation = () => {};
+
+  await context.watchSaveTask('superseded-task', { tagEditMutationClaim: {} });
+
+  assert.equal(fetchCount, 120);
+  assert.deepEqual(alerts, []);
 });
 
 test('watchSaveTask preserves finalized raw credits for album-only splits', async () => {
@@ -5122,8 +5504,14 @@ test('watchSaveTask rejects an older completion when disjoint sources target the
 
 test('watchSaveTask preserves absolute scroll intent through a required view refresh', async () => {
   const context = loadHelpers();
+  context.state.view.surface = { active: 'albums' };
+  context.state.view.selected_artist = '';
   const refreshCalls = [];
-  context.buildApiUrl = () => '/api/library';
+  const buildApiOptions = [];
+  context.buildApiUrl = (_view, options) => {
+    buildApiOptions.push(options);
+    return '/api/library';
+  };
   context.fetch = async () => ({
     ok: true,
     async json() {
@@ -5145,6 +5533,7 @@ test('watchSaveTask preserves absolute scroll intent through a required view ref
     preserveAbsoluteScroll: true,
   });
 
+  assert.deepEqual(JSON.parse(JSON.stringify(buildApiOptions)), [{ rootFullPayload: true }]);
   assert.equal(refreshCalls.length, 1);
   assert.equal(refreshCalls[0][0], '/api/library');
   assert.equal(refreshCalls[0][1], false);
@@ -5159,6 +5548,33 @@ test('watchSaveTask preserves absolute scroll intent through a required view ref
       restartIfSameUrl: true,
     },
   );
+});
+
+test('watchSaveTask preserves the committed search request without a root payload tier', async () => {
+  const context = loadHelpers();
+  context.state.view.surface = { active: 'albums' };
+  context.state.view.selected_artist = '';
+  context.state.view.query = 'Sparse';
+  const refreshCalls = [];
+  context.buildApiUrl = (_view, options = {}) => (
+    `/view-data?surface=albums&q=Sparse${options.payloadTier ? `&payload_tier=${options.payloadTier}` : ''}`
+  );
+  context.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { ok: true, status: 'completed', requires_view_refresh: true, updated_albums: [] };
+    },
+  });
+  context.fetchAndRender = async (...args) => {
+    refreshCalls.push(args);
+    return true;
+  };
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('committed-search-refresh-task');
+
+  assert.equal(refreshCalls.length, 1);
+  assert.equal(refreshCalls[0][0], '/view-data?surface=albums&q=Sparse');
 });
 
 test('watchSaveTask preserves absolute scroll intent while rendering finalized albums', async () => {
@@ -5223,6 +5639,8 @@ test('watchSaveTask keeps default callers on ordinary anchor preservation', asyn
 
 test('watchSaveTask persists a failed tag edit and exposes Log History', async () => {
   const context = loadHelpers();
+  const originalAlbum = { key: 'artist::album', name: 'Album', tracks: [] };
+  const tagEditorDraft = { album: originalAlbum, values: {} };
   const logEntry = {
     id: 'failed-tag-edit-1',
     action: 'Tag edit failed',
@@ -5230,6 +5648,7 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   };
   const persistedEntries = [];
   const alerts = [];
+  const restoredDrafts = [];
   context.fetch = async () => ({
     ok: true,
     async json() {
@@ -5243,10 +5662,12 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   });
   context.prependUtilityLogHistoryEntry = async (entry) => persistedEntries.push(entry);
   context.showRepairAlert = (...args) => alerts.push(args);
+  context.restoreTagEditorDraftAfterFailedSave = (draft) => restoredDrafts.push(draft);
 
-  await context.watchSaveTask('failed-tag-task');
+  await context.watchSaveTask('failed-tag-task', { originalAlbum, tagEditorDraft });
 
   assert.deepEqual(persistedEntries, [logEntry]);
+  assert.deepEqual(restoredDrafts, [tagEditorDraft]);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0][0], logEntry.error);
   assert.equal(alerts[0][1], 'error');
@@ -5458,6 +5879,8 @@ test('watchSaveTask does not restore origin-bound album state after navigation b
   };
   const localMutations = [];
   const alerts = [];
+  const restoredDrafts = [];
+  const tagEditorDraft = { album: originalAlbum, values: {} };
   context.state.ui = { viewStateRevision: 7 };
   context.console = { warn() {} };
   context.document.getElementById = (id) => (
@@ -5482,15 +5905,74 @@ test('watchSaveTask does not restore origin-bound album state after navigation b
   context.renderView = (...args) => localMutations.push(['render', ...args]);
   context.updateOpenTrackModalAfterTagEdit = (...args) => localMutations.push(['modal', ...args]);
   context.showRepairAlert = (...args) => alerts.push(args);
+  context.restoreTagEditorDraftAfterFailedSave = (draft) => restoredDrafts.push(draft);
 
   await context.watchSaveTask('navigated-failed-tag-task', {
     originalAlbum,
     originatingViewStateRevision: 7,
+    tagEditorDraft,
   });
 
   assert.deepEqual(localMutations, []);
+  assert.deepEqual(restoredDrafts, []);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0][0], 'Structural persistence failed after media compensation.');
+});
+
+test('watchSaveTask leaves an unrelated foreground search untouched after save completion', async () => {
+  const context = loadHelpers();
+  const originalAlbum = {
+    key: 'pre-edit-source',
+    name: 'Source Album',
+    album_artist: 'Edit Artist',
+    tracks: [{ path: 'D:\\Music\\Edit Artist\\Source Album\\01 First.flac' }],
+  };
+  const finalizedAlbum = {
+    key: 'renamed-destination',
+    name: 'Renamed Destination',
+    album_artist: 'Edit Artist',
+    tracks: originalAlbum.tracks,
+  };
+  const unrelatedAlbum = {
+    key: 'unrelated-search-result',
+    name: 'Unrelated Search Result',
+    album_artist: 'Foreground Artist',
+    tracks: [{ path: 'D:\\Music\\Foreground Artist\\Result\\01 Other.flac' }],
+  };
+  const refreshes = [];
+  context.state.ui = { viewStateRevision: 11 };
+  context.state.view.query = 'Unrelated Search Result';
+  context.state.view.selected_artist = 'Foreground Artist';
+  context.state.view.selected_artist_source = 'auto_top_match';
+  context.state.view.artist_groups = [{
+    artist: 'Foreground Artist',
+    albums: [unrelatedAlbum],
+  }];
+  context.buildApiUrl = () => '/api/unrelated-search';
+  context.fetchAndRender = async (...args) => {
+    refreshes.push(args);
+    return true;
+  };
+  context.fetch = async () => ({
+    ok: true,
+    async json() {
+      context.state.ui.viewStateRevision = 12;
+      return {
+        ok: true,
+        status: 'completed',
+        requires_view_refresh: true,
+        updated_albums: [finalizedAlbum],
+      };
+    },
+  });
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('navigated-unrelated-search-task', {
+    originalAlbum,
+    originatingViewStateRevision: 11,
+  });
+
+  assert.deepEqual(refreshes, []);
 });
 
 test('watchSaveTask does not apply finalized origin albums after navigation before completion', async () => {
@@ -5510,6 +5992,10 @@ test('watchSaveTask does not apply finalized origin albums after navigation befo
   const authoritativeRefreshes = [];
   const alerts = [];
   context.state.ui = { viewStateRevision: 11 };
+  context.state.view.artist_groups = [{
+    artist: 'Edit Artist',
+    albums: [finalizedAlbum],
+  }];
   context.buildApiUrl = (view) => {
     requestedViews.push(view);
     return '/api/current-library-view';

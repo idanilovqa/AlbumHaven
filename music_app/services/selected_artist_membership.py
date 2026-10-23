@@ -9,7 +9,12 @@ from music_app.services.artist_sidebar import (
     is_shared_artist_album,
     is_various_album,
 )
-from music_app.services.library import album_preview_to_dict, album_sort_key, shared_album_display_artist
+from music_app.services.library import (
+    album_preview_to_dict,
+    album_sort_key,
+    shared_album_display_artist,
+    split_album_artist_members,
+)
 
 _WORD_COLLAB_MARKER_RE = re.compile(r"\b(?:feat|featuring|with|vs|x)\b", re.IGNORECASE)
 _FEATURED_ALIAS_SUFFIX_RE = re.compile(
@@ -302,10 +307,36 @@ def grouped_selected_artist_names_for_album(
     if not matching_members and not exact_album_artist_selected:
         return []
     if exact_album_artist_selected:
-        return [combined_artist]
+        featured_members = [
+            artist
+            for artist in matching_members
+            if album_artist_relationship(album, artist, alias_to_canonical) == "featured"
+        ]
+        return list(dict.fromkeys([combined_artist, *featured_members]))
     if is_shared_artist_album(album) and combined_artist and not is_various_album(album) and matching_members:
         return [combined_artist]
     return matching_members
+
+
+def album_artist_relationship(
+    album,
+    artist: str,
+    alias_to_canonical: dict[str, str],
+) -> str:
+    """Classify an artist as an album owner or a track-only guest."""
+    album_artist = str(getattr(album, "album_artist", "") or "").strip()
+    owner_names = [album_artist] if album_artist else []
+    owner_names.extend(split_album_artist_members(album_artist))
+
+    def relationship_key(value: object) -> str:
+        text = str(value or "").strip()
+        canonical = str(alias_to_canonical.get(text, text) or "").strip()
+        return artist_display_dedupe_key(canonical)
+
+    artist_key = relationship_key(artist)
+    return "owned" if artist_key and artist_key in {
+        relationship_key(owner_name) for owner_name in owner_names
+    } else "featured"
 
 
 def build_artist_membership_groups(
@@ -389,6 +420,20 @@ def build_artist_membership_groups(
             seen.add(dedupe_key)
             display_names.append(text)
         artist_display = " / ".join(display_names) if display_names else artist
+        album_payloads = []
+        for album in matched_albums:
+            cached_payload = cached_album_payload(album)
+            if isinstance(cached_payload, dict):
+                payload = dict(cached_payload)
+                payload["artist_relationship"] = album_artist_relationship(
+                    album,
+                    artist,
+                    alias_to_canonical,
+                )
+                album_payloads.append(payload)
+            else:
+                album_payloads.append(cached_payload)
+
         groups.append({
             "artist": artist,
             "artist_display": (
@@ -396,7 +441,7 @@ def build_artist_membership_groups(
                 if build_group_artist_display is not None
                 else artist_display
             ),
-            "albums": [cached_album_payload(album) for album in matched_albums],
+            "albums": album_payloads,
         })
     return groups
 

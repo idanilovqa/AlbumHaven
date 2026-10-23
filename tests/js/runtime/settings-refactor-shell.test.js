@@ -24,6 +24,8 @@ function harness() {
     problemFilterButton: element(), problemFilterMenu: element(), problemFilterChips: element(),
   };
   const context = {
+    closeTagEditorExceptionMenu() {},
+    getTagEditorElements: () => ({ form: null }),
     state: {
       utility: { activeTab: tabs[0], loaded: true, problemDropdownOpen: false, problematicFiles: [], selectedProblemFilters: [], repairSelections: {}, loops: [] },
       coverLookup: { drawerOpen: false }, tagEditor: {},

@@ -42,6 +42,33 @@ from music_app.services.view_payloads import (
 )
 
 
+def test_selected_artist_wire_payload_sends_group_sections_once():
+    primary = [{"artist": "Primary", "albums": [{"key": "primary"}]}]
+    family = [{"artist": "Family", "albums": [{"key": "family"}]}]
+    payload = {
+        "selected_artist": "Primary",
+        "artist_groups": [*primary, *family],
+        "primary_artist_groups": primary,
+        "family_artist_groups": family,
+    }
+
+    result = view_payloads_module.compact_selected_artist_wire_payload(payload)
+
+    assert result is payload
+    assert "artist_groups" not in result
+    assert result["artist_groups_from_selected_sections"] is True
+    assert result["primary_artist_groups"] is primary
+    assert result["family_artist_groups"] is family
+
+
+def test_selected_artist_wire_payload_leaves_root_gallery_unchanged():
+    groups = [{"artist": "Root", "albums": [{"key": "root"}]}]
+    payload = {"selected_artist": "", "artist_groups": groups}
+
+    assert view_payloads_module.compact_selected_artist_wire_payload(payload) == payload
+    assert payload["artist_groups"] is groups
+
+
 _ORIGINAL_BUILD_MOVE_AVAILABILITY_PAYLOAD = library_module.build_move_availability_payload
 
 
@@ -283,6 +310,7 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "relations_source": "local",
         "covers_in_progress": True,
         "covers_processed": 1,
+        "covers_completed": 0,
         "covers_total": 4,
         "covers_downloaded": 1,
         "covers_current_folder": "C:/Music/Artist/Album",
@@ -314,7 +342,14 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "relations_phase": "Building",
         "relations_source": "local",
         "covers_in_progress": True,
+        "covers_spotify_quota_exceeded": False,
+        "covers_elapsed_seconds": None,
+        "covers_estimated_remaining_seconds": None,
+        "covers_run_mode": "unknown",
+        "covers_outcome": "unknown",
+        "covers_phase": "preparing",
         "covers_processed": 1,
+        "covers_completed": 0,
         "covers_total": 4,
         "covers_downloaded": 1,
         "covers_current_folder": "C:/Music/Artist/Album",
@@ -332,6 +367,19 @@ def test_build_status_payload_reflects_current_state_counters(app):
             "duration_ms": 0.0,
         },
     }
+
+
+@pytest.mark.parametrize("completed", [0, 2])
+def test_build_status_payload_preserves_completed_results_separate_from_queue_position(completed):
+    payload = build_status_payload(library_state={
+        "covers_processed": 9,
+        "covers_completed": completed,
+        "covers_total": 10,
+    })
+
+    assert payload["covers_completed"] == completed
+    assert payload["covers_processed"] == 9
+    assert payload["covers_total"] == 10
 
 
 def test_build_status_payload_uses_provided_state_without_flask_context():

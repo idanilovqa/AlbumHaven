@@ -432,6 +432,12 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
   assert.equal(context.state.utility.problematicFiles.length, 1);
   assert.equal(context.state.utility.problematicFiles[0].name, 'First detail');
   assert.equal(context.state.utility.problematicFilesComplete, false);
+  assert.equal(context.state.utility.loading, false);
+  assert.ok(context.state.utility.completeLoadPromise);
+  let completeLoadSettled = false;
+  context.state.utility.completeLoadPromise.finally(() => { completeLoadSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completeLoadSettled, false);
   assert.ok(calls.renders >= 2, 'the bounded response must paint before completion');
 
   context.state.utility.selectedProblematicKey = 'first';
@@ -1926,4 +1932,512 @@ test('a pending Problematic Files response cannot rerender a different active ta
   assert.equal(calls.renders, 1, 'late completion must not replace the active loop player DOM');
   await context.loadProblematicFiles();
   assert.equal(calls.renders, 1, 'cached background reads must not replace the active loop player DOM');
+});
+
+function createTargetNavigationHarness({ previewKeys = ['alpha', 'beta'], fullKeys = previewKeys } = {}) {
+  const preview = createDeferred();
+  const full = createDeferred();
+  const requests = [];
+  const opens = [];
+  const trackPath = (key) => `/synthetic/${key}/track.flac`;
+  const summary = (key) => ({ key, name: key, detail_loaded: false,
+    track_paths: [trackPath(key)], problematic_track_paths: [trackPath(key)] });
+  const detail = (key) => ({ ...summary(key), detail_loaded: true,
+    tracks: [{ path: trackPath(key), title: `${key} track` }],
+    repair_preview_rows: [], track_problem_rows: [] });
+  const response = (data, status = 200) => ({ ok: status === 200, status, json: async () => data });
+  const { context, calls } = loadHelper({
+    fetch(url) {
+      requests.push(String(url));
+      if (String(url).endsWith('?limit=50')) return preview.promise;
+      if (String(url).includes('/detail?')) {
+        const key = new URL(String(url), 'http://synthetic.test').searchParams.get('album_key');
+        return Promise.resolve(response(detail(key)));
+      }
+      return full.promise;
+    },
+    albumsShareTrackPath(album, paths) {
+      return (album.track_paths || []).some((value) => paths.has(value));
+    },
+  });
+  vm.runInContext(problematicTrackNavigationSource, context, { filename: listBuilderPath });
+  context.setUtilityActiveTab = (tab) => { context.state.utility.activeTab = tab; };
+  context.openUtilityModal = () => {
+    const selected = context.state.utility.problematicFiles.find(
+      (item) => item.key === context.state.utility.selectedProblematicKey,
+    );
+    opens.push({ key: selected?.key, loaded: selected?.detail_loaded,
+      track: context.state.utility.focusedTrackPath });
+  };
+  const finishPreview = () => preview.resolve(response({ complete: false, items: previewKeys.map(summary) }));
+  const finishFull = () => full.resolve(response({ items: fullKeys.map(summary) }));
+  return { context, calls, requests, opens, preview, full, trackPath, summary, detail,
+    response, finishPreview, finishFull };
+}
+
+const settleTargetNavigation = () => new Promise((resolve) => setImmediate(resolve));
+
+test('track navigation opens hydrated preview target before full summary and keeps one detail request', async () => {
+  const h = createTargetNavigationHarness();
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  h.finishPreview();
+  try {
+    await settleTargetNavigation();
+    assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+    assert.equal(h.context.state.utility.problematicFilesComplete, false);
+    assert.equal(h.requests.filter((url) => url.includes('/detail?')).length, 1);
+  } finally {
+    h.finishFull();
+    await navigation;
+    await h.context.state.utility.completeLoadPromise;
+  }
+  assert.equal(h.requests.filter((url) => url.includes('/detail?')).length, 1,
+    'same-summary continuation must not duplicate target hydration');
+});
+
+test('outside-preview track waits for canonical full-summary identity without guessed detail requests', async () => {
+  const h = createTargetNavigationHarness({ previewKeys: ['alpha'], fullKeys: ['alpha', 'omega'] });
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('omega'));
+  h.finishPreview();
+  try {
+    await settleTargetNavigation();
+    assert.deepEqual(h.opens, []);
+    assert.equal(h.requests.filter((url) => url.includes('/detail?')).length, 0);
+  } finally {
+    h.finishFull();
+    await navigation;
+  }
+  assert.deepEqual(h.opens, [{ key: 'omega', loaded: true, track: h.trackPath('omega') }]);
+});
+
+test('concurrent track navigation reuses both summary phases and opens only the latest preview target', async () => {
+  const h = createTargetNavigationHarness();
+  const older = h.context.openUtilityModalForTrack(h.trackPath('alpha'));
+  const newer = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  h.finishPreview();
+  try {
+    await settleTargetNavigation();
+    assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+    assert.deepEqual(h.requests.filter((url) => !url.includes('/detail?')), [
+      '/utilities/problematic-files?limit=50', '/utilities/problematic-files',
+    ]);
+  } finally {
+    h.finishFull();
+    await Promise.all([older, newer]);
+    await h.context.state.utility.completeLoadPromise;
+  }
+});
+
+test('preview navigation does not release the complete-list search and filter barrier', async () => {
+  const h = createTargetNavigationHarness();
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  h.finishPreview();
+  let complete = false;
+  try {
+    await settleTargetNavigation();
+    const readiness = h.context.waitForProblematicFilesComplete().then((value) => { complete = value; });
+    await settleTargetNavigation();
+    assert.equal(complete, false);
+    assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+    h.finishFull();
+    await readiness;
+    assert.equal(complete, true);
+  } finally {
+    h.finishFull();
+    await navigation;
+  }
+});
+
+for (const cancellation of ['close', 'navigate-away']) {
+  test(`${cancellation} before preview arrives prevents delayed track navigation from opening`, async () => {
+    const h = createTargetNavigationHarness();
+    const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+    h.context.state.utility.problematicNavigationToken += 1;
+    h.context.state.utility.problematicNavigationActiveToken = 0;
+    if (cancellation === 'navigate-away') h.context.state.utility.activeTab = 'loops';
+    h.finishPreview();
+    await settleTargetNavigation();
+    h.finishFull();
+    await navigation;
+    assert.deepEqual(h.opens, []);
+    assert.equal(h.requests.filter((url) => url.includes('/detail?')).length, 0);
+  });
+}
+
+test('failed full summary leaves preview target visible but completeness remains retryable', async () => {
+  const h = createTargetNavigationHarness();
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  h.finishPreview();
+  try {
+    await settleTargetNavigation();
+    assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+  } finally {
+    h.full.resolve(h.response({ error: 'Synthetic full summary failure' }, 503));
+    await navigation;
+    await h.context.state.utility.completeLoadPromise;
+  }
+  assert.equal(h.context.state.utility.loaded, false);
+  assert.equal(h.context.state.utility.problematicFilesComplete, false);
+  assert.equal(h.context.state.utility.loading, false);
+  assert.equal(h.context.state.utility.problematicFiles.find((item) => item.key === 'beta')?.detail_loaded, true);
+});
+
+for (const terminal of ['error', 'superseded']) {
+  test(`initial summary ${terminal} settles track navigation without opening stale content`, async () => {
+    const h = createTargetNavigationHarness();
+    let settled = false;
+    const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta')).finally(() => { settled = true; });
+    if (terminal === 'superseded') h.context.state.utility.problematicSummaryRequestToken += 1;
+    h.preview.resolve(terminal === 'error'
+      ? h.response({ error: 'Synthetic preview failure' }, 503)
+      : h.response({ complete: false, items: [h.summary('beta')] }));
+    await settleTargetNavigation();
+    assert.equal(settled, true, 'failed or obsolete initial readiness must never hang');
+    await navigation;
+    assert.deepEqual(h.opens, []);
+    assert.equal(h.context.state.utility.loading, false);
+  });
+}
+
+test('pending tag save settles before preview navigation uses refreshed canonical identity', async () => {
+  const h = createTargetNavigationHarness();
+  const save = createDeferred();
+  h.context.state.utility.pendingProblematicSaveTasks = {
+    edit: { promise: save.promise, trackPaths: [h.trackPath('beta')] },
+  };
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  await settleTargetNavigation();
+  assert.deepEqual(h.requests, [], 'do not read canonical summary before the owning save settles');
+  save.resolve();
+  await settleTargetNavigation();
+  h.finishPreview();
+  try {
+    await settleTargetNavigation();
+    assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+  } finally {
+    h.finishFull();
+    await navigation;
+    await h.context.state.utility.completeLoadPromise;
+  }
+});
+
+test('full summary continuation retains an in-flight target detail when summary content is unchanged', async () => {
+  const h = createTargetNavigationHarness();
+  const detailResponse = createDeferred();
+  const fetch = h.context.fetch;
+  h.context.fetch = (url) => {
+    if (String(url).includes('/detail?')) {
+      h.requests.push(String(url));
+      return detailResponse.promise;
+    }
+    return fetch(url);
+  };
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  h.finishPreview();
+  try {
+    await settleTargetNavigation();
+    assert.equal(h.requests.filter((url) => url.includes('/detail?')).length, 1,
+      'target detail must start while complete summary is outstanding');
+    h.finishFull();
+    await settleTargetNavigation();
+    assert.equal(h.requests.filter((url) => url.includes('/detail?')).length, 1);
+  } finally {
+    h.finishFull();
+    detailResponse.resolve(h.response(h.detail('beta')));
+    await navigation;
+    await h.context.state.utility.completeLoadPromise;
+  }
+  assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+});
+
+test('track navigation survives an in-flight summary refresh that retains its target', async () => {
+  const h = createTargetNavigationHarness({
+    previewKeys: ['alpha'],
+    fullKeys: ['alpha', 'beta'],
+  });
+  const firstDetail = createDeferred();
+  const fetch = h.context.fetch;
+  let detailRequests = 0;
+  h.context.fetch = (url) => {
+    if (String(url).includes('/detail?')) {
+      h.requests.push(String(url));
+      detailRequests += 1;
+      if (detailRequests === 1) return firstDetail.promise;
+    }
+    return fetch(url);
+  };
+  h.context.state.utility.problematicFiles = [h.summary('beta')];
+  h.context.state.utility.loaded = true;
+  h.context.state.utility.problematicFilesComplete = true;
+
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  await settleTargetNavigation();
+  assert.equal(detailRequests, 1, 'navigation starts from the previously loaded target');
+
+  const refresh = h.context.loadProblematicFiles(true, { render: false });
+  firstDetail.resolve(h.response(h.detail('beta')));
+  await settleTargetNavigation();
+  h.finishPreview();
+  await settleTargetNavigation();
+  h.finishFull();
+  await refresh;
+  await navigation;
+  await h.context.state.utility.completeLoadPromise;
+
+  assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+});
+
+test('track navigation retries detail superseded by a completed summary refresh', async () => {
+  const h = createTargetNavigationHarness();
+  const firstDetail = createDeferred();
+  const fetch = h.context.fetch;
+  let detailRequests = 0;
+  h.context.fetch = (url) => {
+    if (String(url).includes('/detail?')) {
+      h.requests.push(String(url));
+      detailRequests += 1;
+      if (detailRequests === 1) return firstDetail.promise;
+    }
+    return fetch(url);
+  };
+  h.context.state.utility.problematicFiles = [h.summary('beta')];
+  h.context.state.utility.loaded = true;
+  h.context.state.utility.problematicFilesComplete = true;
+
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  await settleTargetNavigation();
+  assert.equal(detailRequests, 1, 'navigation starts from the previously loaded target');
+
+  const refresh = h.context.loadProblematicFiles(true, { render: false });
+  h.finishPreview();
+  h.finishFull();
+  await refresh;
+  assert.equal(h.context.state.utility.completeLoadPromise, null,
+    'the summary refresh completes before the superseded detail response');
+
+  firstDetail.resolve(h.response(h.detail('beta')));
+  await navigation;
+
+  assert.equal(detailRequests, 2,
+    'navigation must hydrate the retained target after summary ownership changes');
+  assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+});
+
+test('track navigation waits for a full summary when refresh supersedes detail outside preview', async () => {
+  const h = createTargetNavigationHarness({
+    previewKeys: ['alpha'],
+    fullKeys: ['alpha', 'beta'],
+  });
+  const firstDetail = createDeferred();
+  const fetch = h.context.fetch;
+  let detailRequests = 0;
+  h.context.fetch = (url) => {
+    if (String(url).includes('/detail?')) {
+      h.requests.push(String(url));
+      detailRequests += 1;
+      if (detailRequests === 1) return firstDetail.promise;
+    }
+    return fetch(url);
+  };
+  h.context.state.utility.problematicFiles = [h.summary('beta')];
+  h.context.state.utility.loaded = true;
+  h.context.state.utility.problematicFilesComplete = true;
+
+  const refresh = h.context.loadProblematicFiles(true, { render: false });
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  await settleTargetNavigation();
+  assert.equal(detailRequests, 1, 'navigation hydrates the target from the prior summary');
+
+  h.finishPreview();
+  await settleTargetNavigation();
+  firstDetail.resolve(h.response(h.detail('beta')));
+  await settleTargetNavigation();
+
+  assert.deepEqual(h.opens, [],
+    'navigation must not fall back to the first preview item while the full summary is pending');
+
+  h.finishFull();
+  await refresh;
+  await navigation;
+
+  assert.equal(detailRequests, 2,
+    'navigation rehydrates the canonical target after the complete summary arrives');
+  assert.deepEqual(h.opens, [{ key: 'beta', loaded: true, track: h.trackPath('beta') }]);
+});
+
+test('track navigation follows a refreshed canonical key for the same track', async () => {
+  const h = createTargetNavigationHarness({ previewKeys: ['alpha'], fullKeys: ['alpha'] });
+  const firstDetail = createDeferred();
+  const fetch = h.context.fetch;
+  const trackPath = h.trackPath('beta');
+  const refreshedSummary = {
+    ...h.summary('beta-v2'),
+    track_paths: [trackPath],
+    problematic_track_paths: [trackPath],
+  };
+  const refreshedDetail = {
+    ...h.detail('beta-v2'),
+    ...refreshedSummary,
+    detail_loaded: true,
+    tracks: [{ path: trackPath, title: 'beta track' }],
+  };
+  let detailRequests = 0;
+  h.context.fetch = (url) => {
+    if (String(url).includes('/detail?')) {
+      h.requests.push(String(url));
+      detailRequests += 1;
+      if (detailRequests === 1) return firstDetail.promise;
+      return Promise.resolve(h.response(refreshedDetail));
+    }
+    return fetch(url);
+  };
+  h.context.state.utility.problematicFiles = [h.summary('beta')];
+  h.context.state.utility.loaded = true;
+  h.context.state.utility.problematicFilesComplete = true;
+
+  const navigation = h.context.openUtilityModalForTrack(trackPath);
+  await settleTargetNavigation();
+  const refresh = h.context.loadProblematicFiles(true, { render: false });
+  firstDetail.resolve(h.response(h.detail('beta')));
+  await settleTargetNavigation();
+  h.finishPreview();
+  await settleTargetNavigation();
+  h.full.resolve(h.response({ items: [h.summary('alpha'), refreshedSummary] }));
+  await refresh;
+  await navigation;
+  await h.context.state.utility.completeLoadPromise;
+
+  assert.equal(detailRequests, 2);
+  assert.deepEqual(h.opens, [{ key: 'beta-v2', loaded: true, track: trackPath }]);
+});
+
+test('mutation invalidation during preview-derived detail cannot open obsolete selected content', async () => {
+  const h = createTargetNavigationHarness();
+  const detailResponse = createDeferred();
+  const fetch = h.context.fetch;
+  h.context.fetch = (url) => {
+    if (String(url).includes('/detail?')) {
+      h.requests.push(String(url));
+      return detailResponse.promise;
+    }
+    return fetch(url);
+  };
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  h.finishPreview();
+  await settleTargetNavigation();
+  // Same invalidation contract used when a problem-exclusion mutation completes.
+  h.context.state.utility.problematicSummaryRequestToken += 1;
+  h.context.state.utility.loaded = false;
+  detailResponse.resolve(h.response(h.detail('beta')));
+  h.finishFull();
+  await navigation;
+  await h.context.state.utility.completeLoadPromise;
+  assert.deepEqual(h.opens, [], 'invalidated preview cannot authorize a later modal open');
+  assert.equal(h.context.state.utility.loaded, false);
+});
+
+for (const previewDetailState of ['loaded', 'in-flight']) {
+  test(`changed same-key full summary refreshes ${previewDetailState} preview detail`, async () => {
+    const h = createTargetNavigationHarness();
+    const oldDetail = createDeferred();
+    const fetch = h.context.fetch;
+    let detailRequests = 0;
+    const freshSummary = { ...h.summary('beta'), name: 'Renamed beta', problem_reasons: ['Missing year'] };
+    const freshDetail = { ...h.detail('beta'), ...freshSummary, detail_loaded: true,
+      tracks: [{ path: h.trackPath('beta'), title: 'Updated track title' }] };
+    h.context.fetch = (url) => {
+      if (String(url).includes('/detail?')) {
+        h.requests.push(String(url));
+        detailRequests += 1;
+        if (detailRequests === 1) {
+          return previewDetailState === 'in-flight'
+            ? oldDetail.promise : Promise.resolve(h.response(h.detail('beta')));
+        }
+        return Promise.resolve(h.response(freshDetail));
+      }
+      return fetch(url);
+    };
+    const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+    h.finishPreview();
+    try {
+      await settleTargetNavigation();
+      assert.equal(detailRequests, 1, 'preview must start target hydration before full summary');
+      h.full.resolve(h.response({ items: [h.summary('alpha'), freshSummary] }));
+      await settleTargetNavigation();
+      assert.equal(detailRequests, 2,
+        'client load generation does not prove backend snapshot equality; changed summary needs fresh detail');
+    } finally {
+      oldDetail.resolve(h.response(h.detail('beta')));
+      h.full.resolve(h.response({ items: [h.summary('alpha'), freshSummary] }));
+      await navigation;
+      await h.context.state.utility.completeLoadPromise;
+    }
+    const selected = h.context.state.utility.problematicFiles.find((item) => item.key === 'beta');
+    assert.equal(h.context.state.utility.selectedProblematicKey, 'beta');
+    assert.equal(h.context.state.utility.focusedTrackPath, h.trackPath('beta'));
+    assert.equal(selected.name, 'Renamed beta');
+    assert.equal(selected.tracks[0].title, 'Updated track title');
+    assert.deepEqual(Array.from(selected.problem_reasons), ['Missing year']);
+    assert.equal(selected.detail_loaded, true);
+    if (previewDetailState === 'loaded') {
+      assert.ok(h.calls.renders > 0, 'canonical changed content must repaint the already-open target');
+    }
+  });
+}
+
+test('actual closeUtilityModal cancels navigation waiting for initial summary readiness', async () => {
+  const h = createTargetNavigationHarness();
+  const overlay = { hidden: false };
+  h.context.getUtilityModalElements = () => ({ overlay });
+  h.context.document = {
+    body: { classList: { remove() {} } },
+    getElementById() { return { hidden: true }; },
+    querySelectorAll() { return []; },
+  };
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  const owner = h.context.state.utility.problematicNavigationToken;
+  h.context.closeUtilityModal();
+  assert.equal(overlay.hidden, true);
+  assert.notEqual(h.context.state.utility.problematicNavigationToken, owner);
+  h.finishPreview();
+  await settleTargetNavigation();
+  h.finishFull();
+  await navigation;
+  await h.context.state.utility.completeLoadPromise;
+  assert.deepEqual(h.opens, []);
+  assert.equal(h.requests.filter((url) => url.includes('/detail?')).length, 0);
+});
+
+test('full summary removing target while preview detail is pending cannot open obsolete album', async () => {
+  const h = createTargetNavigationHarness();
+  const detail = createDeferred();
+  const fetch = h.context.fetch;
+  h.context.fetch = (url) => String(url).includes('/detail?') ? detail.promise : fetch(url);
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  h.finishPreview();
+  await settleTargetNavigation();
+  h.full.resolve(h.response({ items: [h.summary('alpha')] }));
+  await settleTargetNavigation();
+  detail.resolve(h.response(h.detail('beta')));
+  await navigation;
+  await h.context.state.utility.completeLoadPromise;
+  assert.deepEqual(h.opens, []);
+});
+
+test('full-summary initial detail supersedes an older in-flight preview detail', async () => {
+  const h = createTargetNavigationHarness();
+  const oldDetail = createDeferred();
+  const fetch = h.context.fetch;
+  h.context.fetch = (url) => String(url).includes('/detail?') ? oldDetail.promise : fetch(url);
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
+  h.finishPreview();
+  await settleTargetNavigation();
+  h.full.resolve(h.response({ items: [h.summary('alpha'), h.summary('beta')],
+    initial_detail: { ...h.detail('beta'), name: 'Canonical initial detail' } }));
+  await settleTargetNavigation();
+  oldDetail.resolve(h.response(h.detail('beta')));
+  await navigation;
+  await h.context.state.utility.completeLoadPromise;
+  assert.equal(h.context.state.utility.problematicFiles.find((item) => item.key === 'beta').name,
+    'Canonical initial detail');
 });

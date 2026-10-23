@@ -1,5 +1,7 @@
 const fs = require('node:fs');
+const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { applyPerformanceChangeImpact } = require('./performance-change-impact.cjs');
 const { PERFORMANCE_SHARDS: PERFORMANCE_SHARD_CONFIGS } = require('./resolve-ci-shard.cjs');
 
 const INCREMENTAL_LINE_LIMIT = 250;
@@ -318,6 +320,15 @@ function runCli(env = process.env) {
     'git',
     ['diff', '--numstat', '--no-renames', diffBase, headSha],
     { encoding: 'utf8' },
+  );
+  const changedPaths = parseNumstat(numstat).map(({ path: changedPath }) => changedPath);
+  const performanceChangeImpact = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'tests', 'ci', 'performance-change-impact.json'),
+    'utf8',
+  ));
+  Object.assign(
+    pipeline,
+    applyPerformanceChangeImpact(pipeline, changedPaths, performanceChangeImpact),
   );
   const review = classifyReviewScope({
     action,

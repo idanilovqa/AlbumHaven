@@ -12,6 +12,68 @@ def _logger():
     return type("Logger", (), {"verbose": lambda self, *args, **kwargs: None})()
 
 
+def test_automatic_youtube_issues_at_most_two_album_queries():
+    from music_app.services import cover_provider_youtube_music as ytm
+
+    calls = []
+
+    class Client:
+        def search(self, query, **_kwargs):
+            calls.append(query)
+            return []
+
+    candidates = ytm.search_youtube_music_candidates(
+        "Artist", "Album", None, 2001, "AlbumHavenTests/1.0",
+        automatic=True, max_queries=2,
+        client_getter=lambda **_kwargs: Client(),
+        build_query_variants=lambda *_args: [
+            ("Artist", "Album", None, 2001),
+            ("Normalized Artist", "Album", None, 2001),
+        ],
+        match_score=lambda **_kwargs: 0.0,
+        parse_year=lambda _value: 2001,
+        probe_match_candidates=lambda **_kwargs: [],
+        log_event=None,
+        logger=_logger(),
+    )
+
+    assert candidates == []
+    assert len(calls) == 2
+    assert calls[1].startswith("Normalized Artist")
+
+
+def test_automatic_youtube_keeps_first_valid_result_without_retrying_query(monkeypatch):
+    from music_app.services import cover_provider_youtube_music as ytm
+
+    calls = []
+
+    class Client:
+        def search(self, query, **_kwargs):
+            calls.append(query)
+            if len(calls) > 1:
+                raise TimeoutError("unnecessary retry")
+            return [{"title": "Album"}]
+
+    candidate = CoverCandidate(
+        source="youtube_music", url="https://example.test/cover.jpg", width=900, height=900,
+        score=0.95, matched_artist="Artist", matched_album="Album",
+    )
+    monkeypatch.setattr(ytm, "_collect_result_matches", lambda *_args, **_kwargs: [(0.95, candidate.url, {})])
+    results = ytm.search_youtube_music_candidates(
+        "Artist", "Album", None, 2001, "AlbumHavenTests/1.0",
+        automatic=True, max_queries=2,
+        client_getter=lambda **_kwargs: Client(),
+        build_query_variants=lambda *_args: [("Artist", "Album", None, 2001), ("Artist", "Album", None, None)],
+        match_score=lambda **_kwargs: 0.95,
+        parse_year=lambda _value: 2001,
+        probe_match_candidates=lambda **_kwargs: [candidate],
+        log_event=None,
+    )
+
+    assert results == [candidate]
+    assert len(calls) == 1
+
+
 @pytest.fixture(autouse=True)
 def _reset_youtube_music_client_state(monkeypatch):
     from music_app.services import cover_provider_youtube_music as ytm

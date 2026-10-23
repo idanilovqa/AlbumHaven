@@ -8,6 +8,15 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(repoRoot, 'scripts', 'ci', 'run-performance-shard.ps1');
 const targetRunnerPath = path.join(repoRoot, 'scripts', 'run-performance-playwright.cjs');
 
+test('performance shard exports its runner temp root to managed child processes', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(
+    source,
+    /Set-Item\s+-LiteralPath\s+['"]Env:RUNNER_TEMP['"]\s+-Value\s+\$RunnerTemp/i,
+  );
+});
+
 test('performance shard stops on process cleanup failure even when target ports are clear', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   const tailStart = source.indexOf('$statePath = Join-Path $stateRoot');
@@ -136,12 +145,12 @@ test('performance profile runner prepares one isolated fixture before compatible
   assert.match(source, /Set-Item\s+-LiteralPath\s+["']Env:\$key["']/i);
 });
 
-test('performance profile runner accepts the ten-target synthetic profile', () => {
+test('performance profile runner accepts the seventeen-target synthetic profile', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
-  assert.doesNotMatch(
+  assert.match(
     source,
-    /\$targetNames\.Count\s+-gt\s+[1-9]\b/,
-    'the synthetic profile runner must accept all ten targets',
+    /\$targetNames\.Count\s+-gt\s+17\b/,
+    'the synthetic profile runner must accept its complete seventeen-target registry',
   );
 });
 
@@ -154,6 +163,132 @@ test('performance profile runner prepares its fixture exactly once before the ta
 
   assert.equal(preparationCalls.length, 1, 'profile preparation must be invoked exactly once');
   assert.ok(prepareIndex > provisionIndex && prepareIndex < targetLoopIndex, 'prepare after provisioning and before targets');
+});
+
+test('Edit Tags performance target receives only a private writable DDT media copy', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(
+    source,
+    /if\s*\(\$target\s+-eq\s+['"]edit-tags-post-edit['"]\)[\s\S]*Prepare-EditTagsWritableMedia/i,
+  );
+  assert.match(
+    source,
+    /\$ddtArtist\s*=\s*\[string\]::Concat\(\[char\]0x0414,\s*\[char\]0x0414,\s*\[char\]0x0422\)/i,
+  );
+  assert.match(
+    source,
+    /Join-Path\s+\(Join-Path\s+\$env:ALBUM_HAVEN_MEDIA_ROOT\s+['"]writable['"]\)\s+\$ddtArtist/i,
+  );
+  assert.doesNotMatch(source, /ДДТ/);
+  assert.match(source, /Copy-Item\s+-LiteralPath\s+\$sourceArtistRoot[\s\S]*ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT/i);
+  assert.match(
+    source,
+    /ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT[^\r\n]*\$null[\s\S]*foreach\s*\(\$target\s+in\s+\$targetNames\)/i,
+    'the writable override must be cleared before sequential targets',
+  );
+  assert.doesNotMatch(
+    source,
+    /Copy-Item[^\r\n]*\$verifiedBaseFixtureRoot[^\r\n]*-Recurse/i,
+    'the runner must not copy or mutate the complete retained release fixture',
+  );
+});
+
+test('performance shard prepares and owns the preloaded artwork derivative before fixture loading', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  for (const parameter of [
+    'GeneratorCheckout',
+    'ExpectedFixtureRelease',
+    'BaseManifestSha256',
+    'GeneratorCommit',
+    'VariantCount',
+    'SourceMaxEdge',
+  ]) {
+    assert.match(source, new RegExp(`\\$${parameter}\\b`), `missing derived-fixture parameter ${parameter}`);
+  }
+  assert.match(
+    source,
+    /ValidateSet\([^)]*['"]preloaded-release['"][^)]*['"]generated-isolated['"][^)]*['"]preloaded-derived['"][^)]*\)/i,
+  );
+  assert.match(source, /prepare-artwork-diversity-fixture\.ps1/i);
+  assert.match(
+    source,
+    /\$derivedRoot\s*=\s*Join-Path\s+\$profileSessionRoot\s+['"]artwork-diversity-derived['"]/i,
+  );
+  assert.match(
+    source,
+    /\$artworkDiversityProvenancePath\s*=\s*Join-Path\s+\$stateRoot\s+['"]artwork-diversity-provenance\.json['"]/i,
+  );
+  assert.equal(
+    (source.match(/&\s*\$prepareArtworkDiversityFixture\b/gi) || []).length,
+    1,
+    'the shard must invoke the generator helper exactly once',
+  );
+
+  const helperIndex = source.search(/&\s*\$prepareArtworkDiversityFixture\b/i);
+  const loaderIndex = source.search(/&\s*\$PythonPath\s+\$loader\b/i);
+  const targetLoopIndex = source.search(/foreach\s*\(\$target\s+in\s+\$targetNames\)\s*\{\s*\$targetIndex\s*\+=\s*1/i);
+  assert.ok(helperIndex >= 0 && helperIndex < loaderIndex, 'generate before loading the fixture into Postgres');
+  assert.ok(loaderIndex < targetLoopIndex, 'load the derivative before application targets start');
+  assert.match(
+    source,
+    /Set-Item\s+-LiteralPath\s+['"]Env:ALBUM_HAVEN_FIXTURE_ROOT['"]\s+-Value\s+\$derivedRoot/i,
+  );
+  assert.match(
+    source,
+    /Set-Item\s+-LiteralPath\s+['"]Env:ALBUM_HAVEN_MEDIA_ROOT['"]\s+-Value\s+\(Join-Path\s+\$derivedRoot\s+['"]media['"]\)/i,
+  );
+  assert.match(
+    source,
+    /if\s*\(\$FixtureMode\s+-in\s+@\([^)]*preloaded-release[^)]*preloaded-derived[^)]*\)\)/i,
+  );
+  assert.match(
+    source,
+    /Process cleanup is unproven;[^"]*\$derivedRoot[^"]*\$artworkDiversityProvenancePath/i,
+    'cleanup failure must report and retain exact derivative evidence paths',
+  );
+});
+
+test('performance profile runner removes copied derived provenance only after cleanup is proven', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const databaseTeardownIndex = source.search(/&\s*\$bootstrap\s+`[\s\S]*?-Mode\s+Teardown/i);
+  const provenanceTeardownIndex = source.indexOf('$sourceProvenanceHash');
+  const profileTeardownIndex = source.search(
+    /Remove-Item\s+-LiteralPath\s+\$profileSessionRoot\s+-Recurse\s+-Force/i,
+  );
+  const stateRootTeardownIndex = source.search(
+    /Remove-Item\s+-LiteralPath\s+\$stateRoot\s+-Force/i,
+  );
+  assert.match(
+    source,
+    /\$retainedArtworkDiversityProvenancePath\s*=\s*Join-Path[\s\S]*gallery-artwork-diversity[\s\S]*artwork-diversity-provenance\.json/i,
+  );
+  assert.match(
+    source,
+    /Get-FileHash[\s\S]*\$artworkDiversityProvenancePath[\s\S]*Get-FileHash[\s\S]*\$retainedArtworkDiversityProvenancePath/i,
+    'the source provenance must be removed only after its retained copy is byte-identical',
+  );
+  assert.match(
+    source,
+    /Remove-Item\s+-LiteralPath\s+\$artworkDiversityProvenancePath\s+-Force/i,
+  );
+  assert.match(
+    source,
+    /Get-ChildItem\s+-LiteralPath\s+\$stateRoot\s+-Force[\s\S]*Remove-Item\s+-LiteralPath\s+\$stateRoot\s+-Force/i,
+    'the stable state root must be removed only when cleanup leaves it empty',
+  );
+  assert.ok(
+    databaseTeardownIndex >= 0 && provenanceTeardownIndex > databaseTeardownIndex,
+    'derived provenance cleanup must run only after successful database teardown',
+  );
+  assert.ok(
+    profileTeardownIndex > provenanceTeardownIndex,
+    'derived fixture cleanup must run only after database and provenance teardown are proven',
+  );
+  assert.ok(
+    stateRootTeardownIndex > profileTeardownIndex,
+    'the stable state root can be removed only after its prepared-profile child is deleted',
+  );
 });
 
 test('performance profile runner explicitly marks every sequential target as fixture-prepared', () => {

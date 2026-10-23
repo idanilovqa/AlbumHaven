@@ -24,6 +24,12 @@ operate, or contribute to the application.
   private fixture assets.
 - Use environment variables for machine-specific paths and credentials.
 - Keep tests independent and give state-mutating tests uniquely owned data.
+- Never infer a user action from pre-existing data during migration or backfill.
+  In particular, an existing cover path or remote URL is not evidence of an
+  explicit in-app cover selection. Preserve proven manual choices; leave
+  ambiguous legacy provenance unknown; any repair policy needs explicit owner
+  authorization and guarded updates. Do not blanket-promote
+  inherited covers to user-owned or blanket-clear genuine manual ownership.
 - Shared UI presentation belongs to its component CSS/templates: anchored menus
   match their originating surface (light content stays light; dark chrome stays
   dark), switch rows have no hover fill, checkbox hover uses neutral control
@@ -32,7 +38,90 @@ operate, or contribute to the application.
   copies or overrides of these rules.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
+- E2E tests for owner-reported regressions must assert every named
+  user-visible outcome and failure mode through the real UI. Internal calls,
+  request parameters, mocked helper success, or state inspection may support
+  diagnosis, but they do not replace assertions that the requested content is
+  rendered, positioned, stable, complete, and usable exactly as specified.
+- Scroll and navigation regressions must also assert the requested target's
+  visible identity in page chrome, its exact unobscured content boundary, and
+  the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
+
+## Mandatory search regression gate
+
+- Immediately run `npm run test:search-regressions` after changing search
+  algorithms, search payloads, gallery or library rebuild behavior, cache
+  invalidation, watcher reconciliation that can invalidate projections,
+  artist-tree filtering or selection, pagination, or search-related rendering.
+- The command is the complete local search gate: PostgreSQL/API contracts,
+  JavaScript and component tests, the `gallery-search-visual` functional E2E
+  shard, and the measured `artist-family`, `search-all-artists`, and
+  `search-browse` performance targets. Do not replace it with a narrower test
+  selection. Keep the timed cold duplicate-projection cache-miss test in this
+  gate so an interactive search cannot synchronously rebuild the global
+  album/file inventory.
+
+## Mandatory HTML reload regression gate
+
+- Changes to HTML bootstrap, static asset versioning, or their cache/lifecycle
+  owners must run the focused Python bootstrap, asset-version, and shutdown
+  tests, plus the real-Postgres `artist-tree-scroll-navigation` performance
+  target on the full production-calibration synthetic fixture.
+- Keep both first-load and post-browsing document-response measurements:
+  1000 ms target, 400 ms grace, 1400 ms hard ceiling. Scroll placement passing
+  does not excuse a slow HTML response. Pending-shell timing does not prove
+  gallery readiness; preserve separate readiness and populated-content gates.
+- Preserve live asset invalidation, including same-size/restored-timestamp
+  changes, and explicit native resource cleanup. Keep
+  `tests/ci/performance-change-impact.json` synchronized with new owners.
+- This gate supplements the search and Problematic Files gates below; it does
+  not replace them or authorize relaxed budgets.
+
+## Mandatory Edit Tags regression gate
+
+- Immediately run the Edit Tags regression coverage after changing tag-editor
+  loading, selection, submission, optimistic updates, media writes, save-task
+  completion, recovery, or tag-edit reconciliation. Every agent and chat must
+  run this gate during implementation, not defer it until feature completion.
+- Run the affected Python/API tests, including `test_edit_workflows.py`,
+  `test_save_tasks.py`, `test_edit_state.py`, `test_tag_edit_recovery.py`,
+  `test_tag_edit_intents_postgres.py`, and `test_postgres_structural_tag_edit.py`
+  under `tests/py`, plus the tag-editor and optimistic-update JavaScript tests
+  and affected component tests. Real-Postgres cases require a fresh isolated
+  database; skipped database cases do not satisfy the gate.
+- Run the `metadata-mutations` functional E2E shard. Verify actual persisted
+  tags and album/track identities, terminal success or readable failure,
+  optimistic updates, and gallery position preservation; an HTTP success or
+  dismissed modal alone does not prove an edit succeeded.
+- Changes affecting post-save browse state must also run the mandatory search
+  and Problematic Files gates. Measure opening, saving, closing, and subsequent
+  search/artist navigation with the production-calibration synthetic library;
+  preserve approved budgets and compare cold and warm behavior. A fast save
+  acknowledgement does not excuse delayed persistence or later browse stalls.
+- Run Python, JavaScript, component, and browser stages sequentially. Never run
+  these tests against the shared Sandbox3 library or another active test's
+  database, and audit owned processes and ports before the next heavy run.
+
+## Mandatory Problematic Files regression gate
+
+- Immediately run both `utility-problematic-files` and
+  `problematic-files-focused` performance targets after changing Problematic
+  Files queries, candidate discovery, summaries/details, cache invalidation,
+  watcher reconciliation, tag-edit/cover/move projection invalidation, utility
+  loading, search/filtering, virtualization, or shared rendering that affects
+  this surface. This applies to every agent and chat; a narrow unit pass is
+  not a substitute.
+- Follow `docs/problematic-files-regression-checks.md` for PostgreSQL/API,
+  JavaScript, component, functional, and measured browser coverage. Use real
+  isolated Postgres fixtures. Skipped database checks or setup failures do not
+  satisfy the gate. Run Python, Node, and browser stages serially.
+- Keep the approved 1000 ms readiness target plus 200 ms grace. Retain cold
+  and warm measurements, full response sizes, and populated visible detail
+  assertions. Do not relax budgets, remove cases, or rerun until green.
+- Maintain `tests/ci/performance-change-impact.json` when ownership moves or
+  new dependencies are introduced. Its tested mapping must select both PF
+  targets; full CI remains mandatory before release.
 
 ## Subagents and token burning
 

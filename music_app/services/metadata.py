@@ -20,6 +20,7 @@ NON_ALBUM_EXCEPTION_VALUES = {
     "interview": "Interview",
     "non-album rarity": "Non-album rarity",
     "non album rarity": "Non-album rarity",
+    "custom collection": "Custom Collection",
 }
 NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "albumhavenexception",
@@ -74,6 +75,10 @@ def normalize_exception_value(value: object) -> str:
     if not text:
         return ""
     return NON_ALBUM_EXCEPTION_VALUES.get(text.casefold(), text)
+
+
+def normalize_custom_collection_name(value: object) -> str:
+    return str(value or "").strip()
 
 def _decode_ape_text(value: bytes) -> str:
     for encoding in ("utf-8", "latin-1"):
@@ -559,7 +564,7 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     duration_seconds = safe_int(tags.get("duration_seconds"))
     year = extract_year(tags)
     release_date = extract_release_date(tags)
-    edition = first_tag(tags, ["edition", "album edition", "albumedition", "version", "subtitle", "discsubtitle"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
+    edition = first_tag(tags, ["edition", "album edition", "albumedition", "version"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
     album_rating = extract_album_rating(tags)
     exception_type = normalize_exception_value(first_custom_tag(tags, NON_ALBUM_EXCEPTION_TAG_NAMES))
     return {

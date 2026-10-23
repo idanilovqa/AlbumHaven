@@ -134,17 +134,25 @@ def test_targeted_album_metadata_uses_every_retained_member(watcher_repair_inven
     assert after["owner::unrelated"] == before["owner::unrelated"]
 
 
+@pytest.mark.parametrize("owned_directory_name", [
+    "watcher-reconciliation",
+    "gallery-native-response-overlap",
+])
 @pytest.mark.parametrize("mixed_album", [False, True])
-def test_watcher_cleanup_removes_all_owned_albums_or_refuses_mixed_ownership(watcher_repair_inventory, mixed_album):
+def test_watcher_cleanup_removes_all_owned_albums_or_refuses_mixed_ownership(
+    watcher_repair_inventory,
+    mixed_album,
+    owned_directory_name,
+):
     from pathlib import Path
     from tests.e2e.support import watcherFixture
 
     fixture = watcher_repair_inventory
-    owned = fixture.entry("cases/watcher-reconciliation/Owner/Target/song.flac", album="Target")
-    sibling = fixture.entry("cases/watcher-reconciliation/Owner/Sibling/song.flac", album="Sibling")
+    owned = fixture.entry(f"cases/{owned_directory_name}/Owner/Target/song.flac", album="Target")
+    sibling = fixture.entry(f"cases/{owned_directory_name}/Owner/Sibling/song.flac", album="Sibling")
     outside = fixture.entry("cases/watcher-reconciliation-other/Owner/Outside/song.flac", album="Target" if mixed_album else "Outside")
     fixture.seed(owned, sibling, outside)
-    owned_root = Path(fixture.roots[0]["path"]) / "cases" / "watcher-reconciliation"
+    owned_root = Path(fixture.roots[0]["path"]) / "cases" / owned_directory_name
     for item in (owned, sibling):
         Path(item["path"]).unlink()
 
@@ -167,3 +175,18 @@ def test_watcher_cleanup_removes_all_owned_albums_or_refuses_mixed_ownership(wat
         watcherFixture.remove_watched_inventory(owned_root)
         with isolatedPostgres._connect(fixture.setup_url) as connection:
             assert connection.execute("select metadata ->> 'inventory_mutation_revision' as revision from library.libraries where library_kind = 'local'").fetchone()["revision"] == revision
+
+
+def test_watcher_cleanup_accepts_exact_response_overlap_owner_before_database_access(monkeypatch, tmp_path):
+    from tests.e2e.support import watcherFixture
+
+    owned_root = tmp_path / "cases" / "gallery-native-response-overlap"
+    owned_root.mkdir(parents=True)
+
+    def accepted_owner():
+        raise RuntimeError("accepted response-overlap owner")
+
+    monkeypatch.setattr(isolatedPostgres, "resolve_isolated_database_urls", accepted_owner)
+
+    with pytest.raises(RuntimeError, match="accepted response-overlap owner"):
+        watcherFixture.remove_watched_inventory(owned_root)

@@ -1102,6 +1102,8 @@ class PostgresLibraryBrowseRepository:
             payload["initial_view_partial"] = False
             payload["payload_tier"] = "gallery_page"
             payload["all_artists_active"] = _request_flag((query_params or {}).get("all_artists"))
+            if _request_flag((query_params or {}).get("include_library_wide_non_album")):
+                payload["library_non_album_tracks"] = payload.get("non_album_tracks", [])
             if not include_non_album_tracks or (query_params or {}).get("gallery_cursor"):
                 payload.pop("non_album_tracks", None)
             if _request_flag((query_params or {}).get("omit_sidebar")):

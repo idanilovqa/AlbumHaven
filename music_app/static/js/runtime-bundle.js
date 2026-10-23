@@ -11251,7 +11251,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
       ? payload.library_non_album_tracks
       : state.view.non_album_tracks;
     state.view.non_album_tracks_deferred = false;
-    if (typeof syncGalleryMainControls === 'function') syncGalleryMainControls();
+    if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_tracks;
   })().finally(() => {
     deferredNonAlbumHydrationPromise = null;

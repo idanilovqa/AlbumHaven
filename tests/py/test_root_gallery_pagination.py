@@ -99,8 +99,10 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
     hydrated = repository.build_root_startup_preview_payload(query_params={
         "gallery_page_size": "2",
         "include_non_album": "1",
+        "include_library_wide_non_album": "1",
     })
     assert hydrated["non_album_tracks"] == [loose_track]
+    assert hydrated["library_non_album_tracks"] == [loose_track]
     assert hydrated["non_album_tracks_deferred"] is False
     assert len(non_album_calls) == 1
     assert non_album_calls[0]["connection"] is connection

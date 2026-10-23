@@ -283,6 +283,8 @@ test('non-album tracks follow the displayed artist family instead of a retained 
 test('deferred non-album tracks hydrate without rerendering the gallery', async () => {
   const { context } = loadHelper();
   const requested = [];
+  let controlSyncs = 0;
+  context.updateGalleryMainControls = () => { controlSyncs += 1; };
   context.state.view = {
     selected_artist: 'Agalloch',
     non_album_tracks: [],
@@ -309,6 +311,7 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('include_non_album'), '1');
   assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Loose']);
   assert.equal(context.state.view.non_album_tracks_deferred, false);
+  assert.equal(controlSyncs, 1);
 });
 
 test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {

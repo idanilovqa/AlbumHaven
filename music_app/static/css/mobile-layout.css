@@ -255,7 +255,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .settings-outlet { grid-column: 1; min-width: 0; padding: 12px; overflow: auto; background: var(--appearance-main-surface, var(--bg)); }
   .settings-outlet .account-main { width: 100%; min-width: 0; padding: 0; }
   .settings-outlet .form-grid { grid-template-columns: minmax(0, 1fr); }
-  .settings-outlet .page-gallery-bar { position: sticky; top: -12px; padding-top: 12px; background: var(--app-surface); z-index: 4; }
   .settings-shell .settings-nav { display: block; position: fixed; top: var(--app-bar-height); bottom: var(--player-height); left: 0; width: min(320px, 75vw); box-sizing: border-box; padding: 0 12px 16px; z-index: 4500; overflow-y: auto; transform: translateX(-102%); visibility: hidden; transition: transform 200ms ease, visibility 200ms; border-radius: 0 14px 14px 0; }
   .settings-shell .settings-nav.is-settings-navigation-open { transform: none; visibility: visible; }
   .settings-nav-backdrop:not([hidden]) { display: block; position: fixed; inset: var(--app-bar-height) 0 var(--player-height); border: 0; background: rgb(0 0 0 / .22); z-index: 4400; }
@@ -465,9 +464,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
   /* All account pages start with the same bar at the top of their main body. */
   .settings-host.settings-shell { grid-template-rows: var(--app-bar-height) minmax(0, 1fr); }
-  .settings-host .settings-outlet { grid-row: 2; padding: 14px 12px 0; margin: 0; }
+  .settings-host .settings-outlet { grid-row: 2; padding: 8px 12px 0; margin: 0; }
   .settings-host :is(.settings-main, .account-main) { width: 100%; min-width: 0; padding: 0 0 24px; }
-  .settings-outlet .page-gallery-bar { top: 0; padding-block: 0 10px; margin-bottom: 8px; border-radius: 0; background: var(--appearance-main-surface, var(--app-surface)); }
+  .page-gallery-bar { position: sticky; top: 0; border-radius: 0; background: var(--appearance-main-surface, var(--app-surface)); z-index: 4; }
   .settings-host .settings-nav { top: var(--app-bar-height); width: max-content; min-width: min(190px, 75vw); max-width: min(320px, 75vw); overflow-y: auto; }
   .settings-host .settings-nav nav { grid-template-columns: minmax(0, 1fr); }
   .settings-host .settings-nav .settings-nav-heading { display: flex; align-items: center; }
@@ -597,26 +596,26 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
      never under the navigation button. Controls share the count row when roomy. */
   .shell-layout .shell-main-surface:not(.has-mobile-page),
   .shell-layout .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) { padding-top: 8px; }
-  [data-gallery-bar-instance="gallery"] {
+  [data-gallery-bar-layout="mobile-primary"] {
     display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
     align-items: start; gap: 2px 6px; padding-bottom: 6px;
   }
-  [data-gallery-bar-instance="gallery"] > .gallery-bar__context { display: contents; }
+  [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__context { display: contents; }
   /* Hit areas remain 40px; they must not create a 40px text row above the counts. */
-  [data-gallery-bar-instance="gallery"] .gallery-bar__title {
+  [data-gallery-bar-layout="mobile-primary"] .gallery-bar__title {
     grid-column: 2 / -1; min-height: 24px; line-height: 24px; align-items: flex-start;
   }
-  [data-gallery-bar-instance="gallery"] #mobile-library-button {
+  [data-gallery-bar-layout="mobile-primary"] :is(#mobile-library-button, .page-gallery-bar__back) {
     position: absolute; left: 0; top: -8px;
   }
-  [data-gallery-bar-instance="gallery"] .gallery-bar__title .gallery-info-button {
+  [data-gallery-bar-layout="mobile-primary"] .gallery-bar__title .gallery-info-button {
     margin-block: -8px;
   }
-  [data-gallery-bar-instance="gallery"] .gallery-bar__summary {
+  [data-gallery-bar-layout="mobile-primary"] .gallery-bar__summary {
     grid-column: 2; grid-row: 2; align-self: start; min-width: 0; margin: 0;
   }
-  [data-gallery-bar-instance="gallery"] .gallery-bar__summary:empty { display: none; }
-  [data-gallery-bar-instance="gallery"] > .gallery-bar__actions {
+  [data-gallery-bar-layout="mobile-primary"] .gallery-bar__summary:empty { display: none; }
+  [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions {
     grid-column: 3; grid-row: 2; justify-self: end; align-self: start; margin: 0;
   }
   :root #mobile-library-button {
@@ -646,8 +645,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
 @media (max-width: 350px) {
   /* A third action row is preferable to squeezing or left-shifting the counts. */
-  [data-gallery-bar-instance="gallery"] .gallery-bar__summary { grid-column: 2 / -1; }
-  [data-gallery-bar-instance="gallery"] > .gallery-bar__actions { grid-column: 2 / -1; grid-row: 3; }
+  [data-gallery-bar-layout="mobile-primary"] .gallery-bar__summary { grid-column: 2 / -1; }
+  [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions { grid-column: 2 / -1; grid-row: 3; }
 }
 
 @media (max-width: 900px) {

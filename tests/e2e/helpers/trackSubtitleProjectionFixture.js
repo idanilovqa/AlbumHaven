@@ -64,6 +64,15 @@ albums = [
             {"title": "Leviathan II"},
         ],
     },
+    {
+        "artist": "Accented Album Regression",
+        "album": "Belle Âme",
+        "year": "2012",
+        "tracks": [
+            {"title": "First Movement"},
+            {"title": "Second Movement"},
+        ],
+    },
 ]
 
 for album in albums:

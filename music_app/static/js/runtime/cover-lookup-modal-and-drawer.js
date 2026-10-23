@@ -1266,11 +1266,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const clearButton = document.getElementById('cover-lookup-drawer-clear');
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
-  const tasks = (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
-    .filter((task) => !(
-      String(task?.status || '') === 'completed'
-      && Boolean(task?.notification_action_taken)
-    ));
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -1326,6 +1322,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
+    const isCoverUpdated = status === 'completed' && String(task?.result_kind || '') === 'cover-updated';
     const foundCount = Number.isFinite(Number(task?.possible_match_count))
       ? Math.max(0, Number(task.possible_match_count))
       : Array.isArray(task?.possible_matches)
@@ -1337,6 +1334,8 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? 'Canceled'
       : isNoResult
       ? 'No covers found'
+          : isCoverUpdated
+            ? 'Art chosen'
       : status === 'completed'
         ? `${foundCount ? `${foundCount} ` : ''}covers found`
       : status === 'pending'

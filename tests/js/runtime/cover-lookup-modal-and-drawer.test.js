@@ -1109,9 +1109,11 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
-  assert.doesNotMatch(bodyElement.innerHTML, /data-open-cover-lookup-task="task-1"/);
-  assert.equal(badgeElement.hidden, true);
-  assert.equal(clearElement.disabled, true);
+  assert.match(bodyElement.innerHTML, /data-open-cover-lookup-task="task-1"/);
+  assert.match(bodyElement.innerHTML, />Art chosen<\/span>/);
+  assert.equal(badgeElement.hidden, false);
+  assert.equal(badgeElement.textContent, '1');
+  assert.equal(clearElement.disabled, false);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -3335,7 +3337,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   context.renderCoverLookupDrawer();
 
   assert.equal(badgeElement.hidden, false);
-  assert.equal(badgeElement.textContent, '2');
+  assert.equal(badgeElement.textContent, '3');
   assert.deepEqual(buttonToggleCalls.at(-1), ['has-active-lookups', true]);
 
   context.state.coverLookup.tasks = [
@@ -3351,9 +3353,9 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 
   context.renderCoverLookupDrawer();
 
-  assert.equal(badgeElement.hidden, true);
-  assert.equal(badgeElement.textContent, '');
-  assert.deepEqual(buttonToggleCalls.at(-1), ['has-active-lookups', false]);
+  assert.equal(badgeElement.hidden, false);
+  assert.equal(badgeElement.textContent, '1');
+  assert.deepEqual(buttonToggleCalls.at(-1), ['has-active-lookups', true]);
 }
 
 ;(async () => {

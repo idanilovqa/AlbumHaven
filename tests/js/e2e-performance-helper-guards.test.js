@@ -39,6 +39,11 @@ test('PR gallery traversal gates first cover and memory while soak gates every d
     );
   }
   assert.match(spec, /expectTimingBudgetOutcome\(expect, firstVisibleDecodedTiming,/);
+  assert.match(spec, /catch \(error\) \{\s*firstVisibleDecodedError = error;\s*\}/);
+  assert.match(
+    spec,
+    /if \(firstVisibleDecodedError\) \{\s*expectTimingBudgetOutcome\(\s*expect,\s*firstVisibleDecodedTiming,/,
+  );
   assert.match(spec, /expectTimingBudgetOutcome\(expect, slowestWindowRecoveryTiming,/);
   assert.match(spec, /const TRAVERSAL_STEPS = SOAK_MODE \? 400 : 160/);
   assert.match(spec, /const TRAVERSAL_CYCLES = SOAK_MODE \? 2 : 1/);

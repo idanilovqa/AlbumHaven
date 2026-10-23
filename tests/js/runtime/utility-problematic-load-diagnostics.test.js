@@ -432,6 +432,12 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
   assert.equal(context.state.utility.problematicFiles.length, 1);
   assert.equal(context.state.utility.problematicFiles[0].name, 'First detail');
   assert.equal(context.state.utility.problematicFilesComplete, false);
+  assert.equal(context.state.utility.loading, false);
+  assert.ok(context.state.utility.completeLoadPromise);
+  let completeLoadSettled = false;
+  context.state.utility.completeLoadPromise.finally(() => { completeLoadSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completeLoadSettled, false);
   assert.ok(calls.renders >= 2, 'the bounded response must paint before completion');
 
   context.state.utility.selectedProblematicKey = 'first';

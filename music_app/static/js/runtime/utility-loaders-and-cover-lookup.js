@@ -112,6 +112,10 @@ async function loadProblematicFiles(force = false, options = {}) {
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
         const completePayloadPromise = fetchSummary('/utilities/problematic-files');
+        if (state.utility.loadPromise === requestPromise) {
+          state.utility.loading = false;
+          state.utility.loadPromise = null;
+        }
         if (canRenderBoundedPage()
             && ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage())) {
           renderUtilityModalContent();

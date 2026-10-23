@@ -216,7 +216,10 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
         "request": request,
         "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
         "runtime_asset_version": runtime_asset_version,
-        "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
+        "account_menu_allowed_actions": allowed_actions_for_request(
+            request,
+            ("accounts.read", "system.preview_storage.read"),
+        ),
         "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
         "account_menu_csrf_token": issue_session_csrf(
             request.cookies.get("__Host-album_haven_session"),

@@ -38,6 +38,7 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
   const completedPageCursors = new Set();
   const traffic = { pending: 0, started: 0, finished: 0, failed: 0, galleryPages: 0 };
   let firstVisibleDecodedTiming = null;
+  let firstVisibleDecodedError = null;
   let slowestWindowRecoveryTiming = null;
   let origin = null;
   const onRequest = request => {
@@ -224,13 +225,25 @@ test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounde
     const firstVisibleDecodedStartedAt = performance.now();
     await galleryActions.goto('/?surface=albums');
     origin = new URL(page.url()).origin;
-    await galleryActions.galleryPage.waitForFirstDecodedVisibleCover({
-      timeout: FIRST_VISIBLE_DECODED_BUDGET.hardCeiling,
-    });
+    try {
+      await galleryActions.galleryPage.waitForFirstDecodedVisibleCover({
+        timeout: FIRST_VISIBLE_DECODED_BUDGET.hardCeiling,
+      });
+    } catch (error) {
+      firstVisibleDecodedError = error;
+    }
     firstVisibleDecodedTiming = evaluateTimingBudget(
       performance.now() - firstVisibleDecodedStartedAt,
       FIRST_VISIBLE_DECODED_BUDGET,
     );
+    if (firstVisibleDecodedError) {
+      expectTimingBudgetOutcome(
+        expect,
+        firstVisibleDecodedTiming,
+        'First visible decoded gallery artwork',
+      );
+      throw firstVisibleDecodedError;
+    }
     await navigationPanelActions.waitForSidebarFullyHydrated({ timeout: 120000 });
     await galleryActions.waitForInitialAllArtistsSections({ timeout: 120000 });
     const baselineWindow = await galleryActions.galleryPage.waitForDecodedProductionCardWindow({

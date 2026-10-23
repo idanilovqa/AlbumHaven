@@ -886,6 +886,28 @@ test('opening another preview album replaces its mobile identity before presenta
   assert.doesNotMatch(presentations[0].list, /Previous Track/);
 });
 
+test('opening a mobile album recomposes it after mobile page presentation', () => {
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => new Promise(() => {}),
+  });
+  let presented = false;
+  let recomposedAfterPresentation = false;
+  context.presentMobileAlbumPage = () => {
+    presented = true;
+  };
+  context.syncMobileAlbumComposition = () => {
+    recomposedAfterPresentation ||= presented;
+  };
+
+  context.openTrackModal({
+    key: 'mobile-album',
+    name: 'Mobile Album',
+    preview_only: true,
+  });
+
+  assert.equal(recomposedAfterPresentation, true);
+});
+
 async function run() {
   {
     const { context, trackModal } = loadHelper();

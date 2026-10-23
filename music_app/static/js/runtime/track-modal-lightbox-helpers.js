@@ -147,6 +147,7 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   document.body.classList.add('modal-open');
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
 }
 
 function suspendGalleryCoverLoadsForTrackModal() {
@@ -638,6 +639,7 @@ function openTrackModal(album, options = {}) {
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
   attachSharedPlayer();
 }
 

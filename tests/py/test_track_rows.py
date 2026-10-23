@@ -192,6 +192,46 @@ def test_build_track_row_payload_prefers_persisted_secondary_credit_metadata():
     assert row["secondary_artist"] == "feat. U.D.O."
 
 
+def test_build_track_row_payload_groups_and_deduplicates_persisted_featured_artists():
+    album = SimpleNamespace(album_artist="Dante")
+    track = SimpleNamespace(
+        path=r"C:\Music\Dante\Album\01 Pool of the Naiads.flac",
+        title="Pool of the Naiads",
+        track_number=1,
+        disc_number=1,
+        disc_number_raw="1",
+        artist="Dante",
+        album_artist="Dante",
+        secondary_credit=(
+            "feat. Lars Fredrik Frøislie / feat. Eric Gillette / "
+            "feat. Lars Fredrik Frøislie"
+        ),
+        duration_seconds=929,
+    )
+
+    row = build_track_row_payload(track, album=album)
+
+    assert row["secondary_artist"] == "feat. Lars Fredrik Frøislie, Eric Gillette"
+
+
+def test_build_track_row_payload_groups_computed_featured_artists_under_one_marker():
+    album = SimpleNamespace(album_artist="Dante")
+    track = SimpleNamespace(
+        path=r"C:\Music\Dante\Album\04 Voyage.flac",
+        title="Voyage",
+        track_number=4,
+        disc_number=1,
+        disc_number_raw="1",
+        artist="Dante / Marjana Semkina / Nick D'Virgilio / Jim Grey / Marjana Semkina",
+        album_artist="Dante",
+        duration_seconds=1618,
+    )
+
+    row = build_track_row_payload(track, album=album)
+
+    assert row["secondary_artist"] == "feat. Marjana Semkina, Nick D'Virgilio, Jim Grey"
+
+
 @pytest.mark.parametrize(
     "raw_title",
     [

@@ -796,7 +796,9 @@
     ],
     "expectedContracts": [
       "clean-track-titles",
-      "per-track-credits"
+      "per-track-credits",
+      "single-featured-prefix",
+      "deduplicated-featured-artists"
     ],
     "ownerApproval": "approved"
   },

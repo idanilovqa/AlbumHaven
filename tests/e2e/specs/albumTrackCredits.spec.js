@@ -51,6 +51,12 @@ const ORDINARY_TRACK_CREDITS = [
     title: 'Штиль',
     secondaryArtist: `${ORDINARY_ALBUM_ARTIST}, U.D.O.`,
   },
+  {
+    rawTitle: 'Grouped Feature Signal',
+    rawArtist: `${ORDINARY_ALBUM_ARTIST} / Guest One / Guest Two / Guest One`,
+    title: 'Grouped Feature Signal',
+    secondaryArtist: 'feat. Guest One, Guest Two',
+  },
 ];
 const DUPLICATE_HEADER_ALBUM = 'Snow White And The Seven Dwarfs';
 const DUPLICATE_HEADER_YEAR = '1937';

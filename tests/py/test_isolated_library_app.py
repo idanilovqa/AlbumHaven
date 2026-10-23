@@ -2369,6 +2369,13 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
         isolatedLibraryApp.ORDINARY_TRACK_CREDIT_TITLE,
         isolatedLibraryApp.ORDINARY_TRACK_CREDIT_ARTIST,
     )
+    assert (
+        ordinary_track_credit_entries[2]["title"],
+        ordinary_track_credit_entries[2]["artist"],
+    ) == (
+        isolatedLibraryApp.ORDINARY_GROUPED_FEATURE_TRACK_TITLE,
+        isolatedLibraryApp.ORDINARY_GROUPED_FEATURE_TRACK_ARTIST,
+    )
     compilation_entries = sorted(
         (
             entry

@@ -85,6 +85,8 @@ ORDINARY_TRACK_CREDIT_ALBUM = "Штиль Feature Credit"
 ORDINARY_TRACK_CREDIT_TITLE = "Штиль (feat. U.D.O.)"
 ORDINARY_ARTIST_MARKER_TRACK_TITLE = "Штиль"
 ORDINARY_ARTIST_MARKER_TRACK_ARTIST = "Ария, U.D.O."
+ORDINARY_GROUPED_FEATURE_TRACK_TITLE = "Grouped Feature Signal"
+ORDINARY_GROUPED_FEATURE_TRACK_ARTIST = "Ария / Guest One / Guest Two / Guest One"
 RATING_FIXTURE_ARTIST = "Album Rating Contract"
 RATING_FIXTURE_YEAR = 2026
 RATING_FIXTURES = (
@@ -2183,6 +2185,10 @@ def build_file_cache(
                     title = ORDINARY_ARTIST_MARKER_TRACK_TITLE
                     track_artist = ORDINARY_ARTIST_MARKER_TRACK_ARTIST
                     track_path = album_dir / "02 - Artist Marker Signal.mp3"
+                elif is_ordinary_track_credit_fixture and track_index == 2:
+                    title = ORDINARY_GROUPED_FEATURE_TRACK_TITLE
+                    track_artist = ORDINARY_GROUPED_FEATURE_TRACK_ARTIST
+                    track_path = album_dir / "03 - Grouped Feature Signal.mp3"
                 if artist == SNOW_WHITE_RAW_ARTIST and album == SNOW_WHITE_ALBUM:
                     track_artist = SNOW_WHITE_TRACK_ARTISTS[
                         track_index % len(SNOW_WHITE_TRACK_ARTISTS)

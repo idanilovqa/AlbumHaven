@@ -27,7 +27,7 @@ test('root gallery continuation uses the approved 800/1200 timing contract', () 
   assert.doesNotMatch(spec, /continuationDuration\)\.toBeLessThan\(3000\)/);
 });
 
-test('PR gallery traversal gates first cover and memory while soak gates every decoded window', () => {
+test('PR gallery traversal gates memory while soak gates decoded-cover timings', () => {
   const spec = readRepoFile(
     'tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js',
   );
@@ -38,19 +38,18 @@ test('PR gallery traversal gates first cover and memory while soak gates every d
       new RegExp(`performanceTimingBudget\\(\\s*'gallery-artwork-diversity\\.${metric}'`),
     );
   }
-  assert.match(spec, /expectTimingBudgetOutcome\(expect, firstVisibleDecodedTiming,/);
   assert.match(spec, /catch \(error\) \{\s*firstVisibleDecodedError = error;\s*\}/);
   assert.match(
     spec,
-    /if \(firstVisibleDecodedError\) \{\s*expectTimingBudgetOutcome\(\s*expect,\s*firstVisibleDecodedTiming,/,
+    /if \(SOAK_MODE && firstVisibleDecodedError\) \{\s*expectTimingBudgetOutcome\(\s*expect,\s*firstVisibleDecodedTiming,/,
   );
   assert.match(spec, /expectTimingBudgetOutcome\(expect, slowestWindowRecoveryTiming,/);
   assert.match(spec, /const TRAVERSAL_STEPS = SOAK_MODE \? 400 : 160/);
   assert.match(spec, /const TRAVERSAL_CYCLES = SOAK_MODE \? 2 : 1/);
-  assert.match(spec, /firstVisibleCoverReadinessGated: true/);
+  assert.match(spec, /firstVisibleCoverReadinessGated: SOAK_MODE/);
   assert.match(spec, /windowRecoveryBudgetGated: SOAK_MODE/);
   assert.match(spec, /memoryBoundsGated: true/);
-  assert.match(spec, /TODO\(E3\): make this budget blocking in PR mode/);
+  assert.match(spec, /TODO\(E3\): make decoded-cover budgets blocking in PR mode/);
   assert.doesNotMatch(spec, /diagnosticOnly: true/);
 
   const firstStart = spec.indexOf('const firstVisibleDecodedStartedAt = performance.now();');

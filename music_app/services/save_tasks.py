@@ -639,7 +639,7 @@ def _finalize_save_task(
         relation_projection_fields = (
             relation_projection_edit_fields
             if relation_projection_edit_fields is not None
-            else structural_edit_fields | {"artist"}
+            else {"artist", "album_artist"}
         )
         if (
             changed_field_names & relation_projection_fields

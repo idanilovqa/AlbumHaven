@@ -110,7 +110,6 @@ def test_finalize_save_task_only_requires_relation_state_for_relation_fields(tmp
     finalize_kwargs.update(
         changed_field_names={"album", "year"},
         structural_edit_fields={"album", "year"},
-        relation_projection_edit_fields={"artist", "album_artist"},
     )
 
     finalize_save_task(task_id, **finalize_kwargs)

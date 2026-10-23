@@ -583,6 +583,43 @@ for (const required of [false, true]) {
   });
 }
 
+test('canonical album detached by virtualization is settled rather than a pending transition', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
+  const events = new FakePage();
+  const observer = new ProductionViewObserver(events, events);
+  events.emit('documentcommitted');
+  const gallery = Object.create(GalleryPage.prototype);
+  gallery.productionViewObserver = observer;
+  gallery.readProductionBootstrapPayload = async () => ({
+    bootstrap: { startupHydration: { required: false, tier: 'full', trigger: 'none' } },
+    initial_view: {
+      payload_tier: 'full', query: 'Neal Morse', visible_library_categories: ['main_library'],
+      artist_groups: [{ artist: 'Neal Morse & The Resonance', albums: [{ name: 'No Hill For A Climber' }] }],
+    },
+  });
+  gallery.readAppliedGalleryProjection = async () => ({
+    payload_tier: 'full', query: 'Neal Morse', locationQuery: 'Neal Morse', surface: 'albums',
+    visible_library_categories: ['main_library'], busy: false, pendingViewTransition: false,
+    artist_groups: [{ artist: 'Neal Morse & The Resonance', albums: [{ name: 'No Hill For A Climber' }] }],
+  });
+  gallery.page = { locator: () => ({ count: async () => 0 }), url: () => 'http://localhost/?q=Neal%20Morse' };
+  gallery.albumCard = { detailsButtonByArtistAndAlbum: () => ({ count: async () => 0 }) };
+  gallery.libraryLoader = { isVisible: async () => false };
+  gallery.artistHeadings = { allTextContents: async () => ['Neal Morse'] };
+
+  const state = await gallery.readAlbumTargetState({
+    artist: 'Neal Morse & The Resonance', album: 'No Hill For A Climber', query: 'Neal Morse',
+  });
+
+  assert.equal(state.canonicalMatch, true);
+  assert.equal(state.canonicalReadyMatch, true);
+  assert.equal(state.attachedMatch, false);
+  assert.equal(state.canonicalApplied, true);
+  assert.equal(state.busy, false);
+  assert.equal(state.pendingViewTransition, false);
+});
+
 async function committedFamilyGallery() {
   const { ProductionViewObserver } = await import(observerUrl);
   const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));

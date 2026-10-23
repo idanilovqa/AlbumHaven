@@ -1015,7 +1015,7 @@ export class GalleryPage extends BasePage {
       || finalObservation.pendingPayloadReadCount > 0
       || observationChanged
       || domChanged;
-    const canonicalApplied = hasAppliedCanonicalArtistSurface(
+    const canonicalApplied = canonicalEvidence.canonicalReadyMatch || hasAppliedCanonicalArtistSurface(
       canonicalEvidence.observedArtists,
       finalAttachedArtists,
       {

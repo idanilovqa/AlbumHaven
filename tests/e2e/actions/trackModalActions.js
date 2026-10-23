@@ -741,6 +741,33 @@ export class TrackModalActions {
     await expect(this.trackModal.lightboxNextButton).toBeEnabled({ timeout });
   }
 
+  async expectCoverLightboxKeyboardFocusPresentation(options = {}) {
+    const timeout = options.timeout || 15000;
+    const controls = [
+      this.trackModal.lightboxCloseButton,
+      this.trackModal.lightboxPreviousButton,
+      this.trackModal.lightboxNextButton,
+    ];
+    for (const control of controls) {
+      await expect(control).toHaveCSS('outline-style', 'none', { timeout });
+    }
+
+    const expectKeyboardRing = async (control) => {
+      await expect(control).toBeFocused({ timeout });
+      await expect(control).toHaveCSS('outline-style', 'solid', { timeout });
+      await expect(control).toHaveCSS('outline-width', '2px', { timeout });
+      await expect(control).toHaveCSS('outline-offset', '2px', { timeout });
+      await expect(control).not.toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)', { timeout });
+    };
+
+    await this.trackModal.lightboxCloseButton.press('Tab');
+    await expectKeyboardRing(this.trackModal.lightboxPreviousButton);
+    await this.trackModal.lightboxPreviousButton.press('Tab');
+    await expectKeyboardRing(this.trackModal.lightboxNextButton);
+    await this.trackModal.lightboxNextButton.press('Tab');
+    await expectKeyboardRing(this.trackModal.lightboxCloseButton);
+  }
+
   async readCoverLightboxSources() {
     return this.trackModal.readCoverLightboxSources();
   }

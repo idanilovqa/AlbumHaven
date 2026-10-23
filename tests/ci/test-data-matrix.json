@@ -1684,7 +1684,9 @@
     ],
     "expectedContracts": [
       "decoded-player-artwork",
-      "active-album-full-art-scope"
+      "active-album-full-art-scope",
+      "resting-outline-suppression",
+      "keyboard-visible-lightbox-controls"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:active-album-artwork",

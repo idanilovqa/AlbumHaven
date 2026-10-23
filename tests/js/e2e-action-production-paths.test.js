@@ -1110,6 +1110,20 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.keyboard|\.press\(['"]Space['"]\)/);
 });
 
+test('full-size artwork E2E owns resting and keyboard-focus presentation checks', () => {
+  const spec = read('tests/e2e/specs/galleryCoverStability.spec.js');
+  const trackModalActions = read('tests/e2e/actions/trackModalActions.js');
+
+  assert.match(
+    trackModalActions,
+    /expectCoverLightboxKeyboardFocusPresentation\([\s\S]*outline-style[\s\S]*lightboxCloseButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxPreviousButton\)[\s\S]*lightboxPreviousButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxNextButton\)[\s\S]*lightboxNextButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxCloseButton\)/,
+  );
+  assert.match(
+    spec,
+    /expectCoverLightboxNavigationAvailable\(\)[\s\S]*expectCoverLightboxKeyboardFocusPresentation\(\)/,
+  );
+});
+
 test('player artwork search-context E2E restores playback through an action-owned reload', () => {
   const spec = read('tests/e2e/specs/playerArtworkSearchContext.spec.js');
   const globalPlayerActions = read('tests/e2e/actions/globalPlayerActions.js');

@@ -390,6 +390,7 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     expect(galleryModal.title).toContain(`${ARTIST} • ${ALBUM}`);
     await trackModalActions.openCoverLightbox();
     await trackModalActions.expectCoverLightboxNavigationAvailable();
+    await trackModalActions.expectCoverLightboxKeyboardFocusPresentation();
     await trackModalActions.closeCoverLightbox();
     await trackModalActions.close();
   });

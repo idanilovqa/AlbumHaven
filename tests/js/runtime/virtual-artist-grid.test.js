@@ -1455,6 +1455,35 @@ test('setGroups absolute scroll preservation can retain an explicit interaction-
   );
 });
 
+test('settled setGroups scroll restoration rechecks root gallery pagination', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 900;
+  let paginationChecks = 0;
+  context.scheduleBrowserAnimationFrame = callback => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  context.loadNextRootGalleryPage = () => {
+    paginationChecks += 1;
+    return Promise.resolve(true);
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollLeft: 0, scrollTop: 9040 },
+  });
+  assert.equal(paginationChecks, 0, 'pagination must wait until scroll restoration settles');
+  scheduledFrames.get(virtualGrid._scrollRestoreRaf)();
+
+  assert.equal(paginationChecks, 1);
+});
+
 test('setGroups renders the immediate virtual window from the explicit preserved coordinate', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

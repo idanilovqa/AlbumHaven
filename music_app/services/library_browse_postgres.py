@@ -102,6 +102,7 @@ _UTILITY_PROJECTION_CACHE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_PREWARM_INFLIGHT: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
 _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
+_SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
     thread_name_prefix="albumhaven-postgres-utility-prewarm",
@@ -3357,24 +3358,43 @@ class PostgresLibraryBrowseRepository:
         }
         if query_utf8_prefilter is not None:
             params["query_utf8_prefilter"] = query_utf8_prefilter
+        def load_rows(active_connection: Any) -> _SearchPreviewRows:
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                use_utf8_prefilter = (
+                    query_utf8_prefilter is not None
+                    and self._database_url not in _SEARCH_UTF8_FALLBACK_DATABASES
+                )
+            try:
+                cursor = active_connection.execute(
+                    _search_preview_sql(
+                        _SEARCH_PREVIEW_ALBUM_LIMIT if not include_missing else None,
+                        use_utf8_prefilter=use_utf8_prefilter,
+                    ),
+                    params,
+                )
+            except Exception as exc:
+                if (
+                    not use_utf8_prefilter
+                    or getattr(exc, "sqlstate", None) != "42883"
+                    or "library.search_utf8_hex" not in str(exc)
+                ):
+                    raise
+                active_connection.rollback()
+                with _UTILITY_PROJECTION_CACHE_LOCK:
+                    _SEARCH_UTF8_FALLBACK_DATABASES.add(self._database_url)
+                cursor = active_connection.execute(
+                    _search_preview_sql(
+                        _SEARCH_PREVIEW_ALBUM_LIMIT if not include_missing else None,
+                        use_utf8_prefilter=False,
+                    ),
+                    params,
+                )
+            return _SearchPreviewRows(cursor.fetchall())
+
         if connection is not None:
-            cursor = connection.execute(
-                _search_preview_sql(
-                    _SEARCH_PREVIEW_ALBUM_LIMIT if not include_missing else None,
-                    use_utf8_prefilter=query_utf8_prefilter is not None,
-                ),
-                params,
-            )
-            return _SearchPreviewRows(cursor.fetchall())
+            return load_rows(connection)
         with self._connect_to_database() as owned_connection:
-            cursor = owned_connection.execute(
-                _search_preview_sql(
-                    _SEARCH_PREVIEW_ALBUM_LIMIT if not include_missing else None,
-                    use_utf8_prefilter=query_utf8_prefilter is not None,
-                ),
-                params,
-            )
-            return _SearchPreviewRows(cursor.fetchall())
+            return load_rows(owned_connection)
 
 
     def _artist_search_projection_is_authoritative(

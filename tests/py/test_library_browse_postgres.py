@@ -17197,6 +17197,66 @@ def test_search_preview_loader_partitions_active_and_missing_rows_from_one_execu
     assert rows.missing_album_rows == [missing]
 
 
+def test_search_preview_loader_skips_utf8_prefilter_before_helper_migration(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        _root_sidebar_view_state,
+    )
+
+    class Cursor:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def __init__(self):
+            self.search_sql = ""
+            self.rolled_back = False
+            self.helper_attempts = 0
+
+        def execute(self, sql, _params=None):
+            normalized = " ".join(str(sql).casefold().split())
+            if "library.search_utf8_hex" in normalized:
+                self.helper_attempts += 1
+                error = RuntimeError(
+                    "function library.search_utf8_hex(text) does not exist"
+                )
+                error.sqlstate = "42883"
+                raise error
+            self.search_sql = normalized
+            return Cursor()
+
+        def rollback(self):
+            self.rolled_back = True
+
+    monkeypatch.setattr(browse, "_SEARCH_UTF8_FALLBACK_DATABASES", set())
+    connection = Connection()
+    repository = PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+    })
+
+    repository._load_search_rows(
+        "Needle",
+        _root_sidebar_view_state({"category": ["main_library"]}),
+        connection=connection,
+    )
+    repository._load_search_rows(
+        "Needle",
+        _root_sidebar_view_state({"category": ["main_library"]}),
+        connection=connection,
+    )
+
+    assert "library.search_utf8_hex" not in connection.search_sql
+    assert connection.rolled_back is True
+    assert connection.helper_attempts == 1
+
+
 def test_search_preview_sql_shares_candidates_for_active_and_missing_partitions():
     from music_app.services.library_browse_postgres import _search_preview_sql
 

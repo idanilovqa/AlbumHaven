@@ -2252,6 +2252,8 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
 
         def execute(self, sql, params=None):
             self.commands.append((str(sql), dict(params or {})))
+            if "to_regprocedure" in str(sql):
+                return _InventoryCursor(row={"available": True})
             return _InventoryCursor()
 
         def rollback(self):
@@ -2324,7 +2326,7 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     assert connection.commands[:1] == [
         ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", {}),
     ]
-    assert len(connection.commands) == 5
+    assert len(connection.commands) == 6
     missing_reads = [(command, params) for command, params in connection.commands if _is_missing_album_query(command)]
     assert len(missing_reads) == 1
     assert missing_reads[0][1] == {"album_key": None}
@@ -11046,6 +11048,8 @@ def test_postgres_library_browse_builds_problematic_files_projection_from_rows()
         def execute(self, sql, params=None):
             if _is_missing_album_query(sql):
                 return _InventoryCursor()
+            if "to_regprocedure" in str(sql):
+                return _InventoryCursor(row={"available": True})
             executed.append(sql)
             executed.append(dict(params or {}))
             return FakeCursor()
@@ -12250,6 +12254,7 @@ def test_duplicate_source_attachment_targets_cache_miss_without_global_prewarm(m
     browse.invalidate_postgres_utility_projection_cache()
     fingerprint = {"fingerprint": (1, 1, 1, 1, 1), "observed_at": 1}
     monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: fingerprint)
+    monkeypatch.setattr(browse, "_duplicate_identity_helpers_available", lambda _connection: True)
     queued = []
     monkeypatch.setattr(repository, "queue_utility_projection_prewarm", queued.append)
 
@@ -14805,6 +14810,8 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
         def execute(self, sql, params=None):
             if _is_missing_album_query(sql):
                 return _InventoryCursor()
+            if "to_regprocedure" in str(sql):
+                return _InventoryCursor(row={"available": True})
             executed.append((str(sql), dict(params or {})))
             return FakeCursor()
 

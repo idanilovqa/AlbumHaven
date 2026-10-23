@@ -812,13 +812,13 @@ def test_finalize_save_task_uses_direct_callbacks_without_framework_context(tmp_
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [],
         find_problematic_album_by_track_paths=lambda track_paths: None,
-        updated_file_cache={"track-1.mp3": {"path": "track-1.mp3", "title": "Song"}},
+        updated_file_cache={"track-1.mp3": {"path": "track-1.mp3", "artist": "Canonical Artist"}},
         previous_file_cache={},
         changed_paths={"track-1.mp3"},
         requested_track_paths={"track-1.mp3"},
         separate_release_keys=set(),
-        changed_field_names={"title"},
-        structural_edit_fields={"title"},
+        changed_field_names={"artist"},
+        structural_edit_fields={"artist"},
         log_entry={"action": "Library save completed"},
     )
 

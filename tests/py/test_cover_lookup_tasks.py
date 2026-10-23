@@ -103,6 +103,7 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
             {"id": "booklet", "art_kind": "other", "debug": "y" * 200_000},
         ],
         "album_payload": {
+            "album_id": 41,
             "key": "artist::album",
             "name": "Album",
             "album_artist": "Artist",
@@ -129,6 +130,7 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
     assert "job_contract" not in summary
     assert "phase_timings_ms" not in summary
     assert summary["album_payload"] == {
+        "album_id": 41,
         "key": "artist::album",
         "name": "Album",
         "album_artist": "Artist",

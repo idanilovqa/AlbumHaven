@@ -846,6 +846,44 @@ def _live_restore_rows(connection, *, track_ids, track_file_ids):
     return tracks, track_files
 
 
+def test_artist_only_projection_keeps_existing_album_owner():
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.scan_cache_persistence import (
+        _structural_destination_album_projection,
+    )
+
+    owner = "Control Signal Lead"
+    partner = "Control Signal Partner"
+    artists = [
+        f"{owner} / {partner}",
+        f"{owner}, {partner}",
+        "Independent Credit Voice",
+    ]
+    entries = {
+        f"C:/Music/Control Lead Solo/{index:02d}.mp3": {
+            "path": f"C:/Music/Control Lead Solo/{index:02d}.mp3",
+            "album": "Control Lead Solo",
+            "album_artist": owner,
+            "artist": artist,
+            "title": f"Track {index}",
+            "track_number": str(index),
+            "disc_number": "1",
+            "year": 2026,
+        }
+        for index, artist in enumerate(artists, start=1)
+    }
+
+    projection = _structural_destination_album_projection(
+        build_albums_from_file_cache,
+        entries,
+        frozenset({"artist"}),
+        set(),
+    )
+
+    assert projection.album_artist == owner
+    assert projection.key == "control signal lead::control lead solo"
+
+
 @pytest.mark.parametrize("selected_count", [1, 9])
 def test_live_postgres_structural_recovery_subset_already_in_destination_is_idempotent(
     monkeypatch, selected_count,

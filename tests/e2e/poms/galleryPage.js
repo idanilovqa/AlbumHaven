@@ -41,7 +41,9 @@ export function readAppliedGalleryProjectionSnapshot(target = {}) {
         !expectedAlbum
         || String(album?.name || album?.title || '').trim() === expectedAlbum
       ));
-      if (expectedAlbum && !albums.length) return [];
+      if (expectedAlbum && !albums.length) {
+        return expectedArtist ? [{ ...group, albums: [] }] : [];
+      }
       return [{ ...group, albums }];
     });
   };

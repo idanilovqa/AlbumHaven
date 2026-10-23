@@ -1965,6 +1965,54 @@ test('queried album projection transfers only the matching target', async () => 
   assert.equal(snapshot.locationQuery, 'ДДТ');
 });
 
+test('queried absent album projection retains matching artist authority', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(
+    __dirname,
+    '..',
+    'e2e',
+    'poms',
+    'galleryPage.js',
+  )).href);
+  const vm = require('node:vm');
+  const applied = {
+    query: 'Control Signal Partner',
+    selected_artist: 'Control Signal Lead',
+    artist_groups: [
+      { artist: 'Control Signal Lead', albums: [{ name: 'Lead solo' }] },
+      { artist: 'Control Signal Partner', albums: [{ name: 'Partner solo' }] },
+    ],
+    primary_artist_groups: [
+      { artist: 'Control Signal Lead', albums: [{ name: 'Lead solo' }] },
+    ],
+    family_artist_groups: [
+      { artist: 'Control Signal Partner', albums: [{ name: 'Partner solo' }] },
+    ],
+  };
+  const snapshot = await GalleryPage.prototype.readAppliedAlbumTargetProjection.call({
+    page: {
+      evaluate: (fn, argument) => vm.runInNewContext(
+        `(${fn.toString()})(${JSON.stringify(argument)})`,
+        {
+          state: { view: applied, ui: {} },
+          URL,
+          window: {
+            location: {
+              href: 'http://127.0.0.1/?q=Control%20Signal%20Partner&artist=Control%20Signal%20Lead',
+            },
+          },
+        },
+      ),
+    },
+  }, { artist: 'Control Signal Partner', album: 'Guest-only album' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.artist_groups)), [
+    { artist: 'Control Signal Partner', albums: [] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.family_artist_groups)), [
+    { artist: 'Control Signal Partner', albums: [] },
+  ]);
+});
+
 test('bounded gallery pages expose browse telemetry without claiming a complete inventory', async () => {
   const { ProductionViewObserver, hasCompleteCanonicalAlbumInventory } = await import(observerUrl);
   const page = new FakePage();

@@ -2316,6 +2316,9 @@ def _structural_destination_album_projection(
         }
         for path, entry in updated_entries.items()
     }
+    if changed_field_names == frozenset({"artist"}):
+        for entry in projection_entries.values():
+            entry["artist"] = entry.get("album_artist") or entry.get("artist")
     destination_albums = build_albums(
         projection_entries,
         (

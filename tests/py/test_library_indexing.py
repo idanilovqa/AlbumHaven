@@ -1119,7 +1119,7 @@ def test_scan_library_file_cache_stages_publication_while_live_progress_remains_
     assert publication_state["albums"][0].name == "New Album"
 
 
-def test_scan_library_file_cache_rereads_unchanged_legacy_rating_metadata_only(
+def test_scan_library_file_cache_recovers_unchanged_v2_unknown_album_metadata(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -1148,13 +1148,25 @@ def test_scan_library_file_cache_rereads_unchanged_legacy_rating_metadata_only(
             entry["release_date"] = None
         return entry
 
-    legacy_entry = cached_entry(legacy_track, rating=None, complete=False)
+    legacy_entry = cached_entry(legacy_track, rating=None, complete=True)
+    legacy_entry["metadata_schema_version"] = 2
+    legacy_entry.update({
+        "album": "",
+        "artist": "Unknown Artist",
+        "album_artist": "Unknown Artist",
+    })
     complete_entry = cached_entry(complete_track, rating=7, complete=True)
     metadata_calls: list[Path] = []
 
     def read_metadata(path: Path):
         metadata_calls.append(path)
         entry = cached_entry(path, rating=9, complete=True)
+        if path == legacy_track:
+            entry.update({
+                "album": "L.I.F.T.",
+                "artist": "The Neal Morse Band",
+                "album_artist": "The Neal Morse Band",
+            })
         return entry
 
     monkeypatch.setattr(library_indexing, "read_metadata_for_file", read_metadata)
@@ -1179,6 +1191,14 @@ def test_scan_library_file_cache_rereads_unchanged_legacy_rating_metadata_only(
 
     assert metadata_calls == [legacy_track]
     assert updated_file_cache[str(legacy_track)]["album_rating"] == 9
+    assert updated_file_cache[str(legacy_track)]["album"] == "L.I.F.T."
+    assert {
+        (album.album_artist, album.name)
+        for album in library_indexing.build_albums_from_file_cache(updated_file_cache)
+    } == {
+        ("Artist", "Album"),
+        ("The Neal Morse Band", "L.I.F.T."),
+    }
     assert (
         updated_file_cache[str(legacy_track)]["metadata_schema_version"]
         == FILE_METADATA_SCHEMA_VERSION

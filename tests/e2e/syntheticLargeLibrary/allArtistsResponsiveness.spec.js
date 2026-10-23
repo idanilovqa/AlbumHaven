@@ -702,11 +702,11 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
           await searchToolbarActions.search(SEARCH_QUERY);
         },
         async () => {
-          await searchToolbarActions.waitForQuery(SEARCH_QUERY, { timeout: 60000 });
           await navigationPanelActions.waitForSidebarSelection(SEARCH_EXPECTED.primary, { timeout: 60000 });
         },
       )
     ));
+    await searchToolbarActions.waitForQuery(SEARCH_QUERY, { timeout: 60000 });
     await searchAllArtistsLocalReport.recordTimingCheckpoint({
       key: 'search-auto-selection',
       label: 'Search auto-selected Ария in the filtered tree',

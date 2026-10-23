@@ -1437,9 +1437,11 @@ function applyViewPayload(payload, options = {}) {
       && String(nextView.selected_artist || '').trim(),
     );
     const selectedArtistChanged = Boolean(selectionChanged && nextSelectedArtist);
-    state.ui.pendingSidebarRevealArtist = (clearedSearchWithSelection || selectedArtistChanged)
-      ? String(nextView.selected_artist || '')
-      : '';
+    if (clearedSearchWithSelection || selectedArtistChanged) {
+      state.ui.pendingSidebarRevealArtist = String(nextView.selected_artist || '');
+    } else if (!nextSelectedArtist) {
+      state.ui.pendingSidebarRevealArtist = '';
+    }
   }
   state.view = nextView;
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);

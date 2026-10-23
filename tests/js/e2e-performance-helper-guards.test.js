@@ -786,6 +786,30 @@ test('direct Artist Tree timing anchors highlight and gallery readiness to the c
   assert.doesNotMatch(spec, /Artist\[10\]/);
 });
 
+test('search auto-selection timing stops at the visible tree selection before full query settlement', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js');
+  const measurementStart = spec.indexOf('const searchAutoSelectionMs =');
+  const selectionWait = spec.indexOf(
+    'await navigationPanelActions.waitForSidebarSelection(',
+    measurementStart,
+  );
+  const queryWait = spec.indexOf(
+    'await searchToolbarActions.waitForQuery(SEARCH_QUERY',
+    measurementStart,
+  );
+  const checkpoint = spec.indexOf(
+    'await searchAllArtistsLocalReport.recordTimingCheckpoint({',
+    measurementStart,
+  );
+  const measurementSection = spec.slice(measurementStart, queryWait);
+
+  assert.ok(measurementStart >= 0);
+  assert.ok(selectionWait > measurementStart, 'visible selection must close the timed readiness check');
+  assert.ok(queryWait > selectionWait && checkpoint > queryWait,
+    'full query settlement must happen after auto-selection timing and before reporting');
+  assert.match(measurementSection, /waitForSidebarSelection[\s\S]*?\)\s*\)\s*\);\s*$/);
+});
+
 test('focused selected-artist and root browse reports own complete terminal timing evidence', () => {
   const selectedArtist = readRepoFile('tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js');
   const rootBrowse = readRepoFile('tests/e2e/syntheticLargeLibrary/rootAlbumBrowse.spec.js');

@@ -4489,7 +4489,10 @@ def test_non_exact_search_preview_limits_album_ids_before_track_rollups():
     assert "library.local_track_files.scan_cache_stale is false" in eligible_preview_sql
     assert "path_override.override_payload ? 'exception_type'" in eligible_preview_sql
     assert "track_override.override_payload ? 'exception_type'" in eligible_preview_sql
-    assert "in ('', 'none', 'null')" in eligible_preview_sql
+    assert (
+        "not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')"
+        in eligible_preview_sql
+    )
     assert "join eligible_preview_album_ids" in candidate_sql
     assert "limit 8" in candidate_sql
     assert eligible_preview_start < candidate_start
@@ -5213,7 +5216,9 @@ def test_root_startup_payload_preserves_override_precedence_for_both_eligibility
     assert compact_sql.count("and path_override.id is null") == 2
     assert compact_sql.count("when path_override.override_payload ? 'exception_type'") == 2
     assert compact_sql.count("when track_override.override_payload ? 'exception_type'") == 2
-    assert compact_sql.count("in ('', 'none', 'null')") == 2
+    assert compact_sql.count(
+        "not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')"
+    ) == 2
 
 
 def test_root_startup_payload_keeps_canonical_ranking_and_one_snapshot_json_result():
@@ -7260,7 +7265,10 @@ def test_root_startup_preview_applies_eligible_file_predicate_before_candidate_l
     assert "join library.local_track_files" in limited_candidates
     assert "library.local_track_files.scan_cache_stale is false" in limited_candidates
     assert "exception_type" in limited_candidates
-    assert "in ('', 'none', 'null')" in limited_candidates
+    assert (
+        "not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')"
+        in limited_candidates
+    )
 
 
 def test_root_startup_preview_uses_scalar_library_for_ordered_early_limit():
@@ -11537,7 +11545,9 @@ def test_requested_duplicate_source_rows_use_dedicated_container_projection():
     assert "candidate_containers as materialized" in sql
     assert "albums.id = any(%(album_ids)s::bigint[])" in sql
     assert "albums.id as candidate_album_id" in sql
-    assert "tracks.album_id = files.candidate_album_id" in sql
+    assert "albums.id = tracks.album_id" in sql
+    assert "tracks.album_id = files.candidate_album_id" not in sql
+    assert "files.library_root_id = candidate_prefixes.library_root_id" not in sql
     assert "files.private_path >= candidate_prefixes.prefix" in sql
     assert "files.private_path < candidate_prefixes.upper_bound" in sql
     for column in (
@@ -11564,6 +11574,25 @@ def test_requested_duplicate_source_rows_use_dedicated_container_projection():
         "spotify_quota_albums",
     ):
         assert diagnostic not in sql
+
+
+def test_problematic_duplicate_marker_only_references_summary_candidate_cte():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    summary_sql = " ".join(
+        _problematic_files_sql(candidate_summary=True).casefold().split()
+    )
+    detail_sql = " ".join(_problematic_files_sql().casefold().split())
+    duplicate_sql = " ".join(
+        _problematic_files_sql(duplicate_candidates=True).casefold().split()
+    )
+
+    marker = "selected_albums.id in (select album_id from duplicate_album_ids)"
+    assert f"{marker} as duplicate_candidate" in summary_sql
+    assert marker not in detail_sql
+    assert marker not in duplicate_sql
+    assert "false as duplicate_candidate" in detail_sql
+    assert "false as duplicate_candidate" in duplicate_sql
 
 
 def test_exact_duplicate_candidate_lookup_keeps_requested_album_for_year_provenance():
@@ -13347,6 +13376,22 @@ def test_problematic_duplicate_count_does_not_leak_between_separated_years():
     albums = _problematic_album_projection_payloads(rows)
     assert len(albums) == 2
     assert all(not album["has_duplicate_files"] for album in albums)
+
+
+def test_problematic_duplicate_candidate_requires_confirmed_sources():
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_projection_payloads,
+        _problematic_album_summary_payload,
+    )
+
+    row = _normal_problematic_product_row()
+    row["duplicate_candidate"] = True
+
+    album = _problematic_album_projection_payloads([row])[0]
+    summary = _problematic_album_summary_payload(album)
+
+    assert summary is not None
+    assert "Duplicate files" not in summary["problem_reasons"]
 
 
 def _healthy_problematic_order_rows(
@@ -17495,8 +17540,8 @@ def test_live_compact_alias_source_matches_full_join_for_multiroot_inventory(wat
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
         full_rows = list(connection.execute(projection.load_relation_source_rows_sql()).fetchall())
         compact_rows = list(connection.execute(projection.load_relation_alias_source_rows_sql()).fetchall())
-    assert len(compact_rows) == len(full_rows), (
-        'compact and full sources must share album/root/directory location cardinality'
+    assert len(compact_rows) < len(full_rows), (
+        'compact source must avoid the full source membership/location fanout'
     )
     expected = builder.build_postgres_relation_views(full_rows)
     actual = builder.build_postgres_relation_alias_views(compact_rows)

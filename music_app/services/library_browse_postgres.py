@@ -293,6 +293,7 @@ class PostgresLibraryBrowseRepository:
         *,
         connection: Any | None = None,
         defer_on_cache_miss: bool = False,
+        defer_source_payloads: bool = False,
     ) -> None:
         albums = list(albums)
         keys = list({str(album.get("_persisted_album_key") or album.get("key") or album.get("album_ref") or "") for album in albums} - {""})
@@ -325,14 +326,22 @@ class PostgresLibraryBrowseRepository:
                     _duplicate_source_rows_for_album_ids_sql(),
                     {"album_ids": candidate_ids},
                 )
-                duplicates = _duplicate_sources_from_rows(list(cursor.fetchall()))
+                duplicate_rows = list(cursor.fetchall())
+                duplicates = (
+                    _duplicate_sources_from_rows(
+                        duplicate_rows,
+                        defer_source_payloads=True,
+                    )
+                    if defer_source_payloads
+                    else _duplicate_sources_from_rows(duplicate_rows)
+                )
             if fingerprint:
                 absent = dict(absent)
                 # Only requested albums have every matching identity loaded.
                 # Incidental container companions may have unqueried identities.
                 for key in pending:
                     result = duplicates.get(key, {})
-                    if result.get("duplicate_sources"):
+                    if result.get("has_duplicate_files") or result.get("duplicate_sources"):
                         continue
                     absent[key] = {"duplicate_sources": []}
                     provenance = result.get("_root_provenance_by_year")
@@ -351,7 +360,20 @@ class PostgresLibraryBrowseRepository:
         for album in albums:
             result = duplicates.get(str(album.get("_persisted_album_key") or album.get("key") or album.get("album_ref") or ""), {})
             sources = _duplicate_sources_for_projected_album(album, result)
-            album["has_duplicate_files"] = bool(sources)
+            has_duplicates = bool(sources)
+            if defer_source_payloads:
+                has_duplicates = bool(result.get("has_duplicate_files"))
+                if (
+                    album.get("_persisted_album_key")
+                    and album.get("key") != album.get("_persisted_album_key")
+                ):
+                    has_duplicates = {_coerce_int(album.get("year"))} in result.get(
+                        "_duplicate_source_years", []
+                    )
+            album["has_duplicate_files"] = has_duplicates
+            materializer = result.get("_duplicate_source_materializer")
+            if callable(materializer):
+                album["_duplicate_source_materializer"] = materializer
             provenance = _duplicate_provenance_for_projected_album(album, result)
             if provenance is not None:
                 album["root_provenance"] = provenance
@@ -2692,9 +2714,19 @@ class PostgresLibraryBrowseRepository:
         missing_rows: list[object] | None = None,
         limit: int | None = None,
     ) -> dict[str, object]:
+        albums = _problematic_album_projection_payloads(rows)
+        duplicate_candidates = [
+            album for album in albums if album.get("_duplicate_candidate")
+        ]
+        if duplicate_candidates:
+            self._attach_duplicate_sources(
+                duplicate_candidates,
+                connection=connection,
+                defer_source_payloads=True,
+            )
         projected_items = [
             (item, album)
-            for album in _problematic_album_projection_payloads(rows)
+            for album in albums
             if (item := _problematic_album_summary_payload(album)) is not None
         ]
         resolved_missing_rows = (
@@ -4961,12 +4993,17 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 "_ignored_repair_keys": set(ignored_repair_keys),
                 "_separate_release_keys": set(separate_release_keys),
                 "_duplicate_file_counts": {},
+                "_duplicate_candidate": bool(row_payload.get("duplicate_candidate")),
             }
             albums[album_identity] = album
             seen_track_paths_by_album[album_identity] = set()
         else:
             album["_ignored_repair_keys"].update(ignored_repair_keys)
             album["_separate_release_keys"].update(separate_release_keys)
+            album["_duplicate_candidate"] = bool(
+                album.get("_duplicate_candidate")
+                or row_payload.get("duplicate_candidate")
+            )
 
         track_path = str(row_payload.get("file_private_path") or "").strip()
         if not track_path or track_path in seen_track_paths_by_album[album_identity]:
@@ -10477,7 +10514,6 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
         candidate_containers as materialized (
             select distinct
                 albums.id as candidate_album_id,
-                seed_files.library_root_id,
                 {seed_container} as folder
             from library.local_albums albums
             join bootstrap_context
@@ -10497,7 +10533,6 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
         candidate_prefixes as (
             select
                 candidate_album_id,
-                library_root_id,
                 folder,
                 folder || '/' as prefix,
                 folder || '0' as upper_bound
@@ -10505,7 +10540,6 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             union all
             select
                 candidate_album_id,
-                library_root_id,
                 folder,
                 replace(folder, '/', chr(92)) || chr(92) as prefix,
                 replace(folder, '/', chr(92)) || ']' as upper_bound
@@ -10523,8 +10557,7 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             join lateral (
                 select files.*
                 from library.local_track_files files
-                where files.library_root_id = candidate_prefixes.library_root_id
-                  and files.private_path >= candidate_prefixes.prefix
+                where files.private_path >= candidate_prefixes.prefix
                   and files.private_path < candidate_prefixes.upper_bound
                   and files.scan_cache_stale is false
                 offset 0
@@ -10554,7 +10587,6 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
         from scoped_files files
         join library.local_tracks tracks
           on tracks.id = files.track_id
-         and tracks.album_id = files.candidate_album_id
         join bootstrap_context
           on bootstrap_context.library_id = tracks.library_id
         join library.local_albums albums
@@ -11297,10 +11329,16 @@ def _problematic_files_sql(
           group by library.separate_releases.library_id
         )
     """
-    diagnostic_result_projection = "" if duplicate_sources_only else """
+    duplicate_candidate_projection = (
+        "selected_albums.id in (select album_id from duplicate_album_ids)"
+        if candidate_summary
+        else "false"
+    )
+    diagnostic_result_projection = "" if duplicate_sources_only else f"""
           , (selected_albums.id::text || ':search_spotify') in (select task_key from spotify_quota_albums) as spotify_cover_quota_exceeded
           , coalesce(ignored_repair_rollup.ignored_repair_keys, array[]::text[]) as ignored_repair_keys,
           coalesce(separate_release_rollup.separate_release_keys, array[]::text[]) as separate_release_keys,
+          {duplicate_candidate_projection} as duplicate_candidate,
           coalesce(active_track_files.duplicate_file_count, 1) as duplicate_file_count
     """
     diagnostic_joins = "" if duplicate_sources_only else """

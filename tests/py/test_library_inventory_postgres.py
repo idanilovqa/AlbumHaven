@@ -351,7 +351,10 @@ def test_candidate_query_prefilters_active_files_through_four_indexed_eligibilit
     assert "scan_cache_stale is false" in scanned_exception_path
     assert "bootstrap_context.library_id = library.local_tracks.library_id" in scanned_exception_path
     assert "{scan_cache,file_entry,exception_type}" in scanned_exception_path
-    assert "not in ('', 'none', 'null')" in scanned_exception_path
+    assert (
+        "in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')"
+        in scanned_exception_path
+    )
     assert "select library.local_track_files.id as track_file_id" in loose_track_path
     assert "from library.local_tracks" in loose_track_path
     assert "bootstrap_context.library_id = library.local_tracks.library_id" in loose_track_path

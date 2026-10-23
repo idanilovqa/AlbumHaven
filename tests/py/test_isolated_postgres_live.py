@@ -4022,6 +4022,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
             assert non_album_root_io_blocks < _NON_ALBUM_ROOT_IO_BLOCK_CEILING
 
             connection.execute("set local enable_seqscan = off")
+            connection.execute("set local enable_indexonlyscan = off")
 
             probes = [
                 (

@@ -37626,9 +37626,14 @@ class VirtualArtistGrid {
   }
 
   releaseDetachedAlbumCardAncestors() {
-    // Retain reusable cards, not their removed section and uncached siblings.
+    // Retain decoded/in-flight cover pixels, not the rest of each removed card.
     for (const card of this.albumCardNodeCache.values()) {
-      if (card.isConnected === false && card.parentNode) card.remove();
+      if (card.isConnected !== false) continue;
+      if (card.parentNode) card.remove();
+      const retainedCover = card.querySelector?.('.cover');
+      if (!retainedCover || typeof card.replaceChildren !== 'function') continue;
+      card.replaceChildren(retainedCover);
+      card.setAttribute?.('data-gallery-card-cover-only', '1');
     }
   }
 
@@ -37642,14 +37647,27 @@ class VirtualArtistGrid {
         !retainedCard
         || retainedCard === nextCard
         || String(retainedCard?.getAttribute?.('data-gallery-card-render-key') || '') !== renderKey
-        || typeof nextCard.replaceWith !== 'function'
       ) {
         return;
       }
-      nextCard.replaceWith(retainedCard);
-      this.albumCardNodeCache.delete(cacheKey);
-      this.albumCardNodeCache.set(cacheKey, retainedCard);
       const retainedImage = retainedCard.querySelector?.('img[data-production-cover-src]');
+      if (retainedCard.getAttribute?.('data-gallery-card-cover-only') === '1') {
+        const retainedCover = retainedCard.querySelector?.('.cover');
+        const nextCover = nextCard.querySelector?.('.cover');
+        if (!retainedCover || typeof nextCover?.replaceWith !== 'function') {
+          this.albumCardNodeCache.delete(cacheKey);
+          return;
+        }
+        nextCover.replaceWith(retainedCover);
+      } else {
+        if (typeof nextCard.replaceWith !== 'function') return;
+        nextCard.replaceWith(retainedCard);
+      }
+      this.albumCardNodeCache.delete(cacheKey);
+      this.albumCardNodeCache.set(
+        cacheKey,
+        retainedCard.getAttribute?.('data-gallery-card-cover-only') === '1' ? nextCard : retainedCard,
+      );
       const productionUrl = String(retainedImage?.getAttribute?.('data-production-cover-src') || '').trim();
       const retainedImageDecoded = retainedImage instanceof HTMLImageElement
         && Boolean(retainedImage.complete)

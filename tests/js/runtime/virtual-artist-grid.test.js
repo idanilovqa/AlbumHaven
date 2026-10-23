@@ -4564,6 +4564,70 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   const retainedImage = new context.HTMLImageElement();
   retainedImage.complete = true;
   retainedImage.naturalWidth = 480;
+  const retainedCover = {
+    querySelector(selector) {
+      return selector === 'img[data-production-cover-src]' ? retainedImage : null;
+    },
+  };
+  const retainedCard = {
+    isConnected: false,
+    parentNode: {
+      removeChild(node) { node.parentNode = null; },
+    },
+    childNodes: [retainedCover, { kind: 'metadata' }, { kind: 'actions' }],
+    attributes: {
+      'data-gallery-card-key': 'compact-retained-card',
+      'data-gallery-card-render-key': 'same-render',
+    },
+    getAttribute(name) { return this.attributes[name] || ''; },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    querySelector(selector) {
+      if (selector === '.cover') return retainedCover;
+      if (selector === '.cover img' || selector === 'img[data-production-cover-src]') return retainedImage;
+      return null;
+    },
+    replaceChildren(...children) { this.childNodes = children; },
+    remove() { this.parentNode?.removeChild(this); },
+  };
+  virtualGrid.albumCardNodeCache.set('compact-retained-card', retainedCard);
+
+  virtualGrid.releaseDetachedAlbumCardAncestors();
+
+  assert.deepEqual(
+    retainedCard.childNodes,
+    [retainedCover],
+    'detached cache entries must discard non-cover card DOM',
+  );
+  assert.equal(retainedCard.parentNode, null);
+
+  let nextCover = {
+    replaceWith(node) { nextCover = node; },
+  };
+  let replacement = null;
+  const nextCard = {
+    attributes: {
+      'data-gallery-card-key': 'compact-retained-card',
+      'data-gallery-card-render-key': 'same-render',
+    },
+    getAttribute(name) { return this.attributes[name] || ''; },
+    querySelector(selector) { return selector === '.cover' ? nextCover : null; },
+    replaceWith(node) { replacement = node; },
+  };
+  virtualGrid.reuseRenderedAlbumCards({
+    querySelectorAll() { return [nextCard]; },
+  });
+
+  assert.equal(nextCover, retainedCover, 'the decoded cover subtree must move into the fresh card');
+  assert.equal(replacement, null, 'the compact cache shell must not replace the complete fresh card');
+  assert.equal(virtualGrid.albumCardNodeCache.get('compact-retained-card'), nextCard);
+}
+
+{
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const retainedImage = new context.HTMLImageElement();
+  retainedImage.complete = true;
+  retainedImage.naturalWidth = 480;
   retainedImage.setAttribute(
     'data-production-cover-src',
     'http://127.0.0.1:4173/cover?path=joseph&size=480&v=initial',

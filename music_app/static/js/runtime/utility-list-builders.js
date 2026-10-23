@@ -1911,6 +1911,23 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
     : () => true;
   if (status !== 'completed' || !destinationArtist || !shouldApplyResponse()) return false;
 
+  const orphanedArtists = new Set(
+    (Array.isArray(terminalPayload?.orphaned_source_artists)
+      ? terminalPayload.orphaned_source_artists
+      : [])
+      .map((artist) => String(artist || '').trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  const selectedArtistKey = selectedArtist.toLocaleLowerCase();
+  if (
+    !selectedArtist
+    || (
+      selectedArtistKey !== destinationArtist.toLocaleLowerCase()
+      && !orphanedArtists.has(selectedArtistKey)
+    )
+  ) return false;
+
   const activeQuery = String(state.view?.query || '').trim();
   const destinationView = {
     ...state.view,
@@ -1987,13 +2004,6 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
     ));
   }
 
-  const orphanedArtists = new Set(
-    (Array.isArray(terminalPayload?.orphaned_source_artists)
-      ? terminalPayload.orphaned_source_artists
-      : [])
-      .map((artist) => String(artist || '').trim().toLocaleLowerCase())
-      .filter(Boolean),
-  );
   if (orphanedArtists.size) {
     state.view.artists_sidebar = (state.view.artists_sidebar || []).filter((item) => (
       !orphanedArtists.has(String(item?.artist || '').trim().toLocaleLowerCase())

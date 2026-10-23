@@ -4849,9 +4849,13 @@ def _persist_structural_album_tag_edit_sql(
           set artist_id = (select id from inserted_destination_artist),
               last_seen_at = now()
           from renamed_source_album
+          join validated_source_album
+            on validated_source_album.id = renamed_source_album.id
           where library.local_album_featured_artists.album_id =
                 renamed_source_album.id
             and library.local_album_featured_artists.featured_kind = 'owner'
+            and library.local_album_featured_artists.artist_id =
+                validated_source_album.artist_id
             and exists (select 1 from inserted_destination_artist)
           returning library.local_album_featured_artists.id
         ),

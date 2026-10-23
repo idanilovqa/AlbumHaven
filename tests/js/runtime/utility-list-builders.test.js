@@ -2609,6 +2609,7 @@ test('reconcileCommittedTagEditDestination accepts the destination album after i
     destination_artist: 'Overhead',
     destination_album_id: 14712,
     destination_album_key: 'overhead::telepathic minds::year::1999',
+    orphaned_source_artists: ['Ovderhead'],
     updated_albums: [destinationAlbum],
   }), true);
   assert.deepEqual(historyCalls, ['/albums?artist=Overhead']);
@@ -2653,6 +2654,7 @@ test('reconcileCommittedTagEditDestination keeps a retained source artist', asyn
     album_artist: 'Overhead',
     tracks: [{ path: 'track.flac' }],
   };
+  context.state.view.selected_artist = 'Overhead';
   context.state.view.artists_sidebar = [
     { artist: 'Ovderhead', count: 1 },
     { artist: 'Overhead', count: 1 },
@@ -2686,6 +2688,33 @@ test('reconcileCommittedTagEditDestination keeps a retained source artist', asyn
     Array.from(context.state.view.artists_sidebar, (item) => item.artist),
     ['Ovderhead', 'Overhead'],
   );
+});
+
+test('reconcileCommittedTagEditDestination preserves a retained source selection after a partial split', async () => {
+  const context = loadHelpers();
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Various Artists',
+    artists_sidebar: [
+      { artist: 'Various Artists', count: 1 },
+      { artist: 'Solo Voice', count: 1 },
+    ],
+  };
+  let refreshCount = 0;
+  context.buildApiUrl = () => '/api/library?artist=Solo%20Voice';
+  context.fetchAndRender = async () => {
+    refreshCount += 1;
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Solo Voice',
+    destination_album_key: 'solo voice::featured signal collection split credit',
+    orphaned_source_artists: [],
+  }), false);
+  assert.equal(refreshCount, 0);
+  assert.equal(context.state.view.selected_artist, 'Various Artists');
 });
 
 test('reconcileCommittedTagEditDestination cannot overwrite superseding navigation', async () => {

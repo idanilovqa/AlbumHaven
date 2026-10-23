@@ -1629,6 +1629,10 @@ def test_structural_album_artist_rename_updates_retained_album_owner():
     assert "%(destination_artist_metadata)s::jsonb" in renamed_source_sql
     assert "updated_renamed_album_owner as (" in renamed_source_sql
     assert "featured_kind = 'owner'" in renamed_source_sql
+    assert (
+        "library.local_album_featured_artists.artist_id = "
+        "validated_source_album.artist_id"
+    ) in renamed_source_sql
 
 
 def test_structural_album_artist_rename_resolves_each_track_artist():

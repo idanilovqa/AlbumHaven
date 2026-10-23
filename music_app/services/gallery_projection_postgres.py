@@ -59,6 +59,16 @@ def gallery_projection_context(connection):
         "select to_regclass('library.gallery_projection_state') is not null as installed"))
     if not isinstance(installed, dict) or installed.get("installed") is not True:
         return None
+    compatible = _first(connection.execute("""
+        select exists (
+            select 1 from information_schema.columns
+            where table_schema = 'library'
+              and table_name = 'gallery_projection_occurrences'
+              and column_name = 'revision'
+        ) as compatible
+    """))
+    if not isinstance(compatible, dict) or compatible.get("compatible") is not True:
+        return None
     return _first(connection.execute("""
         select state.library_id, state.generation
         from app.bootstrap_owners owner

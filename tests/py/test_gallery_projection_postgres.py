@@ -504,6 +504,21 @@ def test_old_schema_context_uses_accurate_fallback():
     assert len(calls) == 1
 
 
+def test_pre_staging_projection_schema_uses_accurate_fallback():
+    from music_app.services import gallery_projection_postgres as projection
+
+    calls = []
+
+    class Connection:
+        def execute(self, sql):
+            calls.append(sql)
+            row = {"installed": True} if len(calls) == 1 else {"compatible": False}
+            return SimpleNamespace(fetchone=lambda: row)
+
+    assert projection.load_gallery_projection_page(Connection(), {}, {}) is None
+    assert len(calls) == 2
+
+
 def test_active_scan_can_render_last_compatible_gallery_snapshot():
     from music_app.services import gallery_projection_postgres as projection
 

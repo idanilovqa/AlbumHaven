@@ -5481,6 +5481,30 @@ test('enabled source remains in search requests after category-restricted hydrat
   assert.deepEqual(cleared.searchParams.getAll('category'), ['main_library', 'hoard']);
 });
 
+test('source changes request an authoritative Artist Tree instead of preserving the stale sidebar', () => {
+  const { context, calls } = createContext({
+    useProductionBuildApiUrl: true,
+    currentUrl: 'http://localhost/?surface=albums&category=main_library',
+  });
+  const runtimeRoot = path.dirname(helperPath);
+  vm.runInContext(fs.readFileSync(path.join(runtimeRoot, 'gallery-main-interactions.js'), 'utf8'), context);
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'albums' },
+    visible_library_categories: ['main_library'],
+    loaded_library_categories: ['main_library'],
+  };
+  context.state.gallery.mainState = context.createGalleryMainState({
+    sources: { main_library: true, new_arrivals: false, hoard: false },
+  });
+
+  context.transitionGalleryMain({ type: 'toggle-source', source: 'new_arrivals' });
+
+  assert.equal(calls.buildApiUrlOptions.at(-1).omitSidebar, false);
+  assert.equal(calls.fetchAndRender.at(-1).runtimeOptions.preserveSidebarState, false);
+  assert.equal(calls.fetchAndRender.at(-1).runtimeOptions.fallbackToAllArtistsWhenSelectionMissing, true);
+});
+
 
 for (const [mountedCount, loadedCategories, sidebarCategories = ['main_library', 'new_arrivals', 'hoard']] of [[10, ['main_library', 'new_arrivals', 'hoard']], [9, ['main_library', 'new_arrivals', 'hoard']], [10, ['main_library']], [10, ['main_library', 'new_arrivals', 'hoard'], ['main_library']]]) {
   test(`manual family clear validates captured full-tree completeness and source scope (${mountedCount}/10, ${loadedCategories.length} sources, ${sidebarCategories.length} sidebar sources)`, () => {

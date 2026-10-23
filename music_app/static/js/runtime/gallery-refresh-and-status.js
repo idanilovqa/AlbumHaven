@@ -1404,6 +1404,35 @@ async function fetchAndRender(url, push = true, options = {}) {
       firstPageRevisionRestarted = recovered.restarted === true;
     }
     let data = await readGalleryResponse(response, ownsInitialResponse);
+    const selectedArtist = String(data?.selected_artist || '').trim();
+    const selectedArtistStillVisible = Array.isArray(data?.artists_sidebar)
+      && data.artists_sidebar.some((item) => (
+        String(item?.artist_display || item?.artist || '').trim() === selectedArtist
+      ));
+    if (
+      requestOptions.fallbackToAllArtistsWhenSelectionMissing === true
+      && selectedArtist
+      && !String(data?.query || '').trim()
+      && Array.isArray(data?.artists_sidebar)
+      && !selectedArtistStillVisible
+    ) {
+      const fallbackUrl = new URL(apiUrl, 'http://localhost');
+      for (const name of [
+        'artist', 'related_artist', 'primary_filter', 'family_display',
+        'selected_artist_family_display_mode', 'gallery_anchor_artist',
+        'gallery_cursor', 'gallery_page_direction',
+      ]) fallbackUrl.searchParams.delete(name);
+      fallbackUrl.searchParams.set('all_artists', '1');
+      apiUrl = `${fallbackUrl.pathname}${fallbackUrl.search}`;
+      response = await fetch(apiUrl, {
+        headers: { Accept: 'application/json' },
+        signal: controller?.signal,
+      });
+      if (response.status === 503) {
+        response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
+      }
+      data = await readGalleryResponse(response, ownsInitialResponse);
+    }
     if (rootRefreshCoverage > 0) {
       data = {
         ...data,

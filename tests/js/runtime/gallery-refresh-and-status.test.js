@@ -188,6 +188,46 @@ test('search uses one request and applies its complete payload', async () => {
   assert.equal(context.state.view.payload_tier, 'full');
 });
 
+test('source refresh falls back to All Artists when the selected artist leaves the authoritative tree', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Hoard only artist',
+    all_artists_active: false,
+  };
+
+  const refresh = context.fetchAndRender(
+    '/view-data?artist=Hoard%20only%20artist&category=new_arrivals',
+    false,
+    { fallbackToAllArtistsWhenSelectionMissing: true },
+  );
+  pendingRequests[0].resolveWith({
+    selected_artist: 'Hoard only artist',
+    album_count: 1,
+    artist_groups: [{ artist: 'Related artist', albums: [{ key: 'related::album' }] }],
+    artists_sidebar: [{ artist: 'New arrivals artist', count: 1 }],
+  });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(pendingRequests.length, 2);
+  const fallbackUrl = new URL(pendingRequests[1].url, 'http://localhost');
+  assert.equal(fallbackUrl.searchParams.get('artist'), null);
+  assert.equal(fallbackUrl.searchParams.get('category'), 'new_arrivals');
+  assert.equal(fallbackUrl.searchParams.get('all_artists'), '1');
+  pendingRequests[1].resolveWith({
+    selected_artist: '',
+    all_artists_active: true,
+    album_count: 1,
+    artist_groups: [{ artist: 'New arrivals artist', albums: [{ key: 'new::album' }] }],
+    artists_sidebar: [{ artist: 'New arrivals artist', count: 1 }],
+  });
+
+  assert.equal(await refresh, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(context.state.view.selected_artist, '');
+  assert.equal(context.state.view.all_artists_active, true);
+});
+
 test('superseding a search aborts its request', async () => {
   const { context, calls, pendingRequests } = createContext();
   const obsolete = context.fetchAndRender('/view-data?q=Devin', true);
@@ -361,6 +401,7 @@ function createContext() {
   };
 
   const context = {
+    URL,
     window: {
       AlbumHavenStartupProgress: {
         fail() { calls.startupFailures += 1; },

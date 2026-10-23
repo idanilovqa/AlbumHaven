@@ -28306,6 +28306,13 @@ function normalizeCoverLookupCandidateSnapshot(value) {
   };
 }
 
+function coverLookupCandidateGenerationKey(value) {
+  const generation = String(value || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generation)
+    ? generation.replaceAll('-', '').toLowerCase()
+    : generation;
+}
+
 function getCoverLookupCandidateSource(task, candidateSnapshot) {
   const normalizedTask = task && typeof task === 'object' ? task : null;
   const normalizedSnapshot = normalizeCoverLookupCandidateSnapshot(candidateSnapshot);
@@ -28367,8 +28374,8 @@ function coverLookupCandidateTimestamp(value) {
 function applyCoverLookupCandidateSource(candidateSource) {
   if (!candidateSource) return;
   const modal = state.coverLookup.modal;
-  const generation = String(candidateSource.generation || '').trim();
-  if (generation !== String(modal.candidateGeneration || '').trim()) {
+  const generation = coverLookupCandidateGenerationKey(candidateSource.generation);
+  if (generation !== coverLookupCandidateGenerationKey(modal.candidateGeneration)) {
     modal.candidateGeneration = generation;
     modal.remoteSelectionOverrideGeneration = '';
     modal.remoteSelectionOverrideCandidateId = '';
@@ -28385,7 +28392,7 @@ function applyCoverLookupCandidateSource(candidateSource) {
   );
   const userOverrodeThisGeneration = Boolean(
     generation
-    && String(modal.remoteSelectionOverrideGeneration || '') === generation
+    && coverLookupCandidateGenerationKey(modal.remoteSelectionOverrideGeneration) === generation
   );
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
   const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (

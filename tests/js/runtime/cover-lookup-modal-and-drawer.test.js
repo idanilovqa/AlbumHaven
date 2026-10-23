@@ -3635,6 +3635,33 @@ require('node:test')('visible service cover previews receive eager browser prior
   assert.doesNotMatch(deferredImage, /\ssrc=/);
 });
 
+require('node:test')('UUID generation formatting retains a progressive remote override', () => {
+  const context = loadHelper();
+  const generation = '699803380ccd46e0b1fe89fc61de666a';
+  context.state.coverLookup.modal = {
+    candidateGeneration: generation,
+    remoteSelectionOverrideGeneration: generation,
+    remoteSelectionOverrideCandidateId: 'user-choice',
+    remoteSelectionOverrideUrl: 'https://images.example/user-choice.jpg',
+    selectedRemoteId: 'user-choice',
+    pendingLocalPath: '',
+    pendingPastedImageId: '',
+    activeLocalSelectionPath: '',
+    localCovers: [],
+  };
+
+  context.applyCoverLookupCandidateSource({
+    generation: '69980338-0ccd-46e0-b1fe-89fc61de666a',
+    bestCandidateId: 'later-best',
+    candidates: [
+      { id: 'later-best', url: 'https://images.example/later-best.jpg', art_kind: 'cover' },
+      { id: 'user-choice', url: 'https://images.example/user-choice.jpg', art_kind: 'cover' },
+    ],
+  });
+
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'user-choice');
+});
+
 require('node:test')('deferred previews start after the prioritized preview loads and paints', () => {
   const context = loadHelper();
   const callbacks = [];

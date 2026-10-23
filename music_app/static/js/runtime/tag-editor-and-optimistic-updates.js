@@ -880,6 +880,7 @@ async function confirmManualTagEdit() {
     { title: 'Saving tags', dismissible: false },
   );
   let failedLogHistoryEntryId = '';
+  let failedSaveTaskError = '';
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -892,6 +893,12 @@ async function confirmManualTagEdit() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      if (
+        data.save_task_id
+        && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
+      ) {
+        failedSaveTaskError = String(data.error || '').trim();
+      }
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {
@@ -1036,9 +1043,10 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
+      restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
     }
     showRepairAlert(
-      'Failed to edit tags.',
+      failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {

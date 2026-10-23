@@ -341,6 +341,36 @@ def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artis
     assert featured_sync_params["affected_album_keys"] == []
 
 
+def test_noop_targeted_subtree_deletion_does_not_advance_inventory_revision(
+    monkeypatch,
+):
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = FakeConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: connection,
+    )
+
+    result = adapter.persist_targeted_inventory_mutation(
+        root_id="main",
+        active_file_entries={},
+        deleted_subtrees=("C:/Music/Artist/Album/e2e-undersized.png",),
+    )
+
+    assert result == {
+        "inventory_mutation_revision": 0,
+        "affected_album_keys": [],
+    }
+    assert not any(
+        "update library.libraries" in _normalized_sql(sql)
+        and "inventory_mutation_revision" in _normalized_sql(sql)
+        for sql, _params in connection.executed
+    )
+
+
 def test_targeted_inventory_mutation_marks_relation_projection_stale_atomically():
     from music_app.services import scan_cache_persistence
 

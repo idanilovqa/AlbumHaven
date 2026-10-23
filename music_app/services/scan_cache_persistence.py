@@ -416,6 +416,7 @@ class PostgresScanCacheAdapter:
                 _upsert_local_track_file_sql(),
                 track_file_rows,
             )
+            inventory_changed = bool(file_cache)
             for stale_root_id, stale_targets in sorted(stale_by_root.items()):
                 paths = sorted(stale_targets["paths"])
                 subtrees = sorted(stale_targets["subtrees"])
@@ -433,6 +434,7 @@ class PostgresScanCacheAdapter:
                         "source": _SOURCE,
                     },
                 ).fetchall()
+                inventory_changed = inventory_changed or bool(stale_rows)
                 affected_album_keys.update(
                     str(_row_mapping(row).get("affected_album_key") or "").strip()
                     for row in stale_rows
@@ -440,6 +442,11 @@ class PostgresScanCacheAdapter:
                         _row_mapping(row).get("affected_album_key") or ""
                     ).strip()
                 )
+            if not inventory_changed:
+                return {
+                    "inventory_mutation_revision": 0,
+                    "affected_album_keys": [],
+                }
             # A logical album can span different containers and configured
             # roots. Replace scan-owned credits using all its retained active
             # members, not just the paths selected by this watcher event.

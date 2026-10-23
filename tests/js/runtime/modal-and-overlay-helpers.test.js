@@ -612,6 +612,39 @@ async function flushLightboxPromises() {
   assert.equal(imageElement.attributes['aria-hidden'], undefined);
 }
 
+test('a successful gallery cover load clears a stale local cover failure', () => {
+  const { context } = loadHelper();
+  const coverPath = 'C:/covers/reconnected-drive-cover.jpg';
+  const imageElement = new FakeElement('reconnected-drive-cover');
+  imageElement.complete = true;
+  imageElement.naturalWidth = 480;
+  imageElement.setAttribute('data-cover-path', coverPath);
+  imageElement.currentSrc = `/cover?path=${encodeURIComponent(coverPath)}&size=480`;
+  imageElement.src = imageElement.currentSrc;
+  context.rememberFailedLocalDisplayCoverPath(coverPath);
+
+  assert.equal(context.handleAlbumDisplayCoverImageLoad(imageElement), true);
+  assert.match(
+    context.buildAlbumDisplayCoverUrl({ cover_path: coverPath }),
+    /^\/cover\?path=C%3A%2Fcovers%2Freconnected-drive-cover\.jpg&size=480&v=/,
+  );
+});
+
+test('a successful remote fallback does not clear the failed local cover path', () => {
+  const { context } = loadHelper();
+  const coverPath = 'C:/covers/still-unavailable.jpg';
+  const imageElement = new FakeElement('remote-cover-fallback');
+  imageElement.complete = true;
+  imageElement.naturalWidth = 480;
+  imageElement.setAttribute('data-cover-path', coverPath);
+  imageElement.currentSrc = 'https://images.example/fallback.jpg';
+  imageElement.src = imageElement.currentSrc;
+  context.rememberFailedLocalDisplayCoverPath(coverPath);
+
+  assert.equal(context.handleAlbumDisplayCoverImageLoad(imageElement), true);
+  assert.equal(context.buildAlbumDisplayCoverUrl({ cover_path: coverPath }), '');
+});
+
 test('album cover load records native decode readiness and clears the prior source timestamp', async () => {
   const { context } = loadHelper();
   let resolveDecode;

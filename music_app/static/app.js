@@ -132,6 +132,13 @@
     }
     imageElement.dataset.coverVisualState = 'ready';
     imageElement.removeAttribute('aria-hidden');
+    const coverPath = String(imageElement.getAttribute('data-cover-path') || '').trim();
+    try {
+      const loadedCoverPath = new URL(imageElement.currentSrc || imageElement.src, window.location.href).searchParams.get('path');
+      if (coverPath && loadedCoverPath === coverPath) delete getFailedStartupCoverPaths()[coverPath];
+    } catch (_error) {
+      // The loaded image remains valid even when a nonstandard URL cannot be parsed.
+    }
     return true;
   };
   window.handleStartupAlbumCoverImageError = (imageElement) => {

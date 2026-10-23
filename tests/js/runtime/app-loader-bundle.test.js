@@ -198,6 +198,8 @@ test('startup album covers stay presentation-hidden until native decoded readine
   assert.match(appJs, /imageElement\.naturalWidth/);
   assert.match(appJs, /imageElement\.dataset\.coverVisualState = 'ready'/);
   assert.match(appJs, /imageElement\.removeAttribute\('aria-hidden'\)/);
+  assert.match(appJs, /loadedCoverPath === coverPath/);
+  assert.match(appJs, /delete getFailedStartupCoverPaths\(\)\[coverPath\]/);
   assert.match(appJs, /cover-placeholder cover-placeholder-blank/);
 });
 

@@ -304,7 +304,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-album-identity :is(.album-details-header__identity, .album-details-header__copy) { display: block; width: 100%; min-width: 0; }
   .mobile-album-identity .album-details-header__eyebrow { font-size: 12px; color: var(--muted, currentColor); margin-bottom: 6px; }
   .mobile-album-identity .album-details-header__primary { font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; white-space: normal; text-align: inherit; }
-  .mobile-album-identity .album-details-header__secondary { display: block; font-size: 12px; line-height: 1.5; margin-top: 7px; overflow-wrap: anywhere; text-align: inherit; }
+  .mobile-album-identity .album-details-header__secondary { display: block; font-size: 12px; line-height: 1.5; margin-top: 3px; overflow-wrap: anywhere; text-align: inherit; }
   /* Approved A and B have different action placement; the table is untouched. */
   .shell-main-surface.has-mobile-page { position: relative; }
   .mobile-page-header[data-inline-album-layout="true"] { position: absolute; inset: 0 12px auto; z-index: 3; padding: 14px 0; background: var(--appearance-main-surface, var(--bg)); }
@@ -595,7 +595,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 @media (max-width: 900px) {
   /* Reserve the hamburger's column on both rows: counts start at the title,
      never under the navigation button. Controls share the count row when roomy. */
-  .shell-layout .shell-main-surface:not(.has-mobile-page) { padding-top: 8px; }
+  .shell-layout .shell-main-surface:not(.has-mobile-page),
+  .shell-layout .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) { padding-top: 8px; }
   [data-gallery-bar-instance="gallery"] {
     display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
     align-items: start; gap: 2px 6px; padding-bottom: 6px;
@@ -761,12 +762,12 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #mobile-page-header .gallery-bar__summary { margin: 2px 0 0; }
   /* The pinned album identity is two compact lines beside the 40px artwork.
      Do not reserve the generic toolbar title's 40px minimum above its metadata. */
-  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) > :is(.gallery-bar__context, .mobile-page-cover) { align-self: flex-start; }
-  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) #mobile-page-title {
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover) { align-self: flex-start; }
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) #mobile-page-title {
     display: block; min-height: 0; line-height: 22px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) #mobile-page-summary {
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) #mobile-page-summary {
     line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
 

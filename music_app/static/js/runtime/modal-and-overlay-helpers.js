@@ -867,6 +867,10 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
   }
   imageElement.setAttribute('data-cover-visual-state', 'ready');
   imageElement.removeAttribute('aria-hidden');
+  const loadedCoverPath = imageElement.getAttribute('data-cover-path') || '';
+  if (readCoverUrlQueryParam(imageElement.currentSrc || imageElement.src || '', 'path') === loadedCoverPath) {
+    clearFailedLocalDisplayCoverPath(loadedCoverPath);
+  }
   if (typeof imageElement.decode === 'function') {
     const decodedSource = String(imageElement.currentSrc || imageElement.src || '');
     Promise.resolve(imageElement.decode()).then(() => {

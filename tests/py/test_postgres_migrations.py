@@ -632,6 +632,16 @@ def test_album_raw_artist_search_index_prerequisite_relocates_pg_trgm_without_re
     assert "operator_class.opcname = 'gin_trgm_ops'" in prerequisite_sql
 
 
+def test_pg_trgm_prerequisite_creates_library_schema_for_fresh_database():
+    source = (
+        REPO_ROOT / "scripts" / "postgres" / "prepare_0083_pg_trgm_schema.sql"
+    ).read_text(encoding="utf-8")
+    normalized = _normalized_sql(source)
+
+    assert "create schema if not exists library authorization %I" in source
+    assert "where database.datname = current_database()" in normalized
+
+
 def test_gallery_projection_featured_role_migration_extends_field_allowlist():
     assert GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION.is_file()
     sql = _normalized_sql(

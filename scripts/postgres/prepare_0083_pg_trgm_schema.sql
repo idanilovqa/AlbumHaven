@@ -3,8 +3,20 @@
 -- keeps existing index dependencies by OID when a relocatable extension moves.
 do $migration$
 declare
+  database_owner name;
   trigram_schema name;
 begin
+  select owner.rolname
+  into database_owner
+  from pg_catalog.pg_database database
+  join pg_catalog.pg_roles owner on owner.oid = database.datdba
+  where database.datname = current_database();
+
+  execute format(
+    'create schema if not exists library authorization %I',
+    database_owner
+  );
+
   create extension if not exists pg_trgm with schema library;
 
   select namespace.nspname

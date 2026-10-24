@@ -11539,7 +11539,7 @@ def test_duplicate_sources_only_projection_preserves_candidates_without_problem_
     ):
         assert column in slim
     for diagnostic in (
-        "physical_file_context", "exception_overrides", "ignored_repairs",
+        "physical_file_context", "exception_overrides", "exception_source_tracks", "ignored_repairs",
         "separate_release_keys", "album_metadata",
     ):
         assert diagnostic in full

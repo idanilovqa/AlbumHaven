@@ -171,7 +171,7 @@ def test_asgi_search_reload_preserves_all_artists_hydration(app, monkeypatch, pa
 
 
 @pytest.mark.parametrize("path", ["/", "/bootstrap-data"])
-def test_asgi_root_empty_shell_hydration_requests_bounded_gallery_page(app, monkeypatch, path):
+def test_asgi_root_partial_preview_hydration_requests_complete_bounded_page(app, monkeypatch, path):
     from music_app.routes import web_asgi
 
     _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
@@ -194,10 +194,8 @@ def test_asgi_root_empty_shell_hydration_requests_bounded_gallery_page(app, monk
     assert hydration["required"] is True
     params = parse_qs(urlsplit(hydration["endpoint"]).query)
     assert params["gallery_page_size"] == ["50"]
-    assert params["omit_sidebar"] == ["1"]
-    sidebar_params = parse_qs(urlsplit(hydration["followupEndpoint"]).query)
-    assert sidebar_params["payload_tier"] == ["sidebar"]
-    assert "gallery_page_size" not in sidebar_params
+    assert "omit_sidebar" not in params
+    assert hydration["followupEndpoint"] == ""
 
 
 def test_asgi_web_routes_register_natively(asgi_app):
@@ -367,6 +365,13 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
                 "selected_artist": "",
                 "payload_tier": "sidebar",
                 "gallery_display_mode": "covers",
+            },
+            build_projected_root_sidebar_payload=lambda **_kwargs: {
+                "artists_sidebar": [
+                    {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+                ],
+                "artist_count": 1,
+                "show_all_artists_sidebar_link": True,
             },
             build_selected_artist_payload=lambda **_kwargs: {
                 "selected_artist": "Broadcast",
@@ -1097,7 +1102,6 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
 
     refresh_calls = []
     cancel_calls = []
-    hydrate_calls = []
     selected_view_calls = []
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
 
@@ -1167,18 +1171,6 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
         SelectedSearchBrowseRepository,
     )
 
-    def fake_hydrate(library_state, config, *, logger_for_prewarm=None, **kwargs):
-        hydrate_calls.append(
-            {
-                "library_state": library_state,
-                "config": config,
-                "logger_for_prewarm": logger_for_prewarm,
-                "kwargs": kwargs,
-            }
-        )
-        library_state["albums"] = [{"name": "Hydrated"}]
-        return True
-
     def fake_start_background_refresh_for_state(
         library_state,
         config,
@@ -1204,7 +1196,6 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
         cancel_calls.append(library_state)
         return True
 
-    monkeypatch.setattr(web_asgi.state_service, "hydrate_library_state_for_config", fake_hydrate)
     monkeypatch.setattr(
         web_asgi.state_service,
         "start_background_refresh_for_state",
@@ -1313,14 +1304,6 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
     assert _decode_json(cancel_body) == {"ok": True, "cancelled": True}
     assert refresh_status == 302
     assert refresh_headers["location"] == "/?refreshed=1&artist=Broadcast&q=Tender+Buttons"
-    assert hydrate_calls == [
-        {
-            "library_state": library_state,
-            "config": asgi_app.state.config,
-            "logger_for_prewarm": asgi_logger,
-            "kwargs": {},
-        }
-    ]
     assert refresh_calls == [
         {
             "library_state": library_state,

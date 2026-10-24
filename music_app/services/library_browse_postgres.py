@@ -11451,6 +11451,22 @@ def _problematic_files_sql(
         left join separate_release_rollup
           on separate_release_rollup.library_id = selected_albums.library_id
     """
+    exception_source_track_union = "" if duplicate_sources_only else """
+          union
+          select
+            exception_source_tracks.id,
+            exception_source_tracks.library_id,
+            exception_source_tracks.source_album_id as album_id,
+            exception_source_tracks.track_key,
+            exception_source_tracks.title,
+            exception_source_tracks.disc_number,
+            exception_source_tracks.track_number,
+            exception_source_tracks.duration_seconds
+          from exception_source_tracks
+          join selected_albums
+            on selected_albums.id = exception_source_tracks.source_album_id
+           and selected_albums.library_id = exception_source_tracks.library_id
+    """
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -11491,20 +11507,7 @@ def _problematic_files_sql(
           join selected_albums
             on selected_albums.id = library.local_tracks.album_id
            and selected_albums.library_id = library.local_tracks.library_id
-          union
-          select
-            exception_source_tracks.id,
-            exception_source_tracks.library_id,
-            exception_source_tracks.source_album_id as album_id,
-            exception_source_tracks.track_key,
-            exception_source_tracks.title,
-            exception_source_tracks.disc_number,
-            exception_source_tracks.track_number,
-            exception_source_tracks.duration_seconds
-          from exception_source_tracks
-          join selected_albums
-            on selected_albums.id = exception_source_tracks.source_album_id
-           and selected_albums.library_id = exception_source_tracks.library_id
+          {exception_source_track_union}
         ),
         {selected_active_track_file_rows_sql}
         active_track_files as (

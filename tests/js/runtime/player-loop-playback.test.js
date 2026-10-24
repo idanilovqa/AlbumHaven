@@ -322,6 +322,41 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
+test('mirrored playback keeps metadata unobscured while showing its locked status', () => {
+  const timelineWrap = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
+  const time = new FakeElement();
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const title = new FakeElement();
+  const albumLink = new FakeElement();
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ timeline, time, play, title, albumLink }),
+    isPlaybackLockedByAnotherTab: () => true,
+    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+  });
+
+  context.updatePlayerUi();
+
+  assert.equal(timelineWrap.classList.contains('is-idle'), false,
+    'the empty-player overlay must not cover mirrored metadata');
+  assert.equal(title.textContent, 'Artist - Song /');
+  assert.equal(albumLink.textContent, 'Album');
+  assert.equal(time.textContent, 'Playing in another tab');
+  assert.equal(time.hidden, false);
+  assert.equal(play.disabled, true);
+  assert.equal(timeline.disabled, true);
+
+  context.state.player.loopActive = true;
+  context.state.player.loopStart = 10;
+  context.state.player.loopEnd = 20;
+  context.updatePlayerUi();
+  assert.equal(time.textContent, 'Playing in another tab',
+    'mirrored ownership status takes precedence over the local loop range');
+  context.isPlaybackLockedByAnotherTab = () => false;
+  context.updatePlayerUi();
+  assert.equal(time.textContent, '10 - 20');
+});
+
 test('lease loss renders unavailable status instead of claiming another tab owns playback', () => {
   const timelineWrap = new FakeElement();
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });

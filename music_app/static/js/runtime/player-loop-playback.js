@@ -182,10 +182,10 @@ function updatePlayerUi() {
   }
   if (els.time) {
     els.time.hidden = !hasTrack;
-    els.time.textContent = state.player.loopActive
-      ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
-      : lockedByAnotherTab
+    els.time.textContent = lockedByAnotherTab
       ? blockedLabel
+      : state.player.loopActive
+      ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   els.loopActions?._loopActionController?.update({
@@ -205,7 +205,7 @@ function updatePlayerUi() {
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
   if (els.timeline?.parentElement) {
-    els.timeline.parentElement.classList.toggle('is-idle', !hasTrack || lockedByAnotherTab);
+    els.timeline.parentElement.classList.toggle('is-idle', !hasTrack);
     els.timeline.parentElement.setAttribute('data-idle-label', lockedByAnotherTab ? blockedLabel : 'Nothing is playing');
   }
   if (els.loopRegion) els.loopRegion.hidden = !state.player.loopActive;

@@ -327,7 +327,7 @@ test('cloud E2E merger module exists', () => {
   assert.equal(mergerExists, true, 'Missing scripts/ci/merge-cloud-e2e-results.cjs');
 });
 
-mergerTest('expected child inventory is exactly four functional shards and 29 performance targets', () => {
+mergerTest('expected child inventory is exactly seven functional shards and 29 performance targets', () => {
   const { buildExpectedCloudE2EInventory } = require(mergerPath);
   const expected = exactInventory();
   const actual = buildExpectedCloudE2EInventory({
@@ -336,13 +336,13 @@ mergerTest('expected child inventory is exactly four functional shards and 29 pe
     runAttempt: RUN_ATTEMPT,
   });
 
-  assert.equal(actual.functional.length, 4);
+  assert.equal(actual.functional.length, 7);
   assert.equal(actual.performance.length, 29);
   assert.deepEqual(actual, expected);
   assert.equal(new Set([
     ...actual.functional.map((row) => row.childId),
     ...actual.performance.map((row) => row.childId),
-  ]).size, 33);
+  ]).size, 36);
   assert.deepEqual(actual.performance.filter((row) => !row.measurementExpected).map((row) => row.target), ['scan-page', 'scan-health', 'scan-error']);
 
   const driftedContract = clone(performanceContract);
@@ -922,7 +922,7 @@ mergerTest('public merger output drops raw reporter internals and validates as a
   assert.equal(retainedHistory.length, 26);
   assert.equal(retainedHistory.every((entry) => entry.attempts[0].attempt === 1), true);
   assert.deepEqual(validateCloudTestReport(report), []);
-  assert.equal(report.verificationEvidence.children.length, 33);
+  assert.equal(report.verificationEvidence.children.length, 36);
   assert.equal(report.verificationEvidence.children.every((child) => (
     child.kind === 'functional' || child.kind === 'performance'
   )), true);
@@ -939,12 +939,12 @@ mergerTest('authenticated inventory retains structured E2E results for 14 days a
   const report = mergeCloudE2EResults(sampleInput());
   const inventory = report.authenticatedInventory;
 
-  assert.equal(inventory.structuredReports.length, 33);
+  assert.equal(inventory.structuredReports.length, 36);
   assert.equal(inventory.debugArtifacts.length, 2);
   assert.equal(inventory.structuredReports.every((entry) => entry.retentionDays === 14), true);
   assert.equal(inventory.debugArtifacts.every((entry) => entry.retentionDays === 7), true);
   assert.equal(new Set([
     ...inventory.structuredReports.map((entry) => entry.name),
     ...inventory.debugArtifacts.map((entry) => entry.name),
-  ]).size, 35);
+  ]).size, 38);
 });

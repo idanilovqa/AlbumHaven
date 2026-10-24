@@ -81,10 +81,10 @@ def _current_foobar_account_transaction(database_url, context, *, constraints, a
     clock = lambda: datetime.now(timezone.utc)
     try:
         with pooled_connection(database_url) as connection:
-            connection.execute('set transaction isolation level read committed')
+            connection.execute('set transaction isolation level read committed').close()
             _foobar_taste_connection(connection)
-            connection.execute("set local lock_timeout = '250ms'")
-            connection.execute("set local statement_timeout = '1000ms'")
+            connection.execute("set local lock_timeout = '250ms'").close()
+            connection.execute("set local statement_timeout = '1000ms'").close()
             cursor = connection.execute(
                 'select id,is_active,disabled_at from app.accounts where id=%s for update',
                 (live.actor.account_id,))

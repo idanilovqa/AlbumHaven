@@ -68,14 +68,14 @@ def current_foobar_import_transaction(database_url, context, *, matching_library
     clock = lambda: datetime.now(timezone.utc)
     try:
         with pooled_connection(database_url) as connection:
-            connection.execute('set transaction isolation level read committed')
+            connection.execute('set transaction isolation level read committed').close()
             _foobar_taste_connection(connection)
-            connection.execute("set local lock_timeout = '250ms'")
-            connection.execute("set local statement_timeout = '1000ms'")
+            connection.execute("set local lock_timeout = '250ms'").close()
+            connection.execute("set local statement_timeout = '1000ms'").close()
             if matching_library_id is not None:
                 # Same publication-before-account lock order as native inventory owners.
                 # This lock reveals no library data and grants no library authority.
-                connection.execute("select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))")
+                connection.execute("select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))").close()
             cursor = connection.execute(
                 'select id,is_active,disabled_at from app.accounts where id=%s for update',
                 (live.actor.account_id,))

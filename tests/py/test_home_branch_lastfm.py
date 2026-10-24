@@ -22,7 +22,7 @@ def test_genuine_repository_checks_receipt_connection_binding_before_yield(monke
     repo=HomeActivityPostgresRepository({})
     scope=SimpleNamespace(account_id=1,session_id='session',library_id=2,source_account_id=1,
         audience='own',subject_account_id=None)
-    query=SimpleNamespace(snapshot_ref='opaque',kind='listens',period='all')
+    query=SimpleNamespace(snapshot_ref='A'*43,kind='listens',period='all')
     now=datetime.now(timezone.utc)
     snapshot=dict(coverage={'_lastfm_history_stamp':{'connected':True,'provider_username':'Old'}},
         ledger_revision=1,inventory_revision=1,authority_fingerprint='authority',expires_at=now+timedelta(minutes=5))
@@ -43,7 +43,7 @@ def test_genuine_repository_rechecks_binding_after_consumer(monkeypatch):
     repo=HomeActivityPostgresRepository({})
     scope=SimpleNamespace(account_id=1,session_id='session',library_id=2,source_account_id=1,
         audience='own',subject_account_id=None)
-    query=SimpleNamespace(snapshot_ref='opaque',kind='listens',period='all')
+    query=SimpleNamespace(snapshot_ref='A'*43,kind='listens',period='all')
     now=datetime.now(timezone.utc);stamp={'connected':True,'provider_username':'Owner'}
     snapshot=dict(coverage={'_lastfm_history_stamp':stamp},ledger_revision=1,inventory_revision=1,
         authority_fingerprint='authority',expires_at=now+timedelta(minutes=5))

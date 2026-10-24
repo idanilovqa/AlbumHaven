@@ -8,6 +8,8 @@ pillow
 imageio-ffmpeg==0.6.0
 ytmusicapi
 pytest
+pytest-asyncio==1.4.0
+httpx==0.28.1
 psycopg[binary,pool]
 zstandard
 argon2-cffi

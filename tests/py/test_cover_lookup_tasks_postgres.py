@@ -248,6 +248,7 @@ def test_notification_summary_page_items_omit_tracks_and_local_paths():
                 "id": 41,
                 "name": "Album",
                 "cover_path": "C:/Music/Artist/Album/cover.jpg",
+                "cover_revision": "cover-revision-41",
                 "tracks": [{"path": "C:/Music/Artist/Album/01.flac"}],
             },
         }
@@ -267,8 +268,11 @@ def test_notification_summary_page_items_omit_tracks_and_local_paths():
     assert "cover_path" not in item.get("album_payload", {})
     assert "tracks" not in item.get("album_payload", {})
     assert item["album_payload"]["id"] == 41
+    assert item["album_payload"]["cover_preview_url"] == (
+        "/cover?path=C%3A/Music/Artist/Album/cover.jpg&size=480&v=cover-revision-41"
+    )
     page_sql = connection.operations[-1][0]
     assert "'tracks'" not in page_sql
-    assert "'cover_path'" not in page_sql
+    assert "album_payload' -> 'cover_path'" in page_sql
     assert "album_payload' -> 'id'" in page_sql
     assert "album_payload' -> 'album_id'" in page_sql

@@ -369,6 +369,11 @@ def _compact_notification_summary(summary: dict[str, object]) -> dict[str, objec
         compact.pop(key, None)
     album_payload = compact.get("album_payload")
     if isinstance(album_payload, Mapping):
+        album_payload = dict(album_payload)
+        if album_payload.get("cover_path"):
+            from music_app.services.startup_bootstrap import build_startup_cover_url
+
+            album_payload["cover_preview_url"] = build_startup_cover_url(album_payload)
         compact["album_payload"] = {
             str(key): value
             for key, value in album_payload.items()
@@ -817,6 +822,7 @@ def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) 
                   'album_artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album_artist',
                   'artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'artist',
                   'year', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'year',
+                  'cover_path', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_path',
                   'cover_preview_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_preview_url',
                   'cover_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_revision',
                   'remote_cover_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_url',

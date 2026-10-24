@@ -139,6 +139,29 @@ test('failed search preserves the view', async () => {
   assert.equal(calls.applyViewPayload.length, 0);
 });
 
+test('ordinary gallery refresh works without a browser host or optional draft navigation services', async () => {
+  for (const browserHost of [undefined, {}]) {
+    const {context, calls, pendingRequests} = createContext();
+    if (browserHost === undefined) {
+      delete context.window;
+      assert.equal(typeof context.window, 'undefined', 'the isolated gallery owner does not require window');
+    } else context.window = browserHost;
+    assert.equal(context.window?.AlbumHavenSettingsNavigation, undefined);
+    const refresh = context.fetchAndRender('/view-data', false, {preserveScroll: true});
+    assert.equal(pendingRequests.length, 1);
+    pendingRequests[0].resolveWith({artist_groups: []});
+    assert.equal(await refresh, true);
+    assert.equal(calls.applyViewPayload.length, 1);
+  }
+});
+
+test('a retained draft request without its native owner fails closed before transport', async () => {
+  const {context, pendingRequests} = createContext();
+  assert.equal(await context.fetchAndRender('/view-data', false,
+    {retainedPlaylistDraft: {token: 'expired:draft', scopeKey: 'expired:scope'}}), false);
+  assert.equal(pendingRequests.length, 0);
+});
+
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);

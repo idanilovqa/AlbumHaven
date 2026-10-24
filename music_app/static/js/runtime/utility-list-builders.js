@@ -184,13 +184,16 @@ function buildUtilityIntegrationDetail(item) {
   }
   if (item?.key === 'foobar') {
     const format = state.utility.foobarFormat || 'Playback Statistics XML';
+    const canImport = window.AlbumHavenCapabilities?.allows('account.self.foobar.write') === true;
     return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Foobar2000</h3>
-      <section class="library-settings-section"><label class="lastfm-inline-field"><span>SQLite database</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
+      <section class="library-settings-section"><h4>Account import</h4><p>Import supported Foobar files into your own listening history, ratings and favorites.</p>
+      <div class="settings-integration-actions">${button({ label: 'Open Foobar importer', disabled: !canImport, attributes: { 'data-account-foobar-open': '1' } })}</div></section>
+      <section class="library-settings-section"><label class="lastfm-inline-field"><span>Legacy SQLite database path</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
       <div class="settings-integration-actions">${button({ label: 'Save', variant: 'primary', disabled: true })}</div></section>
       <section class="library-settings-section"><h4>Import playback history</h4><div class="settings-integration-actions">
       ${button({ label: format, attributes: { 'data-foobar-format-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
       ${button({ label: 'Import', disabled: true, attributes: { 'data-foobar-import': '1' } })}</div>
-      <p id="foobar-unavailable">Import is unavailable in this build. Setup instructions and export references are available.</p></section>
+      <p id="foobar-unavailable">Legacy path and XML import controls are unavailable in this build. Use the account importer above for supported files. Setup instructions and export references are available.</p></section>
       <div class="settings-integration-actions settings-instructions-action">${button({ label: 'Read setup instructions', attributes: { 'data-foobar-help': '1' } })}</div></div>`;
   }
   if (!item || item.key !== 'lastfm') return '<div class="utility-empty-state">Select an integration.</div>';

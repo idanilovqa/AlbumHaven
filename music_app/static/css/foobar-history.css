@@ -1,0 +1,28 @@
+.foobar-history { display: grid; gap: 1rem; min-width: 0; padding: 1rem; }
+.foobar-history__intro h3, .foobar-history__row h4, .foobar-history p { margin: 0; }
+.foobar-history__intro, .foobar-history__row { display: grid; gap: .5rem; }
+.foobar-history__controls { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; }
+.foobar-history__field { display: grid; gap: .375rem; min-width: 12rem; max-width: 100%; flex: 1 1 13rem; }
+.foobar-history__field select { width: 100%; max-width: 100%; min-width: 0; }
+.foobar-history__actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.foobar-history__hint, .foobar-history__resolution { color: var(--text-muted, #777); font-size: .875rem; }
+.foobar-history__scope { overflow-wrap: anywhere; }
+.foobar-history__rows { list-style: none; padding: 0; margin: 0; display: grid; gap: .75rem; }
+.foobar-history__row { border: 1px solid var(--border-color, #8885); border-radius: .5rem; padding: .875rem; overflow-wrap: anywhere; }
+.foobar-history__row-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem .75rem; }
+.foobar-history__row-heading h4 { flex: 1 1 12rem; }
+.foobar-history__kind { font-size: .875rem; }
+.foobar-history__count { font-size: .875rem; font-variant-numeric: tabular-nums; }
+.foobar-history__boundaries { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(0, 3fr); gap: .375rem .75rem; margin: 0; }
+.foobar-history__boundaries dt { font-size: .875rem; }
+.foobar-history__boundaries dd { margin: 0; min-width: 0; }
+.foobar-history__resolution { display: block; }
+.foobar-history__status:empty, .foobar-history__hint:empty { display: none; }
+@media (max-width: 600px) {
+  .foobar-history { padding: .75rem; }
+  .foobar-history__boundaries { grid-template-columns: minmax(0, 1fr); }
+  .foobar-history__boundaries dd { margin-bottom: .5rem; }
+}
+/* The native/document scroll host owns movement. Measured row anchoring owns
+   this bounded subtree so browser overflow anchoring cannot apply it twice. */
+.foobar-history__rows { overflow-anchor: none; }

@@ -404,3 +404,38 @@ for (const stage of ['initial', 'navigation']) for (const transition of ['sectio
     assert.deepEqual(toasts, []);
   });
 }
+
+function installFoobarPolicy(context, allowed) {
+ context.document = {readyState:'complete',getElementById:id=>id==='capability-bootstrap'
+  ?{textContent:JSON.stringify({allowed_actions:{'account.self.foobar.write':allowed},available_tabs:['integrations']})}:null,
+  querySelectorAll:()=>[]};
+ vm.runInContext(fs.readFileSync(path.join(root,'music_app/static/js/capability-ui.js'),'utf8'),context);
+}
+
+test('Home Foobar account navigation uses genuine account capability, independent of library administration',()=>{
+ const c=load();installFoobarPolicy(c,true);
+ c.state.utility.librarySettings.allowedActions={};
+ const html=c.buildUtilityIntegrationDetail({key:'foobar'});
+ assert.match(html,/Open Foobar importer/);
+ assert.doesNotMatch(html,/data-account-foobar-open="1"[^>]*disabled|disabled[^>]*data-account-foobar-open="1"/);
+ assert.match(html,/Legacy path and XML import controls are unavailable/);
+ let destination=null;c.location={assign:value=>{destination=value;}};
+ c.handleLibrarySettingsClick({preventDefault(){},target:{closest:selector=>selector==='[data-account-foobar-open]'?{disabled:false}:null}});
+ assert.equal(destination,'/account/integrations/foobar');
+});
+
+test('Home Foobar navigation fails closed for missing and denied account capability',()=>{
+ for (const grant of [undefined,false]) {
+  const c=load();if(grant!==undefined)installFoobarPolicy(c,grant);
+  const html=c.buildUtilityIntegrationDetail({key:'foobar'});
+  assert.match(html,/data-account-foobar-open="1"[^>]*disabled|disabled[^>]*data-account-foobar-open="1"/);
+  c.location={assign(){assert.fail('Denied account navigated');}};
+  c.handleLibrarySettingsClick({preventDefault(){},target:{closest:selector=>selector==='[data-account-foobar-open]'?{disabled:false}:null}});
+ }
+});
+
+test('Home Foobar click rechecks capability after rendering',()=>{
+ const c=load();installFoobarPolicy(c,true);c.buildUtilityIntegrationDetail({key:'foobar'});
+ installFoobarPolicy(c,false);c.location={assign(){assert.fail('Revoked account navigated');}};
+ c.handleLibrarySettingsClick({preventDefault(){},target:{closest:selector=>selector==='[data-account-foobar-open]'?{disabled:false}:null}});
+});

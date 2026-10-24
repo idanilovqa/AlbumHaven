@@ -1,0 +1,15 @@
+/* Creation composes native form, SearchInput, Tabs and read-only track tables.
+   Shared control, status and responsive form appearance remain with their owners. */
+.playlists-creation { gap: 14px; }
+.playlists-creation__metadata { padding: 0; }
+.playlists-creation__search, .playlists-creation__results, .playlists-creation__review { min-width: 0; }
+.playlists-creation__search .search-field { width: 100%; min-width: 0; }
+.playlists-creation__toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.playlists-creation__toolbar > .home-friends__tabs { flex: 1 1 auto; min-width: 0; }
+.playlists-creation label.playlists-creation__select-visible { flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
+.playlists-creation__results [data-cdt-column="selection"] { display: flex; align-items: center; justify-content: center; }
+.playlists-creation__identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.playlists-creation__identity > div { flex: 1 1 auto; min-width: 0; }
+.playlists-creation__identity .home-detail__release > div { min-width: 0; }
+.playlists-creation__identity > button { flex: 0 0 auto; }
+.playlists-creation__results .album-track-table__disc-heading { overflow-wrap: anywhere; }

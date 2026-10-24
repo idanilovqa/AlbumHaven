@@ -1,0 +1,68 @@
+def select_default_foobar_source(database_url, context, *, constraints=None):
+    """Explicit import-start owner; database URL/context are server supplied.
+
+    Its eventual POST route must provide real private-context and CSRF checks.
+    This function must not be used by preview GET/POST or silently to rebind an
+    existing Prepare/Apply command. No route is activated by this source slice.
+    """
+    try:
+        _foobar_taste_context(context)
+        if SOURCE_SELECTION_BYTES > 4194304:
+            raise SourceUnavailable()
+        def checked_constraints(target):
+            # A resolver-thrown denial-shaped exception is operational, not an
+            # actual evaluator decision. Do not let the native owner misread it.
+            try:
+                value = constraints(target) if callable(constraints) else constraints
+                if value is not None and not isinstance(value, PolicyEvaluationConstraints):
+                    raise SourceUnavailable()
+                return value
+            except Exception:
+                raise SourceUnavailable() from None
+        _authority(context, checked_constraints)
+        with current_library_transaction(
+            database_url, context, constraints=checked_constraints,
+            target_account_ids=(context.actor.account_id,), read_only=False,
+            inventory_publication_first=True,
+        ) as (connection, live, sampled_now):
+            _foobar_taste_connection(connection)
+            _foobar_taste_context(live)
+            _authority(live, checked_constraints)
+            source_ref = _default_ref(live.actor.account_id, live.library_id)
+            frame = json.dumps((live.actor.account_id,live.library_id,source_ref),
+                               ensure_ascii=True,separators=(',',':'),allow_nan=False).encode('ascii')
+            if len(frame) > MAX_FRAME_BYTES:
+                raise SourceUnavailable()
+            rows = _query(connection,_READ,frame,maximum=1)
+            if not rows:
+                # Existing default selection bypasses this insertion-only cap.
+                count = _source_count(_query(connection,_COUNT,frame,maximum=1))
+                if count >= MAX_SOURCES:
+                    raise SourceUnavailable()
+                inserted = _query(connection,_INSERT,frame,maximum=1)
+                if (type(inserted) is not list or len(inserted) > 1 or any(
+                        type(row) is not dict or set(row) != {'source_ref'}
+                        or type(row['source_ref']) is not str or row['source_ref'] != source_ref for row in inserted)):
+                    raise SourceUnavailable()
+                del inserted
+                rows = _query(connection,_READ,frame,maximum=1)
+            previous = _stream(rows,source_ref)
+            del rows
+            current = _stream(_query(connection,_TOUCH,frame,maximum=1),
+                              source_ref,previous=previous)
+            # Trigger high water is a later independent sample, not equal-now.
+            # Crossing a UTC-day boundary cannot issue a mismatched generation.
+            today = (current['observed_at'].astimezone(timezone.utc).date()-date(1970,1,1)).days
+            if current['current_generation'] != today:
+                raise SourceUnavailable()
+            _authority(live, checked_constraints)
+            result = FoobarSourceSelection(source_ref,current['current_generation'],current['revision'])
+            del previous,current,frame
+        # Native context exit is the sole commit owner. No result escapes first.
+        return result
+    except SourceUnavailable:
+        raise
+    except PrivateLibraryAuthorityError:
+        raise SourceStale() from None
+    except Exception:
+        raise SourceUnavailable() from None

@@ -889,8 +889,18 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
 }
 
 async function fetchAndRender(url, push = true, options = {}) {
+  const suppliedOptions = (options && typeof options === 'object') ? options : {};
+  const nativeWindow = typeof window === 'undefined' ? null : window;
+  const navigation = nativeWindow?.AlbumHavenSettingsNavigation?.instance;
+  const retainedPlaylistDraft = suppliedOptions.retainedPlaylistDraft || navigation?.retainedPlaylistDraft?.()
+    || (!push && nativeWindow?.history?.state?.playlistDraft) || null;
+  if (retainedPlaylistDraft && !navigation?.isPlaylistDraftCurrent?.(retainedPlaylistDraft)) return false;
+  if (push && !retainedPlaylistDraft && typeof deferAppFormPageReplacement === 'function') {
+    const deferred = deferAppFormPageReplacement(() => fetchAndRender(url, push, options));
+    if (deferred) return deferred;
+  }
+  const requestOptions = retainedPlaylistDraft ? {...suppliedOptions, retainedPlaylistDraft} : suppliedOptions;
   cancelRootGalleryPageRequest();
-  const requestOptions = (options && typeof options === 'object') ? options : {};
   const albumDetailPrewarmSearchGeneration = state.ui?.albumDetailPrewarmSearchSuspended
     ? Number(state.ui.albumDetailPrewarmSearchGeneration || 0)
     : 0;
@@ -1049,6 +1059,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
       return false;
     }
+    if (retainedPlaylistDraft && !nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft)) return false;
     // A response dispatched before a tag edit must not replace its optimistic view.
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
@@ -1187,7 +1198,7 @@ async function fetchAndRender(url, push = true, options = {}) {
         },
       );
     }
-    if (state.ui.activeViewRequestPush) pushBrowserViewState(state.view);
+    if (state.ui.activeViewRequestPush) pushBrowserViewState(state.view, state.view, retainedPlaylistDraft);
     recordSuccessfulCanonicalFullViewApply(data, requestOptions);
     consumePendingScanCompletionViewRefresh(requestId, data, requestOptions);
     return true;

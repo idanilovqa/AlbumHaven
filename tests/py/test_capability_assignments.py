@@ -40,7 +40,7 @@ def allowed(keys, action, *, surface="private_web"):
 def test_admin_and_owner_are_separate_but_can_be_combined():
     administrator = build_assignment(["admin"], [])
     owner = build_assignment(["owner"], [])
-    assert set(administrator.effective_keys) == {"capability.view", "capability.admin"}
+    assert set(administrator.effective_keys) == {"capability.view", "capability.admin", "capability.social"}
     for action in ("accounts.read", "accounts.manage", "accounts.membership.manage", "accounts.capabilities.manage"):
         assert allowed(administrator.effective_keys, action)
         assert not allowed(owner.effective_keys, action)
@@ -231,7 +231,7 @@ def test_update_persists_choices_and_effective_scoped_grants_in_one_transaction(
     update(connection, roles=("admin", "listener"), direct=("capability.practice",))
     inserts = [params for sql, params in connection.operations if "insert into app.capabilities" in sql]
     assert len(inserts) == 1
-    assert set(inserts[0][3]) == {"capability.admin", "capability.view", "capability.play", "capability.practice"}
+    assert set(inserts[0][3]) == {"capability.admin", "capability.view", "capability.play", "capability.practice", "capability.social"}
     assert inserts[0][:3] == (41, 9, NOW)
     metadata = next(params for sql, params in connection.operations if "library_access_assignments_v1" in sql and sql.startswith("update"))
     assert metadata[0] == "9" and metadata[2] == 41
@@ -358,4 +358,4 @@ def test_new_user_editor_defaults_to_listener_without_hidden_explicit_grants():
     assert editor["role_keys"] == ["listener"]
     assert editor["capability_keys"] == []
     assert editor["unlisted_keys"] == []
-    assert set(editor["inherited_keys"]) == {"capability.view", "capability.play"}
+    assert set(editor["inherited_keys"]) == {"capability.view", "capability.play", "capability.social"}

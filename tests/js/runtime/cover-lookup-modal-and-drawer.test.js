@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createNotificationDrawerHarness} = require('./notification-drawer-harness.cjs');
 
 const helperPath = path.join(
   __dirname,
@@ -81,7 +82,8 @@ require('node:test')('polling preserves a pressed task before selection exists a
   const task = { id: 'pressed-task', status: 'running', artist: 'Artist', album: 'Album' };
   context.state.coverLookup.tasks = [task];
   context.renderCoverLookupDrawer();
-  const before = bodyElement.innerHTML;
+  const before = bodyElement.querySelector('.cover-lookup-task-open');
+  const selectedTextNode = before.querySelector('.cover-lookup-task-title').firstChild;
   const pressedTask = {};
   let pressed = true;
   bodyElement.contains = node => node === pressedTask;
@@ -89,7 +91,9 @@ require('node:test')('polling preserves a pressed task before selection exists a
   context.window.getSelection = () => ({ isCollapsed: true, rangeCount: 1 });
   task.status = 'completed';
   context.renderCoverLookupDrawer();
-  assert.equal(bodyElement.innerHTML, before, 'Polling must not replace the pending text-selection anchor');
+  assert.equal(before.isConnected, true, 'Polling must not replace the pending text-selection anchor');
+  assert.equal(before.querySelector('.cover-lookup-task-title').firstChild, selectedTextNode);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/, 'obsolete Cancel retires during the press');
   pressed = false;
   context.renderCoverLookupDrawer();
   assert.match(bodyElement.innerHTML, />covers found</, 'Polling resumes when the press ends without a selection');
@@ -97,7 +101,7 @@ require('node:test')('polling preserves a pressed task before selection exists a
   pressed = true;
   context.state.coverLookup.tasks = [];
   context.renderCoverLookupDrawer({ preserveInteraction: false });
-  assert.match(bodyElement.innerHTML, /not looking for anything at the moment/i,
+  assert.match(bodyElement.innerHTML, /No notifications/i,
     'Explicit user removal must not be blocked by interaction preservation');
 });
 
@@ -129,111 +133,22 @@ for (const interaction of ['focus', 'hover']) {
   const task = { id: 'selected-transition', status: 'running', artist: 'Artist', album: 'Album' };
   context.state.coverLookup.tasks = [task];
   context.renderCoverLookupDrawer();
-  const selectedMarkup = bodyElement.innerHTML;
+  const title = bodyElement.querySelector('.cover-lookup-task-title');
+  const selectedTextNode = title.firstChild;
   const selectedNode = {};
   bodyElement.contains = (node) => node === selectedNode;
   context.window.getSelection = () => ({ isCollapsed: false, rangeCount: 1, anchorNode: selectedNode, focusNode: selectedNode });
   task.status = 'canceled';
   context.renderCoverLookupDrawer();
-  assert.equal(bodyElement.innerHTML, selectedMarkup, 'terminal polling must preserve an independent text selection');
+  assert.equal(title.firstChild, selectedTextNode, 'terminal polling must preserve an independent text selection');
+  assert.equal(bodyElement.querySelector('[data-cancel-cover-lookup-task]'), null, 'obsolete actions retire without replacing selected text');
   context.window.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
   context.renderCoverLookupDrawer();
   assert.match(bodyElement.innerHTML, />Canceled</);
 }
 
-{
-  const staleCancel = {
-    closest: (selector) => selector === '.cover-lookup-task-actions' ? {} : staleCancel,
-    getAttribute: () => 'finished-task',
-  };
-  const context = loadHelper({ document: { activeElement: staleCancel } });
-  context.state.coverLookup.tasks = [{ id: 'finished-task', status: 'canceled' }];
-  for (const actionAttribute of ['data-retry-cover-lookup-task', 'data-clear-cover-lookup-task']) {
-    const hoveredAction = { closest: (selector) => selector === `[${actionAttribute}]` ? hoveredAction : null };
-    const body = { contains: () => true, querySelector: selector => selector === '.cover-lookup-task-actions :hover' ? hoveredAction : null };
-    assert.equal(context.hasActiveCoverLookupDrawerAction(body), true,
-      `a stale focused Cancel must not override hovered ${actionAttribute}`);
-  }
-}
-
-{
-  const hoveredAction = {};
-  const focusedAction = { closest: (selector) => selector === '.cover-lookup-task-actions' ? {} : null };
-  const context = loadHelper({ document: { activeElement: null } });
-  const body = {
-    contains: () => false,
-    querySelector: (selector) => (
-      selector === '.cover-lookup-task-actions :hover' ? hoveredAction : null
-    ),
-  };
-
-  assert.equal(context.hasActiveCoverLookupDrawerAction(body), true);
-
-  context.document.activeElement = focusedAction;
-  body.contains = (element) => element === focusedAction;
-  body.querySelector = () => null;
-  assert.equal(context.hasActiveCoverLookupDrawerAction(body), true);
-}
-
 function createDrawerHarness(overrides = {}) {
-  const drawerClasses = new Set();
-  const drawerElement = {
-    hidden: false,
-    classList: { contains: name => drawerClasses.has(name),
-      toggle: (name, enabled) => enabled ? drawerClasses.add(name) : drawerClasses.delete(name) },
-  };
-  const bodyElement = { innerHTML: '' };
-  const badgeElement = { hidden: false, textContent: '' };
-  const buttonElement = { classList: { toggle: () => {} } };
-  const clearElement = {
-    hidden: false,
-    disabled: false,
-    attributes: {},
-    setAttribute(name, value) {
-      this.attributes[name] = String(value);
-    },
-  };
-  const modalElement = { hidden: true };
-  const intervalCalls = [];
-  const clearedIntervals = [];
-  const context = loadHelper({
-    escapeHtml: (value) => String(value || ''),
-    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
-    showToast: () => {},
-    formatCoverLookupTaskElapsedLabel: () => 'Elapsed 1s',
-    window: {
-      setInterval(callback, delay) {
-        intervalCalls.push({ callback, delay });
-        return intervalCalls.length;
-      },
-      clearInterval(timerId) {
-        clearedIntervals.push(timerId);
-      },
-    },
-    document: {
-      getElementById: (id) => ({
-        'cover-lookup-drawer': drawerElement,
-        'cover-lookup-drawer-body': bodyElement,
-        'cover-lookup-drawer-badge': badgeElement,
-        'cover-lookup-drawer-button': buttonElement,
-        'cover-lookup-drawer-clear': clearElement,
-        'cover-lookup-modal': modalElement,
-      }[id] || null),
-      querySelectorAll: () => [],
-    },
-    ...overrides,
-  });
-  context.state.coverLookup.drawerOpen = true;
-  context.state.coverLookup.modal = { taskId: '' };
-  context.state.coverLookup.pollingTimer = 0;
-  context.state.coverLookup.elapsedTimer = 0;
-  return {
-    context,
-    bodyElement,
-    clearElement,
-    intervalCalls,
-    clearedIntervals,
-  };
+  return createNotificationDrawerHarness(overrides);
 }
 
 (async () => {
@@ -247,12 +162,11 @@ function createDrawerHarness(overrides = {}) {
       id: 'rollback-task', status: 'completed', artist: 'Artist', album: 'Restored Album',
     }];
     context.renderCoverLookupDrawer();
-    context.hasActiveCoverLookupDrawerAction = () => true;
     context.hasActiveCoverLookupDrawerTextSelection = () => true;
     const pending = clearAll
       ? context.clearCompletedCoverLookupTasks()
       : context.clearCoverLookupTaskNotification('rollback-task');
-    assert.match(bodyElement.innerHTML, /not looking for anything at the moment/i);
+    assert.match(bodyElement.innerHTML, /No notifications/i);
     resolveFetch({ ok: false, json: async () => ({ ok: false, error: 'Delete failed' }) });
     await pending;
     assert.equal(context.state.coverLookup.tasks[0].id, 'rollback-task');
@@ -307,19 +221,9 @@ function createDrawerHarness(overrides = {}) {
     context,
     bodyElement,
   } = createDrawerHarness();
-  const anchorNode = {};
-  const focusNode = {};
-  let currentHtml = '<div class="cover-lookup-task-title">Selected notification</div>';
-  let bodyWriteCount = 0;
-  Object.defineProperty(bodyElement, 'innerHTML', {
-    configurable: true,
-    get: () => currentHtml,
-    set: (value) => {
-      bodyWriteCount += 1;
-      currentHtml = value;
-    },
-  });
-  bodyElement.contains = (node) => node === anchorNode || node === focusNode;
+  context.state.coverLookup.tasks = [{id: 'completed-task', status: 'completed', artist: 'Mastodon', album: 'Selected notification', year: 2009}];
+  context.renderCoverLookupDrawer();
+  const title = bodyElement.querySelector('.cover-lookup-task-title'), anchorNode = title.firstChild, focusNode = title.firstChild;
   const selection = {
     anchorNode,
     focusNode,
@@ -340,17 +244,13 @@ function createDrawerHarness(overrides = {}) {
     true,
   );
   context.renderCoverLookupDrawer();
-  assert.equal(
-    bodyWriteCount,
-    0,
-    'poll-driven drawer rendering must not replace text while the user is selecting it',
-  );
-  assert.match(currentHtml, /Selected notification/);
+  assert.equal(title.firstChild, anchorNode, 'poll-driven drawer rendering must not replace text while the user is selecting it');
+  assert.match(title.textContent, /Selected notification/);
 
   selection.isCollapsed = true;
   context.renderCoverLookupDrawer();
-  assert.equal(bodyWriteCount, 1);
-  assert.match(currentHtml, /Crack The Skye/);
+  assert.equal(bodyElement.querySelector('.cover-lookup-task-title'), title);
+  assert.match(title.textContent, /Crack The Skye/);
 }
 
 {
@@ -703,24 +603,7 @@ function createDrawerHarness(overrides = {}) {
 }
 
 ;(async () => {
-  const drawerElement = {
-    hidden: false,
-    classList: { toggle: () => {} },
-  };
-  const bodyElement = {
-    innerHTML: '',
-  };
-  const badgeElement = {
-    hidden: false,
-    textContent: '',
-  };
-  const buttonElement = {
-    classList: { toggle: () => {} },
-  };
-  const clearElement = {
-    hidden: false,
-  };
-  const context = loadHelper({
+  const {context, bodyElement} = createDrawerHarness({
     fetch: async () => ({
       ok: true,
       json: async () => ({
@@ -732,15 +615,6 @@ function createDrawerHarness(overrides = {}) {
     escapeHtml: (value) => String(value || ''),
     applyCoverLookupTaskUpdates: () => {},
     stopCoverLookupPollingIfIdle: () => {},
-    document: {
-      getElementById: (id) => ({
-        'cover-lookup-drawer': drawerElement,
-        'cover-lookup-drawer-body': bodyElement,
-        'cover-lookup-drawer-badge': badgeElement,
-        'cover-lookup-drawer-button': buttonElement,
-        'cover-lookup-drawer-clear': clearElement,
-      }[id] || { hidden: true }),
-    },
   });
   context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.modal = { taskId: '' };
@@ -2152,7 +2026,7 @@ function createDrawerHarness(overrides = {}) {
 
   assert.equal(clearElement.hidden, false);
   assert.equal(clearElement.disabled, false);
-  assert.equal(clearElement.attributes['aria-disabled'], 'false');
+  assert.equal(clearElement.getAttribute('aria-disabled'), 'false');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2170,7 +2044,7 @@ function createDrawerHarness(overrides = {}) {
 
   assert.equal(clearElement.hidden, false);
   assert.equal(clearElement.disabled, true);
-  assert.equal(clearElement.attributes['aria-disabled'], 'true');
+  assert.equal(clearElement.getAttribute('aria-disabled'), 'true');
   await context.clearCompletedCoverLookupTasks();
   assert.deepEqual(toastCalls, []);
 })().catch((error) => {
@@ -2835,35 +2709,7 @@ function createDrawerHarness(overrides = {}) {
 });
 
 {
-  const drawerElement = {
-    hidden: false,
-    classList: { toggle: () => {} },
-  };
-  const bodyElement = {
-    innerHTML: '',
-  };
-  const badgeElement = {
-    hidden: false,
-    textContent: '',
-  };
-  const buttonElement = {
-    classList: { toggle: () => {} },
-  };
-  const clearElement = {
-    hidden: false,
-  };
-  const context = loadHelper({
-    escapeHtml: (value) => String(value || ''),
-    document: {
-      getElementById: (id) => ({
-        'cover-lookup-drawer': drawerElement,
-        'cover-lookup-drawer-body': bodyElement,
-        'cover-lookup-drawer-badge': badgeElement,
-        'cover-lookup-drawer-button': buttonElement,
-        'cover-lookup-drawer-clear': clearElement,
-      }[id] || { hidden: true }),
-    },
-  });
+  const {context, bodyElement} = createDrawerHarness();
   context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.tasks = [
     {
@@ -2902,40 +2748,10 @@ function createDrawerHarness(overrides = {}) {
 }
 
 {
-  const drawerElement = {
-    hidden: false,
-    classList: { toggle: () => {} },
-  };
-  const bodyElement = {
-    innerHTML: '',
-  };
-  const badgeElement = {
-    hidden: false,
-    textContent: '',
-  };
+  const {context, badgeElement, buttonElement} = createDrawerHarness();
   const buttonToggleCalls = [];
-  const buttonElement = {
-    classList: {
-      toggle: (className, enabled) => {
-        buttonToggleCalls.push([className, enabled]);
-      },
-    },
-  };
-  const clearElement = {
-    hidden: false,
-  };
-  const context = loadHelper({
-    escapeHtml: (value) => String(value || ''),
-    document: {
-      getElementById: (id) => ({
-        'cover-lookup-drawer': drawerElement,
-        'cover-lookup-drawer-body': bodyElement,
-        'cover-lookup-drawer-badge': badgeElement,
-        'cover-lookup-drawer-button': buttonElement,
-        'cover-lookup-drawer-clear': clearElement,
-      }[id] || { hidden: true }),
-    },
-  });
+  const toggle = buttonElement.classList.toggle;
+  buttonElement.classList.toggle = (className, enabled) => {buttonToggleCalls.push([className, enabled]); return toggle(className, enabled);};
   context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.tasks = [
     {
@@ -2989,24 +2805,7 @@ function createDrawerHarness(overrides = {}) {
 
 ;(async () => {
   let resolveFetch;
-  const drawerElement = {
-    hidden: false,
-    classList: { toggle: () => {} },
-  };
-  const bodyElement = {
-    innerHTML: '',
-  };
-  const badgeElement = {
-    hidden: false,
-    textContent: '',
-  };
-  const buttonElement = {
-    classList: { toggle: () => {} },
-  };
-  const clearElement = {
-    hidden: false,
-  };
-  const context = loadHelper({
+  const {context, bodyElement} = createDrawerHarness({
     escapeHtml: (value) => String(value || ''),
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
     showToast: () => {},
@@ -3014,15 +2813,6 @@ function createDrawerHarness(overrides = {}) {
     fetch: () => new Promise((resolve) => {
       resolveFetch = resolve;
     }),
-    document: {
-      getElementById: (id) => ({
-        'cover-lookup-drawer': drawerElement,
-        'cover-lookup-drawer-body': bodyElement,
-        'cover-lookup-drawer-badge': badgeElement,
-        'cover-lookup-drawer-button': buttonElement,
-        'cover-lookup-drawer-clear': clearElement,
-      }[id] || { hidden: true }),
-    },
   });
   context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.modal = { taskId: 'completed-task' };
@@ -3038,11 +2828,10 @@ function createDrawerHarness(overrides = {}) {
   ];
 
   context.renderCoverLookupDrawer();
-  context.hasActiveCoverLookupDrawerAction = () => true;
   const pending = context.clearCoverLookupTaskNotification('completed-task');
 
   assert.equal(context.state.coverLookup.tasks.length, 0);
-  assert.match(bodyElement.innerHTML, /not looking for anything at the moment/i);
+  assert.match(bodyElement.innerHTML, /No notifications/i);
 
   resolveFetch({
     ok: true,

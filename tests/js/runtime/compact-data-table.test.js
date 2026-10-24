@@ -38,7 +38,7 @@ const utilitiesCssPath = path.join(
   'utilities.css',
 );
 
-function loadRenderer() {
+function loadRenderer({buttons = false} = {}) {
   assert.equal(
     fs.existsSync(rendererPath),
     true,
@@ -53,11 +53,37 @@ function loadRenderer() {
         .replaceAll('"', '&quot;');
     },
   };
+  if (buttons) context.ButtonComponent = require(path.join(path.dirname(rendererPath), '..', 'button-component.js'));
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(rendererPath, 'utf8'), context, { filename: rendererPath });
   assert.equal(typeof context.buildCompactDataTable, 'function');
   return context.buildCompactDataTable;
 }
+
+test('multiple selection is presentation-only and retains table semantics', () => {
+  const html = loadRenderer()({selection: 'multiple', columnsConfig: [{key: 'title', label: 'Track'}],
+    rows: [{key: 'first-occurrence', ariaSelected: true, tabIndex: 0, cells: {title: 'One'}},
+      {key: 'second-occurrence', ariaSelected: true, tabIndex: 0, cells: {title: 'One again'}}]});
+  assert.match(html, /role="table"/); assert.match(html, /data-cdt-selection="multiple"/);
+  assert.equal((html.match(/aria-selected="true"/g) || []).length, 2);
+  assert.doesNotMatch(html, /role="grid"|aria-multiselectable|aria-activedescendant/);
+  const css = fs.readFileSync(componentCssPath, 'utf8');
+  assert.match(css, /data-cdt-selection="multiple"[^{}]*aria-selected="true"/);
+  assert.match(css, /data-cdt-selection="multiple"[^{}]*:focus-visible/);
+});
+
+test('narrow columns hide matching headers and cells only when an alternate grid is supplied', () => {
+  const render = loadRenderer();
+  const config = {columns: '1fr 60px 20px', narrowColumns: '1fr', columnsConfig: [
+    {key: 'title', label: 'Title'}, {key: 'rating', label: 'Rating', hideWhenNarrow: true},
+    {key: 'action', header: 'absent', hideWhenNarrow: true, action: true},
+  ], rows: [{key: 'one', cells: {title: 'Track', rating: '4', action: 'Select'}}]};
+  const html = render(config);
+  assert.match(html, /data-cdt-narrow="true"/);
+  assert.match(html, /--cdt-narrow-columns: 1fr/);
+  assert.equal((html.match(/data-cdt-hide-narrow/g) || []).length, 4);
+  assert.doesNotMatch(render({...config, narrowColumns: undefined}), /data-cdt-hide-narrow|data-cdt-narrow=/);
+});
 
 test('buildCompactDataTable renders deterministic accessible structure without domain policy', () => {
   const buildCompactDataTable = loadRenderer();
@@ -437,6 +463,98 @@ test('compact table keeps approved title-case headers with normal spacing', () =
   assert.ok(headerRule, 'the shared component must define its column-header typography');
   assert.doesNotMatch(headerRule[1], /text-transform:\s*uppercase/);
   assert.doesNotMatch(headerRule[1], /letter-spacing:\s*0\.08em/);
+});
+
+test('sortable headers use native shared Buttons and announce current and next directions', () => {
+  const render = loadRenderer({buttons: true});
+  const config = {id: 'metrics', columnsConfig: [
+    {key: 'title', label: 'Track'}, {key: 'plays', label: 'Plays', sortable: true},
+    {key: 'duration', label: 'Length', sortable: true},
+  ], rows: [{key: 'second', cells: {title: 'Second'}}, {key: 'first', cells: {title: 'First'}}]};
+  for (const [direction, ariaSort, current, next] of [
+    ['default', 'none', 'default order', 'ascending order'],
+    ['asc', 'ascending', 'ascending', 'descending order'],
+    ['desc', 'descending', 'descending', 'default order'],
+  ]) {
+    const html = render({...config, sort: {key: 'plays', direction}});
+    assert.match(html, new RegExp(`role="columnheader"[^>]*data-cdt-column="plays"[^>]*aria-sort="${ariaSort}"`));
+    assert.match(html, /role="columnheader"[^>]*data-cdt-column="duration"[^>]*aria-sort="none"/);
+    assert.match(html, new RegExp(`aria-label="Sort by Plays: ${current}\\. Activate for ${next}\\."`));
+    assert.match(html, /<button type="button" class="button ui-button ui-button--secondary ui-button--small ui-button--quiet compact-data-table__sort"/);
+    assert.match(html, new RegExp(`data-cdt-sort="plays" data-cdt-sort-direction="${direction}"`));
+    assert.match(html, /class="compact-data-table__sort-label">Plays<\/span>/);
+    assert.match(html, /sort-icon"[^>]*aria-hidden="true"/);
+    assert.doesNotMatch(html, /<button[^>]*(?:aria-sort|aria-pressed|tabindex|onkeydown|onclick|role)=/);
+    assert.match(html, /role="cell"[^>]*data-cdt-column="plays"[^>]*aria-labelledby="metrics-header-plays"/);
+    assert.ok(html.indexOf('data-cdt-row-key="second"') < html.indexOf('data-cdt-row-key="first"'), 'the renderer never sorts source rows');
+  }
+});
+
+test('sorting opt-in preserves ordinary and hidden headers without a Button dependency', () => {
+  const render = loadRenderer();
+  const plain = {columnsConfig: [{key: 'plays', label: 'Plays'}], rows: []};
+  const normal = render(plain);
+  assert.equal(render({...plain, sort: {key: 'plays', direction: 'desc'}}), normal);
+  assert.doesNotMatch(normal, /<button|aria-sort|data-cdt-sort/);
+  for (const key of [undefined, null, 0, '', ' ']) {
+    assert.doesNotMatch(render({columnsConfig: [{key, label: 'Plays', sortable: true}]}), /<button|aria-sort|data-cdt-sort/);
+  }
+  for (const headers of ['screen-reader', 'absent']) {
+    assert.doesNotMatch(render({...plain, headers, columnsConfig: [{key: 'plays', label: 'Plays', sortable: true}]}), /<button|aria-sort|data-cdt-sort/);
+    assert.doesNotMatch(render({...plain, columnsConfig: [{key: 'plays', label: 'Plays', sortable: true, header: headers}]}), /<button|aria-sort|data-cdt-sort/);
+  }
+});
+
+test('locked sort headers use native disabled state while retaining the current view direction', () => {
+  const render = loadRenderer({buttons: true});
+  const config = {columnsConfig: [{key: 'plays', label: 'Plays', sortable: true},
+    {key: 'duration', label: 'Length', sortable: true}], sort: {key: 'plays', direction: 'desc'}};
+  const locked = render({...config, sortDisabled: true});
+  assert.equal((locked.match(/ disabled aria-disabled="true"/g) || []).length, 2);
+  assert.match(locked, /data-cdt-column="plays"[^>]*aria-sort="descending"/);
+  assert.match(locked, /data-cdt-column="duration"[^>]*aria-sort="none"/);
+  assert.match(locked, /data-cdt-sort="plays" data-cdt-sort-direction="desc"/);
+  assert.match(locked, /aria-label="Sort by Plays: descending\."/);
+  assert.doesNotMatch(locked, /Activate for/);
+  for (const sortDisabled of [undefined, false, 'true', 1]) {
+    const active = render({...config, sortDisabled});
+    assert.doesNotMatch(active, / disabled|aria-disabled/);
+    assert.match(active, /aria-label="Sort by Plays: descending\. Activate for default order\."/);
+  }
+});
+
+test('sortable labels and action keys remain escaped literal data', () => {
+  const render = loadRenderer({buttons: true});
+  const key = 'plays" autofocus="', label = 'Plays <img src=x> & "mine"';
+  const html = render({columnsConfig: [{key, label, sortable: true}], sort: {key, direction: 'asc'}});
+  assert.match(html, /data-cdt-sort="plays&quot; autofocus=&quot;"/);
+  assert.match(html, /class="compact-data-table__sort-label">Plays &lt;img src=x&gt; &amp; &quot;mine&quot;<\/span>/);
+  assert.doesNotMatch(html, /<img| autofocus="/);
+  assert.match(html, /aria-sort="ascending"/);
+  assert.match(render({columnsConfig: [{key: 'plays', label: 'Plays', sortable: true}], sort: {key: 'plays', direction: 'unexpected'}}), /aria-sort="none"/);
+});
+
+test('only explicitly focusable data rows enter keyboard order', () => {
+  const render = loadRenderer();
+  const html = render({columnsConfig: [{key: 'title', label: 'Title'}], rows: [
+    {key: 'normal'}, {key: 'focusable', tabIndex: 0}, {key: 'programmatic', tabIndex: -1},
+    {key: 'disabled', ariaDisabled: true, tabIndex: 0}, {key: 'invalid-number', tabIndex: 1},
+    {key: 'invalid-string', tabIndex: '0'}, {key: 'status', fullSpanContent: 'Unavailable', tabIndex: 0},
+  ]});
+  assert.match(html, /data-cdt-row-key="focusable" tabindex="0"/);
+  assert.match(html, /data-cdt-row-key="programmatic" tabindex="-1"/);
+  assert.match(html, /data-cdt-row-key="disabled" aria-disabled="true" tabindex="-1"/);
+  for (const key of ['normal', 'invalid-number', 'invalid-string', 'status']) {
+    assert.doesNotMatch(html.match(new RegExp(`<div[^>]*data-cdt-row-key="${key}"[^>]*>`))[0], /tabindex/);
+  }
+});
+
+test('sort controls preserve compact header geometry and visible keyboard access in stacked tables', () => {
+  const css = fs.readFileSync(componentCssPath, 'utf8');
+  assert.match(css, /\.compact-data-table-header:has\(\.compact-data-table__sort\)\s*\{[^}]*box-sizing:\s*border-box/s);
+  assert.match(css, /\.compact-data-table \.compact-data-table__sort\s*\{[^}]*height:\s*18px[^}]*min-height:\s*18px[^}]*padding:\s*0/s);
+  assert.match(css, /\.compact-data-table__sort::before\s*\{[^}]*inset-block:\s*-3px/s);
+  assert.match(css, /data-cdt-mobile="stack"\] \.compact-data-table-header:has\(\.compact-data-table__sort\)\s*\{[^}]*position:\s*static[^}]*clip:\s*auto/s);
 });
 
 test('problematic mutation spinner stops animating for reduced motion while retaining its ring', () => {

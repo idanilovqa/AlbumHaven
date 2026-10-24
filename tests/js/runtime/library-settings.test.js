@@ -264,6 +264,7 @@ test('shared choice dropdown toggles, switches triggers, preserves IDs and Fooba
   const makeNode = () => ({
     style: {}, listeners: {}, attributes: {}, isConnected: true,
     setAttribute(key, value) { this.attributes[key] = value; },
+    getAttribute(key) { return this.attributes[key] ?? null; },
     addEventListener(type, callback) { this.listeners[type] = callback; },
     remove() { this.removed = true; }, contains: () => false,
     focus() { this.focused = true; },

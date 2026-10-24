@@ -1715,7 +1715,9 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
         if (refreshedAlbum && !modal.overlay.hidden
           && loadToken === state.ui.pendingTrackModalLoadToken
           && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
-          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
+          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery,
+            presentationRestrictions: typeof getTrackModalPresentationRestrictions === 'function' ? getTrackModalPresentationRestrictions() : undefined,
+            sourcePageOwner: typeof getTrackModalSourcePageOwner === 'function' ? getTrackModalSourcePageOwner() : undefined });
         }
       }
       const conflictMessage = String(
@@ -1757,7 +1759,77 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
   }
 }
 
+let homeTrackEvidenceRenderGeneration = 0;
+let trackModalFoobarEvidence = null;
+function disposeTrackModalFoobarEvidence() {
+  const lease=trackModalFoobarEvidence;trackModalFoobarEvidence=null;
+  if(!lease)return;
+  lease.sequence++;lease.panel?.dispose();lease.host?.remove();lease.unsubscribe?.();lease.observer?.disconnect();
+  for(const {button,click} of lease.controls){button.removeEventListener('click',click);button.remove();}
+  lease.controls.length=0;
+}
+function loadFoobarTrackEvidencePresenter() {
+  const version=encodeURIComponent(String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__||''));
+  return import(`/static/js/foobar-history/track-evidence.mjs?v=${version}`);
+}
+function mountTrackModalFoobarEvidence(album,receipt,generation) {
+  const shell=document.getElementById('app-shell'),overlay=document.getElementById('track-modal');
+  if(shell?.dataset.accountFoobarHistoryAllowed!=='true'||album.read_only_subject||album.source_readable===false
+    ||album.allowed_actions?.can_read===false||typeof PrivateUITransport==='undefined'
+    ||typeof MutationObserver!=='function'||receipt.rows.length!==receipt.nodes.length)return;
+  const accountId=shell.dataset.nativeAccountId,libraryId=shell.dataset.nativeLibraryId;
+  if(!/^[1-9]\d{0,18}$/.test(accountId||'')||!/^[1-9]\d{0,18}$/.test(libraryId||''))return;
+  let context,transportGeneration;
+  try{context=PrivateUITransport.context();transportGeneration=PrivateUITransport.generation();}catch{return;}
+  const lease={controls:[],panel:null,host:null,sequence:0,observer:null,unsubscribe:null};trackModalFoobarEvidence=lease;
+  const current=()=>{
+    try {
+      // Home generation() synchronizes context and may retire this lease.
+      const liveGeneration=PrivateUITransport.generation();
+      return trackModalFoobarEvidence===lease&&generation===homeTrackEvidenceRenderGeneration
+        &&getCurrentTrackModalAlbum()===album&&isTrackModalContentVisible()&&receipt.list.isConnected
+        &&isTrackModalSourceActionCurrent()
+        &&(!getTrackModalSelectionLease() || (getTrackModalSelectionLease().isCurrent() && getTrackModalSelectionLease().canOpen()))
+        &&shell.dataset.accountFoobarHistoryAllowed==='true'&&shell.dataset.nativeAccountId===accountId
+        &&shell.dataset.nativeLibraryId===libraryId&&shell.dataset.privateUiContext===context
+        &&liveGeneration===transportGeneration;
+    } catch {return false;}
+  };
+  receipt.rows.forEach(({source},index)=>{
+    const ref=source?.inventory_track_ref,match=typeof ref==='string'?/^inventory-track:([1-9]\d{0,18}):([1-9]\d{0,18})$/.exec(ref):null;
+    if(!match||match[1]!==libraryId||BigInt(match[2])>9223372036854775807n||source.allowed_actions?.can_read===false)return;
+    const cell=receipt.nodes[index]?.querySelector('.album-track-table__title')?.parentElement;
+    if(!cell)return;
+    const button=document.createElement('button');button.type='button';button.className='playlists__note';
+    button.textContent='Foobar evidence';button.setAttribute('aria-label','Read Foobar imported evidence for '+String(source.title||'this track'));
+    const click=()=>{
+      if(!current())return;
+      const focused=document.activeElement===button,token=++lease.sequence;
+      lease.panel?.dispose();lease.panel=null;lease.host?.remove();
+      const host=document.createElement('div');host.className='foobar-history';receipt.list.appendChild(host);lease.host=host;
+      host.textContent='Loading imported evidence controls…';
+      void loadFoobarTrackEvidencePresenter().then(module=>{
+        if(!current()||lease.sequence!==token||!host.isConnected)return;
+        host.replaceChildren();
+        lease.panel=module.mountFoobarTrackEvidence(host,{transport:PrivateUITransport,
+          isCurrent:()=>current()&&lease.sequence===token,trackId:match[2],libraryId,accountId});
+        if(focused&&document.activeElement===button)lease.panel.focus();
+        void lease.panel.load();
+      }).catch(()=>{if(current()&&lease.sequence===token)host.textContent='Imported evidence is unavailable. Try again after reopening this track list.';});
+    };
+    button.addEventListener('click',click);cell.appendChild(button);lease.controls.push({button,click});
+  });
+  const retire=()=>{if(trackModalFoobarEvidence===lease&&!current())disposeTrackModalFoobarEvidence();};
+  lease.unsubscribe=PrivateUITransport.subscribe(retire);lease.observer=new MutationObserver(retire);
+  if(overlay)lease.observer.observe(overlay,{attributes:true,attributeFilter:['hidden']});
+  lease.observer.observe(shell,{attributes:true,attributeFilter:['data-native-account-id','data-native-library-id','data-private-ui-context','data-account-foobar-history-allowed']});
+  lease.observer.observe(receipt.list,{childList:true});
+}
+
 function renderTrackModalRelease(album) {
+  const homeEvidenceGeneration = ++homeTrackEvidenceRenderGeneration;
+  disposeTrackModalFoobarEvidence();
+  if (typeof reconcileTrackModalSelectionAlbum === 'function') reconcileTrackModalSelectionAlbum(album);
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
@@ -1818,6 +1890,11 @@ function renderTrackModalRelease(album) {
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
+    if (album.read_only_subject) {
+      const summary = document.createElement('p'); summary.className = 'playlists__note';
+      summary.textContent = `Rating: ${album.album_rating ?? '–'} · Favorite: ${album.favorite === true ? 'Yes' : album.favorite === false ? 'No' : '–'}`;
+      els.header.appendChild(summary);
+    }
     els = getTrackModalElements();
   }
   if (els.folder) {
@@ -1868,6 +1945,7 @@ function renderTrackModalRelease(album) {
     const remoteCoverUrlRaw = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
     const localCoverPath = escapeHtml(localCoverPathRaw);
     const remoteCoverUrl = escapeHtml(remoteCoverUrlRaw);
+    const artworkAllowed = typeof canViewTrackModalArtwork !== 'function' || canViewTrackModalArtwork();
     const lightboxGalleryAttribute = state.ui?.trackModalCoverLightboxGallery === false
       ? ''
       : ' data-lightbox-gallery="visible"';
@@ -1876,7 +1954,7 @@ function renderTrackModalRelease(album) {
       ${renderAlbumArtbox({
         state: 'ready',
         label: `Album cover for ${album.name}`,
-        coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+        coverHtml: `<button class="track-modal-cover-button" type="button"${artworkAllowed ? ' data-open-lightbox="1"' : ' disabled aria-disabled="true"'} data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
         overlayHtml: coverToolsHtml,
       })}
       ${coverSourceBadge}
@@ -1922,7 +2000,7 @@ function renderTrackModalRelease(album) {
         && typeof loadGalleryCoverPreviewImage === 'function'
       ) {
         const ownsCurrentModalCover = () => {
-          if (els.overlay.hidden || !modalCoverImage.isConnected) return false;
+          if (!(typeof isTrackModalContentVisible === 'function' ? isTrackModalContentVisible() : !els.overlay.hidden) || !modalCoverImage.isConnected) return false;
           if (els.cover.querySelector('.track-modal-cover-visual img') !== modalCoverImage) return false;
           const currentAlbum = state.modalReleases[state.modalReleaseIndex] || null;
           return getTrackModalAlbumRequestKey(currentAlbum) === resolvedAlbumKey;
@@ -1999,13 +2077,23 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
+  DuplicateFolderRecoveryUI.mount(album, els.duplicateWarning, resolvedAlbumKey);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
-  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
+  const evidenceRows = [];
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength, evidenceRows);
+  const evidenceReceipt = Object.freeze({album, list: els.list, rows: Object.freeze(evidenceRows),
+    nodes: Object.freeze([...els.list.querySelectorAll('.album-track-table__row')])});
+  if (!albumMissing) mountTrackModalFoobarEvidence(album, evidenceReceipt, homeEvidenceGeneration);
+  if (typeof NativePlaytables !== 'undefined') {
+    if (albumMissing) NativePlaytables.retire('album-tracks');
+    else if (isTrackModalContentVisible()) NativePlaytables.mount('album-tracks', els.list);
+  }
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
   }
   renderTrackModalTabs(els);
+  if (typeof decorateTrackModalSelection === 'function') decorateTrackModalSelection();
   refreshTrackModalPlaybackState();
   if (typeof attachSharedPlayer === 'function') attachSharedPlayer();
 }
@@ -2120,7 +2208,8 @@ function groupAlbumTracks(tracks) {
 }
 
 
-function buildTrackListHtml(tracks, album = null, totalLength = null) {
+function buildTrackListHtml(tracks, album = null, totalLength = null, evidenceRows = null) {
+  const privateRows = [];
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
@@ -2157,10 +2246,14 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         : duration;
       const trackValue = getAlbumTrackDisplayNumber(track, index);
       const trackRow = trackRowByPath.get(trackPath) || null;
+      const source = trackRow || track;
+      evidenceRows?.push(Object.freeze({track, source}));
+      privateRows.push({...source, track_ref: Object.hasOwn(source, 'track_ref') ? source.track_ref : track.path});
       const displayTitle = String(trackRow?.title || track.title || '').trim();
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
       return {
-        path: trackPath,
+        path: trackPath, inventory_track_ref: source.inventory_track_ref,
+        subjectRating: album?.read_only_subject ? source.rating : null, subjectLove: album?.read_only_subject ? source.love_tier : null,
         src,
         title: displayTitle,
         playbackTitle: String(track.title || '').trim(),
@@ -2192,6 +2285,18 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     )).join('');
   }
   const hasBonusDisc = componentGroups.some((group) => group.isBonus);
+  if (typeof NativePlaytables !== 'undefined') NativePlaytables.prepare('album-tracks', album, componentGroups, privateRows, () => {
+    const lease = getTrackModalSelectionLease(), overlay = document.getElementById('track-modal');
+    const retained = typeof mobilePageState !== 'undefined' && mobilePageState.pages.some(page => page.kind === 'album');
+    return getCurrentTrackModalAlbum() === album && isTrackModalSourceActionCurrent()
+      && (lease ? lease.isCurrent() && lease.canOpen() : Boolean(overlay?.isConnected && (!overlay.hidden || retained)));
+  }, () => {
+    const lease = getTrackModalSelectionLease();
+    if (lease) return lease.retainNavigation?.() || null;
+    const source = getTrackModalSourcePageOwner(), view = state.view;
+    return source ? source.isCurrent : () => state.view === view && album.source_readable !== false
+      && !(Object.hasOwn(album.allowed_actions || {}, 'can_read') && album.allowed_actions.can_read !== true);
+  });
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -2199,6 +2304,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+    selection: 'multiple', subjectTaste: Boolean(album?.read_only_subject),
 
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
@@ -2212,7 +2318,7 @@ function buildPlayerTrackPayload(track, album = null) {
   if (!track) return null;
   return {
     src: `/track?path=${encodeURIComponent(track.path)}`,
-    path: String(track.path || ''),
+    path: String(track.path || ''), inventory_track_ref: track.inventory_track_ref || null,
     title: track.title || 'Track',
     artist: track.artist || track.album_artist || '',
     albumArtist: track.album_artist || album?.album_artist || '',
@@ -2339,9 +2445,16 @@ function setAlbumPlaybackQueue(album, startingTrackPath) {
 }
 
 function peekNextQueuedTrack() {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) return ExplicitQueueRuntime.peek();
+  return peekNextOrdinaryQueuedTrack();
+}
+
+function peekNextOrdinaryQueuedTrack() {
   const queue = state.player.playbackQueue;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const currentPath = String(state.player.current?.path || '');
+  const playlistIndex = typeof playlistQueueNextIndex === 'function' ? playlistQueueNextIndex(queue, currentPath) : null;
+  if (playlistIndex !== null) return playlistIndex < 0 ? null : queue.tracks[playlistIndex];
   const currentIndex = queue.tracks.findIndex((track) => String(track.path || '') === currentPath);
   const resolvedIndex = currentIndex >= 0 ? currentIndex : Number(queue.currentIndex) || 0;
   const nextIndex = resolvedIndex + 1;
@@ -2352,8 +2465,18 @@ function peekNextQueuedTrack() {
 }
 
 function getNextQueuedTrack() {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) return ExplicitQueueRuntime.consume();
+  return getNextOrdinaryQueuedTrack();
+}
+
+function getNextOrdinaryQueuedTrack() {
   const queue = state.player.playbackQueue;
-  const nextTrack = peekNextQueuedTrack();
+  if (queue?.playlistId && typeof playlistQueueNextIndex === 'function') {
+    const index = playlistQueueNextIndex(queue, String(state.player.current?.path || ''));
+    if (index === null || index < 0) {state.player.playbackQueue = null; return null;}
+    queue.currentIndex = index; return queue.tracks[index];
+  }
+  const nextTrack = peekNextOrdinaryQueuedTrack();
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length || !nextTrack) {
     if (queue && Array.isArray(queue.tracks)) {
       const currentPath = String(state.player.current?.path || '');
@@ -2378,14 +2501,17 @@ function getNextQueuedTrack() {
 }
 
 function refreshTrackModalPlaybackState() {
-  const trackModal = document.getElementById('track-modal');
-  if (!trackModal || trackModal.hidden) return;
+  const trackModal = typeof getTrackModalContentRoot === 'function' ? getTrackModalContentRoot() : document.getElementById('track-modal');
+  if (!trackModal || (typeof isTrackModalContentVisible === 'function' ? !isTrackModalContentVisible() : trackModal.hidden)) return;
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
   const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
   const activeDuration = formatTrackDuration(playback.duration) || '0:00';
 
-  document.querySelectorAll('#track-modal [data-track-row-path]').forEach((row) => {
+  const selection = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
+  const rows = selection ? selection.dialog.querySelectorAll('[data-track-row-path]')
+    : document.querySelectorAll('#track-modal [data-track-row-path]');
+  rows.forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
@@ -2542,3 +2668,99 @@ async function confirmProblemSuggestions() {
     syncProblemSuggestionSelection();
   }
 }
+
+const DuplicateFolderRecoveryUI = (() => {
+  let active = null;
+  function mount(album, host, albumKey) {
+    active?.abort(); active = null;
+    if (!host || document.getElementById('app-shell')?.dataset?.duplicateRecoveryEnabled !== 'true'
+      || album?.allowed_actions?.['library.inventory.manage'] !== true
+      || trackModalPresentationRestrictions?.can_open_album_page === false) return;
+    const controller = new AbortController(), scope = TrackActionsRuntime.scope().token;
+    active = controller;
+    const panel = document.createElement('div');
+    panel.setAttribute('data-duplicate-folder-recovery', '');
+    controller.signal.addEventListener('abort', () => panel.remove(), {once: true});
+    host.append(panel); host.hidden = false;
+    let busy = false, keep = null, choices = null;
+    const current = () => !controller.signal.aborted && panel.isConnected
+      && !panel.closest('[hidden], [inert]')
+      && (typeof isTrackModalContentVisible !== 'function' || isTrackModalContentVisible())
+      && TrackActionsRuntime.scope().token === scope
+      && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey;
+    const button = (label, action, id, disabled = false) => ButtonComponent.renderButton({
+      label, variant: 'secondary', disabled,
+      attributes: {'data-duplicate-action': action, ...(id === undefined ? {} : {'data-duplicate-id': String(id)})},
+    });
+    const paint = () => {
+      if (!current()) return;
+      if (!choices) {panel.innerHTML = button('Manage duplicate copies', 'load', undefined, busy); return;}
+      panel.innerHTML = choices.sources.map(source => button(
+        keep === source.id ? `Keeping ${source.label}` : `Keep ${source.label}`, 'keep', source.id, busy)
+        + button(`Trash ${source.label}`, 'trash', source.id, busy || keep === null || keep === source.id)).join('')
+        + choices.operations.filter(op => op.state !== 'restored').map(op => button(
+          op.state === 'trashed' ? `Restore ${op.track_count} tracks` : 'Reconcile pending move',
+          op.state === 'trashed' ? 'restore' : 'reconcile', op.operation_id, busy)
+          + (op.state === 'pending_trash' ? button('Cancel pending move / restore', 'restore', op.operation_id, busy) : '')).join('')
+        + button('Refresh copies', 'load', undefined, busy);
+    };
+    const request = async (action, body) => {
+      if (!current()) throw Object.assign(new Error('Duplicate selection was superseded.'), {name: 'AbortError'});
+      const response = await PrivateUITransport.request(`/api/library/duplicate-folders/${action}`, {
+        method: 'POST', body, signal: controller.signal, isCurrent: current,
+      });
+      if (!current()) throw Object.assign(new Error('Duplicate selection was superseded.'), {name: 'AbortError'});
+      return response.data;
+    };
+    const load = async () => {
+      choices = await request('choices', {album_key: albumKey});
+      if (!Array.isArray(choices?.sources) || !Array.isArray(choices?.operations)) throw new Error('Invalid recovery response.');
+      if (!choices.sources.some(source => source.id === keep)) keep = null;
+    };
+    panel.addEventListener('click', async event => {
+      const target = event.target.closest('[data-duplicate-action]');
+      if (!target || !panel.contains(target) || busy || !current()) return;
+      const action = target.dataset.duplicateAction, id = target.dataset.duplicateId;
+      if (action === 'keep') {keep = Number(id); paint(); return;}
+      busy = true; paint();
+      let mutationStarted = false;
+      try {
+        if (action === 'load') await load();
+        else if (action === 'trash') {
+          if (!Number.isInteger(keep) || keep === Number(id)) return;
+          const body = {album_key: albumKey, keep_id: keep, remove_id: Number(id)};
+          const preview = await request('preview', body);
+          const accepted = await showAppConfirmDialog({title: 'Move duplicate copy to trash?',
+            message: `Keep ${preview.keep}. Move ${preview.remove} (${preview.track_count} tracks, ${preview.file_count} files) to recoverable trash. Nothing is permanently deleted.`,
+            acceptLabel: 'Move to trash', cancelLabel: 'Cancel', danger: true});
+          if (!accepted || !current()) return;
+          const command = {...body, fingerprint: preview.fingerprint, operation_id: crypto.randomUUID()};
+          mutationStarted = true;
+          await request('trash', command);
+          if (current()) {invalidateHydratedTrackModalAlbumDetails([album]); await load();}
+        } else if (action === 'restore' || action === 'reconcile') {
+          const operation = choices.operations.find(op => op.operation_id === id);
+          if (!operation) return;
+          const accepted = await showAppConfirmDialog({title: action === 'restore' ? 'Restore this copy?' : 'Reconcile this move?',
+            message: action === 'restore' ? 'Restore the copy to its original folder. Existing files will never be overwritten.'
+              : 'Check the saved operation and finish its original move only if the exact source is still unchanged.',
+            acceptLabel: action === 'restore' ? 'Restore' : 'Reconcile', cancelLabel: 'Cancel'});
+          if (!accepted || !current()) return;
+          mutationStarted = true;
+          await request(action, {operation_id: id});
+          if (current()) {invalidateHydratedTrackModalAlbumDetails([album]); await load();}
+        }
+        if (mutationStarted && current()) {
+          showToast('Duplicate copy updated. Refresh the album to see its current files.', 'info', 4500);
+        }
+      } catch (error) {
+        if (mutationStarted) choices = null;
+        if (current()) showToast(mutationStarted
+          ? 'The outcome is not confirmed. Refresh copies and reconcile the saved operation; do not repeat the move.'
+          : (error?.message || 'Duplicate recovery is unavailable.'), 'error', 6500);
+      } finally {busy = false; paint();}
+    }, {signal: controller.signal});
+    paint();
+  }
+  return Object.freeze({mount});
+})();

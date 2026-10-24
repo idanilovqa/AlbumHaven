@@ -21,6 +21,7 @@ UTILITY_TAB_ACTIONS = MappingProxyType({
     "appearance": "account.self.appearance.read",
 })
 ACTION_SELECTORS = MappingProxyType({
+    "integration.lastfm.scrobbles.submit": ("[data-recent-scrobble-retry]",),
     "library.media.read": (
         ".global-player", ".compact-player-shell", ".play-track-button",
     ),
@@ -67,6 +68,7 @@ ACTION_SELECTORS = MappingProxyType({
     "accounts.read": ('a[href="/admin/members"]',),
 })
 UI_ACTIONS = tuple(sorted({
+    "account.self.foobar.read", "account.self.foobar.write",
     *CAPABILITY_KEYS, *ACTION_SELECTORS, *UTILITY_TAB_ACTIONS.values(),
     *(action for actions in CAPABILITY_ACTIONS.values() for action in actions),
 }))

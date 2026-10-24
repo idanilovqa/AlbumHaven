@@ -8016,5 +8016,291 @@
       "gallery-sidebar-prefix-order"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-001 keeps explicit Queue on own signed-in Home",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-001"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-001"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-001",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-001"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-002 preserves explicit occurrence order and native queue timing",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-002"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-002"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-002",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-002"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-003 guards queue activation reorder and confirmed Clear",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-003"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-003"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-003",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-003"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-004 retains native Album and Artist inspection across Queue changes",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-004"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-004"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-004",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-004"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-005 preserves canonical selection and subject-owned taste",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-005"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-005"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-005",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-005"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-006 hides playback for readable missing occurrences",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-006"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-006"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-006",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-006"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-007 admits existing Playlist Inspect only for confirmed missing sources",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-007"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-007"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-007",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-007"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-008 preserves compact native responsive Playlist and Inspect composition",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-008"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-008"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-008",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-008"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-009 preserves native Period Choice anchoring keyboard and focus",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-009"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-009"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-009",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-009"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-010 creates selected Playlists only after explicit commit and current authority",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-010"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-010"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-010",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-010"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.home-feedback.config.js",
+    "project": "home-feedback-chromium",
+    "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+    "case": "FTC-HFP-FB-013 pins only fresh authorized friend playback without listen credit",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "home-feedback:ftc-hfp-fb-013"
+    ],
+    "filesystemScenarios": [
+      "generated-home-feedback-media"
+    ],
+    "expectedContracts": [
+      "ftc-hfp-fb-013"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-hfp-fb-013",
+      "filesystemCopy": "generated-home-feedback/ftc-hfp-fb-013"
+    },
+    "ownerApproval": "approved"
   }
 ]

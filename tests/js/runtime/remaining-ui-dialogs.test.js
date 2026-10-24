@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const {createNotificationDrawerHarness} = require('./notification-drawer-harness.cjs');
 
 const root = path.resolve(__dirname, '../../..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -95,7 +96,8 @@ test('cover lookup notifications use navigation cards, state labels, and shared 
  assert.ok(markup.indexOf("id='cover-lookup-drawer-clear'") < markup.indexOf('data-close-cover-lookup-drawer'));
   assert.match(drawer, /cover-lookup-task-card navigation-tree-item/);
   assert.match(drawer, /taskStateClass = status === 'failed'[^]*'is-failed'[^]*'is-running'[^]*'is-completed'/s);
-  assert.match(drawer, /cover-lookup-task-status-label \$\{taskStateClass\}/);
+  assert.match(drawer, /cover-lookup-task-status-label \$\{escapeHtml\(stateClass\)\}/);
+  assert.match(drawer, /markup: renderNotificationCard\(\{[^]*?stateClass: taskStateClass/);
   assert.match(drawer, /ui-button--icon[^>]*cover-lookup-task-retry[^>]*aria-label="Retry lookup"[^]*?<svg/);
   assert.doesNotMatch(drawer, /data-retry-cover-lookup-task="[^]*>Retry<\/button>/);
   assert.match(drawer, /ButtonComponent\.renderActionButton\(\{\s*icon: 'delete',\s*semantic: 'destructive',[^]*?className: 'cover-lookup-task-clear',[^]*?'data-clear-cover-lookup-task': task.id/);
@@ -110,4 +112,19 @@ test('cover lookup notifications use navigation cards, state labels, and shared 
   assert.match(css, /\.cover-lookup-task-card\.is-running[^]*\.cover-lookup-task-progress span[^}]*var\(--appearance-info/s);
   assert.match(css, /\.cover-lookup-task-card\.is-completed[^]*\.cover-lookup-task-progress span[^}]*var\(--appearance-success/s);
   assert.match(css, /\.cover-lookup-task-card\.is-failed[^]*\.cover-lookup-task-progress span[^}]*var\(--appearance-error/s);
+  const native = createNotificationDrawerHarness();
+  for (const [status, stateClass, label] of [['failed', 'is-failed', 'Lookup failed'],
+    ['running', 'is-running', 'Searching'], ['completed', 'is-completed', 'covers found']]) {
+    native.context.state.coverLookup.tasks = [{id: status, album: '<Album>', status, album_payload: {key: 'album'}}];
+    native.render();
+    const statusNode = native.bodyElement.querySelector('.cover-lookup-task-status-label');
+    assert.equal(statusNode.classList.contains(stateClass), true); assert.equal(statusNode.textContent, label);
+    assert.equal(native.bodyElement.querySelector('.cover-lookup-task-title').textContent, '<Album>');
+    assert.equal(native.bodyElement.querySelector('album'), null);
+  }
+  const host = native.document.createElement('div');
+  host.innerHTML = native.context.renderNotificationCard({title: '<Title>', typeLabel: '<Type>', statusLabel: '<Status>',
+    stateClass: 'is-failed" data-injected="yes'});
+  assert.equal(host.querySelector('[data-injected]'), null);
+  assert.equal(host.querySelector('.cover-lookup-task-status-label').textContent, '<Status>');
 });

@@ -14,6 +14,7 @@ const surfaces = [
   { config: 'playwright.cover-rescan.config.js', category: 'browserFunctional' },
   { config: 'playwright.lastfm-auto-timezone.config.js', category: 'browserFunctional' },
   { config: 'playwright.non-album-rescan.config.js', category: 'browserFunctional' },
+  { config: 'playwright.home-feedback.config.js', category: 'browserFunctional', testDirectory: 'tests/e2e/homeFeedback' },
   { config: 'playwright.component.config.js', category: 'component', testDirectory: 'tests/components' },
   { config: 'playwright.synthetic-large-library.config.cjs', category: 'performance', testDirectory: 'tests/e2e/syntheticLargeLibrary' },
   { config: 'playwright.utility-problematic-files.config.cjs', category: 'performance', testDirectory: 'tests/e2e/utilityProblematicFiles' },

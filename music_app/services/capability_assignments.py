@@ -29,6 +29,7 @@ ASSIGNABLE_CAPABILITY_KEYS = (
 )
 ROLE_LABELS = {key: key.title() for key in ROLE_PRESETS}
 CAPABILITY_LABELS = {
+    "capability.social": "Social",
     "capability.view": "View library", "capability.play": "Play music",
     "capability.edit": "Edit audio tags", "capability.change_covers": "Change covers",
     "capability.delete": "Delete covers and missing inventory",

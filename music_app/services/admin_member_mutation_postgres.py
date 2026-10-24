@@ -46,7 +46,7 @@ def lock_current_actor_session(connection: Any, *, actor_account_id: int,
         session_id = _positive_id(actor_session_id)
     except ValueError:
         raise RecentAuthenticationRequired("Recent authentication is required.") from None
-    rows = connection.execute(
+    cursor = connection.execute(
         """
         select id, account_id, authenticated_at, idle_expires_at,
                absolute_expires_at, revoked_at
@@ -54,7 +54,11 @@ def lock_current_actor_session(connection: Any, *, actor_account_id: int,
         where id = %s and account_id = %s
         for update
         """, (session_id, actor_account_id),
-    ).fetchall()
+    )
+    try:
+        rows = cursor.fetchall()
+    finally:
+        cursor.close()
     now = _aware_utc(clock())
     if len(rows) != 1 or not isinstance(rows[0], Mapping):
         raise RecentAuthenticationRequired("Recent authentication is required.")

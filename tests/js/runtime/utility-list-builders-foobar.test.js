@@ -121,7 +121,8 @@ test('buildUtilityIntegrationDetail shows supported Foobar guidance and unavaila
   assert.match(html, /Read setup instructions/);
   assert.match(html, /data-foobar-format-trigger/);
   assert.match(html, /Playback Statistics XML/);
-  assert.match(html, /Import is unavailable in this build/);
+  assert.match(html, /Legacy path and XML import controls are unavailable in this build/);
+  assert.match(html, /Open Foobar importer/);
   assert.match(html, /data-foobar-import/);
   assert.doesNotMatch(html, /Continuous Foobar sync|One-time import only/);
 

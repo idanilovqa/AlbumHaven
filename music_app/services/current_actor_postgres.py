@@ -129,10 +129,14 @@ class PostgresCurrentActorResolver:
                 authenticated_at=session.authenticated_at,
             )
         relationships = _library_relationships(payload.get("library_relationships"))
-        current_library_id = _positive_integer(
-            payload.get("current_library_id"), "current library id"
+        if "current_library_id" not in payload:
+            raise RuntimeError("Current actor current library id is invalid.")
+        library_value = payload["current_library_id"]
+        current_library_id = (
+            None if library_value is None
+            else _positive_integer(library_value, "current library id")
         )
-        if not any(
+        if current_library_id is not None and not any(
             item.library_id == current_library_id for item in relationships
         ):
             if payload.get("is_bootstrap_owner") is True:

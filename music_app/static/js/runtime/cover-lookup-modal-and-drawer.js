@@ -1096,6 +1096,11 @@ function getCoverLookupTaskElapsedLabel(task, nowMs) {
 function updateCoverLookupTaskElapsedLabels() {
   const body = document.getElementById('cover-lookup-drawer-body');
   if (!body || typeof body.querySelectorAll !== 'function') return;
+  if (hasActiveCoverLookupDrawerTextSelection(body)) {
+    const owner = notificationListOwners.get(body);
+    if (owner) owner.deferred = true;
+    return;
+  }
   const tasksById = new Map(
     (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
       .map((task) => [String(task?.id || '').trim(), task])
@@ -1186,25 +1191,6 @@ function hasActiveCoverLookupDrawerTextSelection(body) {
   );
 }
 
-function hasActiveCoverLookupDrawerAction(body) {
-  if (!body || typeof body.contains !== 'function') return false;
-  // Polling must not replace the anchor while a press is still a collapsed selection.
-  if (body.querySelector?.('.cover-lookup-task-open:active')) return true;
-  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
-  const focusedAction = activeElement && body.contains(activeElement) && activeElement.closest?.('.cover-lookup-task-actions')
-    ? activeElement
-    : null;
-  const hoveredAction = body.querySelector?.('.cover-lookup-task-actions :hover');
-  return [focusedAction, hoveredAction].some((action) => {
-    if (!action) return false;
-    const cancelButton = action.closest?.('[data-cancel-cover-lookup-task]');
-    if (!cancelButton) return true;
-    const taskId = cancelButton.getAttribute('data-cancel-cover-lookup-task');
-    const task = (state.coverLookup.tasks || []).find((candidate) => String(candidate?.id || '') === taskId);
-    return ['pending', 'running'].includes(String(task?.status || ''));
-  });
-}
-
 function findCoverLookupTaskOpenForSelectionNode(node) {
   const element = typeof node?.closest === 'function' ? node : node?.parentElement;
   return element?.closest?.('.cover-lookup-task-open') || null;
@@ -1223,6 +1209,216 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
+// The native drawer is the sole list owner. Sources supply current display facts;
+// their authenticated controllers keep read and mutation authority.
+const notificationSources = new Map();
+const notificationListOwners = new WeakMap();
+
+function orderNotificationCards(cards) {
+  const timestamp = value => {
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = typeof value === 'number' ? value : Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  return [...cards].sort((left, right) => {
+    const a = timestamp(left.createdAt), b = timestamp(right.createdAt);
+    return (a === null ? (b === null ? 0 : 1) : b === null ? -1 : b - a)
+      || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+  });
+}
+
+function renderNotificationCard({title, typeLabel, byline = '', statusLabel, stateClass = '', coverHtml,
+  actionsHtml = '', openAttributes = {}, elapsedLabel = '', elapsedClass = '', elapsedAttributes = {}, progress = null}) {
+  const attributes = values => Object.entries(values).map(([name, value]) => {
+    if (!/^(?:data-[a-z0-9-]+|aria-[a-z0-9-]+|role|tabindex)$/.test(name)) throw new TypeError('Unsupported notification attribute.');
+    return `${name}="${escapeHtml(value)}"`;
+  }).join(' ');
+  const amount = Number(progress), percent = Number.isFinite(amount) ? Math.max(0, Math.min(100, amount)) : 0;
+  return `<div class="cover-lookup-task-card navigation-tree-item ${escapeHtml(stateClass)}">
+    <div class="cover-lookup-task-open" ${attributes(openAttributes)}>
+      ${coverHtml || '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>'}
+      <span class="cover-lookup-task-copy">
+        <span class="cover-lookup-task-type">${escapeHtml(typeLabel)}</span>
+        <span class="cover-lookup-task-title">${escapeHtml(title)}</span>
+        <span class="cover-lookup-task-byline">${escapeHtml(byline)}</span>
+        <span class="cover-lookup-task-meta">
+          <span class="cover-lookup-task-status-label ${escapeHtml(stateClass)}">${escapeHtml(statusLabel)}</span>
+          <span class="cover-lookup-task-elapsed ${escapeHtml(elapsedClass)}" ${attributes(elapsedAttributes)} ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>
+        </span>
+      </span>
+    </div>
+    <div class="cover-lookup-task-actions">${actionsHtml}</div>
+    <div class="cover-lookup-task-progress" ${progress === null ? 'hidden' : ''} aria-hidden="true"><span style="width:${percent}%"></span></div>
+  </div>`;
+}
+
+function notificationDrawerFocusTarget(key) {
+  const body = document.getElementById('cover-lookup-drawer-body');
+  return [...(body?.children || [])].find(card => card.dataset.notificationKey === key)?.querySelector('.cover-lookup-task-open')
+    || document.querySelector?.('#cover-lookup-drawer [data-close-cover-lookup-drawer]')
+    || document.getElementById('cover-lookup-drawer-button');
+}
+
+function registerNotificationSource({name, scopeKey, isCurrent, onOpen, onShow} = {}) {
+  if (typeof name !== 'string' || !name.trim() || typeof scopeKey !== 'string' || !scopeKey.trim()
+    || typeof isCurrent !== 'function' || typeof onOpen !== 'function') throw new TypeError('A current notification scope and opener are required.');
+  const source = {name, scopeKey, isCurrent, onOpen, onShow, records: new Map(), status: 'idle', revision: 0};
+  const current = () => notificationSources.get(name) === source && isCurrent() === true;
+  notificationSources.set(name, source);
+  renderCoverLookupDrawer();
+  return Object.freeze({
+    replace(records, {status = 'ready'} = {}) {
+      if (!current()) return false;
+      if (!['idle', 'ready', 'empty', 'loading', 'error', 'denied', 'unavailable'].includes(status)) throw new TypeError('Unsupported notification status.');
+      const next = new Map();
+      for (const row of ['ready', 'loading'].includes(status) && Array.isArray(records) ? records : []) {
+        if (typeof row?.id !== 'string' || !row.id.trim() || next.has(row.id)) continue;
+        // Only same-origin paths and HTTPS avatars may enter the shared card.
+        const avatarUrl = typeof row.avatarUrl === 'string' && !/[\\\u0000-\u0020\u007f]/.test(row.avatarUrl)
+          && (/^\/(?!\/)/.test(row.avatarUrl) || /^https:\/\//i.test(row.avatarUrl)) ? row.avatarUrl : '';
+        next.set(row.id, Object.freeze({id: row.id, title: String(row.title || 'Friend request'),
+          byline: String(row.byline || ''), avatarUrl, createdAt: row.createdAt ?? null}));
+      }
+      source.records = next; source.status = status; source.revision++;
+      renderCoverLookupDrawer();
+      return true;
+    },
+    dispose() {
+      if (notificationSources.get(name) !== source) return;
+      notificationSources.delete(name);
+      source.records.clear();
+      renderCoverLookupDrawer();
+    },
+  });
+}
+
+function getRequestNotificationCards() {
+  const cards = [];
+  for (const [name, source] of notificationSources) {
+    if (source.isCurrent() !== true) {notificationSources.delete(name); source.records.clear(); continue;}
+    const message = {idle: 'Friend requests have not been loaded.', loading: 'Loading friend requests…', error: 'Friend requests could not be loaded.',
+      denied: 'You do not have access to friend requests.', unavailable: 'Friend requests are unavailable.'}[source.status];
+    if (message) cards.push({key: JSON.stringify([name, source.scopeKey]), createdAt: null, status: true,
+      markup: `<div class="notification-source-status">${buildOnPageAlertHtml({message,
+        severity: source.status === 'error' ? 'error' : 'info', role: source.status === 'error' ? 'alert' : 'status'})}</div>`,
+    });
+    for (const record of source.records.values()) {
+      const key = JSON.stringify([name, source.scopeKey, record.id]);
+      cards.push({key, createdAt: record.createdAt, source, id: record.id,
+        markup: renderNotificationCard({title: record.title, typeLabel: 'Friend request', byline: record.byline,
+          statusLabel: 'Pending response', stateClass: 'is-pending',
+          coverHtml: record.avatarUrl ? `<img class="cover-lookup-task-cover" src="${escapeHtml(record.avatarUrl)}" alt="">` : '',
+          openAttributes: {role: 'button', tabindex: '0', 'aria-label': `Open friend request from ${record.title}`,
+            'data-open-request-notification': key},
+        }),
+      });
+    }
+  }
+  return cards;
+}
+
+function renderNotificationList(body, records, {preserveInteraction = true} = {}) {
+  let owner = notificationListOwners.get(body);
+  if (!owner) {
+    owner = {records: [], deferred: false, queued: false};
+    notificationListOwners.set(body, owner);
+    const flush = () => {
+      if (!body.isConnected) {body.ownerDocument.removeEventListener('selectionchange', flush); return;}
+      if (!owner.deferred || owner.queued) return;
+      owner.queued = true;
+      Promise.resolve().then(() => {owner.queued = false; if (body.isConnected) renderCoverLookupDrawer();});
+    };
+    body.addEventListener('focusout', flush);
+    body.addEventListener('pointerup', flush);
+    body.addEventListener('pointerout', flush);
+    body.ownerDocument.addEventListener('selectionchange', flush);
+    const open = event => {
+      const target = event.target.closest?.('[data-open-request-notification]');
+      if (!target || !body.contains(target) || target.closest('[hidden], [inert]')) return;
+      if (event.type === 'keydown' && (!['Enter', ' '].includes(event.key) || event.repeat)) return;
+      if (event.type === 'click' && hasActiveCoverLookupDrawerTextSelection(body)) return;
+      event.preventDefault(); event.stopPropagation();
+      const key = target.getAttribute('data-open-request-notification');
+      const record = owner.records.find(card => card.key === key);
+      const source = record?.source;
+      if (!source || notificationSources.get(source.name) !== source || source.isCurrent() !== true || !source.records.has(record.id)) {
+        renderCoverLookupDrawer(); return;
+      }
+      if (source.onOpen(record.id, {parentSurface: '#cover-lookup-drawer', returnFocus: () => notificationDrawerFocusTarget(key)}) === false) {
+        renderCoverLookupDrawer();
+      }
+    };
+    body.addEventListener('click', open);
+    body.addEventListener('keydown', open);
+  }
+  owner.records = records;
+  const selected = preserveInteraction && hasActiveCoverLookupDrawerTextSelection(body);
+  const pressed = preserveInteraction && Boolean(body.querySelector('.cover-lookup-task-open:active'));
+  const deferText = selected || pressed;
+  owner.deferred = deferText;
+  const doc = body.ownerDocument, focused = doc.activeElement, focusWasInside = body.contains(focused);
+  const previous = new Map([...body.children].filter(card => card.dataset.notificationKey).map(card => [card.dataset.notificationKey, card]));
+  const syncAttributes = (target, source) => {
+    for (const attribute of [...target.attributes]) if (!source.hasAttribute(attribute.name)) target.removeAttribute(attribute.name);
+    for (const attribute of source.attributes) if (target.getAttribute(attribute.name) !== attribute.value) target.setAttribute(attribute.name, attribute.value);
+  };
+  body.setAttribute('role', 'list'); body.setAttribute('aria-label', 'Notifications');
+  let cursor = body.firstElementChild;
+  for (const record of orderNotificationCards(records)) {
+    let card = previous.get(record.key);
+    previous.delete(record.key);
+    if (!card || card.notificationMarkup !== record.markup) {
+      const template = doc.createElement('template'); template.innerHTML = record.markup;
+      const next = template.content.firstElementChild;
+      next.dataset.notificationKey = record.key; next.setAttribute('role', 'listitem');
+      if (card) {
+        syncAttributes(card, next);
+        if (record.status && !deferText && card.innerHTML !== next.innerHTML) card.innerHTML = next.innerHTML;
+        for (const selector of ['.cover-lookup-task-open', '.cover-lookup-task-type', '.cover-lookup-task-title', '.cover-lookup-task-byline',
+          '.cover-lookup-task-status-label', '.cover-lookup-task-elapsed', '.cover-lookup-task-progress', '.cover-lookup-task-progress span']) {
+          const target = card.querySelector(selector), source = next.querySelector(selector);
+          if (!target || !source) continue;
+          syncAttributes(target, source);
+          if (!deferText && !target.children.length && target.textContent !== source.textContent) target.textContent = source.textContent;
+        }
+        for (const selector of ['.cover-lookup-task-cover', '.cover-lookup-task-actions']) {
+          const target = card.querySelector(selector), source = next.querySelector(selector);
+          // Unchanged controls retain identity; obsolete actions retire even
+          // while unrelated notification text is selected.
+          if (target && source && target.outerHTML !== source.outerHTML) {target.parentNode.insertBefore(source, target); target.remove();}
+        }
+      } else {
+        if (deferText) continue;
+        card = next;
+      }
+      if (!deferText) card.notificationMarkup = record.markup;
+    }
+    if (!deferText && card !== cursor) body.insertBefore(card, cursor);
+    cursor = card.nextElementSibling;
+  }
+  // Revoked/removed records must disappear immediately, including their actions.
+  for (const card of previous.values()) card.remove();
+  for (const node of [...body.children]) if (!node.dataset.notificationKey) node.remove();
+  if (!records.length) {
+    const empty = doc.createElement('div'); empty.className = 'cover-lookup-drawer-empty';
+    empty.setAttribute('role', 'listitem'); empty.textContent = 'No notifications'; body.appendChild(empty);
+  }
+  if (focusWasInside && (!focused.isConnected || doc.activeElement !== focused) && !body.closest('[hidden], [inert]')) {
+    (focused.isConnected ? focused : notificationDrawerFocusTarget())?.focus?.({preventScroll: true});
+  }
+}
+
+function closeNotificationDrawer() {
+  state.coverLookup.drawerOpen = false;
+  renderCoverLookupDrawer();
+  stopCoverLookupPollingIfIdle();
+}
+
+if (typeof window !== 'undefined') {
+  window.AlbumHavenNotifications = Object.freeze({registerSource: registerNotificationSource});
+  if (typeof Event === 'function') window.dispatchEvent?.(new Event('albumhaven:notifications-ready'));
+}
+
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
@@ -1232,6 +1428,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const opening = state.coverLookup.drawerOpen && !drawer.classList.contains('is-open');
+  const requestCards = getRequestNotificationCards();
+  const requestCount = requestCards.filter(card => !card.status).length;
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -1246,11 +1445,12 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const activeCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
   const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
   const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
-  const badgeCount = activeCount + pendingNotificationCount;
+  const badgeCount = activeCount + pendingNotificationCount + requestCount;
   if (summary) {
     summary.textContent = [
       activeCount ? `${activeCount} active` : '',
       terminalCount ? `${terminalCount} finished` : '',
+      requestCount ? `${requestCount} friend ${requestCount === 1 ? 'request' : 'requests'}` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
   }
   badge.hidden = badgeCount <= 0;
@@ -1261,16 +1461,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  const preserveSelectedNotificationText = preserveInteraction
-    && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
-  if (!tasks.length) {
-    if (!preserveSelectedNotificationText) {
-      body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
-    }
-    syncCoverLookupElapsedTimer();
-    return;
-  }
-  const taskMarkup = tasks.map((task) => {
+  const taskCards = tasks.map((task) => {
     const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
@@ -1311,20 +1502,12 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const coverMarkup = coverUrl
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
-    return `
-      <div class="cover-lookup-task-card navigation-tree-item ${taskStateClass}">
-        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
-          ${coverMarkup}
-          <span class="cover-lookup-task-copy">
-            <span class="cover-lookup-task-title">${escapeHtml(albumTitle)}</span>
-            <span class="cover-lookup-task-byline">${escapeHtml(albumByline)}</span>
-            <span class="cover-lookup-task-meta">
-              <span class="cover-lookup-task-status-label ${taskStateClass}">${escapeHtml(statusLabel)}</span>
-              <span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>
-            </span>
-          </span>
-        </div>
-      <div class="cover-lookup-task-actions">
+    return {key: `cover-lookup:${String(task.id || '')}`, createdAt: task.created_at ?? null,
+      markup: renderNotificationCard({title: albumTitle, typeLabel: 'Cover search', byline: albumByline,
+        statusLabel, stateClass: taskStateClass, coverHtml: coverMarkup, progress,
+        openAttributes: {role: 'button', tabindex: '0', 'aria-label': openLabel, 'data-open-cover-lookup-task': task.id || ''},
+        elapsedLabel, elapsedClass: elapsedStateClass, elapsedAttributes: {'data-cover-lookup-task-elapsed': task.id || ''},
+        actionsHtml: `
         ${status === 'failed' && task?.album_payload
           ? `<button class="button ui-button ui-button--secondary ui-button--small ui-button--icon cover-lookup-task-retry" type="button" data-retry-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Retry lookup" title="Retry lookup"><svg class="ui-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 1 0 16 12M15.5 7V3.5M15.5 7H12"/></svg></button>`
           : ''}
@@ -1347,15 +1530,21 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
               attributes: { 'data-clear-cover-lookup-task': task.id || '' },
             })
             : ''}
-      </div>
-      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
-      </div>
-    `;
-  }).join('');
-  if (!preserveSelectedNotificationText) {
-    body.innerHTML = taskMarkup;
-  }
+        `,
+      }),
+    };
+  });
+  renderNotificationList(body, [...taskCards, ...requestCards], {preserveInteraction});
   syncCoverLookupElapsedTimer();
+  if (opening) for (const source of [...notificationSources.values()]) {
+    if (notificationSources.get(source.name) !== source || typeof source.onShow !== 'function' || source.isCurrent() !== true) continue;
+    const revision = source.revision;
+    const failed = () => {
+      if (notificationSources.get(source.name) !== source || source.revision !== revision || source.isCurrent() !== true) return;
+      source.records.clear(); source.status = 'error'; source.revision++; renderCoverLookupDrawer();
+    };
+    try { Promise.resolve(source.onShow()).catch(failed); } catch (_error) {failed();}
+  }
 }
 
 async function clearCompletedCoverLookupTasks() {
@@ -1942,6 +2131,7 @@ async function refreshCoverLookupGallery(showLoading = true) {
 
 async function openCoverLookupModal(album, options = {}) {
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.lookup')) return;
+  if (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(() => openCoverLookupModal(album, options))) return;
   coverLookupModalSession += 1;
   if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();

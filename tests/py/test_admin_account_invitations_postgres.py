@@ -38,6 +38,10 @@ class Cursor:
         return list(self.rows)
 
 
+    def close(self):
+        self.closed = True
+
+
 class Transaction:
     def __init__(self, connection):
         self.connection = connection

@@ -19,7 +19,7 @@ _pools = {}
 _lock = Lock()
 
 
-def pooled_connection(database_url: str, *, workload: str = "default"):
+def pooled_connection(database_url: str, *, workload: str = "default", timeout: float | None = None):
     if not isinstance(database_url, str) or not database_url.strip():
         raise RuntimeError("Postgres configuration is required.")
     normalized_workload = str(workload or "").strip()
@@ -41,7 +41,7 @@ def pooled_connection(database_url: str, *, workload: str = "default"):
             _pools[pool_key] = pool
     # The pool commits or rolls back before returning a connection; no retry of
     # an application mutation is introduced here.
-    return pool.connection()
+    return pool.connection() if timeout is None else pool.connection(timeout=timeout)
 
 
 def prewarm_connection_pool(database_url: str) -> None:

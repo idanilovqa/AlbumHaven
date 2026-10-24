@@ -166,6 +166,7 @@ outline: 1px solid var(--appearance-error, #df8f96) !important;
 outline-offset: -1px !important;
 box-shadow: none;
 }
+.loop-play-control-button:disabled,
 .ui-button:disabled,
 .ui-button[aria-disabled='true'],
 .action-button:disabled,

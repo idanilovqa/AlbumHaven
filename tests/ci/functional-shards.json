@@ -509,6 +509,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/playbackOwnership.spec.js",
+              "case": "FTC-PLAYBACK-LASTFM-010 two browsers hand off playback without duplicate paused listens",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
               "case": "FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order",
               "area": "playback"

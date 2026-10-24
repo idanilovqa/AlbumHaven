@@ -12,7 +12,10 @@ from music_app.services.lastfm import LastfmSession
 
 
 def payload(store, **changes):
-    entry = measured(store['own'], finalized=True, **changes)
+    entry = measured(store['own'], **{
+        'finalized': True, 'measured_listened_seconds': 60,
+        'max_measured_contiguous_seconds': 60, **changes,
+    })
     entry['library_track_id'] = str(store['own']['track_id'])
     return entry
 

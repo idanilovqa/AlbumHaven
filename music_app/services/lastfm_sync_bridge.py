@@ -10,6 +10,7 @@ from music_app.services.lastfm_listen_sync import (
     build_scrobble_result_updates,
     clear_pending_scrobble,
     load_lastfm_sync_state,
+    playback_scrobble_threshold_seconds,
     record_pending_scrobble,
 )
 
@@ -73,6 +74,8 @@ def record_playback_session_complete(
             entry[key] = payload.get(key)
         entry["finalized"] = payload.get("finalized", True)
         entry = normalize_measurement(entry, account_id=account_id, library_id=library_id)
+        threshold = playback_scrobble_threshold_seconds(entry.get("duration_seconds"))
+        entry["scrobble_eligible"] = threshold > 0 and entry["measured_listened_seconds"] >= threshold
         if not is_meaningful_listen_session(entry):
             return {"ok": True, "entry": None, "scrobbled": False, "scrobble_error": "", "ignored": True}, 200
         with measured_provider_guard(config, account_id=account_id, library_id=library_id,

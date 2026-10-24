@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test';
 
 const LASTFM_JOURNEY_PATHS = new Set([
+  '/playback/session/now-playing',
   '/playback/session/scrobble',
   '/playback/session/complete',
 ]);
@@ -16,6 +17,7 @@ function journeyTitles(events) {
 }
 
 export function observeLastfmJourneyRequests(page) {
+  const nowPlaying = [];
   const scrobbles = [];
   const completions = [];
   const inFlightRequests = new Map();
@@ -38,6 +40,8 @@ export function observeLastfmJourneyRequests(page) {
       inFlightRequests.set(request, lifecycle);
       if (pathname === '/playback/session/scrobble') {
         scrobbles.push(event);
+      } else if (pathname === '/playback/session/now-playing') {
+        nowPlaying.push(event);
       } else {
         completions.push(event);
       }
@@ -97,6 +101,7 @@ export function observeLastfmJourneyRequests(page) {
   page.on('requestfailed', onRequestFailed);
 
   return {
+    nowPlaying,
     scrobbles,
     completions,
     async waitForStableExactJourneys({

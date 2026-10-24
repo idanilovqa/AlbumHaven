@@ -57,6 +57,43 @@ function loadHelper(overrides = {}) {
   return { context, fetchCalls, beaconCalls };
 }
 
+test('audible measured frames qualify an open listen before pause or completion exactly once', async () => {
+  const track = { path: 'signal.flac', title: 'Signal', artist: 'Artist' };
+  const { context, fetchCalls } = loadHelper({
+    crypto: require('node:crypto'),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 31, duration: 60 }),
+    canEmitPlaybackSessionSideEffects: () => true,
+  });
+  context.state.player.current = track;
+  context.startListenSession(track);
+  context.beginListenSegment(0);
+  const session = context.state.player.listenSession;
+  session.duration_seconds = 60;
+  const role = { role: 'current', track };
+  context.recordMeasuredStreamingFrames(role, { frames: 29 * 48000 }, 48000);
+  assert.equal(await context.maybeScrobbleListenSession(session), false);
+  context.recordMeasuredStreamingFrames(role, { frames: 2 * 48000 }, 48000);
+  assert.equal(session.segments.length, 0);
+  assert.equal(session.segmentActive, true);
+  assert.equal(await context.maybeScrobbleListenSession(session), true);
+  assert.equal(await context.maybeScrobbleListenSession(session), false);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0][0], '/playback/session/scrobble');
+  const payload = JSON.parse(fetchCalls[0][1].body);
+  assert.equal(payload.measured_listened_seconds, 31);
+  assert.equal(payload.max_measured_contiguous_seconds, 31);
+  assert.equal(payload.finalized, false);
+});
+
+test('measured eligibility cannot borrow unrendered legacy segment time', () => {
+  const { context } = loadHelper();
+  assert.equal(context.canScrobbleListenSession({
+    duration_seconds: 60,
+    measurement: { total: 1, longest: 1 },
+    segments: [{ start_seconds: 0, end_seconds: 60 }],
+  }), false);
+});
+
 for (const stalledStage of ['headers', 'body']) {
   test(`listen request bounds a stalled ${stalledStage} and releases its claim drain`, async () => {
     const timers = new Map();

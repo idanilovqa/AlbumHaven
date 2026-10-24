@@ -63,8 +63,10 @@ export class GlobalPlayer extends BasePage {
     this.ownershipSurface = this.title;
     this.albumLink = page.locator('#player-album-link');
     this.timeline = page.locator('#player-timeline');
+    this.timelineWrap = this.player.locator('.player-timeline-wrap');
     this.waveformCanvas = page.locator(this.waveformCanvasSelector);
     this.time = page.locator('#player-time');
+    this.blockedStartToast = page.locator('#toast-layer .toast.is-error').filter({ hasText: 'Playback is active in another tab.' });
     this.readinessErrorToasts = page.locator('#toast-layer .toast.is-error.is-visible').filter({
       hasText: /readiness/i,
     });
@@ -588,6 +590,33 @@ export class GlobalPlayer extends BasePage {
         height: surfaceRectangle.height,
       },
     };
+  }
+
+  async readOwnershipMetadataTextBounds() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure mirrored text, not its full-width layout allocation
+    return this.player.evaluate(root => {
+      const bounds = rectangle => ({
+        left: rectangle.left, right: rectangle.right,
+        top: rectangle.top, bottom: rectangle.bottom,
+      });
+      const metadata = bounds(root.querySelector('.player-meta').getBoundingClientRect());
+      return ['#player-title', '#player-album-link'].map(selector => {
+        const element = root.querySelector(selector);
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        return {
+          selector,
+          text: bounds(range.getBoundingClientRect()),
+          clip: bounds(element.getBoundingClientRect()),
+          metadata,
+        };
+      });
+    });
+  }
+
+  async readIdleOverlayContent() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the rendered idle pseudo-element without changing player state
+    return this.timelineWrap.evaluate(element => getComputedStyle(element, '::after').content);
   }
 
   async readPlaybackSummary() {

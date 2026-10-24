@@ -599,6 +599,9 @@ def test_manual_measured_retry_counts_retryable_provider_failure_as_attempted(mo
 
     entry = {
         "id": "measured-retryable",
+        "duration_seconds": 120,
+        "measured_listened_seconds": 60,
+        "max_measured_contiguous_seconds": 60,
         "measurement_version": "rendered-pcm-v1",
         "device_id": "device-1",
         "session_id": "session-1",
@@ -677,6 +680,9 @@ def test_manual_measured_retry_persists_code_9_guard_and_does_not_resubmit(monke
 
     stored = {
         "id": "measured-reauthentication-required",
+        "duration_seconds": 120,
+        "measured_listened_seconds": 60,
+        "max_measured_contiguous_seconds": 60,
         "measurement_version": "rendered-pcm-v1",
         "device_id": "device-1",
         "session_id": "session-1",

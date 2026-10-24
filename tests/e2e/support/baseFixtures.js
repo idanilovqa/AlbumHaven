@@ -54,6 +54,7 @@ import { installContextRequestInterceptionGuard } from './requestInterceptionGua
 import { createManagedAppLifecycle } from '../helpers/managedAppLifecycle.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js';
+import { observeLastfmJourneyRequests } from '../actions/trackModalActions.js';
 import { controlLastfmProvider, readLastfmProviderState } from '../helpers/lastfmProviderHelpers.js';
 import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
 import { createAppearancePreferenceIsolation } from '../helpers/appearancePreferenceIsolation.js';
@@ -511,6 +512,29 @@ export const test = base.extend({
       await use(observer);
     } finally {
       observer.stop();
+    }
+  },
+  playbackOwnershipSessions: async ({ freshBrowserSession }, use, testInfo) => {
+    const sessions = [];
+    try {
+      for (let index = 0; index < 2; index += 1) {
+        const session = await freshBrowserSession.create();
+        sessions.push({ ...session,
+          navigationPanelActions: new NavigationPanelActions(new NavigationPanel(session.page, testInfo)),
+          globalPlayerActions: new GlobalPlayerActions(new GlobalPlayer(session.page, testInfo)),
+          settingsModalAppBarActions: new SettingsModalAppBarActions(new SettingsModalAppBar(session.page, testInfo)),
+          utilityTabBarActions: new UtilityTabBarActions(new UtilityTabBar(session.page, testInfo)),
+          utilityIntegrationsActions: new UtilityIntegrationsActions(new UtilityIntegrationsTab(session.page, testInfo)),
+          playbackEvidence: observePlaybackPcmTraffic(session.page),
+          listenJourney: observeLastfmJourneyRequests(session.page),
+        });
+      }
+      await use(sessions);
+    } finally {
+      for (const session of sessions) {
+        session.playbackEvidence.stop();
+        await session.listenJourney.stop();
+      }
     }
   },
 

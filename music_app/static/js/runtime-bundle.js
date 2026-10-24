@@ -31503,6 +31503,9 @@ function canScrobbleListenSession(session) {
   const duration = getListenSessionDuration(session);
   if (!duration) return false;
   const threshold = getListenScrobbleThreshold(duration);
+  if (session?.measurement) {
+    return session.measurement.total >= threshold || session.measurement.longest >= threshold;
+  }
   return totalListenedSeconds(session) >= threshold || longestListenedSegmentSeconds(session) >= threshold;
 }
 

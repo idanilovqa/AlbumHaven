@@ -287,6 +287,28 @@ test('TrackModalActions plays the named track without assuming its rendered row 
   assert.equal(clicked, true);
 });
 
+test('Last.fm journey observation keeps now-playing separate from durable completions', async () => {
+  const { observeLastfmJourneyRequests } = await import('../e2e/actions/trackModalActions.js');
+  const page = new EventEmitter();
+  const observer = observeLastfmJourneyRequests(page);
+  const request = {
+    method: () => 'POST',
+    url: () => 'http://127.0.0.1:4173/playback/session/now-playing',
+    postDataJSON: () => ({ title: 'Owned signal' }),
+  };
+  try {
+    page.emit('request', request);
+    page.emit('response', { request: () => request, status: () => 200, json: async () => ({ ok: true }) });
+    page.emit('requestfinished', request);
+    await observer.stop();
+    assert.deepEqual(observer.nowPlaying.map(event => event.request.title), ['Owned signal']);
+    assert.equal(observer.nowPlaying[0].status, 200);
+    assert.deepEqual(observer.completions, []);
+    assert.deepEqual(observer.scrobbles, []);
+  } finally { await observer.stop(); }
+  assert.equal(page.listenerCount('request'), 0);
+});
+
 test('Last.fm journey observation preserves request order for responses published after the pause UI flips and removes every listener', async () => {
   const { observeLastfmJourneyRequests } = await import('../e2e/actions/trackModalActions.js');
   const page = new EventEmitter();

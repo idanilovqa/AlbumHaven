@@ -388,6 +388,26 @@ require('node:test')('drawer page loads 50 summaries and retains its next cursor
   assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
 });
 
+require('node:test')('first-page refresh retains its next cursor for drawer pagination', async () => {
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        tasks: [{ id: 'newest', status: 'completed' }],
+        next_cursor: 'page-two',
+        total_count: 528,
+        active_count: 0,
+        finished_count: 528,
+      }),
+    }),
+  });
+
+  await context.loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
+
+  assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
+});
+
 require('node:test')('active-only polling merges updates without replacing loaded history', async () => {
   const requestedUrls = [];
   const { context } = createDrawerHarness({
@@ -543,6 +563,22 @@ require('node:test')('notification history mounts no more than 60 cards with two
     assert.equal((bodyElement.innerHTML.match(/class="cover-lookup-task-card /g) || []).length, 60);
     assert.equal((bodyElement.innerHTML.match(/class="cover-lookup-task-spacer"/g) || []).length, 2);
   }
+});
+
+require('node:test')('closing the notification drawer unmounts cards while retaining task summaries', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  Object.assign(context.state.coverLookup, {
+    drawerOpen: true,
+    tasks: [{ id: 'completed-task', status: 'completed', artist: 'Artist', album: 'Album' }],
+  });
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+  assert.match(bodyElement.innerHTML, /class="cover-lookup-task-card /);
+
+  context.state.coverLookup.drawerOpen = false;
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+
+  assert.equal(bodyElement.innerHTML, '');
+  assert.equal(context.state.coverLookup.tasks.length, 1);
 });
 
 require('node:test')('approaching drawer end serializes the next page request', async () => {
@@ -1173,6 +1209,9 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
+  assert.equal(bodyElement.innerHTML, '');
+  context.state.coverLookup.drawerOpen = true;
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
   assert.match(bodyElement.innerHTML, /data-open-cover-lookup-task="task-1"/);
   assert.match(bodyElement.innerHTML, />Art chosen<\/span>/);
   assert.equal(badgeElement.hidden, false);

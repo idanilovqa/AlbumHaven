@@ -1313,6 +1313,13 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
+  if (!state.coverLookup.drawerOpen) {
+    body.innerHTML = '';
+    state.coverLookup.taskRenderWindowStart = 0;
+    syncCoverLookupElapsedTimer();
+    return;
+  }
+
   const preserveSelectedNotificationText = preserveInteraction
     && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {
@@ -1954,7 +1961,7 @@ async function loadCoverLookupTasks(options = {}) {
     const missingActiveTask = activeOnly
       && Array.from(previousActiveTaskIds).some((taskId) => !incomingTaskIds.has(taskId));
     const nextTasks = mergeCoverLookupTaskSummaries(incomingTasks, requestMode);
-    if (requestMode === 'replace' || requestMode === 'append') {
+    if (requestMode !== 'active') {
       state.coverLookup.tasksNextCursor = String(data.next_cursor || '') || null;
     }
     const snapshot = JSON.stringify(nextTasks.map((task) => ({

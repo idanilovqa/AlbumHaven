@@ -142,8 +142,11 @@ test('failed search preserves the view', async () => {
 test('ordinary gallery refresh works without a browser host or optional draft navigation services', async () => {
   for (const browserHost of [undefined, {}]) {
     const {context, calls, pendingRequests} = createContext();
-    assert.equal(typeof context.window, 'undefined', 'the isolated gallery owner does not require window');
-    if (browserHost) context.window = browserHost;
+    if (browserHost === undefined) {
+      delete context.window;
+      assert.equal(typeof context.window, 'undefined', 'the isolated gallery owner does not require window');
+    } else context.window = browserHost;
+    assert.equal(context.window?.AlbumHavenSettingsNavigation, undefined);
     const refresh = context.fetchAndRender('/view-data', false, {preserveScroll: true});
     assert.equal(pendingRequests.length, 1);
     pendingRequests[0].resolveWith({artist_groups: []});

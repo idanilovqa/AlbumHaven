@@ -99,6 +99,7 @@ function createEngineHarness(options = {}) {
 
     postMessage(message, transfer = []) {
       this.messages.push({ message, transfer });
+      this.processor?.port.onmessage({ data: message });
       if (message.type === 'stop' && options.stopPostMessage) {
         options.stopPostMessage(message);
       }
@@ -115,6 +116,30 @@ function createEngineHarness(options = {}) {
       this.name = name;
       this.options = nodeOptions;
       this.port = new FakeMessagePort();
+      if (options.realProcessor) {
+        const port = this.port;
+        const processorContext = {
+          AudioWorkletProcessor: class {
+            constructor() {
+              this.port = { postMessage: (message) => port.events.push(message) };
+            }
+          },
+          Float32Array, Math, Number, Object, currentTime: 12.5, sampleRate: 48_000,
+          registerProcessor: (_name, Processor) => { port.processor = new Processor(); },
+        };
+        port.events = [];
+        vm.createContext(processorContext);
+        vm.runInContext(fs.readFileSync(path.join(repoRoot,
+          'music_app/static/js/audio-worklets/gapless-playback-processor.js'), 'utf8'), processorContext);
+        this.render = () => {
+          const output = [new Float32Array(128), new Float32Array(128)];
+          port.processor.process([], [output]);
+          return output;
+        };
+        this.deliverEvents = () => {
+          for (const event of port.events.splice(0)) port.dispatch(event);
+        };
+      }
       this.connections = [];
       this.disconnectCalls = 0;
       this.onprocessorerror = null;
@@ -2914,6 +2939,132 @@ test('playing replacement prepares a clean head and cuts over without clearing a
   assert.equal(started.streamId, replacement.streamId);
   assert.equal(harness.sent('promote').at(-1).streamId, replacement.streamId);
   assert.deepEqual([...harness.api.snapshot().diagnostics.activeRoles], ['current']);
+});
+
+for (const pauseAt of ['before-prepare', 'before-boundary', 'queued-boundary']) {
+  test(`pause cancels replacement at ${pauseAt} without changing resumed audible track`, async (t) => {
+    const harness = createEngineHarness({ realProcessor: true });
+    t.after(() => harness.api.stop());
+    const track = makeTrack('outgoing.flac');
+    await harness.api.start(track);
+    const outgoing = harness.sent('open')[0];
+    acceptMetadata(harness, outgoing);
+    receivePcmAndAssertEnqueue(harness, {
+      generation: outgoing.generation, streamId: outgoing.streamId,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+    const node = harness.nodes[0];
+    node.render();
+    node.deliverEvents();
+    receivePcmAndAssertEnqueue(harness, {
+      generation: outgoing.generation, streamId: outgoing.streamId, sequence: 1,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+    const starting = harness.api.start(makeTrack('replacement.flac')).catch(() => null);
+    const replacement = harness.sent('open').at(-1);
+    assert.notEqual(replacement.streamId, outgoing.streamId);
+    if (pauseAt !== 'before-prepare') {
+      acceptMetadata(harness, replacement);
+      receivePcmAndAssertEnqueue(harness, {
+        role: 1, generation: replacement.generation, streamId: replacement.streamId,
+        samples: new Array(48_000 * 2).fill(0.75),
+      });
+      receivePcmAndAssertEnqueue(harness, {
+        role: 1, generation: replacement.generation, streamId: replacement.streamId, sequence: 1,
+        samples: new Array(48_000 * 2).fill(0.75),
+      });
+      node.deliverEvents();
+      assert.equal(harness.engine.pendingSeek.prepareSent, true);
+    }
+    if (pauseAt === 'queued-boundary') {
+      assert.ok(node.render()[0].every((sample) => sample === 0.75));
+      assert.ok(node.port.events.some((event) => event.type === 'seek-boundary'));
+    }
+    const retainedTime = harness.api.snapshot().currentTime;
+    await harness.api.pause();
+    assert.equal(harness.engine.pendingSeek, null,
+      'pause must cancel a pending replacement before its delayed cutover');
+    node.render();
+    node.deliverEvents();
+    const restored = harness.sent('open').at(-1);
+    if (restored.streamId !== replacement.streamId) {
+      assert.equal(restored.startFrame, Math.round(retainedTime * 48_000));
+      acceptMetadata(harness, restored);
+    }
+    await harness.api.resume();
+    if (restored.streamId !== replacement.streamId) {
+      receivePcmAndAssertEnqueue(harness, {
+        generation: restored.generation, streamId: restored.streamId,
+        samples: new Array(48_000 * 2).fill(0.25),
+      });
+    }
+    const output = node.render();
+    node.deliverEvents();
+    assert.equal(harness.engine.roles.current?.track.path, track.path,
+      'cancelled replacement must not become the engine current track');
+    assert.ok(output[0].every((sample) => sample === 0.25),
+      'resume must render outgoing PCM, never cancelled replacement PCM or silence');
+    await starting;
+  });
+}
+
+test('explicit Play after lease loss reopens the real current stream at its retained audible offset', async () => {
+  const harness = createEngineHarness({ realProcessor: true });
+  const { context } = harness;
+  const track = makeTrack('lease-recovery.flac');
+  Object.assign(context, {
+    AbortController,
+    getPlayerPlaybackSnapshot: harness.api.snapshot,
+    setInterval: () => 0,
+    clearInterval: () => {},
+    fetch: async (url) => ({ ok: true, json: async () => url === '/playback/refs'
+      ? { protocol: 1, expiresAt: '2099-10-24T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] }
+      : { protocol: 1, claimToken: 'fresh-claim', expiresAt: new Date(harness.dateNow() + 30_000).toISOString(),
+        is_playing_elsewhere: false, is_playing_here: false } }),
+  });
+  for (const filename of ['playback-ownership-helpers.js', 'player-loop-playback.js']) {
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(enginePath), filename), 'utf8'), context);
+  }
+  context.updatePlayerUi = () => {};
+  context.state.player.current = track;
+  context.state.player.ownership = { tabId: 'lease-client', requestVersion: 0, activeClaim: null };
+  try {
+    assert.equal(await context.claimPlaybackOwnership(track), true);
+    await harness.api.start(track, { startSeconds: 12 });
+    const initial = harness.sent('open')[0];
+    acceptMetadata(harness, initial);
+    receivePcmAndAssertEnqueue(harness, { generation: initial.generation, streamId: initial.streamId,
+      samples: new Array(48_000 * 2).fill(0.25) });
+    assert.ok(harness.nodes[0].render()[0].every(sample => sample === 0.25));
+    harness.nodes[0].deliverEvents();
+    const retainedSeconds = harness.api.snapshot().currentTime;
+    assert.ok(retainedSeconds >= 12);
+    context.losePlaybackOwnership();
+    await harness.settle();
+    assert.equal(harness.api.snapshot().paused, true);
+    assert.equal(harness.engine.roles.current, null);
+    await context.handlePlaybackOwnershipEvent();
+    assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+    await harness.settle();
+    assert.equal(context.isActivePlaybackOwner(), true);
+    assert.equal(harness.engine.roles.current?.track.path, track.path,
+      'explicit Play must recreate a real current decoder, not resume an empty engine');
+    const reopened = harness.sent('open').at(-1);
+    assert.equal(reopened.startFrame, Math.round(retainedSeconds * 48_000));
+    const socket = harness.sockets.at(-1);
+    socket.receive({ type: 'metadata', generation: reopened.generation, streamId: reopened.streamId,
+      role: 'current', sampleRate: 48_000, channels: 2, provisionalTotalFrames: 11_520_000,
+      requestedStartFrame: reopened.startFrame, timelineStartFrame: reopened.startFrame });
+    socket.receive(createPcmMessage({ generation: reopened.generation, streamId: reopened.streamId,
+      samples: new Array(48_000 * 2).fill(0.75) }));
+    assert.ok(harness.nodes.at(-1).render()[0].every(sample => sample === 0.75),
+      'the recovered current stream must render actual non-silent PCM');
+    harness.nodes.at(-1).deliverEvents();
+    assert.ok(harness.api.snapshot().currentTime >= retainedSeconds);
+  } finally {
+    clearTimeout(context.getPlaybackOwnershipState().expiryTimer);
+    await harness.api.stop();
+  }
 });
 
 test('prepared replacement preserves its buffered outgoing cushion while retaining head priority', async () => {

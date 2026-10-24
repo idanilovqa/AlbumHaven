@@ -1639,6 +1639,14 @@ async function pauseStreamingPlayback() {
   if (!engine.context || !engine.node) return;
   engine.snapshot.paused = true;
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
+  if (engine.pendingSeek?.kind === 'replacement') {
+    const currentTrack = engine.roles.current?.track;
+    const startSeconds = engine.snapshot.currentTime;
+    settlePendingStreamingCutover();
+    engine.pendingSeek = null;
+    // Reconfigure the clock too: the replacement boundary may already be queued.
+    return startStreamingTrack(currentTrack, { startSeconds, autoplay: false });
+  }
   await engine.context.suspend();
   if (engine.startRequestId === startRequestId && engine.mode !== 'error') engine.mode = 'paused';
 }
@@ -1867,6 +1875,7 @@ function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
 
 async function cleanupStreamingResources(reason, {
   preserveError = false,
+  preserveSnapshot = false,
   socketAlreadyClosed = false,
 } = {}) {
   const engine = streamingEngineState();
@@ -1903,11 +1912,11 @@ async function cleanupStreamingResources(reason, {
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
   engine.diagnostics.activeRoles = [];
   Object.assign(engine.snapshot, {
-    currentTime: 0,
-    duration: 0,
+    currentTime: preserveSnapshot ? engine.snapshot.currentTime : 0,
+    duration: preserveSnapshot ? engine.snapshot.duration : 0,
     paused: true,
     ended: false,
-    src: '',
+    src: preserveSnapshot ? engine.snapshot.src : '',
     readyState: 0,
   });
   const cleanupErrors = [];
@@ -1980,8 +1989,8 @@ function beginStreamingCleanup(reason, options = {}) {
   return cleanup;
 }
 
-async function stopStreamingPlayback(reason = 'stopped') {
-  return beginStreamingCleanup(reason);
+async function stopStreamingPlayback(reason = 'stopped', options = {}) {
+  return beginStreamingCleanup(reason, options);
 }
 function getStreamingPlaybackSnapshot() {
   const engine = streamingEngineState();

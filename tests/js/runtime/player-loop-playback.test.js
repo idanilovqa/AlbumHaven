@@ -322,6 +322,26 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
+test('lease loss renders unavailable status instead of claiming another tab owns playback', () => {
+  const timelineWrap = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
+  const time = new FakeElement();
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const player = new FakeElement();
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ player, timeline, time, play }),
+    stopStreamingPlayback: async () => {},
+    clearTimeout: () => {},
+  });
+  const ownershipPath = path.join(path.dirname(helperPath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), context, { filename: ownershipPath });
+  context.losePlaybackOwnership();
+  assert.match(time.textContent, /unavailable/i);
+  assert.doesNotMatch(play.getAttribute('aria-label'), /another tab/i);
+  assert.doesNotMatch(timelineWrap.getAttribute('data-idle-label'), /another tab/i);
+  assert.equal(play.disabled, true, 'unavailable playback must not become authorized by a label change');
+});
+
 test('visible play control and global Space dispatch pause and resume through the streaming engine', async () => {
   const calls = [];
   const snapshot = {

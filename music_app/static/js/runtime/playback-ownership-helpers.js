@@ -55,7 +55,7 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   ownership.lockStatus = 'locked';
   ownership.blockedReason = 'playback_unavailable';
   if (typeof stopStreamingPlayback === 'function') {
-    void Promise.resolve(stopStreamingPlayback(reason)).catch(() => {});
+    void Promise.resolve(stopStreamingPlayback(reason, { preserveSnapshot: true })).catch(() => {});
   }
   if (updateUi && typeof updatePlayerUi === 'function') updatePlayerUi();
 }

@@ -157,6 +157,9 @@ function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
+  const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
+    && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
+  const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
@@ -182,7 +185,7 @@ function updatePlayerUi() {
     els.time.textContent = state.player.loopActive
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : lockedByAnotherTab
-      ? 'Playing in another tab'
+      ? blockedLabel
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   els.loopActions?._loopActionController?.update({
@@ -194,14 +197,16 @@ function updatePlayerUi() {
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
+    els.play.setAttribute('aria-label', lockedByAnotherTab
+      ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
+      : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
   if (els.timeline?.parentElement) {
     els.timeline.parentElement.classList.toggle('is-idle', !hasTrack || lockedByAnotherTab);
-    els.timeline.parentElement.setAttribute('data-idle-label', lockedByAnotherTab ? 'Playing in another tab' : 'Nothing is playing');
+    els.timeline.parentElement.setAttribute('data-idle-label', lockedByAnotherTab ? blockedLabel : 'Nothing is playing');
   }
   if (els.loopRegion) els.loopRegion.hidden = !state.player.loopActive;
   if (els.loopStartHandle) els.loopStartHandle.hidden = !state.player.loopActive;
@@ -830,6 +835,11 @@ function togglePlayerPlayback(options = {}) {
       if (typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) return false;
       if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
       pendingPlayerPlaybackHandoff = null;
+      if (playback.mode === 'stopped') {
+        return Boolean(await startStreamingTrack(track, {
+          startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),
+        }));
+      }
       if (playback.ended && typeof seekStreamingPlayback === 'function') await seekStreamingPlayback(0);
       if (selectionToken !== playerTrackSelectionToken) return false;
       return resumeStreamingPlayback();

@@ -157,6 +157,32 @@ def _persistence_upload_length(request,*,enhanced):
     return declared
 
 
+async def _temporary_upload_options(request,command):
+    retain=_one_header(request,'x-albumhaven-retain-source')
+    stored=_one_header(request,'x-albumhaven-retained-source')
+    if retain not in (None,'1'):
+        raise _Invalid()
+    enhanced=command.mapping_name==prepare_command.ENHANCED_MAPPING
+    if stored is None:
+        return _persistence_upload_length(request,enhanced=enhanced),retain=='1',None
+    if (not prepare_command._hex(stored) or request.scope.get('query_string',b'')!=b''
+            or _one_header(request,'content-encoding') is not None
+            or _one_header(request,'content-type',required=True)!='application/octet-stream'
+            or _one_header(request,'content-length') not in (None,'0')):
+        raise _Invalid()
+    length=_integer(_one_header(request,'x-album-haven-foobar-bytes',required=True))
+    if not (100 if enhanced else 1)<=length<=(service_owner.enhanced_upload.MAX_UPLOAD_BYTES if enhanced else MAX_INPUT_BYTES):
+        raise _Invalid()
+    async def empty():
+        async for chunk in request.stream():
+            if chunk:
+                raise _Invalid()
+    await asyncio.wait_for(empty(),timeout=10)
+    identity=service_owner.temporary_source.TemporarySourceIdentity(command.source_ref,command.job_ref,
+        command.mapping_name,stored,length)
+    return length,False,identity
+
+
 async def _json_body(request,*,kind=None):
     length=_content(request,upload=False)
     if length is not None and not 1<=length<=MAX_COMMAND_BYTES:
@@ -570,12 +596,13 @@ async def _run_job(request,kind):
             value=_command_json(raw.encode('ascii'),kind='job')
             command=_job_command(value)
             enhanced=command.mapping_name==prepare_command.ENHANCED_MAPPING
-            declared=_persistence_upload_length(request,enhanced=enhanced)
+            declared,retain,stored=await _temporary_upload_options(request,command)
             ticket=service.begin_job(context=context,constraints=constraints,command=command,
                 inventory_sha256=value['inventory_sha256'],review_sha256=value['review_sha256'],
-                length=declared,resume=kind=='resume')
-            await asyncio.wait_for((_enhanced_upload_body if enhanced else _upload)(request,service,ticket),
-                timeout=service_owner.enhanced_upload.MAX_UPLOAD_SECONDS if enhanced else 30)
+                length=declared,resume=kind=='resume',retain_source=retain,retained_identity=stored)
+            if stored is None:
+                await asyncio.wait_for((_enhanced_upload_body if enhanced else _upload)(request,service,ticket),
+                    timeout=service_owner.enhanced_upload.MAX_UPLOAD_SECONDS if enhanced else 30)
             await _job_identity(request,identity)
             if _ui_context(request)!=ui_ref:
                 raise SourceStale()
@@ -898,10 +925,12 @@ async def _run_review(request,kind):
                 value.get('observation_after'),raw_field)
             review_owner.validate_review_request(command)
             enhanced=command.mapping_name==prepare_command.ENHANCED_MAPPING
-            declared=_persistence_upload_length(request,enhanced=enhanced)
-            ticket=service.begin_review(context=context,constraints=constraints,request=command,length=declared)
-            await asyncio.wait_for((_enhanced_upload_body if enhanced else _upload)(request,service,ticket),
-                timeout=service_owner.enhanced_upload.MAX_UPLOAD_SECONDS if enhanced else 30)
+            declared,retain,stored=await _temporary_upload_options(request,command)
+            ticket=service.begin_review(context=context,constraints=constraints,request=command,length=declared,
+                retain_source=retain,retained_identity=stored)
+            if stored is None:
+                await asyncio.wait_for((_enhanced_upload_body if enhanced else _upload)(request,service,ticket),
+                    timeout=service_owner.enhanced_upload.MAX_UPLOAD_SECONDS if enhanced else 30)
             await _job_identity(request,identity)
             if _ui_context(request)!=ui_ref:
                 raise SourceStale()
@@ -1945,3 +1974,46 @@ async def foobar_account_maintenance(request: Request):
             outcome_uncertain=dispatched),marker,503)
     finally:
         if service is not None and ticket is not None: service.abandon(ticket)
+
+
+@router.post('/integrations/foobar/account/temporary-source/status')
+async def foobar_account_temporary_source_status(request: Request):
+    protocol='foobar_temporary_source_v1'
+    service=ticket=None
+    ui_ref=None
+    try:
+        context,constraints,identity=await _authorize(request)
+        ui_ref=_ui_context(request)
+        service=getattr(request.app.state,'foobar_account_import_service',None)
+        if type(service) is not service_owner.FoobarImportHandle:
+            raise SourceUnavailable()
+        value=await asyncio.wait_for(_json_body(request),timeout=10)
+        if set(value)!={'version','source_ref','job_ref'} or value['version']!=protocol:
+            raise _Invalid()
+        ticket=service.begin_temporary_status(context=context,constraints=constraints,
+            source_ref=value['source_ref'],job_ref=value['job_ref'])
+        delivery=await asyncio.wait_for(_delivery(request,service,ticket),timeout=15)
+        await _job_identity(request,identity)
+        if _ui_context(request)!=ui_ref:
+            raise SourceStale()
+        if delivery.kind.value!='temporary-status' or delivery.outcome.value!='success':
+            raise SourceUnavailable()
+        result=delivery.receipt
+        if type(result) is not service_owner.temporary_source.TemporarySourceStatus:
+            raise SourceUnavailable()
+        item=result.identity
+        source=None if item is None else dict(source_ref=item.source_ref,job_ref=item.job_ref,
+            mapping_name=item.mapping_name,upload_sha256=item.upload_sha256,
+            byte_length=item.byte_length,expires_at=result.expires_at)
+        return _ui_response(dict(protocol=protocol,source=source),ui_ref)
+    except HTTPException as error:
+        return _ui_response(dict(protocol=protocol,error='authentication_required' if error.status_code==401 else 'forbidden'),None,error.status_code)
+    except (_Invalid,prepare_command.PrepareInvalid):
+        return _ui_response(dict(protocol=protocol,error='invalid_import_request'),ui_ref,400)
+    except SourceStale:
+        return _ui_response(dict(protocol=protocol,error='stale_import'),ui_ref,409)
+    except Exception:
+        return _ui_response(dict(protocol=protocol,error='unavailable'),ui_ref,503)
+    finally:
+        if service is not None and ticket is not None:
+            service.abandon(ticket)

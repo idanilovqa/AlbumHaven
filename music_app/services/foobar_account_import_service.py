@@ -23,6 +23,7 @@ from . import foobar_account_history_postgres as history
 from . import foobar_account_history_native as history_native
 from . import foobar_account_track_evidence as track_evidence
 from . import foobar_account_import_maintenance as maintenance
+from . import foobar_account_temporary_source as temporary_source
 from . import foobar_enhanced_upload as enhanced_upload
 from . import foobar_account_enhanced_review as enhanced_review
 from . import foobar_enhanced_raw_windows as enhanced_windows
@@ -154,6 +155,7 @@ class _Kind(Enum):
     MAINTENANCE = "maintenance"
     REVIEW = "review"
     PERSONAL_CHANGE = "personal-changes"
+    TEMPORARY_STATUS = "temporary-status"
 
 
 class _Outcome(Enum):
@@ -252,10 +254,66 @@ class _Operation:
     continuation_review: object | None = None
     personal_review: object | None = None
     enhanced_channel: object | None = None
+    retain_source: bool = False
+    retained_identity: object | None = None
+    retained_loaded: bool = False
+    retention_attempted: bool = False
+
+
+def _retain_raw_source(owner,operation,*,payload=None,artifact=None):
+    if (not owner.retain_raw_enabled or not operation.retain_source
+            or operation.retained_identity is not None or operation.retention_attempted):
+        return
+    operation.retention_attempted=True
+    command=(operation.command.command if operation.kind is _Kind.JOB else operation.command)
+    def chunks():
+        if artifact is not None:
+            with artifact.path.open('rb') as stream:
+                while chunk:=stream.read(temporary_source.CHUNK_BYTES):
+                    yield chunk
+        else:
+            for offset in range(0,len(payload),temporary_source.CHUNK_BYTES):
+                yield payload[offset:offset+temporary_source.CHUNK_BYTES]
+    from hashlib import sha256
+    identity=temporary_source.TemporarySourceIdentity(command.source_ref,command.job_ref,
+        command.mapping_name,artifact.sha256 if artifact is not None else sha256(payload).hexdigest(),
+        artifact.byte_length if artifact is not None else len(payload))
+    try:
+        temporary_source.save_temporary_source(owner.database_url,operation.context,identity=identity,
+            chunks=chunks(),constraints=operation.constraints,cancelled=operation.job_cancel.is_set)
+    except Exception:
+        # Optional retention failure never retries or blocks the existing import.
+        # Status later reports actual durable availability, not presumed save.
+        pass
 
 
 def _call_once(owner,operation):
     """One genuine chain invocation; every native context exits before return."""
+    if operation.retained_identity is not None and not operation.retained_loaded:
+        with temporary_source.materialize_temporary_source(owner.database_url, operation.context,
+                identity=operation.retained_identity, constraints=operation.constraints,
+                cancelled=operation.job_cancel.is_set) as artifact:
+            operation.retained_loaded=True
+            try:
+                if _enhanced_operation(operation.kind,operation.command):
+                    with enhanced_windows.open_enhanced_raw_index(artifact,
+                            logical_capacity_bytes=owner.intake_capacity.logical_bytes-review.REVIEW_HOLD_BYTES,
+                            cancelled=operation.job_cancel.is_set) as upload:
+                        operation.indexed_upload=upload
+                        try:
+                            return _call_once(owner,operation)
+                        finally:
+                            operation.indexed_upload=None
+                with artifact.path.open('rb') as stream:
+                    while chunk:=stream.read(temporary_source.CHUNK_BYTES):
+                        operation.intake.append(chunk)
+                operation.intake.finish()
+                return _call_once(owner,operation)
+            finally:
+                operation.retained_loaded=False
+    if (operation.kind in (_Kind.JOB,_Kind.REVIEW) and operation.intake is not None
+            and operation.intake._payload is not None):
+        _retain_raw_source(owner,operation,payload=operation.intake._payload)
     phase_capacity=(FoobarIntakeCapacity(owner.intake_capacity.logical_bytes-review.REVIEW_HOLD_BYTES)
                     if operation.job_request is not None else owner.intake_capacity)
     if (operation.kind in (_Kind.JOB,_Kind.REVIEW)
@@ -264,6 +322,7 @@ def _call_once(owner,operation):
         # Only this settled worker owns the temporary artifact and index.
         # Neither is persisted with durable imported evidence/checkpoints.
         with enhanced_upload.staged_enhanced_upload(operation.enhanced_channel) as artifact:
+            _retain_raw_source(owner,operation,artifact=artifact)
             with enhanced_windows.open_enhanced_raw_index(artifact,
                     logical_capacity_bytes=phase_capacity.logical_bytes,
                     cancelled=operation.job_cancel.is_set) as upload:
@@ -299,6 +358,17 @@ def _call_once(owner,operation):
         receipt=job_worker.run_foobar_job(owner,operation)
         if type(receipt) is not job_worker.FoobarJobProgress:
             raise SourceUnavailable()
+        if owner.retain_raw_enabled and receipt.phase=='completed' and not receipt.uncertain:
+            try:
+                temporary_source.remove_completed_temporary_source(owner.database_url,operation.context,
+                    source_ref=receipt.command.source_ref,job_ref=receipt.command.job_ref,
+                    constraints=operation.constraints)
+            except Exception:
+                pass  # Expiry remains fixed; cleanup retries through janitor only.
+    elif operation.kind is _Kind.TEMPORARY_STATUS:
+        receipt=temporary_source.temporary_source_status(owner.database_url,operation.context,
+            source_ref=operation.command.source_ref,job_ref=operation.command.job_ref,
+            constraints=operation.constraints)
     elif operation.kind is _Kind.MAINTENANCE:
         receipt=maintenance.maintain_foobar_source(owner.database_url,operation.context,
             request=operation.command,constraints=operation.constraints)
@@ -568,16 +638,17 @@ class FoobarImportHandle:
     def finish_prepare(self,ticket):
         self.owner.intake_action(self,ticket,finish=True)
 
-    def begin_job(self,*,context,constraints,command,inventory_sha256,review_sha256,length,resume=False):
+    def begin_job(self,*,context,constraints,command,inventory_sha256,review_sha256,length,resume=False,retain_source=False,retained_identity=None):
         jobs._command(command)
         if (not prepare_command._hex(inventory_sha256) or not prepare_command._hex(review_sha256)
                 or type(resume) is not bool):
             raise prepare_command.PrepareInvalid()
         if command.mapping_name==prepare_command.ENHANCED_MAPPING:
-            if inventory_sha256!=prepare.NO_LIBRARY_INVENTORY_SHA256:
+            if (command.original_matching_library_id is None
+                    and inventory_sha256!=prepare.NO_LIBRARY_INVENTORY_SHA256):
                 raise prepare_command.PrepareInvalid()
             request=job_worker.FoobarJobRequest(command,inventory_sha256,resume,review_sha256)
-            return self.owner.begin(self,_Kind.JOB,context,constraints,request,length)
+            return self.owner.begin(self,_Kind.JOB,context,constraints,request,length,retain_source=retain_source,retained_identity=retained_identity)
         charge=known_prepare_data_charge(self.owner.limits,length)
         if (charge.total+2*jobs.JOB_PHASE_BYTES+review.REVIEW_HOLD_BYTES>self.owner.limits.total_logical_bytes
                 or prepare.window.indexed_upload_intake_bytes(length)+review.REVIEW_HOLD_BYTES+8192
@@ -585,12 +656,12 @@ class FoobarImportHandle:
                     >self.owner.limits.intake_bytes):
             raise SourceUnavailable()
         request=job_worker.FoobarJobRequest(command,inventory_sha256,resume,review_sha256)
-        return self.owner.begin(self,_Kind.JOB,context,constraints,request,length)
+        return self.owner.begin(self,_Kind.JOB,context,constraints,request,length,retain_source=retain_source,retained_identity=retained_identity)
 
-    def begin_review(self,*,context,constraints,request,length):
+    def begin_review(self,*,context,constraints,request,length,retain_source=False,retained_identity=None):
         review.validate_review_request(request)
         if request.mapping_name==prepare_command.ENHANCED_MAPPING:
-            return self.owner.begin(self,_Kind.REVIEW,context,constraints,request,length)
+            return self.owner.begin(self,_Kind.REVIEW,context,constraints,request,length,retain_source=retain_source,retained_identity=retained_identity)
         charge=known_prepare_data_charge(self.owner.limits,length)
         if (charge.total+2*jobs.JOB_PHASE_BYTES+review.REVIEW_HOLD_BYTES
                     +prepare.CONFLICT_REVIEW_BYTES+prepare.PROBLEM_CONTROL_BYTES+review.DETAIL_HOLD_BYTES>self.owner.limits.total_logical_bytes
@@ -598,7 +669,12 @@ class FoobarImportHandle:
                     +prepare.CONFLICT_REVIEW_BYTES+prepare.PROBLEM_CONTROL_BYTES+7*length+prepare.window.PARSER_WORK_BYTES+prepare.window.WINDOW_WORK_BYTES
                     >self.owner.limits.intake_bytes):
             raise SourceUnavailable()
-        return self.owner.begin(self,_Kind.REVIEW,context,constraints,request,length)
+        return self.owner.begin(self,_Kind.REVIEW,context,constraints,request,length,retain_source=retain_source,retained_identity=retained_identity)
+
+    def begin_temporary_status(self,*,context,constraints,source_ref,job_ref):
+        if not self.owner.retain_raw_enabled or not prepare_command._uuid(source_ref) or not prepare_command._uuid(job_ref):
+            raise SourceUnavailable()
+        return self.owner.begin(self,_Kind.TEMPORARY_STATUS,context,constraints,_JobControl(source_ref,job_ref))
 
     def begin_personal_changes(self,*,context,constraints,source_ref,job_ref,review_sha256,choices):
         if (not prepare_command._uuid(source_ref) or not prepare_command._uuid(job_ref)
@@ -775,6 +851,8 @@ class _ProcessOwner:
         # Actual server-owned runtime config, never request data or a ready flag.
         # Existing non-native operations do not depend on this optional binding.
         self.native_configuration=native_configuration
+        self.retain_raw_enabled=(type(native_configuration) is dict and native_configuration.get("ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED") is True)
+        self.last_retention_sweep=0.0
         self.intake_capacity=FoobarIntakeCapacity(limits.intake_bytes)
         self.condition=threading.Condition(threading.Lock())
         self.state=_State.DORMANT
@@ -831,7 +909,7 @@ class _ProcessOwner:
                 self.condition.wait(remaining)
             return self.state is _State.OPEN
 
-    def begin(self,handle,kind,context,constraints,command,length=None):
+    def begin(self,handle,kind,context,constraints,command,length=None,*,retain_source=False,retained_identity=None):
         self._identity()
         if (type(context) is not PolicyContext
                 or (type(constraints) is not PolicyEvaluationConstraints and not callable(constraints))):
@@ -843,6 +921,18 @@ class _ProcessOwner:
             require_account_foobar_read(context,constraints)
         else:
             prepare.require_account_foobar(context,constraints)
+        if type(retain_source) is not bool:
+            raise SourceUnavailable()
+        if retained_identity is not None:
+            temporary_source.validate_identity(retained_identity)
+            actual=command.command if kind is _Kind.JOB else command
+            if (not self.retain_raw_enabled or kind not in (_Kind.JOB,_Kind.REVIEW)
+                    or retained_identity.source_ref!=actual.source_ref
+                    or retained_identity.job_ref!=actual.job_ref
+                    or retained_identity.mapping_name!=actual.mapping_name
+                    or retained_identity.byte_length!=length
+                    or kind is _Kind.JOB and retained_identity.upload_sha256!=actual.upload_sha256):
+                raise SourceStale()
         enhanced_stream=_enhanced_operation(kind,command)
         with self.condition:
             self._handle(handle)
@@ -867,7 +957,7 @@ class _ProcessOwner:
                             or command.matching_library_id!=cached.request.matching_library_id
                             or command.resume!=cached.request.resume):
                         raise SourceStale()
-            if (self.limits.intake_bytes+prepare.MAX_PRIVATE_BYTES+HISTORY_SCHEMA_PHASE_BYTES
+            required_logical=(self.limits.intake_bytes+prepare.MAX_PRIVATE_BYTES+HISTORY_SCHEMA_PHASE_BYTES
                     +(prepare.CONFLICT_REVIEW_BYTES+prepare.PROBLEM_CONTROL_BYTES if kind in (_Kind.REVIEW,_Kind.PERSONAL_CHANGE) else 0)
                     +(review.DETAIL_HOLD_BYTES if kind in (_Kind.REVIEW,_Kind.PERSONAL_CHANGE)
                         or self.last_review is not None else 0)
@@ -891,9 +981,14 @@ class _ProcessOwner:
                     +(review.REVIEW_HOLD_BYTES if kind in (_Kind.JOB,_Kind.REVIEW)
                       or self.last_review is not None
                       or self.last_job is not None and self.last_job.proposed is not None else 0)
-                    >self.limits.total_logical_bytes):
+                    )
+            if required_logical>self.limits.total_logical_bytes:
                 raise SourceUnavailable()
-            if kind not in (_Kind.MAINTENANCE,_Kind.JOB_STATUS,_Kind.JOB_CANCEL,_Kind.JOB_LIST,
+            retention_fits=required_logical+temporary_source.PHASE_BYTES<=self.limits.total_logical_bytes
+            if retained_identity is not None and not retention_fits:
+                raise SourceUnavailable()
+            retain_source=retain_source and retention_fits
+            if kind not in (_Kind.TEMPORARY_STATUS,_Kind.MAINTENANCE,_Kind.JOB_STATUS,_Kind.JOB_CANCEL,_Kind.JOB_LIST,
                             _Kind.HISTORY,_Kind.ENHANCED_HISTORY,_Kind.HISTORY_SOURCES,_Kind.TRACK_EVIDENCE,_Kind.HISTORY_ELIGIBILITY,_Kind.HISTORY_PLAY,
                             _Kind.ENHANCED_REVIEW):
                 self.last_job=None
@@ -902,8 +997,9 @@ class _ProcessOwner:
             self.next_ticket+=1
             self.current=_Operation(ticket,kind,command,context,constraints,None,
                 _Stage.INTAKE if kind in (_Kind.PREPARE,_Kind.JOB,_Kind.REVIEW)
-                    and not enhanced_stream else _Stage.DISPATCH)
-            if enhanced_stream:
+                    and not enhanced_stream and retained_identity is None else _Stage.DISPATCH,
+                retain_source=retain_source,retained_identity=retained_identity)
+            if enhanced_stream and retained_identity is None:
                 try:
                     self.current.job_cancel=threading.Event()
                     self.current.enhanced_channel=enhanced_upload.EnhancedUploadChannel(
@@ -911,6 +1007,8 @@ class _ProcessOwner:
                 except BaseException:
                     self._discard_locked()
                     raise SourceUnavailable() from None
+            if retained_identity is not None:
+                self.current.job_cancel=threading.Event()
             if kind is _Kind.PERSONAL_CHANGE:
                 # Consumed under the same admission lock before any dispatch.
                 # A lost reply cannot redispatch this reviewed choice.
@@ -1099,6 +1197,12 @@ class _ProcessOwner:
                     self.state=_State.OPEN
                 self.condition.notify_all()
             while True:
+                if self.retain_raw_enabled and time.monotonic()-self.last_retention_sweep>=60:
+                    self.last_retention_sweep=time.monotonic()
+                    try:
+                        temporary_source.expire_temporary_sources(self.database_url)
+                    except Exception:
+                        pass  # Optional retention remains inaccessible at expiry.
                 with self.condition:
                     if self.state is _State.FAULTED:
                         return
@@ -1110,7 +1214,10 @@ class _ProcessOwner:
                             and self.current.stage is _Stage.DISPATCH):
                         self.current.stage=_Stage.RUNNING
                     else:
-                        self.condition.wait()
+                        if self.retain_raw_enabled:
+                            self.condition.wait(timeout=60)
+                        else:
+                            self.condition.wait()
                         continue
                 _invoke(self)
                 with self.condition:

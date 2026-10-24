@@ -152,6 +152,7 @@ def test_preloaded_fixture_persists_its_exact_media_root(tmp_path, monkeypatch):
     from music_app.services import library_roots
 
     media_root = (tmp_path / "fixture" / "media").resolve()
+    writable_root = (tmp_path / "session" / "edit-tags-writable").resolve()
     recorded = {}
     executed = []
 
@@ -176,7 +177,12 @@ def test_preloaded_fixture_persists_its_exact_media_root(tmp_path, monkeypatch):
         "load_library_root_settings",
         lambda _config: {
             "main_library_roots": [
-                {"id": "functional-core-root", "path": "C:/old", "layout_mode": "artist"}
+                {"id": "functional-core-root", "path": "C:/old", "layout_mode": "artist"},
+                {
+                    "id": "edit-tags-writable-root",
+                    "path": str(writable_root),
+                    "layout_mode": "artist",
+                },
             ]
         },
     )
@@ -207,7 +213,12 @@ def test_preloaded_fixture_persists_its_exact_media_root(tmp_path, monkeypatch):
                 "id": "functional-core-root",
                 "path": str(media_root),
                 "layout_mode": "artist",
-            }
+            },
+            {
+                "id": "edit-tags-writable-root",
+                "path": str(writable_root),
+                "layout_mode": "artist",
+            },
         ]
     }
     assert len(executed) == 1

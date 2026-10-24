@@ -553,8 +553,9 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         album_context = resolve_album_context(config, queued_album)
         album_id = _album_id(queued_album)
         if album_id is not None:
+            repository = PostgresLibraryBrowseRepository(config)
             refreshed_album = await run_in_threadpool(
-                PostgresLibraryBrowseRepository(config).build_album_detail_payload_by_id,
+                repository.build_album_detail_payload_by_id,
                 album_id,
             )
             if refreshed_album is not None:
@@ -570,12 +571,27 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
                 )
                 if destination_album_id > 0:
                     refreshed_album = await run_in_threadpool(
-                        PostgresLibraryBrowseRepository(config).build_album_detail_payload_by_id,
+                        repository.build_album_detail_payload_by_id,
                         destination_album_id,
                     )
                     if refreshed_album is not None:
                         queued_album = _album_with_context_tracks(refreshed_album)
                         album_context = resolve_album_context(config, queued_album)
+            if album_context is None and requested_track_paths:
+                current_albums = await run_in_threadpool(
+                    repository.build_album_payloads_by_track_paths,
+                    requested_track_paths,
+                )
+                for current_album in current_albums:
+                    candidate = _album_with_context_tracks(current_album)
+                    candidate_context = resolve_album_context(config, candidate)
+                    if (
+                        candidate_context is not None
+                        and requested_track_paths <= candidate_context.track_paths
+                    ):
+                        queued_album = candidate
+                        album_context = candidate_context
+                        break
     finally:
         reservation.release()
     if album_context is None:

@@ -3738,3 +3738,88 @@ def test_cover_lookup_reconciliation_uses_inline_album_detail_track_rows():
 
     assert hydrated_album["tracks"] == [track_row]
     assert compact_album["tracks"] == []
+
+
+def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (
+        app.config["MUSIC_DIR"] / "Ovderhead" / "Telepathic Minds" / "05.mp3"
+    ).resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    source_album = {
+        **_album_payload(track_path),
+        "album_id": 14674,
+        "key": "ovderhead::telepathic minds",
+    }
+    compact_source_album = {**source_album, "tracks": []}
+    current_album = {
+        **_album_payload(track_path),
+        "album_id": 24674,
+        "key": "overhead::telepathic minds",
+        "album_artist": "Overhead",
+    }
+    queued = []
+
+    class Reservation:
+        def release(self):
+            pass
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            assert album_id == 14674
+            return compact_source_album
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            assert track_paths == {str(track_path)}
+            return [current_album]
+
+    async def acquire_reservation(_resource_keys):
+        return Reservation()
+
+    def queue_lookup(album, track_paths, _manual_urls, **_kwargs):
+        queued.append((album, track_paths))
+        return "task-1"
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "acquire_structural_tag_edit_reservation_async",
+        acquire_reservation,
+    )
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(
+        asgi_routes,
+        "latest_structural_tag_edit_destination",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(
+        asgi_routes,
+        "cover_lookup_result",
+        lambda task_id: {"id": task_id, "status": "queued"},
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "serialize_cover_lookup_task_payload",
+        lambda payload: payload,
+    )
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/start",
+        json_body={"album": source_album, "manual_urls": []},
+    )
+
+    assert status == 200, body
+    assert queued[0][0]["album_artist"] == "Overhead"
+    assert queued[0][1] == {str(track_path)}

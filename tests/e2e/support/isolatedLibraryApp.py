@@ -2767,12 +2767,14 @@ def persist_preloaded_fixture_library_root(
     save_library_root_settings(
         config,
         {
+            **current_settings,
             "main_library_roots": [
                 {
-                    "id": current_root_id,
+                    **current_main_roots[0],
                     "path": str(media_root),
                     "layout_mode": "artist",
-                }
+                },
+                *current_main_roots[1:],
             ]
         },
     )

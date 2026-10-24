@@ -287,6 +287,8 @@ test('non-album tracks follow the displayed artist family instead of a retained 
 test('deferred non-album tracks hydrate without rerendering the gallery', async () => {
   const { context } = loadHelper();
   const requested = [];
+  let controlSyncs = 0;
+  context.updateGalleryMainControls = () => { controlSyncs += 1; };
   context.state.view = {
     selected_artist: 'Agalloch',
     non_album_tracks: [],
@@ -313,6 +315,7 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('include_non_album'), '1');
   assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Loose']);
   assert.equal(context.state.view.non_album_tracks_deferred, false);
+  assert.equal(controlSyncs, 1);
 });
 
 test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
@@ -587,6 +590,45 @@ function createAlbumCard(viewport, options = {}) {
   assert.equal(replacedWith?.textContent, undefined);
 }
 
+test('revoked gallery object URL requeues its production cover without blacklisting the local path', () => {
+  const { context } = loadHelper();
+  const imageElement = new FakeElement('cover-image');
+  const productionUrl = '/cover?path=C%3A%2Fcovers%2Flocal-primary-1.jpg&size=480&v=fixture';
+  imageElement.src = 'blob:http://127.0.0.1/revoked-cover';
+  imageElement.currentSrc = imageElement.src;
+  imageElement.attributes = {
+    'data-cover-path': 'C:/covers/local-primary-1.jpg',
+    'data-production-cover-src': productionUrl,
+    'data-gallery-cover-priority': 'visible',
+  };
+  const enqueues = [];
+  const releases = [];
+  context.galleryCoverPreviewCache = {
+    releaseImageObjectUrl(image) { releases.push(image); },
+  };
+  context.galleryCoverLoadScheduler = {
+    enqueue(url, options) {
+      enqueues.push({ url, options });
+      return Promise.resolve();
+    },
+  };
+
+  context.handleAlbumDisplayCoverImageError(imageElement);
+
+  assert.equal(context.state.coverFailures.localDisplayPaths['C:/covers/local-primary-1.jpg'], undefined);
+  assert.equal(imageElement.getAttribute('data-gallery-cover-object-retry'), '1');
+  assert.equal(enqueues.length, 1);
+  assert.equal(enqueues[0].url, productionUrl);
+  assert.equal(enqueues[0].options.image, imageElement);
+  assert.equal(enqueues[0].options.priority, 'visible');
+  assert.deepEqual(releases, [imageElement]);
+
+  imageElement.complete = true;
+  imageElement.naturalWidth = 480;
+  context.handleAlbumDisplayCoverImageLoad(imageElement);
+  assert.equal(imageElement.getAttribute('data-gallery-cover-object-retry'), '');
+});
+
 async function flushLightboxPromises() {
   await Promise.resolve();
   await Promise.resolve();
@@ -648,6 +690,10 @@ test('a successful remote fallback does not clear the failed local cover path', 
 test('album cover load records native decode readiness and clears the prior source timestamp', async () => {
   const { context } = loadHelper();
   let resolveDecode;
+  const releases = [];
+  context.galleryCoverPreviewCache = {
+    releaseImageObjectUrl(image) { releases.push(image); },
+  };
   context.performance = { now: () => 4321.25 };
   const imageElement = new FakeElement('timed-album-cover-image');
   imageElement.complete = true;
@@ -663,9 +709,11 @@ test('album cover load records native decode readiness and clears the prior sour
   assert.equal(imageElement.getAttribute('data-cover-decoded-at-ms'), '');
   assert.equal(context.handleAlbumDisplayCoverImageLoad(imageElement), true);
   assert.equal(imageElement.getAttribute('data-cover-decoded-at-ms'), '');
+  assert.deepEqual(releases, [], 'the blob must remain retained until native decoding settles');
 
   resolveDecode();
   await flushLightboxPromises();
+  assert.deepEqual(releases, [imageElement]);
   assert.equal(imageElement.getAttribute('data-cover-decoded-at-ms'), '4321.25');
 });
 

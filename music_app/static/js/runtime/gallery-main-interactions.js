@@ -671,12 +671,13 @@ function transitionGalleryMain(action) {
     const hydrationUrl = buildApiUrl(buildGallerySourceHydrationView({
       currentView: state.view,
       hydrationCategories,
-    }), { omitSidebar: true });
+    }), { omitSidebar: false });
     void fetchAndRender(hydrationUrl, false, {
       preserveScroll: true,
       preserveAbsoluteScroll: true,
       preserveGalleryOptionsMenu: true,
-      preserveSidebarState: true,
+      preserveSidebarState: false,
+      fallbackToAllArtistsWhenSelectionMissing: true,
       preserveGalleryBrowseLocationState: true,
       skipPendingViewTransition: true,
     });

@@ -81,7 +81,9 @@ from music_app.services.save_tasks import (
     queue_finalize_save_task,
     queue_finalize_structural_tag_edit_save_task,
     save_task_result,
+    save_task_timing_recorder,
     structural_tag_edit_resource_keys,
+    update_save_task,
 )
 from music_app.services.separate_releases import load_separate_release_keys, save_separate_release_keys
 from music_app.services.tag_edit_intents_postgres import (
@@ -94,6 +96,7 @@ from music_app.services.state import (
     hydrate_library_state_for_config,
     invalidate_targeted_library_projections,
     run_runtime_state_mutation_for_state,
+    schedule_relation_projection_rebuild,
     start_background_refresh_for_state,
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
@@ -415,6 +418,7 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
     find_albums_by_track_paths = kwargs.pop("find_albums_by_track_paths", None)
     find_problematic_album_by_track_paths = kwargs.pop("find_problematic_album_by_track_paths", None)
     structural_edit_fields = kwargs.pop("structural_edit_fields", set(_STRUCTURAL_EDIT_FIELDS))
+    kwargs["relation_projection_edit_fields"] = set(_RELATION_PROJECTION_EDIT_FIELDS)
     get_state_provider = kwargs.pop("get_state", None)
     if get_state_provider is None:
         raise ValueError("get_state is required")
@@ -816,6 +820,12 @@ def _is_selected_postgres_targeted_structural_edit_request(
     if len(field_sets) == 1 and next(iter(field_sets)) in {
         frozenset({"album"}),
         frozenset({"year"}),
+        frozenset({"artist"}),
+        frozenset({"album_artist"}),
+        frozenset({"artist", "album_artist"}),
+        frozenset({"album", "artist"}),
+        frozenset({"album", "album_artist"}),
+        frozenset({"album", "artist", "album_artist"}),
     }:
         return True
     return bool(field_sets) and all(
@@ -923,6 +933,9 @@ class _EditTagsReservation:
     def __init__(self, intent_lease, structural_reservation):
         self._intent_lease = intent_lease
         self._structural_reservation = structural_reservation
+        self._resource_keys = frozenset(
+            getattr(structural_reservation, "_resource_keys", ()) or ()
+        )
         self._released = False
 
     def release(self):
@@ -1190,6 +1203,13 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
             find_problematic_album_by_track_paths=_empty_problematic_album_by_track_paths,
             structural_edit_fields=set(_SELECTED_POSTGRES_MEDIA_WRITE_REFRESH_FIELDS),
             relation_projection_edit_fields=set(_RELATION_PROJECTION_EDIT_FIELDS),
+            schedule_relation_projection_rebuild=lambda reason: (
+                schedule_relation_projection_rebuild(
+                    config,
+                    reason=reason,
+                    logger=_asgi_logger(request),
+                )
+            ),
             **kwargs,
         )
 
@@ -1388,6 +1408,7 @@ def _authoritative_edit_tags_response(
     *,
     total_ms: float,
 ) -> ResponseValue:
+    response_started = perf_counter()
     if isinstance(result, tuple) or not result.get("ok"):
         return result
     task_id = str(result.get("save_task_id") or "").strip()
@@ -1423,6 +1444,16 @@ def _authoritative_edit_tags_response(
         "updated_problematic_album",
         "requires_view_refresh",
         "warnings",
+        "reconciliation_pending",
+        "destination_album_id",
+        "destination_album_key",
+        "destination_artist",
+        "inventory_mutation_revision",
+        "orphaned_source_artists",
+        "operation_id",
+        "phase_timings_ms",
+        "pool_lease_timings_ms",
+        "pool_lease_counts",
     ):
         if key in task:
             response[key] = task[key]
@@ -1433,6 +1464,15 @@ def _authoritative_edit_tags_response(
     response_timings["total_ms"] = round(total_ms, 3)
     response["timings"] = response_timings
     response["save_task_status"] = "completed"
+    timing_recorder = save_task_timing_recorder(task_id)
+    if timing_recorder is not None:
+        timing_recorder.record(
+            "response_construction",
+            (perf_counter() - response_started) * 1000.0,
+        )
+        timing_snapshot = timing_recorder.snapshot()
+        update_save_task(task_id, **timing_snapshot)
+        response.update(timing_snapshot)
     return response
 
 
@@ -1912,6 +1952,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             return verified
 
         handler_options["validate_proposals"] = validate_proposals
+    reservation_started = perf_counter()
     structural_tag_edit_reservation = (
         await acquire_structural_tag_edit_reservation_async(
             reservation_resource_keys
@@ -1919,6 +1960,9 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         if reservation_resource_keys
         else None
     )
+    handler_options["reservation_wait_ms"] = (
+        perf_counter() - reservation_started
+    ) * 1000.0
     result = await _run_edit_tags_handler_with_reservation(
         handler_options,
         _EditTagsReservation(intent_lease, structural_tag_edit_reservation),

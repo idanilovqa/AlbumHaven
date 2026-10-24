@@ -147,6 +147,7 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   document.body.classList.add('modal-open');
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
 }
 
 function suspendGalleryCoverLoadsForTrackModal() {
@@ -638,6 +639,7 @@ function openTrackModal(album, options = {}) {
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
   attachSharedPlayer();
 }
 
@@ -709,6 +711,26 @@ function resolveTrackModalActionAlbum(button) {
   }
   if (currentAlbum) return currentAlbum;
   return findIndexedTrackModalLogicalRelease(fallbackAlbum) || fallbackAlbum;
+}
+
+async function resolveHydratedTrackModalActionAlbum(button) {
+  const album = resolveTrackModalActionAlbum(button);
+  if (!album || !albumRequiresHydration(album)) return album;
+  const albumKey = String(
+    getTrackModalButtonAlbumKey(button)
+    || getAlbumRequestKey(album)
+    || getAlbumIdentity(album)
+    || album.key
+    || '',
+  ).trim();
+  if (!albumKey) return null;
+  try {
+    return await loadTrackModalAlbumDetails(albumKey);
+  } catch (error) {
+    console.error('[AlbumHaven][AlbumDetails] Failed to load full album details for action.', error);
+    showToast('Unable to load album details.', 'error', 3200);
+    return null;
+  }
 }
 
 function resolveTrackModalDuplicateSourceAlbum(button) {

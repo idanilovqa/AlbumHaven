@@ -146,6 +146,12 @@ The intended behavior is basically: worker still running → keep waiting
   suite and collect all genuine failures before making fixes. Apply the
   superseded-run exception below when a validated review finding requires a new
   commit; otherwise stop early only when continuing would be unsafe or impossible.
+- Track every failed CI execution by its exact test identity, including each
+  parametrized node. Before pushing a fix, run every locally reproducible failed
+  execution by that exact identity and record passing evidence; a skipped test,
+  representative neighbor, related-area test, or aggregate suite result does not
+  substitute for the exact execution. Record CI-only cases and their reason
+  explicitly instead of silently omitting them.
 - Fix the complete CI failure set, verify each fix with its focused local tests,
   then push and rerun all required CI suites. Repeat until CI is fully green.
 

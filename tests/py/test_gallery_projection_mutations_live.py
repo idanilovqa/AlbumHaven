@@ -223,6 +223,153 @@ def test_obsolete_builder_waits_for_writer_then_refuses_publication(gallery_inve
         assert gallery.load_gallery_projection_page(reader, fixture.view_state, {}) is None
 
 
+def test_gallery_staging_does_not_hold_inventory_publication_lock(gallery_inventory):
+    from music_app.services import scan_cache_persistence as persistence
+
+    fixture = gallery_inventory
+    revision = "b" * 64
+    scope_key = gallery.gallery_projection_scope_key(fixture.view_state)
+    publisher_pid = []
+    connected = Event()
+
+    with isolatedPostgres._connect(fixture.setup_url) as blocker:
+        blocker.execute(
+            """
+            insert into library.gallery_projection_occurrences(
+              library_id, scope_key, revision, ordinal, payload
+            ) values (%s, %s, %s, 0, %s)
+            """,
+            (
+                fixture.context["library_id"],
+                scope_key,
+                revision,
+                Jsonb({"album_key": "blocked", "album_title": "Blocked"}),
+            ),
+        )
+        blocker.execute(
+            """
+            select 1
+            from library.gallery_projection_occurrences
+            where library_id=%s and scope_key=%s and revision=%s and ordinal=0
+            for update
+            """,
+            (fixture.context["library_id"], scope_key, revision),
+        )
+
+        def attempt_publication():
+            with isolatedPostgres._connect(fixture.runtime_url) as publisher:
+                publisher.execute("set local statement_timeout='10s'")
+                publisher_pid.append(publisher.info.backend_pid)
+                connected.set()
+                return publish(
+                    publisher,
+                    fixture.context,
+                    fixture.view_state,
+                    revision=revision,
+                    rows=[{"album_key": "proof", "album_title": "Proof"}],
+                )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            publication = executor.submit(attempt_publication)
+            try:
+                assert connected.wait(5), "publisher did not connect"
+                deadline = monotonic() + 5
+                with isolatedPostgres._connect(fixture.runtime_url) as observer:
+                    while monotonic() < deadline:
+                        waiting = observer.execute(
+                            "select wait_event_type from pg_stat_activity where pid=%s",
+                            (publisher_pid[0],),
+                        ).fetchone()
+                        if waiting and waiting["wait_event_type"] == "Lock":
+                            break
+                        observer.commit()
+                        sleep(0.02)
+                    else:
+                        pytest.fail("publisher did not pause while staging occurrences")
+
+                with isolatedPostgres._connect(fixture.runtime_url) as mutation:
+                    mutation.execute("set local statement_timeout='1s'")
+                    mutation.execute(persistence._inventory_publication_advisory_lock_sql())
+                    mutation.execute(
+                        "update library.local_albums set title=title || ' foreground'"
+                    )
+
+                assert not publication.done()
+            finally:
+                blocker.rollback()
+
+            assert publication.result(timeout=10) is False
+
+
+def test_gallery_cleanup_removes_only_expired_inactive_revisions(gallery_inventory):
+    fixture = gallery_inventory
+    scope_key = gallery.gallery_projection_scope_key(fixture.view_state)
+    expired_revision = "c" * 64
+    fresh_revision = "d" * 64
+    next_revision = "e" * 64
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        ready_revision = connection.execute(
+            """
+            select revision
+            from library.gallery_projection_snapshots
+            where library_id=%s and scope_key=%s
+            """,
+            (fixture.context["library_id"], scope_key),
+        ).fetchone()["revision"]
+        connection.execute(
+            """
+            delete from library.gallery_projection_snapshots
+            where library_id=%s and scope_key=%s
+            """,
+            (fixture.context["library_id"], scope_key),
+        )
+        connection.execute(
+            """
+            insert into library.gallery_projection_occurrences(
+              library_id, scope_key, revision, ordinal, payload, staged_at
+            ) values
+              (%s, %s, %s, 0, %s, clock_timestamp() - interval '6 minutes'),
+              (%s, %s, %s, 0, %s, clock_timestamp())
+            """,
+            (
+                fixture.context["library_id"],
+                scope_key,
+                expired_revision,
+                Jsonb({"album_key": "expired", "album_title": "Expired"}),
+                fixture.context["library_id"],
+                scope_key,
+                fresh_revision,
+                Jsonb({"album_key": "fresh", "album_title": "Fresh"}),
+            ),
+        )
+
+    with isolatedPostgres._connect(fixture.runtime_url) as publisher:
+        assert publish(
+            publisher,
+            fixture.context,
+            fixture.view_state,
+            revision=next_revision,
+            rows=[{"album_key": "next", "album_title": "Next"}],
+        )
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        revisions = {
+            row["revision"]
+            for row in connection.execute(
+                """
+                select distinct revision
+                from library.gallery_projection_occurrences
+                where library_id=%s and scope_key=%s
+                """,
+                (fixture.context["library_id"], scope_key),
+            ).fetchall()
+        }
+
+    assert expired_revision not in revisions
+    assert {ready_revision, fresh_revision, next_revision} <= revisions
+
+
 def test_repeatable_read_observer_sees_complete_old_then_new_publication(gallery_inventory):
     fixture = gallery_inventory
     with isolatedPostgres._connect(fixture.runtime_url) as reader:

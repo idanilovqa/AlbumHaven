@@ -56,6 +56,30 @@ def postgres_runtime_fakes(app, monkeypatch):
         def load_notifications(self):
             return list(persisted_notifications)
 
+        def count_notifications(self):
+            active_count = sum(
+                1 for task in persisted_notifications if task.get("status") in {"pending", "running"}
+            )
+            return {
+                "total_count": len(persisted_notifications),
+                "active_count": active_count,
+                "finished_count": len(persisted_notifications) - active_count,
+            }
+
+        def load_notification_summary_page(self, *, limit, cursor, active_only):
+            if cursor is not None:
+                raise ValueError("invalid cover lookup notification cursor")
+            from music_app.services.cover_lookup_tasks import list_cover_lookup_tasks
+
+            items = list_cover_lookup_tasks(config=app.config)
+            if active_only:
+                items = [task for task in items if task.get("status") in {"pending", "running"}]
+            return {
+                "items": items[:limit],
+                "next_cursor": None,
+                "counts": self.count_notifications(),
+            }
+
         def save_notifications(self, tasks):
             persisted_notifications[:] = list(tasks)
 
@@ -279,6 +303,75 @@ def test_asgi_wave_d_router_exports_cover_endpoint_urls_and_methods(app):
     assert route_methods["/utilities/cancel-cover-scan"] == {"POST"}
 
 
+def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    page_calls = []
+    monkeypatch.setattr(
+        asgi_routes,
+        "count_cover_lookup_task_notifications",
+        lambda *, config: {"total_count": 528, "active_count": 2, "finished_count": 526},
+    )
+
+    def fake_page(*, limit, cursor, active_only, config):
+        page_calls.append((limit, cursor, active_only, config))
+        if cursor == "bad-cursor":
+            raise ValueError("invalid cover lookup notification cursor")
+        return {
+            "items": [{"id": "task-528"}],
+            "next_cursor": "next-page",
+            "counts": {
+                "total_count": 528,
+                "active_count": 2,
+                "finished_count": 526,
+            },
+        }
+
+    monkeypatch.setattr(asgi_routes, "load_cover_lookup_task_summary_page", fake_page)
+    asgi_app = _make_wave_d_app(app)
+
+    count_status, _count_headers, count_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks/counts",
+    )
+    page_status, _page_headers, page_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks",
+        query={"limit": 75, "cursor": "page-1", "active_only": "true"},
+    )
+    invalid_status, _invalid_headers, invalid_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks",
+        query={"cursor": "bad-cursor"},
+    )
+
+    assert count_status == 200
+    assert _decode_json(count_body) == {
+        "ok": True,
+        "total_count": 528,
+        "active_count": 2,
+        "finished_count": 526,
+    }
+    assert page_status == 200
+    assert _decode_json(page_body) == {
+        "ok": True,
+        "tasks": [{"id": "task-528"}],
+        "next_cursor": "next-page",
+        "total_count": 528,
+        "active_count": 2,
+        "finished_count": 526,
+    }
+    assert page_calls[0][:3] == (50, "page-1", True)
+    assert invalid_status == 400
+    assert _decode_json(invalid_body) == {
+        "ok": False,
+        "error": "Invalid cover lookup notification cursor",
+    }
+
+
 @pytest.mark.parametrize("operation", ["clear", "mark-action-taken", "cancel"])
 def test_asgi_stale_cover_notification_id_returns_only_not_found_and_preserves_other_tasks(app, operation):
     from music_app.services import cover_lookup_tasks
@@ -430,7 +523,7 @@ def test_asgi_cover_lookup_notification_routes_use_asgi_config_without_flask_bri
 def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
-        PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths",
+        PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
         lambda _self, _paths: {},
     )
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
@@ -519,7 +612,7 @@ def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
         "artist_website_fallback",
     ]
     assert payload["task"]["manual_urls"] == ["https://covers.example/one.jpg"]
-    assert payload["gallery"]["album_root"] == str(track_path.parent)
+    assert "gallery" not in payload
     assert gallery_status == 200
     gallery_payload = _decode_json(gallery_body)
     assert gallery_payload["ok"] is True
@@ -703,13 +796,153 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     ]
 
 
+def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    hydrated_album_ids = []
+
+    def build_album_detail(_self, album_id):
+        hydrated_album_ids.append(album_id)
+        return {**_album_payload(track_path), "id": album_id}
+
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_album_detail_payload_by_id",
+        build_album_detail,
+    )
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_cover_state_entries_by_paths",
+        lambda _self, _paths: {},
+    )
+    snapshot_reads = []
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            snapshot_reads.append(album_id)
+            return None
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeRepository)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={
+            "album": {
+                "id": 41,
+                "name": "Test Album",
+                "album_artist": "Test Artist",
+                "year": 2001,
+                "edition": "",
+            }
+        },
+    )
+
+    assert status == 200
+    assert _decode_json(body)["album_root"] == str(track_path.parent)
+    assert hydrated_album_ids == [41]
+    assert snapshot_reads == [41]
+
+
+def test_asgi_cover_lookup_save_remote_rehydrates_compact_notification_album(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    hydrated_album_ids: list[int] = []
+    queued_calls: list[tuple[object, ...]] = []
+
+    def build_album_detail(_self, album_id):
+        hydrated_album_ids.append(album_id)
+        return {**_album_payload(track_path), "id": album_id}
+
+    class FakeSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_album_detail_payload_by_id",
+        build_album_detail,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        FakeSnapshotRepository,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *args, **_kwargs: queued_calls.append(args),
+    )
+    reset_cover_lookup_runtime_state()
+    task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+    )
+    cover_lookup_tasks.update_cover_lookup_task(
+        task_id,
+        status="completed",
+        possible_matches=[{
+            "id": "candidate-1",
+            "art_kind": "cover",
+            "url": "https://images.example/cover.jpg",
+            "source": "manual",
+            "source_label": "Manual URL",
+        }],
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": {
+                "id": 41,
+                "name": "Test Album",
+                "album_artist": "Test Artist",
+                "year": 2001,
+                "edition": "",
+            },
+            "task_id": task_id,
+            "candidate_id": "candidate-1",
+        },
+    )
+
+    assert status == 200, _decode_json(body)
+    assert hydrated_album_ids == [41]
+    assert queued_calls[0][2] == {str(track_path)}
+
+
 def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider_search(
     app,
     monkeypatch,
 ):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
-        PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths",
+        PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
         lambda _self, _paths: {},
     )
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
@@ -957,7 +1190,7 @@ def test_asgi_cover_lookup_gallery_fails_closed_without_searching_on_snapshot_er
 ):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
-        PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths",
+        PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
         lambda _self, _paths: {},
     )
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
@@ -1802,6 +2035,15 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     outside_delete_image = outside_image.parent / "delete-outside.jpg"
     outside_delete_image.write_bytes(_jpeg_bytes((80, 80, 80)))
     missing_image = track_path.parent / "missing.jpg"
+    managed_preview = (
+        track_path.parent
+        / ".album-haven"
+        / "cover_variants"
+        / "aa"
+        / "aabb.jpg"
+    )
+    managed_preview.parent.mkdir(parents=True)
+    managed_preview.write_bytes(_jpeg_bytes((80, 80, 80)))
     _seed_album_state(app.library_state, track_path)
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.flask_app = _FatalFlaskBridge()
@@ -1864,6 +2106,18 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
         "/utilities/cover-lookup/local-delete",
         json_body={"album": _album_payload(track_path), "source_path": str(outside_delete_image)},
     )
+    managed_select_status, _managed_select_headers, managed_select_body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/local-select",
+        json_body={"album": _album_payload(track_path), "source_path": str(managed_preview)},
+    )
+    managed_delete_status, _managed_delete_headers, managed_delete_body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/local-delete",
+        json_body={"album": _album_payload(track_path), "source_path": str(managed_preview)},
+    )
     pasted_status, _pasted_headers, pasted_body = _run_asgi_request(
         asgi_app,
         "POST",
@@ -1914,6 +2168,17 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     assert _decode_json(delete_body) == {"ok": False, "error": "Selected image was not found"}
     assert delete_outside_status == 400
     assert _decode_json(delete_outside_body) == {"ok": False, "error": "Selected image is outside the album folder"}
+    assert managed_select_status == 400
+    assert _decode_json(managed_select_body) == {
+        "ok": False,
+        "error": "Selected image is an internal managed preview",
+    }
+    assert managed_delete_status == 400
+    assert _decode_json(managed_delete_body) == {
+        "ok": False,
+        "error": "Selected image is an internal managed preview",
+    }
+    assert managed_preview.is_file()
     assert pasted_status == 400
     assert _decode_json(pasted_body) == {"ok": False, "error": "Clipboard image format is invalid."}
 
@@ -2766,6 +3031,80 @@ def test_asgi_cover_lookup_save_remote_uses_requested_snapshot_candidate_when_ta
     assert queued_calls[0]["args"][4]["url"] == "https://images.example/saved.jpg"
 
 
+def test_asgi_cover_lookup_save_remote_recovers_task_from_snapshot_generation(
+    app,
+    monkeypatch,
+):
+    from uuid import UUID
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
+    reset_cover_lookup_runtime_state()
+    candidate = {
+        "id": "saved-candidate",
+        "art_kind": "cover",
+        "url": "https://images.example/saved.jpg",
+        "source": "apple",
+    }
+    task_id, _ = cover_lookup_tasks.create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+    )
+    cover_lookup_tasks.update_cover_lookup_task(
+        task_id,
+        status="running",
+        possible_matches=[candidate],
+    )
+    snapshot_generation = str(UUID(task_id))
+
+    class FakeRepository:
+        def __init__(self, selected_config):
+            assert selected_config is app.config
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            return {
+                "album_id": album_id,
+                "search_generation": snapshot_generation,
+                "search_kind": "manual",
+                "status": "running",
+                "revision": 1,
+                "candidates": [candidate],
+                "best_candidate_id": candidate["id"],
+            }
+
+    queued_task_ids = []
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeRepository)
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda queued_task_id, *_args, **_kwargs: queued_task_ids.append(queued_task_id),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": {**_album_payload(track_path), "album_id": 41},
+            "snapshot_generation": snapshot_generation,
+            "candidate_id": candidate["id"],
+        },
+    )
+
+    assert status == 200
+    assert _decode_json(body)["task"]["id"] == task_id
+    assert queued_task_ids == [task_id]
+
+
 def test_asgi_cover_lookup_save_remote_keeps_action_taken_through_background_completion(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import cover_lookup_tasks
@@ -3332,6 +3671,7 @@ def test_local_cover_selection_uses_postgres_inventory_with_empty_runtime_state(
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused@localhost/test"
     monkeypatch.setitem(globals(), "_seed_album_state", seed_database_inventory)
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths", selected_entries)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", selected_entries)
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_album_payloads_by_track_paths", selected_albums)
     test_asgi_local_cover_selection_persists_before_success_and_logs_safe_completion(app, monkeypatch)
 
@@ -3363,6 +3703,8 @@ def test_postgres_local_cover_commit_updates_live_runtime_not_inventory_snapshot
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_album_payloads_by_track_paths",
                         lambda self, paths: [{"tracks": [{**entry, "path": path} for path, entry in inventory.items()]}])
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths",
+                        lambda self, paths: {path: dict(inventory[path]) for path in paths})
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
                         lambda self, paths: {path: dict(inventory[path]) for path in paths})
     monkeypatch.setattr(routes, "persist_cover_selection_for_tracks",
                         lambda *args, **kwargs: kwargs["commit_guard"](lambda: {"album_rows_updated": 1, "track_file_rows_updated": 2}))
@@ -3406,7 +3748,7 @@ def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory
         loads.append(set(paths))
         return {str(track_path): dict(entry)}
 
-    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths", selected_entries)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", selected_entries)
     repository = SimpleNamespace(get_for_album_context=lambda **kwargs: {})
     monkeypatch.setattr(routes, "_resolved_snapshot_album_context", lambda *args: (repository, 41, None))
     status, _, body = _run_asgi_request(
@@ -3424,3 +3766,239 @@ def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory
     assert (remote["width"], remote["height"]) == (640, 640)
     assert loads == ([] if cached else [{str(track_path)}])
     assert app.library_state["file_cache"] == ({str(track_path): entry} if cached else {})
+
+
+def test_cover_lookup_task_identity_does_not_repeat_validated_album_resolution():
+    from music_app.routes import api_wave_d_asgi_routes as routes
+
+    assert routes._task_matches_album_context(
+        {"track_paths": ["C:/Music/Artist/Album/song.mp3"]},
+        track_paths={"C:/Music/Artist/Album/song.mp3"},
+    ) is True
+
+
+@pytest.mark.parametrize("compact_request", [False, True])
+def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
+    app,
+    monkeypatch,
+    compact_request,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    monkeypatch.setattr(asgi_routes, "perf_counter", lambda: 100.0)
+
+    stale_path = (
+        app.config["MUSIC_DIR"] / "Ovderhead" / "Telepathic Minds" / "05.mp3"
+    ).resolve()
+    current_path = (
+        app.config["MUSIC_DIR"] / "Overhead" / "Telepathic Minds" / "05.mp3"
+    ).resolve()
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_path.write_bytes(b"stale track")
+    current_path.parent.mkdir(parents=True, exist_ok=True)
+    current_path.write_bytes(b"track")
+    album = {
+        **_album_payload(stale_path),
+        "album_id": 14674,
+        "key": "ovderhead::telepathic minds",
+    }
+    if compact_request:
+        album["tracks"] = []
+    refreshed_album = {
+        **_album_payload(current_path),
+        "album_id": 24674,
+        "key": "overhead::telepathic minds",
+        "album_artist": "Overhead",
+    }
+    compact_source_album = {
+        **_album_payload(stale_path),
+        "album_id": 14674,
+        "tracks": [],
+    }
+    events = []
+
+    class Reservation:
+        def release(self):
+            events.append("released")
+
+    async def acquire_reservation(resource_keys):
+        events.append(("acquired", resource_keys))
+        return Reservation()
+
+    def refresh_album(_self, album_id, *, client_surface_class=None):
+        events.append(("refreshed", album_id, client_surface_class))
+        if album_id == 14674:
+            return compact_source_album
+        return refreshed_album if album_id == 24674 else None
+
+    def latest_structural_destination(resource_keys, *, completed_after_monotonic):
+        assert completed_after_monotonic == pytest.approx(70.0)
+        events.append(("reconciled", resource_keys, completed_after_monotonic))
+        return {"destination_album_id": 24674}
+
+    def queue_lookup(queued_album, track_paths, manual_urls, **_kwargs):
+        events.append(("queued", queued_album, track_paths, manual_urls))
+        return "task-1"
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "acquire_structural_tag_edit_reservation_async",
+        acquire_reservation,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_album_detail_payload_by_id",
+        refresh_album,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "latest_structural_tag_edit_destination",
+        latest_structural_destination,
+        raising=False,
+    )
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(
+        asgi_routes,
+        "cover_lookup_result",
+        lambda task_id: {"id": task_id, "status": "queued"},
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "serialize_cover_lookup_task_payload",
+        lambda payload: payload,
+    )
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    asgi_app = _make_wave_d_app(app)
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/start",
+        json_body={"album": album, "manual_urls": []},
+    )
+
+    assert status == 200
+    assert _decode_json(body)["ok"] is True
+    acquired = events[0]
+    assert acquired[0] == "acquired"
+    assert "album:ovderhead::telepathic minds" in acquired[1]
+    stale_path_key = next(iter(asgi_routes.structural_tag_edit_resource_keys(
+        "",
+        {str(stale_path)},
+    )))
+    assert (stale_path_key in acquired[1]) is not compact_request
+    assert events[1] == ("refreshed", 14674, None)
+    assert events[2][0] == "reconciled"
+    assert events[2][1] == acquired[1]
+    assert events[2][2] > 0
+    assert events[3] == ("refreshed", 24674, None)
+    assert events[4] == "released"
+    assert events[5][0] == "queued"
+    assert events[5][1]["album_artist"] == "Overhead"
+    assert events[5][2] == {str(current_path)}
+
+
+def test_cover_lookup_reconciliation_uses_inline_album_detail_track_rows():
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_row = {"path": "C:/Music/Overhead/Telepathic Minds/05.mp3"}
+    compact_album = {
+        "tracks": [],
+        "gallery_list_block": {
+            "track_rows_source": "inline",
+            "track_rows": [track_row],
+        },
+    }
+
+    hydrated_album = asgi_routes._album_with_context_tracks(compact_album)
+
+    assert hydrated_album["tracks"] == [track_row]
+    assert compact_album["tracks"] == []
+
+
+def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (
+        app.config["MUSIC_DIR"] / "Ovderhead" / "Telepathic Minds" / "05.mp3"
+    ).resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    source_album = {
+        **_album_payload(track_path),
+        "album_id": 14674,
+        "key": "ovderhead::telepathic minds",
+    }
+    compact_source_album = {**source_album, "tracks": []}
+    current_album = {
+        **_album_payload(track_path),
+        "album_id": 24674,
+        "key": "overhead::telepathic minds",
+        "album_artist": "Overhead",
+    }
+    queued = []
+
+    class Reservation:
+        def release(self):
+            pass
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            assert album_id == 14674
+            return compact_source_album
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            assert track_paths == {str(track_path)}
+            return [current_album]
+
+    async def acquire_reservation(_resource_keys):
+        return Reservation()
+
+    def queue_lookup(album, track_paths, _manual_urls, **_kwargs):
+        queued.append((album, track_paths))
+        return "task-1"
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "acquire_structural_tag_edit_reservation_async",
+        acquire_reservation,
+    )
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(
+        asgi_routes,
+        "latest_structural_tag_edit_destination",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(
+        asgi_routes,
+        "cover_lookup_result",
+        lambda task_id: {"id": task_id, "status": "queued"},
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "serialize_cover_lookup_task_payload",
+        lambda payload: payload,
+    )
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/start",
+        json_body={"album": source_album, "manual_urls": []},
+    )
+
+    assert status == 200, body
+    assert queued[0][0]["album_artist"] == "Overhead"
+    assert queued[0][1] == {str(track_path)}

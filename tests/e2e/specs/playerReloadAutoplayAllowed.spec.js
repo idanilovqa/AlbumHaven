@@ -2,6 +2,7 @@ import { expect, test } from '../support/baseFixtures.js';
 import {
   PLAYBACK_START_TIMING_BUDGET,
   assertSustainedPlaybackContract,
+  expectTimingBudget,
   measureSustainedPlaybackWindow,
 } from '../helpers/index.js';
 
@@ -93,6 +94,7 @@ test(`${CASE_ID} allowed Chrome policy automatically continues playback after re
     expect(Math.abs(restoredTiming.currentTime - pausedOffset)).toBeLessThan(1);
 
     const explicitPlayMark = await playbackEvidence.playbackMark();
+    // parity-check: allow-read-only-measurement-evaluate -- use the browser monotonic clock for playback latency
     const explicitPlayStartedAtMs = await page.evaluate(() => performance.now());
     await globalPlayerActions.resumeIfPaused();
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({
@@ -100,10 +102,12 @@ test(`${CASE_ID} allowed Chrome policy automatically continues playback after re
       path: playedTrack.path,
     });
     const explicitPlayStartupMs = evidence.observedAtMs - explicitPlayStartedAtMs;
-    expect(
-      explicitPlayStartupMs,
-      `Explicit Play took ${Math.round(explicitPlayStartupMs)} ms to render audible PCM.`,
-    ).toBeLessThanOrEqual(PLAYBACK_START_TIMING_BUDGET.hardCeiling);
+  expectTimingBudget(
+    expect,
+    explicitPlayStartupMs,
+    PLAYBACK_START_TIMING_BUDGET,
+    'Explicit Play audible PCM',
+  );
     const sustained = await measureSustainedPlaybackWindow(page, playbackEvidence, {
       seconds: LONG_SUSTAINED_PLAYBACK_SECONDS,
       timeout: (LONG_SUSTAINED_PLAYBACK_SECONDS * 1_000) + 10_000,

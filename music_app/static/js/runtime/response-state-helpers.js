@@ -1066,6 +1066,17 @@ function buildSelectedArtistChronologicalArtistGroups(primaryGroups = [], family
   }];
 }
 
+function expandCompactSelectedArtistGroups(payload) {
+  if (!payload || payload.artist_groups_from_selected_sections !== true
+      || Array.isArray(payload.artist_groups)) return payload;
+  payload.artist_groups = buildSelectedArtistRuntimeArtistGroups(
+    payload,
+    Array.isArray(payload.primary_artist_groups) ? payload.primary_artist_groups : [],
+    Array.isArray(payload.family_artist_groups) ? payload.family_artist_groups : [],
+  );
+  return payload;
+}
+
 function buildSelectedArtistRuntimeArtistGroups(view, primaryGroups = [], familyGroups = []) {
   if (normalizeRuntimeSelectedArtistFamilyDisplayMode(view?.selected_artist_family_display_mode ?? view?.artist_page?.family_display_mode) === 'chronological') {
     return buildSelectedArtistChronologicalArtistGroups(primaryGroups, familyGroups);
@@ -1370,6 +1381,29 @@ function applyViewPayload(payload, options = {}) {
       ? nextView.loaded_library_categories
       : previousView.non_album_library_categories || nextView.loaded_library_categories)
   )];
+  const previousNonAlbumCategories = previousView.non_album_library_categories
+    || previousView.loaded_library_categories || previousView.visible_library_categories || [];
+  const nextNonAlbumCategories = nextView.non_album_library_categories
+    || nextView.loaded_library_categories || nextView.visible_library_categories || [];
+  const sameNonAlbumScope = (
+    String(previousView.selected_artist || '').trim() === String(nextView.selected_artist || '').trim()
+    && String(previousView.query || '').trim() === String(nextView.query || '').trim()
+    && previousNonAlbumCategories.length === nextNonAlbumCategories.length
+    && previousNonAlbumCategories.every((category) => nextNonAlbumCategories.includes(category))
+  );
+  if (
+    nextView.non_album_tracks_deferred
+    && !previousView.non_album_tracks_deferred
+    && (
+      previousView.non_album_tracks?.length
+      || previousView.library_non_album_tracks?.length
+    )
+    && sameNonAlbumScope
+  ) {
+    nextView.non_album_tracks = previousView.non_album_tracks;
+    nextView.library_non_album_tracks = previousView.library_non_album_tracks;
+    nextView.non_album_tracks_deferred = false;
+  }
   if (nextView.gallery_page && !options.rootGalleryContinuation && !nextPayload?.gallery_page_scope) {
     // Source hydration may retain the navigation URL. Continuations must follow
     // the actual loaded page scope, not those retained browser parameters.
@@ -1426,9 +1460,11 @@ function applyViewPayload(payload, options = {}) {
       && String(nextView.selected_artist || '').trim(),
     );
     const selectedArtistChanged = Boolean(selectionChanged && nextSelectedArtist);
-    state.ui.pendingSidebarRevealArtist = (clearedSearchWithSelection || selectedArtistChanged)
-      ? String(nextView.selected_artist || '')
-      : '';
+    if (clearedSearchWithSelection || selectedArtistChanged) {
+      state.ui.pendingSidebarRevealArtist = String(nextView.selected_artist || '');
+    } else if (!nextSelectedArtist) {
+      state.ui.pendingSidebarRevealArtist = '';
+    }
   }
   state.view = nextView;
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);

@@ -209,7 +209,7 @@ export class TagEditorActions {
       'aria-label',
       'Load all files from this folder',
     );
-    await expect(this.tagEditor.folderLoadButton.locator('svg')).toHaveCount(1);
+    await expect(this.tagEditor.folderLoadButtonIcon).toHaveCount(1);
     await this.tagEditor.folderLoadButton.click();
     if (expectedTrackCount !== undefined) {
       await expect(this.tagEditor.trackButtons).toHaveCount(Number(expectedTrackCount), { timeout });
@@ -358,6 +358,11 @@ export class TagEditorActions {
     await expect(this.tagEditor.artistInput).toHaveValue(String(artist));
   }
 
+  async setAlbumArtist(albumArtist) {
+    await this.tagEditor.albumArtistInput.fill(String(albumArtist));
+    await expect(this.tagEditor.albumArtistInput).toHaveValue(String(albumArtist));
+  }
+
   async expectAlbumName(albumName) {
     await expect(this.tagEditor.albumNameInput).toHaveValue(String(albumName || ''));
   }
@@ -436,9 +441,10 @@ export class TagEditorActions {
       'Year',
       'Track Number',
       'Disc Number',
-      'Exception',
       'Edition',
       'Album Rating',
+      'Exception',
+      'Custom Collection name',
     ]);
     await expect(this.tagEditor.footer).toContainText(
       /^\s*Start at\s*Auto-number\s*Cancel\s*Apply\s*$/u,
@@ -536,8 +542,9 @@ export class TagEditorActions {
   }
 
   async clearException() {
-    await this.tagEditor.exceptionSelect.fill('');
-    await this.tagEditor.exceptionSelect.blur();
+    await this.tagEditor.exceptionSelect.click();
+    await expect(this.tagEditor.exceptionNoneOption).toBeVisible();
+    await this.tagEditor.exceptionNoneOption.click();
     await expect(this.tagEditor.exceptionSelect).toHaveValue('');
   }
 

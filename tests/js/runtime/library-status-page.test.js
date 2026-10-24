@@ -13,7 +13,7 @@ const galleryRefresh = fs.readFileSync(path.join(root, 'music_app/static/js/runt
 const css = fs.readFileSync(path.join(root, 'music_app/static/css/runtime/cover-lookup-drawer-and-related.css'), 'utf8');
 
 test('gallery markup does not preload a hidden Library Status bar', () => {
-  assert.match(template, /data-gallery-bar-instance="gallery"/);
+  assert.match(template, /gallery_bar\('Gallery'[^)]*instance='gallery'/);
   assert.doesNotMatch(template, /id="library-status-gallery-bar"/);
   assert.doesNotMatch(template, /data-gallery-bar-instance="library-(?:scan|status)"/);
   assert.match(runtime, /function mountLibraryStatusBar\(/);

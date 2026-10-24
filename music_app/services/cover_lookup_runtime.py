@@ -249,7 +249,7 @@ def queue_cover_lookup_task(
         build_cover_lookup_job_contract("candidate_lookup"),
     )
     future = _COVER_LOOKUP_EXECUTOR.submit(_run_cover_lookup_job, runtime_job)
-    register_cover_lookup_future(task_id, future)
+    register_cover_lookup_future(task_id, future, config=config)
     return task_id
 
 
@@ -284,7 +284,7 @@ def queue_cover_lookup_save_remote_task(
         apply_cover_selection_for_tracks=apply_cover_selection_for_tracks,
         persist_cover_selection_for_tracks=persist_cover_selection_for_tracks,
     )
-    register_cover_lookup_future(task_id, future)
+    register_cover_lookup_future(task_id, future, config=config)
 
 
 def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:
@@ -574,10 +574,24 @@ def _run_cover_lookup_task(
         service_search = COVER_LOOKUP_PROVIDER_REGISTRY.search_music_service_matches
         progressive_service_candidates: list[dict[str, object]] = []
         progressive_service_candidates_lock = Lock()
+        progressive_service_candidates_published = False
 
         def retain_service_candidates(candidates: list[dict[str, object]]) -> None:
+            nonlocal progressive_service_candidates_published
             with progressive_service_candidates_lock:
                 progressive_service_candidates[:] = list(candidates)
+                should_publish = bool(candidates) and not progressive_service_candidates_published
+                if should_publish:
+                    progressive_service_candidates_published = True
+            if not should_publish or cancel_event.is_set():
+                return
+            publish_candidate_snapshot(candidates)
+            _update_candidate_lookup_task(
+                task_id,
+                config=config,
+                possible_matches=candidates,
+                **candidate_snapshot_changes(),
+            )
 
         service_search_kwargs = _provider_call_kwargs(
             service_search,

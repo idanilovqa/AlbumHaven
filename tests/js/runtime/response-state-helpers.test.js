@@ -7,6 +7,25 @@ const test = require('node:test');
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'response-state-helpers.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
+test('compact selected-artist responses rebuild gallery groups from shared sections', () => {
+  const context = loadHelpers();
+  const primary = { artist: 'Primary', albums: [{ key: 'primary' }] };
+  const family = { artist: 'Family', albums: [{ key: 'family' }] };
+  const payload = {
+    selected_artist: 'Primary',
+    artist_groups_from_selected_sections: true,
+    primary_artist_groups: [primary],
+    family_artist_groups: [family],
+  };
+
+  const expanded = context.expandCompactSelectedArtistGroups(payload);
+
+  assert.equal(expanded, payload);
+  assert.deepEqual(Array.from(expanded.artist_groups, (group) => group.artist), ['Primary', 'Family']);
+  assert.equal(expanded.artist_groups[0], primary);
+  assert.equal(expanded.artist_groups[1], family);
+});
+
 require('node:test')('search normalization preserves, inherits, and explicitly clears artist-name matches', () => {
   const context = loadHelpers();
   const matches = (source, fallback) => Array.from(
@@ -379,7 +398,6 @@ test('new cover run explicit zero discards previous completed count', () => {
   })));
   assert.deepEqual(normalized, {
     artist_groups: [{ artist: 'Broadcast' }],
-    gallery_page: null,
     primary_artist_groups: [],
     family_artist_groups: [],
     artists_sidebar: [],
@@ -671,7 +689,6 @@ test('new cover run explicit zero discards previous completed count', () => {
   })));
   assert.deepEqual(normalized, {
     view: {
-      gallery_page: null,
       artist_groups: [],
       primary_artist_groups: [],
       family_artist_groups: [],
@@ -2575,6 +2592,48 @@ test('root page cursors survive compact state but never leak into a replacement 
   assert.equal(c.normalizeViewPayload({ query: 'Devin', artist_groups: [] }, root).gallery_page, undefined);
   assert.equal(c.normalizeViewPayload({ selected_artist: 'A', artist_groups: [] }, root).gallery_page, undefined);
   assert.equal(c.normalizeViewPayload({ query: '', selected_artist: '', artist_groups: [] }, root).gallery_page, undefined);
+});
+
+test('deferred same-scope payload retains already hydrated non-album tracks', () => {
+  const context = loadHelpers();
+  const categories = ['main_library', 'hoard', 'new_arrivals'];
+  const tracks = [{ path: '/fixture/main/loose.mp3', title: 'Loose' }];
+  context.applyViewPayload({
+    surface: { active: 'albums' }, selected_artist: 'Broadcast', query: '',
+    visible_library_categories: categories, artist_groups: [],
+    non_album_tracks: tracks, library_non_album_tracks: tracks,
+    non_album_tracks_deferred: false,
+  });
+
+  const refreshed = context.applyViewPayload({
+    surface: { active: 'albums' }, selected_artist: 'Broadcast', query: '',
+    visible_library_categories: categories, artist_groups: [],
+    non_album_tracks: [], library_non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  });
+
+  assert.deepEqual(Array.from(refreshed.non_album_tracks, (track) => track.path), [tracks[0].path]);
+  assert.deepEqual(Array.from(refreshed.library_non_album_tracks, (track) => track.path), [tracks[0].path]);
+  assert.equal(refreshed.non_album_tracks_deferred, false);
+});
+
+test('deferred payload stays deferred when no hydrated non-album collection exists', () => {
+  const context = loadHelpers();
+  const categories = ['main_library', 'hoard', 'new_arrivals'];
+  context.state.view = {
+    surface: { active: 'albums' }, selected_artist: '', query: '',
+    visible_library_categories: categories, non_album_tracks: [],
+    non_album_tracks_deferred: false,
+  };
+
+  const refreshed = context.applyViewPayload({
+    surface: { active: 'albums' }, selected_artist: '', query: '',
+    visible_library_categories: categories, artist_groups: [],
+    non_album_tracks: [], library_non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  });
+
+  assert.equal(refreshed.non_album_tracks_deferred, true);
 });
 
 test('paged source hydration retains navigation location but captures continuation scope', () => {

@@ -11,10 +11,13 @@ const EXPECTED_CONFIGS = Object.freeze([
   'playwright.non-album-rescan.config.js',
 ]);
 const EXPECTED_SHARDS = Object.freeze([
-  ['gallery-search-visual', 57],
-  ['cover-providers', 28],
+  ['gallery-search-visual', 53],
+  ['cover-providers-1', 12],
+  ['cover-providers-2', 12],
   ['metadata-mutations', 14],
-  ['playback-utilities', 51],
+  ['playback-utilities-1', 14],
+  ['playback-utilities-2', 14],
+  ['playback-utilities-3', 14],
 ]);
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
   'MUSIC_DIR',
@@ -133,7 +136,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   const shards = Array.isArray(contract?.shards) ? contract.shards : [];
   const expectedNames = EXPECTED_SHARDS.map(([name]) => name);
   if (JSON.stringify(shards.map((shard) => shard.name)) !== JSON.stringify(expectedNames)) {
-    errors.push('functional shards must use the exact approved four-shard order');
+    errors.push('functional shards must use the exact approved seven-shard order');
   }
   for (const [name, expectedCount] of EXPECTED_SHARDS) {
     const shard = shards.find((candidate) => candidate.name === name);
@@ -177,9 +180,9 @@ function validateFunctionalShardContract(contract, discoveredCases) {
     }
     if (
       ownedCase.invocationConfig === 'playwright.autoplay-allowed.config.js'
-      && ownedCase.shard !== 'playback-utilities'
+      && !ownedCase.shard.startsWith('playback-utilities-')
     ) {
-      errors.push('autoplay-allowed coverage must belong only to playback-utilities');
+      errors.push('autoplay-allowed coverage must belong only to playback-utilities shards');
     }
   }
 
@@ -206,7 +209,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 150) errors.push(`functional contract owns ${owned.length} cases; expected 150`);
+  if (owned.length !== 133) errors.push(`functional contract owns ${owned.length} cases; expected 133`);
   return errors;
 }
 
@@ -241,7 +244,7 @@ function loadFunctionalCaseMatrix(repoRoot) {
 }
 
 function executionWavesForShard(shard, matrixRows) {
-  const maximumWave = shard.name === 'playback-utilities' ? 4 : 3;
+  const maximumWave = shard.name.startsWith('playback-utilities-') ? 5 : 3;
   const matrixByCase = new Map(matrixRows.map((row) => [caseKey(row), row]));
   const waves = new Map();
   for (const invocation of shard.invocations || []) {

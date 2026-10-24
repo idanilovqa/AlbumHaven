@@ -79,6 +79,7 @@ test('cover source validation is bounded and removable previews revoke their obj
       { id: 'first', object_url: 'blob:first' },
       { id: 'second', object_url: 'blob:second' },
     ], pendingPastedImageId: 'first' } } },
+    document: { getElementById: () => null },
     URL: { revokeObjectURL: value => revoked.push(value) },
     console,
   };

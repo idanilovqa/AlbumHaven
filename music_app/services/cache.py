@@ -623,13 +623,21 @@ def persist_structural_tag_edit_for_config(
         persistence_options["before_commit"] = before_commit
     if rebuild_relation_projection:
         persistence_options["rebuild_relation_projection"] = True
-    return adapter.persist_structural_tag_edit(
+    result = adapter.persist_structural_tag_edit(
         changed_paths=set(changed_paths),
         previous_file_entries=previous_file_entries,
         updated_file_entries=updated_file_entries,
         changed_field_names=set(changed_field_names),
         **persistence_options,
     )
+    from music_app.services.library_browse_postgres import (
+        invalidate_postgres_utility_projection_cache,
+    )
+
+    invalidate_postgres_utility_projection_cache(
+        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+    )
+    return result
 
 
 def validate_structural_tag_edit_for_config(

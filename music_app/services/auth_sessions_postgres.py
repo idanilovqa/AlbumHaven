@@ -278,17 +278,28 @@ class PostgresAuthSessionService:
             absolute_expires_at=prepared.absolute_expires_at,
         )
 
-    def resolve_session(self, raw_token: object) -> ResolvedBrowserSession | None:
+    def resolve_session(
+        self,
+        raw_token: object,
+        connection: Any | None = None,
+    ) -> ResolvedBrowserSession | None:
         digest = _token_digest(raw_token)
         if digest is None:
             return None
-        now = _aware_now(self._clock)
-        with self._operation(None) as connection:
-            locked = _discover_and_lock_session(connection, digest)
-            if locked is None:
+        with self._operation(connection) as active_connection:
+            payload = _discover_session(active_connection, digest)
+            if payload is None:
                 return None
+            account = payload
             now = _aware_now(self._clock)
-            payload, account = locked
+            last_seen = _datetime_field(payload, "last_seen_at")
+            if now - last_seen >= timedelta(seconds=self._activity_seconds):
+                locked = _discover_and_lock_session(active_connection, digest)
+                if locked is None:
+                    return None
+                payload, account = locked
+                now = _aware_now(self._clock)
+                last_seen = _datetime_field(payload, "last_seen_at")
             if (
                 not _account_is_active(account)
                 or not _account_is_active(payload)
@@ -300,13 +311,12 @@ class PostgresAuthSessionService:
             if now >= idle_expiry or now >= absolute_expiry:
                 return None
 
-            last_seen = _datetime_field(payload, "last_seen_at")
             if now - last_seen >= timedelta(seconds=self._activity_seconds):
                 last_seen = now
                 idle_expiry = min(
                     now + timedelta(seconds=self._idle_seconds), absolute_expiry
                 )
-                _execute(connection,
+                _execute(active_connection,
                     """
                     update app.account_sessions
                     set last_seen_at = %s, idle_expires_at = %s
@@ -544,23 +554,9 @@ def _datetime_field(row: Mapping[str, object], key: str) -> datetime:
 def _discover_and_lock_session(
     connection: Any, digest: bytes
 ) -> tuple[Mapping[str, object], Mapping[str, object]] | None:
-    discovery_rows = _fetchall(
-        connection,
-        """
-        select s.id as session_id, s.account_id,
-               a.is_active, a.disabled_at, s.created_at,
-               s.authenticated_at, s.last_seen_at, s.idle_expires_at,
-               s.absolute_expires_at, s.revoked_at,
-               s.revocation_reason, s.user_agent
-        from app.account_sessions s
-        join app.accounts a on a.id = s.account_id
-        where s.session_token_hash = %s
-        """,
-        (digest,),
-    )
-    if len(discovery_rows) != 1:
+    discovered = _discover_session(connection, digest)
+    if discovered is None:
         return None
-    discovered = _row(discovery_rows[0], _RESOLVED_COLUMNS)
     account_id = _positive_integer(discovered.get("account_id"), "account id")
 
     account_rows = _fetchall(
@@ -597,6 +593,28 @@ def _discover_and_lock_session(
     if len(locked_rows) != 1:
         return None
     return _row(locked_rows[0], _RESOLVED_COLUMNS), account
+
+
+def _discover_session(
+    connection: Any, digest: bytes
+) -> Mapping[str, object] | None:
+    rows = _fetchall(
+        connection,
+        """
+        select s.id as session_id, s.account_id,
+               a.is_active, a.disabled_at, s.created_at,
+               s.authenticated_at, s.last_seen_at, s.idle_expires_at,
+               s.absolute_expires_at, s.revoked_at,
+               s.revocation_reason, s.user_agent
+        from app.account_sessions s
+        join app.accounts a on a.id = s.account_id
+        where s.session_token_hash = %s
+        """,
+        (digest,),
+    )
+    if len(rows) != 1:
+        return None
+    return _row(rows[0], _RESOLVED_COLUMNS)
 
 
 def _execute(connection: Any, sql: str, params: object = None) -> Any:

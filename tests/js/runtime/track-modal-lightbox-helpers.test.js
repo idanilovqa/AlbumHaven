@@ -937,6 +937,28 @@ test('opening another preview album replaces its mobile identity before presenta
   assert.doesNotMatch(presentations[0].list, /Previous Track/);
 });
 
+test('opening a mobile album recomposes it after mobile page presentation', () => {
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => new Promise(() => {}),
+  });
+  let presented = false;
+  let recomposedAfterPresentation = false;
+  context.presentMobileAlbumPage = () => {
+    presented = true;
+  };
+  context.syncMobileAlbumComposition = () => {
+    recomposedAfterPresentation ||= presented;
+  };
+
+  context.openTrackModal({
+    key: 'mobile-album',
+    name: 'Mobile Album',
+    preview_only: true,
+  });
+
+  assert.equal(recomposedAfterPresentation, true);
+});
+
 async function run() {
   {
     const { context, trackModal } = loadHelper();
@@ -1094,6 +1116,80 @@ async function run() {
     context.state.modalReleaseIndex = 0;
 
     assert.strictEqual(context.resolveTrackModalActionAlbum(alphaButton), indexedAlpha);
+  }
+
+  {
+    const compactAlbum = {
+      key: 'susanne-key',
+      name: 'Revelations of Divine Love',
+      album_artist: 'Susanne Sundfør with Kit Downes',
+      preview_only: true,
+      track_count_preview: 13,
+    };
+    const hydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: Array.from({ length: 13 }, (_, index) => ({
+        path: `C:\\Music\\Revelations of Divine Love\\${index + 1}.mp3`,
+      })),
+    };
+    const { context } = loadHelper({
+      initialAlbums: [compactAlbum],
+      fetchedAlbum: hydratedAlbum,
+    });
+    const actionButton = new context.HTMLElement('susanne-cover-action');
+    actionButton.setAttribute('data-album-key', compactAlbum.key);
+
+    const resolved = await context.resolveHydratedTrackModalActionAlbum(actionButton);
+
+    assert.strictEqual(resolved, hydratedAlbum);
+    assert.equal(context.fetchCalls.length, 1);
+    assert.equal(context.fetchCalls[0].url, '/album-details?album_key=susanne-key');
+    assert.equal(resolved.tracks.length, 13);
+  }
+
+  {
+    const hydratedAlbum = {
+      key: 'hydrated-cover-album',
+      name: 'Hydrated Cover Album',
+      preview_only: false,
+      tracks: [{ path: 'C:\\Music\\Hydrated Cover Album\\01 Track.flac' }],
+    };
+    const { context } = loadHelper({ initialAlbums: [hydratedAlbum] });
+    const actionButton = new context.HTMLElement('hydrated-cover-action');
+    actionButton.setAttribute('data-album-key', hydratedAlbum.key);
+    context.openTrackModal(hydratedAlbum);
+
+    const resolved = await context.resolveHydratedTrackModalActionAlbum(actionButton);
+
+    assert.strictEqual(resolved, hydratedAlbum);
+    assert.equal(context.fetchCalls.length, 0);
+  }
+
+  {
+    const compactAlbum = {
+      key: 'failed-cover-album',
+      name: 'Failed Cover Album',
+      preview_only: true,
+      track_count_preview: 1,
+    };
+    const { context } = loadHelper({
+      initialAlbums: [compactAlbum],
+      onFetchAlbumDetails() {
+        throw new Error('album details unavailable');
+      },
+    });
+    const actionButton = new context.HTMLElement('failed-cover-action');
+    actionButton.setAttribute('data-album-key', compactAlbum.key);
+
+    const resolved = await context.resolveHydratedTrackModalActionAlbum(actionButton);
+
+    assert.equal(resolved, null);
+    assert.deepEqual(context.showToastCalls, [{
+      message: 'Unable to load album details.',
+      tone: 'error',
+      duration: 3200,
+    }]);
   }
 
   {

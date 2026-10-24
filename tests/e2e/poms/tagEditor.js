@@ -26,6 +26,7 @@ export class TagEditor extends BasePage {
       name: 'Load all files from this folder',
       exact: true,
     });
+    this.folderLoadButtonIcon = this.folderLoadButton.locator('svg');
     this.reorderCueRows = this.trackList.locator(
       '[data-tag-editor-track].is-reorder-before, [data-tag-editor-track].is-reorder-dragged',
     );
@@ -35,12 +36,16 @@ export class TagEditor extends BasePage {
     this.activeTrackTitles = this.activeTrackButtons.locator('.tag-editor-track-title');
     this.albumNameInput = this.overlay.locator('input[data-tag-field="album"]');
     this.artistInput = this.overlay.locator('input[data-tag-field="artist"]');
+    this.albumArtistInput = this.overlay.locator('input[data-tag-field="album_artist"]');
     this.trackNameInput = this.overlay.locator('input[data-tag-field="title"]');
     this.genreInput = this.overlay.locator('input[data-tag-field="genre"]');
     this.yearInput = this.overlay.locator('input[data-tag-field="year"]');
     this.trackNumberInput = this.overlay.locator('input[data-tag-field="track_number"]');
     this.discNumberInput = this.overlay.locator('input[data-tag-field="disc_number"]');
     this.exceptionSelect = this.overlay.locator('input[data-tag-field="exception_type"]');
+    this.exceptionNoneOption = page.locator(
+      '#tag-editor-exception-menu [data-tag-editor-exception-option=""]',
+    );
     this.customCollectionNameInput = this.overlay.locator(
       'input[data-tag-field="custom_collection_name"]',
     );

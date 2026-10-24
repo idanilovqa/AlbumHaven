@@ -65,6 +65,36 @@ test('initial selected artist is revealed when the complete sidebar arrives', ()
     'later manual scrolling must not be pulled back to the selected artist');
 });
 
+test('same-selected hydration preserves a queued reveal until the selected row can mount', () => {
+  const { context, sidebarList, activeLink, scrollContainer } = createHarness();
+  const markupContext = vm.createContext({});
+  vm.runInContext(fs.readFileSync(path.join(
+    path.dirname(helperPath), 'render-markup-helpers.js',
+  ), 'utf8'), markupContext);
+  context.resolveSidebarVirtualWindow = markupContext.resolveSidebarVirtualWindow;
+  const artists = Array.from({ length: 2080 }, (_, index) => ({
+    artist: `Artist ${index}`, count: 1,
+  }));
+  artists.push({ artist: 'Bottom Artist', count: 1 });
+  sidebarList.querySelector = () => {
+    const window = sidebarList.albumHavenSidebarVirtualWindow;
+    return window?.start <= 2080 && window?.end > 2080 ? activeLink : null;
+  };
+
+  context.__testApplyViewPayload({
+    query: 'bottom',
+    selected_artist: 'Bottom Artist',
+    artists_sidebar: artists,
+  });
+
+  assert.equal(context.__testState.ui.pendingSidebarRevealArtist, 'Bottom Artist');
+  context.__testRenderSidebar();
+  assert.ok(sidebarList.albumHavenSidebarVirtualWindow.start <= 2080);
+  assert.ok(sidebarList.albumHavenSidebarVirtualWindow.end > 2080);
+  assert.ok(scrollContainer.scrollTop > 0);
+  assert.equal(context.__testState.ui.pendingSidebarRevealArtist, '');
+});
+
 class FakeElement {
   constructor(rect = {}) {
     this.rect = rect;

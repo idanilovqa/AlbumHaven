@@ -42,6 +42,33 @@ from music_app.services.view_payloads import (
 )
 
 
+def test_selected_artist_wire_payload_sends_group_sections_once():
+    primary = [{"artist": "Primary", "albums": [{"key": "primary"}]}]
+    family = [{"artist": "Family", "albums": [{"key": "family"}]}]
+    payload = {
+        "selected_artist": "Primary",
+        "artist_groups": [*primary, *family],
+        "primary_artist_groups": primary,
+        "family_artist_groups": family,
+    }
+
+    result = view_payloads_module.compact_selected_artist_wire_payload(payload)
+
+    assert result is payload
+    assert "artist_groups" not in result
+    assert result["artist_groups_from_selected_sections"] is True
+    assert result["primary_artist_groups"] is primary
+    assert result["family_artist_groups"] is family
+
+
+def test_selected_artist_wire_payload_leaves_root_gallery_unchanged():
+    groups = [{"artist": "Root", "albums": [{"key": "root"}]}]
+    payload = {"selected_artist": "", "artist_groups": groups}
+
+    assert view_payloads_module.compact_selected_artist_wire_payload(payload) == payload
+    assert payload["artist_groups"] is groups
+
+
 _ORIGINAL_BUILD_MOVE_AVAILABILITY_PAYLOAD = library_module.build_move_availability_payload
 
 
@@ -315,6 +342,7 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "relations_phase": "Building",
         "relations_source": "local",
         "covers_in_progress": True,
+        "covers_spotify_quota_exceeded": False,
         "covers_elapsed_seconds": None,
         "covers_estimated_remaining_seconds": None,
         "covers_run_mode": "unknown",

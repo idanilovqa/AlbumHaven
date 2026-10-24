@@ -114,6 +114,7 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
   const pendingTimers = new Map();
   let nextTimerId = 0;
   const resizeEvents = [];
+  const startingEvents = [];
   const settledEvents = [];
   const context = {
     state: {
@@ -145,6 +146,9 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
       dispatchEvent(event) {
         this.lastEvent = event;
         if (event.type === 'resize') resizeEvents.push(event);
+        if (event.type === 'album-haven:artist-tree-toggle-starting') {
+          startingEvents.push({ event, folded: appShell.classList.contains('is-artist-tree-folded') });
+        }
         if (event.type === 'album-haven:artist-tree-settled') settledEvents.push(event);
       },
       getComputedStyle: () => ({
@@ -188,6 +192,7 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
     documentElement,
     pendingTimers,
     resizeEvents,
+    startingEvents,
     settledEvents,
   };
 }
@@ -221,7 +226,7 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 {
   const {
     context, drawerRail, foldButton, navigationButton, expandedTree, compactNavigation, artistList, appShell,
-    documentElement, resizeEvents, settledEvents,
+    documentElement, resizeEvents, startingEvents, settledEvents,
   } = loadHelper({ isMobile: false });
   drawerRail.contains = target => target === foldButton;
   context.document.activeElement = foldButton;
@@ -229,6 +234,8 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 
   const folded = context.toggleArtistTreeFold();
 
+  assert.equal(startingEvents.length, 1);
+  assert.equal(startingEvents[0].folded, false, 'The gallery anchor must be captured before folded layout begins');
   assert.equal(folded, true);
   assert.equal(context.state.ui.artistTreeFolded, true);
   assert.equal(context.state.ui.shellLayoutPreferences.artistTreeFolded, true);
@@ -413,59 +420,4 @@ for (const pendingArtist of ['', 'Latest Artist']) {
   assert.equal(opener.getAttribute('aria-expanded'), 'true');
   assert.equal(opener.getAttribute('data-search-results'), null);
   assert.equal(opener.getAttribute('aria-description'), null);
-}
-
-for (const targetKind of ['backdrop', 'exposed-background']) {
-  const { context, drawerRail, drawerBackdrop } = loadHelper({ isMobile: true });
-  const opener = createElement();
-  opener.focus = () => { context.document.activeElement = opener; };
-  const originalGetElementById = context.document.getElementById.bind(context.document);
-  context.document.getElementById = id => id === 'mobile-library-button'
-    ? opener
-    : originalGetElementById(id);
-  const target = targetKind === 'backdrop' ? drawerBackdrop : createElement();
-  drawerRail.contains = candidate => candidate === drawerRail;
-  let prevented = false;
-  let stopped = false;
-  const event = {
-    target: {
-      closest(selector) {
-        return targetKind === 'backdrop' && selector.includes('#shell-navigation-rail-backdrop')
-          ? drawerBackdrop
-          : null;
-      },
-    },
-    preventDefault() { prevented = true; },
-    stopImmediatePropagation() { stopped = true; },
-  };
-  context.openArtistsDrawer();
-
-  const handled = context.handleArtistsDrawerClick(event);
-
-  assert.equal(handled, true, `${targetKind} must stop the delegated dispatcher`);
-  assert.equal(prevented, true, `${targetKind} must prevent underlying default activation`);
-  assert.equal(stopped, true, `${targetKind} must stop remaining click listeners`);
-  assert.equal(context.state.ui.artistsDrawerOpen, false);
-  assert.equal(context.document.activeElement, opener);
-}
-
-{
-  const { context, drawerRail } = loadHelper({ isMobile: true });
-  const inside = createElement();
-  inside.closest = () => null;
-  drawerRail.contains = candidate => candidate === inside;
-  let prevented = false;
-  let stopped = false;
-  context.openArtistsDrawer();
-
-  const handled = context.handleArtistsDrawerClick({
-    target: inside,
-    preventDefault() { prevented = true; },
-    stopImmediatePropagation() { stopped = true; },
-  });
-
-  assert.equal(handled, false);
-  assert.equal(prevented, false);
-  assert.equal(stopped, false);
-  assert.equal(context.state.ui.artistsDrawerOpen, true);
 }

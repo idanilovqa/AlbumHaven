@@ -10,6 +10,123 @@ function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+test('root gallery continuation uses the approved 800/1200 timing contract', () => {
+  const spec = readRepoFile(
+    'tests/e2e/syntheticLargeLibrary/artistTreeScrollNavigation.spec.js',
+  );
+
+  assert.match(
+    spec,
+    /performanceTimingBudget\(\s*'artist-tree-scroll-navigation\.continuationCommittedMs',?\s*\)/,
+  );
+  assert.match(
+    spec,
+    /evaluateTimingBudget\(\s*continuationDuration,\s*CONTINUATION_COMMITTED_BUDGET,?\s*\)/,
+  );
+  assert.match(spec, /expectTimingBudgetOutcome\(expect, continuationTiming,/);
+  assert.doesNotMatch(spec, /continuationDuration\)\.toBeLessThan\(3000\)/);
+});
+
+test('PR gallery traversal gates memory while soak gates decoded-cover timings', () => {
+  const spec = readRepoFile(
+    'tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js',
+  );
+
+  for (const metric of ['firstVisibleDecodedMs', 'windowRecoveryMs']) {
+    assert.match(
+      spec,
+      new RegExp(`performanceTimingBudget\\(\\s*'gallery-artwork-diversity\\.${metric}'`),
+    );
+  }
+  assert.match(spec, /catch \(error\) \{\s*firstVisibleDecodedError = error;\s*\}/);
+  assert.match(
+    spec,
+    /if \(SOAK_MODE && firstVisibleDecodedError\) \{\s*expectTimingBudgetOutcome\(\s*expect,\s*firstVisibleDecodedTiming,/,
+  );
+  assert.match(spec, /expectTimingBudgetOutcome\(expect, slowestWindowRecoveryTiming,/);
+  assert.match(spec, /const TRAVERSAL_STEPS = SOAK_MODE \? 400 : 160/);
+  assert.match(spec, /const TRAVERSAL_CYCLES = SOAK_MODE \? 2 : 1/);
+  assert.match(spec, /firstVisibleCoverReadinessGated: SOAK_MODE/);
+  assert.match(spec, /windowRecoveryBudgetGated: SOAK_MODE/);
+  assert.match(spec, /memoryBoundsGated: true/);
+  assert.match(spec, /TODO\(E3\): make decoded-cover budgets blocking in PR mode/);
+  assert.doesNotMatch(spec, /diagnosticOnly: true/);
+
+  const firstStart = spec.indexOf('const firstVisibleDecodedStartedAt = performance.now();');
+  const navigation = spec.indexOf("await galleryActions.goto('/?surface=albums');");
+  const firstElapsed = spec.indexOf('performance.now() - firstVisibleDecodedStartedAt');
+  const firstWindow = spec.indexOf(
+    'await galleryActions.galleryPage.waitForFirstDecodedVisibleCover',
+    firstStart,
+  );
+  const fullyHydrated = spec.indexOf('await navigationPanelActions.waitForSidebarFullyHydrated');
+  const baselineWindow = spec.indexOf('const baselineWindow = await galleryActions.galleryPage.waitForDecodedProductionCardWindow');
+  const baselineCheckpoint = spec.indexOf("checkpoint('baseline'");
+  assert.ok(firstStart < navigation, 'first decoded artwork timing must begin before navigation');
+  assert.ok(navigation < firstWindow, 'first decoded artwork wait must follow navigation');
+  assert.ok(firstWindow < firstElapsed,
+    'first decoded artwork timing must include its decoded-cover wait');
+  assert.ok(firstElapsed < baselineCheckpoint,
+    'first decoded artwork timing must stop before diagnostic sampling');
+  assert.ok(firstElapsed < fullyHydrated,
+    'first decoded artwork timing must stop before full startup hydration');
+  assert.ok(fullyHydrated < baselineWindow,
+    'the memory baseline must wait for the fully hydrated gallery');
+  const firstWindowSource = spec.slice(firstWindow, firstElapsed);
+  const baselineWindowSource = spec.slice(baselineWindow, baselineCheckpoint);
+  assert.doesNotMatch(firstWindowSource, /waitForDecodedProductionCardWindow/);
+  assert.match(baselineWindowSource, /requireEveryExpectedCoverDecoded:\s*true/);
+
+  const traversalStart = spec.indexOf('const traverse = async');
+  const traversalEnd = spec.indexOf('\n  try {', traversalStart);
+  const traversal = spec.slice(traversalStart, traversalEnd);
+  assert.match(
+    traversal,
+    /const windowState = await waitForDecodedWindow\(\s*phase,\s*step,\s*coverStartedAt,?\s*\);/,
+    'every traversal step must await and time a decoded visible window',
+  );
+  assert.match(spec, /allowIntentionalNoCoverWindow: true/);
+  assert.match(spec, /requireEveryExpectedCoverDecoded: true/);
+  assert.match(spec, /retiredObjectUrls: previewCache\?\.retiredObjectUrls\?\.size/);
+  assert.match(
+    spec,
+    /expect\(result\.gallery\.cachePersistence\.retiredObjectUrls\)\.toBeLessThanOrEqual\(/,
+    'deferred blob revocation must remain bounded by live gallery image consumers',
+  );
+  assert.match(traversal, /checkpoint\(phase, step, windowState\)/,
+    'sparse memory checkpoints must reuse the already timed decoded window');
+  assert.doesNotMatch(traversal, /page\.evaluate\(readDecodedProductionCardWindow/,
+    'snapshot-only windows cannot prove decoded recovery');
+});
+
+test('app-open diagnostics retain every true-cold startup phase', () => {
+  const helper = readRepoFile('tests/e2e/helpers/appOpenAllArtistsHelpers.js');
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/appOpenAllArtists.spec.js');
+
+  for (const field of [
+    'navigationRequestStartMs',
+    'serverResponseMs',
+    'appShellRenderMs',
+    'initialUiFeedbackMs',
+    'rootPayloadReadyMs',
+    'treeReadyMs',
+    'galleryReadyMs',
+    'firstDecodedArtworkMs',
+  ]) {
+    assert.match(helper, new RegExp(`${field}:`));
+  }
+  assert.match(helper, /performance\.getEntriesByType\('paint'\)/);
+  assert.match(helper, /performance\.getEntriesByType\('resource'\)/);
+  assert.match(helper, /slowSameOriginResources/);
+  assert.match(helper, /transferSize/);
+  assert.match(helper, /data-cover-decoded-at-ms/);
+  assert.match(helper, /querySelectorAll\(selectors\.coverImageSelector\)/);
+  assert.match(helper, /filter\(\(element\) => element\.hasAttribute\('data-cover-decoded-at-ms'\)\)/);
+  assert.match(spec, /coverImageSelector:\s*galleryActions\.galleryPage\.albumCard\.coverImageSelector/);
+  assert.match(spec, /startupDiagnostics\.phases\.treeReadyMs\s*=\s*fullSidebarProof\.treeReadyAtMs/);
+  assert.match(spec, /startupPhases:\s*startupDiagnostics\.phases/);
+});
+
 function readExportedFunction(source, signature, nextSignature) {
   const start = source.indexOf(signature);
   const end = source.indexOf(nextSignature, start + signature.length);
@@ -442,8 +559,15 @@ test('artist-family benchmark keeps browser mechanics outside the scenario spec'
   assert.doesNotMatch(spec, /page\.(?:addInitScript|locator|waitForFunction)\s*\(/);
   assert.match(
     spec,
-    /const searchGalleryReadyMs[\s\S]*?measureActionTime\(\s*async \(\) => \{\},[\s\S]*?await galleryActions\.waitForAlbumVisibleUnderHeading\(\s*EXPECTED_FAMILY\.resonance,\s*RESONANCE_ALBUM/,
+    /recordSubmissionBoundary:[\s\S]*?searchSubmittedAt = Date\.now\(\)[\s\S]*?const searchGalleryReadyMs[\s\S]*?await searchToolbarActions\.waitForQuery\(SEARCH_QUERY[\s\S]*?await artistFamilyActions\.waitForViewReady\(EXPECTED_FAMILY\.primary[\s\S]*?await artistFamilyActions\.waitForVisible[\s\S]*?await galleryActions\.waitForAlbumVisibleUnderHeading\(\s*EXPECTED_FAMILY\.resonance,\s*RESONANCE_ALBUM[\s\S]*?return Date\.now\(\) - searchSubmittedAt/,
   );
+  const searchGalleryTimingStart = spec.indexOf('const searchGalleryReadyMs');
+  const searchGalleryTimingEnd = spec.indexOf(
+    "await stepLogger.step('Capture the Neal Morse runtime snapshot",
+    searchGalleryTimingStart,
+  );
+  assert.ok(searchGalleryTimingStart >= 0 && searchGalleryTimingEnd > searchGalleryTimingStart);
+  assert.doesNotMatch(spec.slice(searchGalleryTimingStart, searchGalleryTimingEnd), /measureActionTime/);
   assert.doesNotMatch(spec, /\b(?:localStorage|sessionStorage)\b/);
   assert.match(artistFamilyActions, /async waitForViewReady\(/);
   assert.match(artistFamilyActions, /async waitForPrimaryAndRelatedFilterActive\(/);
@@ -622,6 +746,70 @@ test('focused search browse resolves its timing budget from the central authorit
   assert.doesNotMatch(spec, /benchmarkValidation\s*:/);
 });
 
+test('focused search browse measures first-use and repeated artist readiness from each submission', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js');
+
+  assert.match(spec, /coldSearchAutoSelectionPromise = navigationPanelActions[\s\S]*?\.then\(\(\) => Date\.now\(\) - searchSubmittedAt\)/);
+  assert.match(spec, /coldSearchGalleryReadyPromise = Promise\.all\([\s\S]*?\.then\(\(\) => Date\.now\(\) - searchSubmittedAt\)/);
+  assert.match(spec, /warmSearchAutoSelectionPromise = navigationPanelActions[\s\S]*?\.then\(\(\) => Date\.now\(\) - warmSearchSubmittedAt\)/);
+  assert.match(spec, /warmSearchGalleryReadyPromise = Promise\.all\([\s\S]*?\.then\(\(\) => Date\.now\(\) - warmSearchSubmittedAt\)/);
+  assert.match(spec, /coldSearchAutoSelectionMs = await coldSearchAutoSelectionPromise/);
+  assert.match(spec, /coldSearchGalleryReadyMs = await coldSearchGalleryReadyPromise/);
+  assert.match(spec, /coldSearchCoversMs = Date\.now\(\) - searchSubmittedAt/);
+  assert.match(spec, /let warmSearchSubmittedAt = 0/);
+  assert.match(spec, /warmSearchAutoSelectionMs = await warmSearchAutoSelectionPromise/);
+  assert.match(spec, /warmSearchGalleryReadyMs = await warmSearchGalleryReadyPromise/);
+  assert.match(spec, /warmSearchCoversMs = Date\.now\(\) - warmSearchSubmittedAt/);
+  assert.match(spec, /key: 'cold-search-visible-covers'/);
+  assert.match(spec, /key: 'warm-search-visible-covers'/);
+  assert.match(spec, /clearSearch[\s\S]*clickAllArtists[\s\S]*waitForPostgresBrowseWarmRoot/);
+});
+
+test('direct Artist Tree timing anchors highlight and gallery readiness to the click and measures covers separately', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js');
+  const measurementStart = spec.indexOf('const selectedArtistStartedAt = performance.now();');
+  const click = spec.indexOf('await selectSidebarArtistAtAndVerify(', measurementStart);
+  const highlightWait = spec.indexOf('await navigationPanelActions.waitForSidebarSelection(', click);
+  const highlightTiming = spec.indexOf('selectedArtistSelectionMs = performance.now() - selectedArtistStartedAt;', highlightWait);
+  const galleryWait = spec.indexOf('await galleryActions.waitForSelectedArtistGallery(', highlightTiming);
+  const galleryTiming = spec.indexOf('selectedArtistGalleryMs = performance.now() - selectedArtistStartedAt;', galleryWait);
+  const coversWait = spec.indexOf('await galleryActions.waitForVisibleGalleryCoversLoaded(', galleryTiming);
+  const coversTiming = spec.indexOf('selectedArtistCoversMs = performance.now() - selectedArtistStartedAt;', coversWait);
+
+  assert.ok(measurementStart >= 0, 'the click must own one shared timing origin');
+  assert.ok(click > measurementStart, 'the click must follow the shared timing origin');
+  assert.ok(highlightWait > click && highlightTiming > highlightWait, 'highlight timing must end at visible selection');
+  assert.ok(galleryWait > highlightTiming && galleryTiming > galleryWait, 'gallery timing must end at structural readiness');
+  assert.ok(coversWait > galleryTiming && coversTiming > coversWait, 'decoded-cover timing must remain separate');
+  assert.match(spec, /key: 'selected-artist-visible-covers'/);
+  assert.match(spec, /selectedArtistCoversMs,/);
+  assert.doesNotMatch(spec, /Artist\[10\]/);
+});
+
+test('search auto-selection timing stops at the visible tree selection before full query settlement', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js');
+  const measurementStart = spec.indexOf('const searchAutoSelectionMs =');
+  const selectionWait = spec.indexOf(
+    'await navigationPanelActions.waitForSidebarSelection(',
+    measurementStart,
+  );
+  const queryWait = spec.indexOf(
+    'await searchToolbarActions.waitForQuery(SEARCH_QUERY',
+    measurementStart,
+  );
+  const checkpoint = spec.indexOf(
+    'await searchAllArtistsLocalReport.recordTimingCheckpoint({',
+    measurementStart,
+  );
+  const measurementSection = spec.slice(measurementStart, queryWait);
+
+  assert.ok(measurementStart >= 0);
+  assert.ok(selectionWait > measurementStart, 'visible selection must close the timed readiness check');
+  assert.ok(queryWait > selectionWait && checkpoint > queryWait,
+    'full query settlement must happen after auto-selection timing and before reporting');
+  assert.match(measurementSection, /waitForSidebarSelection[\s\S]*?\)\s*\)\s*\);\s*$/);
+});
+
 test('focused selected-artist and root browse reports own complete terminal timing evidence', () => {
   const selectedArtist = readRepoFile('tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js');
   const rootBrowse = readRepoFile('tests/e2e/syntheticLargeLibrary/rootAlbumBrowse.spec.js');
@@ -640,7 +828,7 @@ test('focused selected-artist and root browse reports own complete terminal timi
   ]) {
     assert.match(`${selectedArtist}\n${rootBrowse}\n${fixtures}`, new RegExp(metricId.replaceAll('.', '\\.')));
   }
-  assert.equal((selectedArtist.match(/recordTerminalTimingOutcome\(/g) || []).length, 3);
+  assert.equal((selectedArtist.match(/recordTerminalTimingOutcome\(/g) || []).length, 4);
   assert.match(selectedArtist, /measureInteractionToPaint/);
   assert.match(selectedArtist, /maxLongTaskMs/);
   assert.match(selectedArtist, /recordContractCompletion\(\)/);
@@ -1049,7 +1237,7 @@ test('reload continuity E2E measures explicit Play startup and a long uninterrup
   const spec = readRepoFile('tests/e2e/specs/playerReloadAutoplayAllowed.spec.js');
 
   assert.match(spec, /LONG_SUSTAINED_PLAYBACK_SECONDS = 60/);
-  assert.match(spec, /PLAYBACK_START_TIMING_BUDGET\.hardCeiling/);
+  assert.match(spec, /expectTimingBudget\([\s\S]*PLAYBACK_START_TIMING_BUDGET/);
   assert.match(spec, /const explicitPlayMark = await playbackEvidence\.playbackMark\(\)/);
   assert.match(spec, /const explicitPlayStartedAtMs = await page\.evaluate/);
   assert.match(spec, /evidence\.observedAtMs - explicitPlayStartedAtMs/);
@@ -1552,14 +1740,14 @@ test('new gallery and cold saved-loop playback cases own their exact sample evid
 test('populated search timer includes selected album identity and visible cover readiness', () => {
   const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js');
   const start = spec.indexOf('const searchPopulatedReadyMs = await stepLogger.step(');
-  const end = spec.indexOf('const searchPayload = await readRuntimeView(page);', start);
+  const end = spec.indexOf("await stepLogger.step('Clear the first-use search", start);
   assert.ok(start >= 0 && end > start);
   const timedReadiness = spec.slice(start, end);
-  const terminal = timedReadiness.indexOf('return Date.now() - searchSubmittedAt;');
+  const terminal = timedReadiness.indexOf('return coldSearchCoversMs;');
   assert.doesNotMatch(timedReadiness, /waitForAlbumVisibleUnderHeading|scrollTo/);
   for (const requiredWait of [
-    'await navigationPanelActions.waitForSidebarSelection(',
-    'await galleryActions.waitForSelectedArtistGallery(',
+    'coldSearchAutoSelectionMs = await coldSearchAutoSelectionPromise',
+    'coldSearchGalleryReadyMs = await coldSearchGalleryReadyPromise',
     'await expect(expectedCover).toBeInViewport(',
     '.readCoverImageReadinessByArtistAndAlbum(searchQuery, expectedAlbums[0])',
     'await galleryActions.waitForVisibleGalleryCoversLoaded(',
@@ -1575,4 +1763,29 @@ test('populated search timer includes selected album identity and visible cover 
   assert.ok(expectedIdentity < spec.indexOf('const searchReadyMs ='));
   assert.match(spec, /performanceTimingBudget\('search-browse\.searchPopulatedReadyMs'\)/);
   assert.match(spec, /recordTerminalTimingOutcome\(\s*SEARCH_POPULATED_BUDGET\.metricId/);
+});
+test('cover candidate readiness uses locator auto-wait without polling backoff', () => {
+  const source = readRepoFile('tests/e2e/actions/coverLookupActions.js');
+  const helper = readExportedFunction(
+    source,
+    '  async waitForRemoteCandidateCountAtLeast(',
+    '  async waitForRemoteCandidateId(',
+  );
+
+  assert.match(helper, /remoteCoverCards\.nth\(Number\(minimumCount\) - 1\)/);
+  assert.match(helper, /toBeVisible\(/);
+  assert.doesNotMatch(helper, /expect\.poll/);
+});
+
+test('cover lookup times the first decoded candidate before Spotify save setup', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js');
+
+  assert.match(
+    spec,
+    /readyCandidate = candidates\[0\][\s\S]*?waitForRemoteCandidateDecoded\(readyCandidate\.id\)[\s\S]*?candidateReadyMs = performance\.now\(\) - lookupStartedAt[\s\S]*?readRemoteCandidateEvidence\(readyCandidate\.id\)/,
+  );
+  assert.match(
+    spec,
+    /candidateReadyMs = performance\.now\(\) - lookupStartedAt[\s\S]*?selectedCandidate = candidates\.find\([\s\S]*?spotify/,
+  );
 });

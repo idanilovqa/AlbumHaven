@@ -42,6 +42,84 @@ def test_pending_gallery_queues_exact_scope_without_membership_work(monkeypatch,
     assert queued[0][1]["view_state"] == browse._root_sidebar_view_state(params)
 
 
+def test_stale_gallery_serves_immediately_and_refreshes_in_background(monkeypatch):
+    calls, queued = [], []
+    params = {"gallery_page_size": "8"}
+
+    class Cursor:
+        def __init__(self, rows=None):
+            self.rows = list(rows or [])
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+        def fetchall(self):
+            return list(self.rows)
+
+    class Connection:
+        def execute(self, sql, _params=None):
+            calls.append(sql)
+            if sql.startswith("SET TRANSACTION"):
+                return Cursor()
+            if sql == browse._relation_alias_maps_sql():
+                return Cursor([{"alias_to_canonical": {}, "canonical_to_aliases": {}}])
+            raise AssertionError(sql)
+
+        def rollback(self):
+            calls.append("rollback")
+
+        def close(self):
+            calls.append("close")
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-stale-gallery"}
+    repository = browse.PostgresLibraryBrowseRepository(
+        config,
+        connect=lambda _: Connection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        gallery,
+        "gallery_projection_context",
+        lambda _: {"library_id": 1, "generation": 3},
+    )
+
+    def load_stale(_connection, _state, _params, **kwargs):
+        assert kwargs["allow_stale"] is True
+        metadata = browse._root_gallery_page_metadata(
+            "stale-revision", 0, 8, 0, 0,
+        )
+        metadata.update(
+            projection_stale=True,
+            source_generation=2,
+        )
+        return [], [], 0, metadata
+
+    monkeypatch.setattr(gallery, "load_gallery_projection_page", load_stale)
+    monkeypatch.setattr(
+        gallery,
+        "schedule_gallery_projection_refresh",
+        lambda current, **kwargs: queued.append((current, kwargs)),
+    )
+    monkeypatch.setattr(
+        repository._inventory_repository,
+        "load_support_state",
+        lambda **_: {
+            "ignored_version_keys": [],
+            "manual_version_links": {},
+        },
+    )
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_: [])
+
+    payload = repository.build_root_startup_preview_payload(query_params=params)
+
+    assert payload["album_count"] == 0
+    assert payload["gallery_page"]["projection_stale"] is True
+    assert len(queued) == 1
+    assert queued[0][0] is config
+    assert queued[0][1]["view_state"] == browse._root_sidebar_view_state(params)
+    assert browse._root_gallery_membership_sql() not in calls
+
+
 def test_custom_gallery_scope_is_prepared_without_common_scope_work(monkeypatch):
     from contextlib import contextmanager
 

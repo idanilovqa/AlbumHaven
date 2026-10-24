@@ -13,6 +13,7 @@ from typing import Callable
 
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
 from music_app.services.covers import Image, reserve_existing_cover_variant
+from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
@@ -121,6 +122,7 @@ def resolve_album_root_from_track_paths(
     if not resolved_dirs or not has_existing_track:
         return None
     resolved_album_roots = [path.resolve(strict=False) for path in resolved_dirs]
+    enforce_layout_depth = False
     if len(resolved_album_roots) == 1:
         album_root = resolved_album_roots[0]
     else:
@@ -140,7 +142,13 @@ def resolve_album_root_from_track_paths(
             if not _is_explicit_release_part_layout(common_root, resolved_album_roots):
                 return None
             album_root = common_root
-    if not _is_valid_album_root(config, album_root, configured_roots=configured_roots):
+            enforce_layout_depth = True
+    if not _is_valid_album_root(
+        config,
+        album_root,
+        configured_roots=configured_roots,
+        enforce_layout_depth=enforce_layout_depth,
+    ):
         return None
     return album_root
 
@@ -190,6 +198,7 @@ def _is_valid_album_root(
     album_root: Path,
     *,
     configured_roots: list[dict[str, object]] | None = None,
+    enforce_layout_depth: bool = False,
 ) -> bool:
     matching_roots = _matching_library_roots(
         config,
@@ -205,7 +214,9 @@ def _is_valid_album_root(
         return False
     if not relative_parts:
         return False
-    return len(relative_parts) >= _minimum_album_folder_depth(root)
+    if enforce_layout_depth:
+        return len(relative_parts) >= _minimum_album_folder_depth(root)
+    return True
 
 
 def _minimum_album_folder_depth(root: dict[str, object]) -> int:
@@ -229,6 +240,8 @@ def validate_local_cover_source(config: dict[str, object], album_root: Path, sou
         raise ValueError("Selected image is outside the album folder") from exc
     if not resolved.is_file():
         raise FileNotFoundError("Selected image was not found")
+    if is_managed_preview_path(resolved):
+        raise ValueError("Selected image is an internal managed preview")
     return resolved
 
 
@@ -711,7 +724,7 @@ def choose_best_remaining_local_cover(
         for path in album_root.rglob("*")
         if path.is_file()
         and path.suffix.lower() in image_extensions
-        and not is_generated_cover_artifact(path, album_root)
+        and not is_managed_preview_path(path)
     ]
     if not candidates:
         return None

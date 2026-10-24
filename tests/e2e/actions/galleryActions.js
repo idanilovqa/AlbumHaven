@@ -130,7 +130,9 @@ export function readVisibleGalleryCoverReadiness(selectors) {
     ).trim();
     const coverImage = card.querySelector(selectors.coverImageSelector);
     const placeholder = card.querySelector(selectors.coverPlaceholderSelector)
-      || (selectors.allowEmptyArtwork ? card.querySelector('[data-album-artbox-state="empty"]') : null);
+      || (selectors.allowEmptyArtwork
+        ? card.querySelector(selectors.emptyArtboxSelector)
+        : null);
     const visual = coverImage instanceof HTMLImageElement
       ? coverImage
       : (placeholder instanceof HTMLElement ? placeholder : null);
@@ -396,6 +398,7 @@ export class GalleryActions {
       albumCardSelector: this.galleryPage.albumCard.cardSelector,
       coverImageSelector: this.galleryPage.albumCard.coverImageWithinCardSelector,
       coverPlaceholderSelector: this.galleryPage.albumCard.coverPlaceholderWithinCardSelector,
+      emptyArtboxSelector: this.galleryPage.albumCard.emptyArtboxWithinCardSelector,
       titleSelector: this.galleryPage.albumCard.titleButtonSelector,
       galleryScrollSelector: this.galleryPage.galleryScrollSelector,
       minimumCount,
@@ -405,6 +408,7 @@ export class GalleryActions {
       requireLocalImage,
     };
     try {
+      // parity-check: allow-read-only-measurement-evaluate -- wait for visible decoded cover evidence
       await this.galleryPage.waitForPageCondition(readVisibleGalleryCoverReadiness, {
         timeout: options.timeout || 60000,
       }, selectors);
@@ -548,6 +552,14 @@ export class GalleryActions {
     return this.galleryPage.artistHeadings.allTextContents();
   }
 
+  async readAppliedPrimaryArtistAlbumNames(artistName) {
+    const projection = await this.galleryPage.readAppliedAlbumTargetProjection({ artist: artistName });
+    return (projection.primary_artist_groups || [])
+      .flatMap((group) => group.albums || [])
+      .map((album) => String(album.name || album.title || '').trim())
+      .filter(Boolean);
+  }
+
   async readArtistHeadingOccurrencesAcrossGallery(options = {}) {
     if (options.expectedArtists !== undefined && (!Array.isArray(options.expectedArtists)
       || !options.expectedArtists.length
@@ -564,13 +576,23 @@ export class GalleryActions {
             return {
               artist: String(heading.textContent || '').trim(),
               sectionKey: String(section?.getAttribute('data-virtual-section-key') || '').trim(),
+              albumNames: Array.from(section?.querySelectorAll(selectors.albumTitleSelector) || [])
+                .map((title) => String(title.textContent || '').trim())
+                .filter(Boolean),
             };
           })
           .filter((entry) => entry.artist && entry.sectionKey)
       ), {
         artistHeadingSelector: this.galleryPage.artistHeadingSelector,
+        albumTitleSelector: this.galleryPage.albumTitleButtonWithinSectionSelector,
       });
-      mounted.forEach((entry) => occurrencesBySection.set(entry.sectionKey, entry));
+      mounted.forEach((entry) => {
+        const existing = occurrencesBySection.get(entry.sectionKey);
+        occurrencesBySection.set(entry.sectionKey, {
+          ...entry,
+          albumNames: [...new Set([...(existing?.albumNames || []), ...entry.albumNames])],
+        });
+      });
     };
 
     let scrollState = await this.readGalleryScrollState();
@@ -1833,6 +1855,7 @@ export class GalleryActions {
       maxScrollTop: Math.max(0, galleryScroll.scrollHeight - galleryScroll.clientHeight),
       hasMore: Boolean(state.view?.gallery_page?.has_more),
       pageCursor: String(state.view?.gallery_page?.next_cursor || ''),
+      pageRevision: String(state.view?.gallery_page?.revision || ''),
     }));
     const observation = this.galleryPage.productionViewObserver.read();
     if (observation.latestGalleryPageError) {

@@ -1258,3 +1258,41 @@ def test_runtime_cache_save_forwards_explicit_scan_rating_seed_intent(
     )
 
     assert seed_intents == [True]
+
+
+def test_structural_tag_persistence_invalidates_utility_projections(monkeypatch):
+    from music_app.services import cache as cache_module
+    from music_app.services import library_browse_postgres as browse_module
+
+    calls: list[dict[str, object]] = []
+
+    class Adapter:
+        def persist_structural_tag_edit(self, **options):
+            calls.append(options)
+            return {"track_rows_updated": 1}
+
+    invalidations: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cache_module,
+        "_select_runtime_scan_cache_adapter",
+        lambda _config: Adapter(),
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "invalidate_postgres_utility_projection_cache",
+        lambda **options: invalidations.append(options),
+    )
+
+    result = cache_module.persist_structural_tag_edit_for_config(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://runtime/library"},
+        changed_paths={"track.flac"},
+        previous_file_entries={"track.flac": {"album": "Before"}},
+        updated_file_entries={"track.flac": {"album": "After"}},
+        changed_field_names={"album"},
+    )
+
+    assert result == {"track_rows_updated": 1}
+    assert calls[0]["changed_paths"] == {"track.flac"}
+    assert invalidations == [
+        {"database_url": "postgresql://runtime/library"}
+    ]

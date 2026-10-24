@@ -10,6 +10,23 @@ function getCoverLookupModalElements() {
   };
 }
 
+function loadCoverLookupDrawerHoverIcon(button) {
+  const icon = button?.querySelector?.('.cover-lookup-drawer-glyph-hover[data-src]');
+  const src = String(icon?.dataset?.src || '').trim();
+  if (!src) return false;
+  icon.src = src;
+  delete icon.dataset.src;
+  return true;
+}
+
+const coverLookupDrawerButton = document.getElementById?.('cover-lookup-drawer-button');
+coverLookupDrawerButton?.addEventListener?.('mouseenter', () => {
+  loadCoverLookupDrawerHoverIcon(coverLookupDrawerButton);
+});
+coverLookupDrawerButton?.addEventListener?.('focus', () => {
+  loadCoverLookupDrawerHoverIcon(coverLookupDrawerButton);
+});
+
 const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
 const COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS = 2000;
@@ -265,6 +282,13 @@ function normalizeCoverLookupCandidateSnapshot(value) {
   };
 }
 
+function coverLookupCandidateGenerationKey(value) {
+  const generation = String(value || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generation)
+    ? generation.replaceAll('-', '').toLowerCase()
+    : generation;
+}
+
 function getCoverLookupCandidateSource(task, candidateSnapshot) {
   const normalizedTask = task && typeof task === 'object' ? task : null;
   const normalizedSnapshot = normalizeCoverLookupCandidateSnapshot(candidateSnapshot);
@@ -326,50 +350,12 @@ function coverLookupCandidateTimestamp(value) {
 function applyCoverLookupCandidateSource(candidateSource) {
   if (!candidateSource) return;
   const modal = state.coverLookup.modal;
-  const generation = String(candidateSource.generation || '').trim();
-  const overrideGeneration = String(modal.remoteSelectionOverrideGeneration || '').trim();
-  const overrideCandidateId = String(
-    modal.remoteSelectionOverrideCandidateId || modal.selectedRemoteId || '',
-  );
-  const overrideUrl = normalizeCoverLookupCandidateUrl(
-    modal.remoteSelectionOverrideUrl || '',
-  ).toLowerCase();
-  const candidateMatchesOverride = (candidate) => (
-    overrideUrl
-      ? normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === overrideUrl
-      : String(candidate?.id || '') === overrideCandidateId
-  );
-  const retainedOverride = (modal.possibleMatches || []).find(candidateMatchesOverride);
-  modal.candidateGeneration = generation;
-  let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
-  const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
-  if (hasExplicitRemoteSelection) {
-    const incomingOverride = possibleMatches.find(candidateMatchesOverride);
-    const selectedOverride = overrideGeneration !== generation
-      ? (retainedOverride || incomingOverride)
-      : incomingOverride;
-    if (selectedOverride) {
-      const selectedOverrideId = String(selectedOverride.id || '');
-      const selectedOverrideUrl = normalizeCoverLookupCandidateUrl(
-        selectedOverride.url,
-      ).toLowerCase();
-      const selectedOverrideIsPresent = possibleMatches.some((candidate) => (
-        String(candidate?.id || '') === selectedOverrideId
-        && normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === selectedOverrideUrl
-      ));
-      if (!selectedOverrideIsPresent) {
-        possibleMatches = [selectedOverride, ...possibleMatches.filter((candidate) => (
-          String(candidate?.id || '') !== selectedOverrideId
-          && (
-            !selectedOverrideUrl
-            || normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() !== selectedOverrideUrl
-          )
-        ))];
-      }
-    }
-    modal.possibleMatches = possibleMatches;
-    modal.selectedRemoteId = String(selectedOverride?.id || '');
-    return;
+  const generation = coverLookupCandidateGenerationKey(candidateSource.generation);
+  if (generation !== coverLookupCandidateGenerationKey(modal.candidateGeneration)) {
+    modal.candidateGeneration = generation;
+    modal.remoteSelectionOverrideGeneration = '';
+    modal.remoteSelectionOverrideCandidateId = '';
+    modal.remoteSelectionOverrideUrl = '';
   }
   modal.possibleMatches = possibleMatches;
   const hasPendingNonRemoteSelection = Boolean(
@@ -378,6 +364,10 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || (modal.localCovers || []).some((cover) => Boolean(cover?.is_active))
     || String(modal.activeLocalSelectionPath || '')
     || String(getCoverLookupActiveLocalPath() || '')
+  );
+  const userOverrodeThisGeneration = Boolean(
+    generation
+    && coverLookupCandidateGenerationKey(modal.remoteSelectionOverrideGeneration) === generation
   );
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
   const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
@@ -1256,39 +1246,20 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
-function buildCoverLookupDrawerTerminalSignatures(tasks) {
-  return Object.fromEntries((Array.isArray(tasks) ? tasks : []).map((task) => {
-    const taskId = String(task?.id || '').trim();
-    const status = String(task?.status || '').trim();
-    const terminalSignature = isCompletedCoverLookupTask(task)
-      ? `${status}|${String(task?.result_kind || '').trim()}|${String(task?.finished_at || '').trim()}`
-      : '';
-    return [taskId, terminalSignature];
-  }).filter(([taskId]) => taskId));
-}
+const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
+const COVER_LOOKUP_TASK_OVERSCAN = 10;
+const COVER_LOOKUP_TASK_ESTIMATED_HEIGHT = 74;
 
-function hasPendingCoverLookupDrawerTerminalPublication(tasks) {
-  const renderedSignatures = state.coverLookup.drawerRenderedTerminalSignatures;
-  if (!renderedSignatures || typeof renderedSignatures !== 'object') return false;
-  return (Array.isArray(tasks) ? tasks : []).some((task) => {
-    if (!isCompletedCoverLookupTask(task)) return false;
-    const taskId = String(task?.id || '').trim();
-    if (!taskId) return false;
-    const currentSignature = buildCoverLookupDrawerTerminalSignatures([task])[taskId];
-    return renderedSignatures[taskId] !== currentSignature;
-  });
-}
-
-let coverLookupTaskBadgeRevision = 0;
-
-function renderCoverLookupTaskBadgeCount(badgeCount) {
-  const badge = document.getElementById('cover-lookup-drawer-badge');
-  const button = document.getElementById('cover-lookup-drawer-button');
-  if (!badge || !button) return;
-  const normalizedCount = Math.max(0, Number(badgeCount) || 0);
-  badge.hidden = normalizedCount <= 0;
-  badge.textContent = String(normalizedCount || '');
-  button.classList.toggle('has-active-lookups', normalizedCount > 0);
+function getCoverLookupTaskRenderWindow(tasks, body) {
+  const rowHeight = Math.max(
+    1,
+    Number(state.coverLookup.taskEstimatedHeight || COVER_LOOKUP_TASK_ESTIMATED_HEIGHT),
+  );
+  const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
+  const visibleStart = Math.floor(Math.max(0, Number(body.scrollTop || 0)) / rowHeight);
+  const start = Math.min(maximumStart, Math.max(0, visibleStart - COVER_LOOKUP_TASK_OVERSCAN));
+  const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
+  return { start, end, rowHeight };
 }
 
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
@@ -1300,11 +1271,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const clearButton = document.getElementById('cover-lookup-drawer-clear');
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
-  const tasks = (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
-    .filter((task) => !(
-      String(task?.status || '') === 'completed'
-      && Boolean(task?.notification_action_taken)
-    ));
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -1316,49 +1283,43 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
-  const activeCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
-  const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
-  const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
-  const summaryBadgeCount = Number(state.coverLookup.taskSummary?.badge_count);
-  const historyPending = !state.coverLookup.tasksHydrated && Number.isFinite(summaryBadgeCount);
-  const badgeCount = historyPending
-    ? Math.max(0, summaryBadgeCount)
-    : activeCount + pendingNotificationCount;
-  const displayedActiveCount = historyPending
-    ? Math.max(0, Number(state.coverLookup.taskSummary?.active_count) || 0)
-    : activeCount;
-  const displayedTerminalCount = historyPending
-    ? Math.max(0, Number(state.coverLookup.taskSummary?.pending_notification_count) || 0)
-    : terminalCount;
+  const loadedActiveCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
+  const loadedTerminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
+  const counts = state.coverLookup.notificationCounts;
+  const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
+  const activeCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.active_count || 0), loadedActiveCount)
+    : loadedActiveCount;
+  const terminalCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
+    : loadedTerminalCount;
+  const badgeCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.total_count || 0), tasks.length)
+    : tasks.length;
   if (summary) {
     summary.textContent = [
       displayedActiveCount ? `${displayedActiveCount} active` : '',
       displayedTerminalCount ? `${displayedTerminalCount} finished` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
   }
-  renderCoverLookupTaskBadgeCount(badgeCount);
+  badge.hidden = badgeCount <= 0;
+  badge.textContent = String(badgeCount || '');
+  if (badgeCount > 0) loadCoverLookupDrawerHoverIcon(button);
+  button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
     clearButton.hidden = false;
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  const preserveTextSelection = state.coverLookup.drawerOpen
-    && preserveInteraction
-    && hasActiveCoverLookupDrawerTextSelection(body);
-  const preservePressedAction = state.coverLookup.drawerOpen
-    && preserveInteraction
-    && Boolean(
-      body.querySelector?.('.cover-lookup-task-open:active')
-      || body.querySelector?.('.cover-lookup-task-actions :active')
-    );
-  const preserveActiveAction = state.coverLookup.drawerOpen
-    && preserveInteraction
-    && hasActiveCoverLookupDrawerAction(body)
-    && (
-      preservePressedAction
-      || !hasPendingCoverLookupDrawerTerminalPublication(tasks)
-    );
-  const preserveSelectedNotificationText = preserveTextSelection || preserveActiveAction;
+  if (!state.coverLookup.drawerOpen) {
+    body.innerHTML = '';
+    state.coverLookup.taskRenderWindowStart = 0;
+    syncCoverLookupElapsedTimer();
+    return;
+  }
+
+  const preserveSelectedNotificationText = preserveInteraction
+    && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
       body.innerHTML = historyPending && badgeCount > 0
@@ -1369,23 +1330,28 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     syncCoverLookupElapsedTimer();
     return;
   }
-  const taskMarkup = tasks.map((task) => {
+  const renderWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  state.coverLookup.taskRenderWindowStart = renderWindow.start;
+  const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
+  const taskMarkup = visibleTasks.map((task) => {
     const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
     const isCoverUpdated = status === 'completed' && String(task?.result_kind || '') === 'cover-updated';
-    const foundCount = Array.isArray(task?.possible_matches)
-      ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
-      : 0;
+    const foundCount = Number.isFinite(Number(task?.possible_match_count))
+      ? Math.max(0, Number(task.possible_match_count))
+      : Array.isArray(task?.possible_matches)
+        ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+        : 0;
     const statusLabel = status === 'failed'
-      ? 'Lookup failed'
+      ? (String(task?.result_kind || '') === 'interrupted' ? 'Lookup interrupted' : 'Lookup failed')
       : status === 'canceled'
       ? 'Canceled'
       : isNoResult
       ? 'No covers found'
-      : isCoverUpdated
-      ? 'Art chosen'
+          : isCoverUpdated
+            ? 'Art chosen'
       : status === 'completed'
         ? `${foundCount ? `${foundCount} ` : ''}covers found`
       : status === 'pending'
@@ -1409,7 +1375,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? String(buildAlbumDisplayCoverUrl(task?.album_payload || {}) || '').trim()
       : '';
     const coverMarkup = coverUrl
-      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
+      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
       <div class="cover-lookup-task-card ${taskStateClass}">
@@ -1453,8 +1419,17 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     `;
   }).join('');
   if (!preserveSelectedNotificationText) {
-    body.innerHTML = taskMarkup;
-    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
+    const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
+    const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
+    body.innerHTML = `
+      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
+      ${taskMarkup}
+      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
+    `;
+    const measuredCard = body.querySelector?.('.cover-lookup-task-card');
+    const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
+    const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;
+    if (measuredHeight > 0) state.coverLookup.taskEstimatedHeight = measuredHeight + measuredGap;
   }
   syncCoverLookupElapsedTimer();
 }
@@ -1488,6 +1463,7 @@ async function clearCompletedCoverLookupTasks() {
       throw new Error(data.error || 'Failed to clear completed cover lookups');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
   } catch (error) {
@@ -1525,6 +1501,7 @@ async function clearCoverLookupTaskNotification(taskId) {
       throw new Error(data.error || 'Failed to clear notification');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
     showToast('Notification cleared.', 'success', 2200);
@@ -1537,7 +1514,39 @@ async function clearCoverLookupTaskNotification(taskId) {
   }
 }
 
-function buildCoverLookupCard(item, kind = 'local') {
+function releaseDeferredCoverLookupPreviews(root) {
+  const images = root?.querySelectorAll?.('[data-cover-lookup-deferred-src]') || [];
+  images.forEach((image) => {
+    const src = String(image.getAttribute('data-cover-lookup-deferred-src') || '').trim();
+    if (!src) return;
+    image.src = src;
+    image.removeAttribute('data-cover-lookup-deferred-src');
+  });
+}
+
+function scheduleDeferredCoverLookupPreviews(root) {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const requestFrame = typeof window.requestAnimationFrame === 'function'
+      ? callback => window.requestAnimationFrame(callback)
+      : typeof window.setTimeout === 'function'
+      ? callback => window.setTimeout(callback, 0)
+      : callback => callback();
+    requestFrame(() => requestFrame(() => releaseDeferredCoverLookupPreviews(root)));
+  };
+  const priorityImage = root?.querySelector?.('.cover-lookup-art-preview-image[fetchpriority="high"]');
+  if (!priorityImage || priorityImage.complete) {
+    release();
+    return;
+  }
+  priorityImage.addEventListener('load', release, { once: true });
+  priorityImage.addEventListener('error', release, { once: true });
+  window.setTimeout?.(release, 500);
+}
+
+function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
@@ -1604,9 +1613,14 @@ function buildCoverLookupCard(item, kind = 'local') {
     ? `data-cover-lookup-open-lightbox="1" data-cover-src="${escapeHtml(fullImageUrl)}" data-cover-alt="${previewAlt}"`
     : `data-cover-src="${escapeHtml(fullImageUrl)}" data-cover-alt="${previewAlt}"`;
   const previewButtonLabel = 'Open full-size cover art';
-  const previewLoadingAttrs = isRemoteKind
+  const previewLoadingAttrs = isRemoteKind && !prioritizeRemotePreview
     ? 'loading="lazy" fetchpriority="low"'
-    : 'loading="eager"';
+    : isRemoteKind
+      ? 'loading="eager" fetchpriority="high"'
+      : 'loading="eager"';
+  const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
+    ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
+    : `src="${escapeHtml(imageUrl)}"`;
   const actionLabel = kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
@@ -1621,7 +1635,7 @@ function buildCoverLookupCard(item, kind = 'local') {
       <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
-          ${imageUrl ? `<img class="cover-lookup-art-preview-image" src="${imageUrl}" alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
+        ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
           <button class="cover-lookup-art-preview-button" type="button" ${previewAttrs} aria-label="${previewButtonLabel}">
             <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
               <path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-.75 1.75h1.5v2h2v1.5h-2v2h-1.5v-2h-2v-1.5h2v-2Z" fill="currentColor"></path>
@@ -1797,7 +1811,7 @@ function renderCoverLookupModal() {
     : '';
   const possibleMatchesMarkup = possibleMatches.length
     ? `
-        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
+        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item, index) => buildCoverLookupCard(item, 'remote', index === 0)).join('')}</div>` : ''}
         ${groupedDiscogsMatches.length ? `<div class="cover-lookup-subsection-title">Discogs</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="discogs">${groupedDiscogsMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${groupedArchiveMatches.length ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="cover_art_archive">${groupedArchiveMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${manualLinkMatches.length ? `<div class="cover-lookup-subsection-title">MANUAL LINKS</div><div class="cover-lookup-gallery">${manualLinkMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
@@ -1861,13 +1875,51 @@ function renderCoverLookupModal() {
       </section>
     `;
   restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
+  scheduleDeferredCoverLookupPreviews(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();
   }
 }
 
-let coverLookupTasksRequestSequence = 0;
+const coverLookupTasksRequestSequences = { replace: 0, refresh: 0, append: 0, active: 0 };
+
+function updateCoverLookupNotificationCounts(data) {
+  if (!Number.isFinite(Number(data?.total_count))) return;
+  state.coverLookup.notificationCounts = {
+    total_count: Math.max(0, Number(data.total_count || 0)),
+    active_count: Math.max(0, Number(data.active_count || 0)),
+    finished_count: Math.max(0, Number(data.finished_count || 0)),
+  };
+}
+
+async function loadCoverLookupNotificationCounts(options = {}) {
+  try {
+    const response = await fetch('/utilities/cover-lookup/tasks/counts', {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || 'Failed to load cover lookup notification counts');
+    }
+    updateCoverLookupNotificationCounts(data);
+    renderCoverLookupDrawer();
+  } catch (error) {
+    console.warn('[AlbumHaven][CoverLookup] Failed to load notification counts.', error);
+    if (options.toast !== false) {
+      showToast(error.message || 'Failed to load cover lookup notification counts.', 'error', 2800);
+    }
+  }
+}
+
+function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
+  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks);
+  if (mode === 'replace') return incoming;
+  const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
+  const remaining = current.filter((task) => !incomingIds.has(String(task?.id || '')));
+  return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
+}
 
 async function loadCoverLookupTaskSummary() {
   const allows = window.AlbumHavenCapabilities?.allows;
@@ -1894,32 +1946,75 @@ async function loadCoverLookupTaskSummary() {
 }
 
 async function loadCoverLookupTasks(options = {}) {
-  const requestSequence = ++coverLookupTasksRequestSequence;
-  state.coverLookup.tasksLoadFailed = false;
+  const activeOnly = options.activeOnly === true;
+  const append = options.append === true;
+  const requestMode = activeOnly
+    ? 'active'
+    : append
+      ? 'append'
+      : options.mergeFirstPage === true
+        ? 'refresh'
+        : 'replace';
+  const requestSequence = ++coverLookupTasksRequestSequences[requestMode];
+  const previousActiveTaskIds = activeOnly
+    ? new Set(
+      (state.coverLookup.tasks || [])
+        .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
+        .map((task) => String(task?.id || ''))
+        .filter(Boolean),
+    )
+    : new Set();
   try {
-    const response = await fetch('/utilities/cover-lookup/tasks', { headers: { Accept: 'application/json' } });
+    const params = new URLSearchParams({ limit: '50' });
+    if (activeOnly) params.set('active_only', 'true');
+    if (append && state.coverLookup.tasksNextCursor) {
+      params.set('cursor', state.coverLookup.tasksNextCursor);
+    }
+    const response = await fetch(`/utilities/cover-lookup/tasks?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
     const data = await response.json().catch(() => ({}));
-    if (requestSequence !== coverLookupTasksRequestSequence) return;
+    if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
-    state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
-    state.coverLookup.tasksHydrated = true;
-    renderCoverLookupDrawer();
-    (state.coverLookup.tasks || []).forEach((task) => {
-      applyCoverLookupTaskUpdates(task);
-    });
-    const snapshot = JSON.stringify(state.coverLookup.tasks.map((task) => ({
+    updateCoverLookupNotificationCounts(data);
+    const incomingTasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const incomingTaskIds = new Set(
+      incomingTasks.map((task) => String(task?.id || '')).filter(Boolean),
+    );
+    const missingActiveTask = activeOnly
+      && Array.from(previousActiveTaskIds).some((taskId) => !incomingTaskIds.has(taskId));
+    const nextTasks = mergeCoverLookupTaskSummaries(incomingTasks, requestMode);
+    if (requestMode !== 'active') {
+      state.coverLookup.tasksNextCursor = String(data.next_cursor || '') || null;
+    }
+    const snapshot = JSON.stringify(nextTasks.map((task) => ({
       id: task.id,
       status: task.status,
       progress: task.progress,
+      progress_label: task.progress_label,
+      message: task.message,
+      result_kind: task.result_kind,
+      artist: task.artist,
+      album: task.album,
+      year: task.year,
+      notification_action_taken: Boolean(task.notification_action_taken),
+      possible_match_count: Number(task.possible_match_count || 0),
+      candidate_updated_at: String(task.candidate_updated_at || ''),
       selected_candidate_id: task.selected_candidate_id,
       possible_match_ids: buildCoverLookupCandidateSnapshot(task),
       updated_albums_count: Array.isArray(task.updated_albums) ? task.updated_albums.length : 0,
     })));
+    const tasksChanged = snapshot !== state.coverLookup.tasksSnapshot;
+    state.coverLookup.tasks = nextTasks;
+    if (tasksChanged) renderCoverLookupDrawer();
+    nextTasks.forEach((task) => {
+      applyCoverLookupTaskUpdates(task);
+    });
     const modalTaskId = String(state.coverLookup.modal.taskId || '');
-    if (modalTaskId && snapshot !== state.coverLookup.tasksSnapshot) {
-      const task = state.coverLookup.tasks.find((item) => String(item?.id || '') === modalTaskId);
+    if (modalTaskId && tasksChanged) {
+      const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
         state.coverLookup.modal.statusText = String(task.message || task.progress_label || '');
@@ -1930,7 +2025,15 @@ async function loadCoverLookupTasks(options = {}) {
           state.coverLookup.modal.candidateSnapshot,
         );
         applyCoverLookupCandidateSource(candidateSource);
-        if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
+      const partialCandidatesAdvanced = ['pending', 'running'].includes(taskStatus)
+        && (
+          Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0)
+          || coverLookupCandidateTimestamp(task.candidate_updated_at)
+            > coverLookupCandidateTimestamp(state.coverLookup.modal.candidateSnapshot?.updated_at)
+        );
+      if (partialCandidatesAdvanced) {
+        await refreshCoverLookupGallery(false);
+      } else if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
           if (options.refreshModalGallery !== false) {
             await refreshCoverLookupGallery(false);
           } else {
@@ -1949,9 +2052,15 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
+    if (missingActiveTask) {
+      await loadCoverLookupTasks({
+        toast: false,
+        mergeFirstPage: true,
+        refreshModalGallery: options.refreshModalGallery,
+      });
+    }
   } catch (error) {
-    if (requestSequence !== coverLookupTasksRequestSequence) return;
-    state.coverLookup.tasksLoadFailed = true;
+    if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     console.warn('[AlbumHaven][CoverLookup] Failed to load lookup tasks.', error);
     renderCoverLookupDrawer({ preserveInteraction: false });
     if (options.toast !== false) {
@@ -1960,24 +2069,83 @@ async function loadCoverLookupTasks(options = {}) {
   }
 }
 
+let coverLookupPollingRequest = null;
+let coverLookupBackgroundPollTicks = 0;
+let coverLookupPollInFlight = false;
+let coverLookupHistoryRequest = null;
+
+async function loadNextCoverLookupTaskPage(options = {}) {
+  if (!state.coverLookup.tasksNextCursor) return;
+  if (coverLookupHistoryRequest) return coverLookupHistoryRequest;
+  const request = loadCoverLookupTasks({ ...options, append: true });
+  coverLookupHistoryRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (coverLookupHistoryRequest === request) coverLookupHistoryRequest = null;
+  }
+}
+
+function handleCoverLookupDrawerScroll(event) {
+  const body = event?.currentTarget || document.getElementById('cover-lookup-drawer-body');
+  if (!body || !state.coverLookup.drawerOpen) return Promise.resolve();
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const nextWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  if (nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)) {
+    renderCoverLookupDrawer({ preserveInteraction: false });
+  }
+  const remaining = Number(body.scrollHeight || 0)
+    - Number(body.scrollTop || 0)
+    - Number(body.clientHeight || 0);
+  const prefetchThreshold = Math.max(600, Number(body.clientHeight || 0) * 2);
+  if (remaining > prefetchThreshold || !state.coverLookup.tasksNextCursor) return Promise.resolve();
+  return loadNextCoverLookupTaskPage({ toast: false });
+}
+
+async function loadCoverLookupTasksForPolling(options = {}) {
+  if (coverLookupPollingRequest) return coverLookupPollingRequest;
+  const request = loadCoverLookupTasks({ ...options, activeOnly: true });
+  coverLookupPollingRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (coverLookupPollingRequest === request) {
+      coverLookupPollingRequest = null;
+    }
+  }
+}
+
 function ensureCoverLookupPolling() {
   if (state.coverLookup.pollingTimer) return;
   state.coverLookup.pollingTimer = window.setInterval(async () => {
-    await loadCoverLookupTasks({ toast: false });
-    const snapshot = state.coverLookup.modal.candidateSnapshot;
+    if (coverLookupPollInFlight) return;
     const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
-    const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
-      String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
-      && ['pending', 'running'].includes(String(task?.status || ''))
-    ));
-    if (
-      modalOpen
-      && !hasMatchingActiveTask
-      && ['pending', 'running'].includes(String(snapshot?.status || ''))
-    ) {
-      await refreshCoverLookupGallery(false);
+    if (!modalOpen) {
+      coverLookupBackgroundPollTicks += 1;
+      if (coverLookupBackgroundPollTicks < 25) return;
+      coverLookupBackgroundPollTicks = 0;
+    } else {
+      coverLookupBackgroundPollTicks = 0;
     }
-  }, 2500);
+    coverLookupPollInFlight = true;
+    try {
+      await loadCoverLookupTasksForPolling({ toast: false });
+      const snapshot = state.coverLookup.modal.candidateSnapshot;
+      const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
+        String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
+        && ['pending', 'running'].includes(String(task?.status || ''))
+      ));
+      if (
+        modalOpen
+        && !hasMatchingActiveTask
+        && ['pending', 'running'].includes(String(snapshot?.status || ''))
+      ) {
+        await refreshCoverLookupGallery(false);
+      }
+    } finally {
+      coverLookupPollInFlight = false;
+    }
+  }, 100);
 }
 
 function stopCoverLookupPollingIfIdle() {
@@ -1988,6 +2156,7 @@ function stopCoverLookupPollingIfIdle() {
   if (state.coverLookup.pollingTimer) {
     window.clearInterval(state.coverLookup.pollingTimer);
     state.coverLookup.pollingTimer = 0;
+    coverLookupBackgroundPollTicks = 0;
   }
 }
 
@@ -2133,10 +2302,7 @@ async function openCoverLookupModal(album, options = {}) {
   }
   renderCoverLookupModal();
   ensureCoverLookupPolling();
-  await Promise.all([
-    loadCoverLookupTasks({ toast: false, refreshModalGallery: false }),
-    refreshCoverLookupGallery(),
-  ]);
+  await refreshCoverLookupGallery();
 }
 
 function closeCoverLookupModal() {
@@ -2155,6 +2321,18 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
+  state.coverLookup.modal.saving = false;
+  state.coverLookup.modal.album = null;
+  state.coverLookup.modal.taskId = '';
+  state.coverLookup.modal.localCovers = [];
+  state.coverLookup.modal.otherArt = [];
+  state.coverLookup.modal.possibleMatches = [];
+  state.coverLookup.modal.candidateSnapshot = null;
+  state.coverLookup.modal.candidateGeneration = '';
+  state.coverLookup.modal.statusText = '';
+  state.coverLookup.modal.statusTone = 'neutral';
+  state.coverLookup.modal.manualUrlText = '';
+  if (els.body) els.body.innerHTML = '';
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
     els.saveRemote.disabled = true;
@@ -2196,7 +2374,6 @@ async function startCoverLookupForAlbum(album, options = {}) {
   const backgroundOnly = Boolean(options?.backgroundOnly);
   const triggerButton = backgroundOnly ? options?.triggerButton : null;
   const triggerWasDisabled = Boolean(triggerButton?.disabled);
-  const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
   if (!backgroundOnly) {
     const selectedLocalCard = document.getElementById('cover-lookup-modal-body')
       ?.querySelector?.('[data-select-local-cover][data-cover-lookup-local-active]');
@@ -2255,9 +2432,8 @@ async function startCoverLookupForAlbum(album, options = {}) {
       5000,
       { placement: 'top-center' },
     );
-    await loadCoverLookupTasks({ toast: false });
-    if (!backgroundOnly && modalOpen) {
-      await refreshCoverLookupGallery(false);
+    if (backgroundOnly) {
+      await loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     }
   } catch (error) {
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);

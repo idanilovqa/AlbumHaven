@@ -8,6 +8,65 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.join(__dirname, '..', '..');
 
+test('cover cache diagnostics inspect the production unversioned key and exact stored epoch', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href);
+  const productionUrl = 'http://127.0.0.1:4173/cover?path=album-cover&size=480&v=revision';
+  const matchedKeys = [];
+  let storedProductionUrl = productionUrl;
+  const page = {
+    async evaluate(callback, url) {
+      const context = {
+        URL,
+        globalThis: {
+          __ALBUM_HAVEN_GALLERY_COVER_CACHE__: {
+            activeCount: 48,
+            activeProductionUrls: [],
+            cacheName: 'gallery-covers',
+          },
+          caches: {
+            async open(name) {
+              assert.equal(name, 'gallery-covers');
+              return {
+                async match(key) {
+                  matchedKeys.push(String(key));
+                  return {
+                    status: 200,
+                    headers: {
+                      get(header) {
+                        if (String(header).toLowerCase() === 'content-type') return 'image/jpeg';
+                        if (header === 'X-Album-Haven-Cover-Production-Url') return storedProductionUrl;
+                        return '';
+                      },
+                    },
+                  };
+                },
+              };
+            },
+          },
+        },
+      };
+      return require('node:vm').runInNewContext(
+        `(${callback.toString()})(url)`,
+        { ...context, url },
+      );
+    },
+  };
+
+  const state = await GalleryPage.prototype.readCoverCacheState.call({ page }, productionUrl);
+
+  assert.deepEqual(matchedKeys, ['http://127.0.0.1:4173/cover?path=album-cover&size=480']);
+  assert.equal(state.cached, true);
+  assert.equal(state.cachedStatus, 200);
+  assert.equal(state.cachedType, 'image/jpeg');
+
+  storedProductionUrl = productionUrl.replace('revision', 'stale');
+  assert.equal(
+    (await GalleryPage.prototype.readCoverCacheState.call({ page }, productionUrl)).cached,
+    false,
+    'an entry for an older cover revision must not satisfy the diagnostic contract',
+  );
+});
+
 test('gallery readiness does not confuse absence-blocking membership with applied target proof', async () => {
   const { classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
   const snapshot = { canonicalApplied: true, canonicalInventoryComplete: true,
@@ -3254,7 +3313,10 @@ test('album-details selection supports production prewarming without a click-tim
 
 test('decoded gallery window ignores offscreen native-lazy cards until real traversal brings them into view', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href;
-  const { readDecodedProductionCardWindow } = await import(moduleUrl);
+  const {
+    hasFirstDecodedVisibleGalleryCover,
+    readDecodedProductionCardWindow,
+  } = await import(moduleUrl);
   class FakeElement {
     constructor(bounds = {}) {
       this.bounds = {
@@ -3354,8 +3416,15 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
       true,
       'background-only cover work must not block a settled visible card window',
     );
+    visibleImage.attributes.set('data-production-cover-src', '');
+    assert.equal(
+      hasFirstDecodedVisibleGalleryCover(args),
+      true,
+      'first-cover paint accepts decoded server markup before hydration metadata arrives',
+    );
     visibleImage.complete = false;
     visibleImage.naturalWidth = 0;
+    assert.equal(hasFirstDecodedVisibleGalleryCover(args), false);
     assert.equal(readDecodedProductionCardWindow(args), false, 'one positive intersecting candidate is required and must settle');
     cards[0].getBoundingClientRect = () => ({
       left: 20, top: 20, right: 20, bottom: 320, width: 0, height: 300,
@@ -3374,8 +3443,8 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
 
   const pom = read('tests/e2e/poms/galleryPage.js');
   const traversal = read('tests/e2e/actions/galleryActions.js');
-  assert.match(pom, /cardBounds\.width > 0[\s\S]*entry\.key && entry\.intersects[\s\S]*entries\.filter\(\(entry\) => entry\.productionSrc\)/);
-  assert.match(pom, /windowState\.candidateCount > 0/);
+  assert.match(pom, /cardBounds\.width > 0[\s\S]*entry\.key && entry\.intersects[\s\S]*const expectedCoverEntries = entries\.filter\(\(entry\) => entry\.expectedCover\)[\s\S]*const coveredEntries = expectedCoverEntries\.filter\(\(entry\) => entry\.productionSrc\)/);
+  assert.match(pom, /if \(windowState\.candidateCount === 0\)[\s\S]*coveredEntries\.length === expectedCoverEntries\.length/);
   assert.match(traversal, /scrollGalleryBy\(deltaY\)[\s\S]*waitForGalleryScrollMovement/);
   assert.match(traversal, /page\.mouse\.wheel\(0, deltaY\)/);
 });
@@ -3410,10 +3479,21 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
     width: 200,
     height: 300,
   };
-  const card = (key, image = null) => ({
+  const card = (key, image = null, album = {}) => ({
     getBoundingClientRect() { return visibleBounds; },
     getAttribute(name) { return name === 'data-gallery-card-key' ? key : ''; },
-    querySelector() { return image; },
+    querySelector(selector) {
+      if (selector === '.cover img') return image;
+      if (selector === '[data-open-tracklist="1"][data-album]') {
+        return { getAttribute: name => name === 'data-album' ? JSON.stringify(album) : '' };
+      }
+      if (selector === '[data-album-artbox-state]') {
+        return image ? null : {
+          getAttribute: name => name === 'data-album-artbox-state' ? 'empty' : '',
+        };
+      }
+      return null;
+    },
   });
   const gallery = new FakeElement({
     left: 0,
@@ -3432,7 +3512,7 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
     productionSrc: '/cover?path=second',
   });
   const cards = [
-    card('first', firstDecodedCover),
+    card('first', firstDecodedCover, { cover_path: 'C:/covers/first.jpg' }),
     card('second', secondDecodedCover),
     card('legitimate-no-art'),
   ];
@@ -3466,11 +3546,28 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
       true,
       'a legitimate no-art card must not block two decoded production covers',
     );
+    cards.push(card('covered-without-image', null, { cover_path: 'C:/covers/expected.jpg' }));
+    assert.equal(
+      readDecodedProductionCardWindow(args),
+      false,
+      'an album with a production cover must not be mistaken for an intentional no-art placeholder',
+    );
+    cards.pop();
     secondDecodedCover.naturalWidth = 0;
+    secondDecodedCover.complete = false;
     assert.equal(
       readDecodedProductionCardWindow(args),
       false,
       'a terminal production-cover failure must not satisfy the required decoded-cover count',
+    );
+    cards.splice(0, cards.length,
+      card('no-art-one'),
+      card('no-art-two'));
+    assert.equal(readDecodedProductionCardWindow(args), false);
+    assert.equal(
+      readDecodedProductionCardWindow({ ...args, allowIntentionalNoCoverWindow: true }),
+      true,
+      'an explicit no-cover window may settle only when every visible card is an intentional placeholder',
     );
   } finally {
     if (originals.document === undefined) delete globalThis.document;
@@ -4966,10 +5063,29 @@ test('cover notification text selection retries only the atomic connected-node g
   assert.doesNotMatch(selectionAction, /element\.click\(|dispatchEvent|selection\.addRange/);
 });
 
+test('cover lookup records decoded candidate readiness before response hashing', () => {
+  const performanceSpec = read('tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js');
+  const decodeReadyIndex = performanceSpec.indexOf(
+    'await coverLookupActions.waitForRemoteCandidateDecoded(readyCandidate.id);',
+  );
+  const timingIndex = performanceSpec.indexOf(
+    'candidateReadyMs = performance.now() - lookupStartedAt;',
+  );
+  const hashEvidenceIndex = performanceSpec.indexOf(
+    'await coverLookupActions.readRemoteCandidateEvidence(readyCandidate.id);',
+  );
+
+  assert.notEqual(decodeReadyIndex, -1, 'candidate readiness must wait for displayed decode');
+  assert.ok(timingIndex > decodeReadyIndex, 'timing must follow displayed decode');
+  assert.ok(hashEvidenceIndex > timingIndex, 'response hashing must stay outside readiness timing');
+});
+
 test('cover lookup hashes only decoded visible currentSrc response evidence', () => {
   const coverLookup = read('tests/e2e/actions/coverLookupActions.js');
 
-  assert.match(coverLookup, /expect\(image,[\s\S]*?\)\.toBeVisible\(\)/);
+  assert.match(coverLookup, /expect\(image,[\s\S]*?\)\.toHaveCount\(1, \{ timeout \}\)/);
+  assert.doesNotMatch(coverLookup, /if \(!\(await image\.count\(\)\)\) return/);
+  assert.match(coverLookup, /expect\(image,[^;]*\)\.toBeVisible\(\{ timeout \}\)/);
   assert.match(coverLookup, /element\.complete\s*&&\s*element\.naturalWidth\s*>\s*0/);
   assert.match(coverLookup, /currentSrc:/);
   assert.match(coverLookup, /hasAttribute\('data-cover-visual-state'\)/);
@@ -4979,6 +5095,57 @@ test('cover lookup hashes only decoded visible currentSrc response evidence', ()
   assert.match(coverLookup, /sourceUrl\.origin !== location\.origin/);
   assert.match(coverLookup, /fetch\(expected\.currentSrc, \{ mode: 'same-origin' \}\)/);
   assert.doesNotMatch(coverLookup, /fetch\((?:src|displayedSource|productionSrc)/);
+});
+
+test('cover lookup decode readiness wakes on image load without polling delay', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href;
+  const { waitForDisplayedImageDecode } = await import(moduleUrl);
+  const originalImageElement = globalThis.HTMLImageElement;
+  class FakeImageElement extends EventTarget {
+    constructor() {
+      super();
+      this.complete = false;
+      this.naturalWidth = 0;
+      this.naturalHeight = 0;
+      this.currentSrc = 'http://127.0.0.1:4173/cover.jpg';
+      this.decodeCalls = 0;
+    }
+
+    async decode() {
+      this.decodeCalls += 1;
+    }
+
+    getAttribute() {
+      return '';
+    }
+
+    hasAttribute() {
+      return false;
+    }
+
+    getBoundingClientRect() {
+      return { width: 240, height: 240 };
+    }
+  }
+  globalThis.HTMLImageElement = FakeImageElement;
+  try {
+    const image = new FakeImageElement();
+    const readiness = waitForDisplayedImageDecode(image);
+    image.complete = true;
+    image.naturalWidth = 480;
+    image.naturalHeight = 480;
+    image.dispatchEvent(new Event('load'));
+
+    const state = await readiness;
+
+    assert.equal(image.decodeCalls, 1);
+    assert.equal(state.complete, true);
+    assert.equal(state.naturalWidth, 480);
+    assert.equal(state.width, 240);
+  } finally {
+    if (originalImageElement === undefined) delete globalThis.HTMLImageElement;
+    else globalThis.HTMLImageElement = originalImageElement;
+  }
 });
 
 test('cover lookup rejects a pending gallery blob transition before hashing response evidence', async () => {
@@ -6155,9 +6322,12 @@ test('root gallery boundary settlement keeps its original bounded timeout and ob
     async waitForPageCondition(callback, options, args) {
       assert.equal(options.timeout, 5000);
       const gallery = { scrollHeight: 1200, clientHeight: 600 };
-      const context = { document: { querySelector: () => gallery }, state: { view: { gallery_page: { has_more: true, next_cursor: 'next-page' } } } };
+      const context = { document: { querySelector: () => gallery }, state: { view: { gallery_page: { has_more: true, next_cursor: 'next-page', revision: 'r1' } } } };
       const predicate = require('node:vm').runInNewContext(`(${callback.toString()})`, context);
       assert.equal(predicate(args), false);
+      context.state.view.gallery_page.revision = 'r2';
+      assert.equal(predicate(args), true);
+      context.state.view.gallery_page.revision = 'r1';
       context.state.view.gallery_page.next_cursor = 'following-page';
       assert.equal(predicate(args), true);
       context.state.view.gallery_page.next_cursor = 'next-page';
@@ -6168,7 +6338,9 @@ test('root gallery boundary settlement keeps its original bounded timeout and ob
       assert.equal(predicate(args), true);
     },
   };
-  await GalleryPage.prototype.waitForRootGalleryBoundaryProgress.call(owner, { maxScrollTop: 600, pageCursor: 'next-page' });
+  await GalleryPage.prototype.waitForRootGalleryBoundaryProgress.call(owner, {
+    maxScrollTop: 600, pageCursor: 'next-page', pageRevision: 'r1',
+  });
 });
 
 
@@ -6321,4 +6493,20 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
       },
     }, 'Mastodon', 'Later album', { ...supplied, waitAtBoundary: true }), error => error === stop);
   }
+});
+
+test('Edit Tags duration gates use the shared timing-budget helper', () => {
+  const functionalSpec = read('tests/e2e/specs/albumTagRename.spec.js');
+  const performanceSpec = read('tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js');
+
+  assert.match(functionalSpec, /defineTimingBudget/);
+  assert.match(
+    functionalSpec,
+    /expectTimingBudget\(\s*expect,\s*Math\.max\(0, lateMedianMs - earlyMedianMs\)/,
+  );
+  assert.match(performanceSpec, /defineTimingBudget/);
+  assert.match(
+    performanceSpec,
+    /expectTimingBudget\(\s*expect,\s*probe\.durationMs,\s*CONCURRENT_PROBE_BUDGET/,
+  );
 });

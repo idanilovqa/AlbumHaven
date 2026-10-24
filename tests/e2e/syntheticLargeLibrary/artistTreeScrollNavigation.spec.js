@@ -14,6 +14,9 @@ import {
 
 const ROOT_HTML_BUDGET = performanceTimingBudget('artist-tree-scroll-navigation.rootHtmlResponseMs');
 const JUMP_ALIGNED_BUDGET = performanceTimingBudget('artist-tree-scroll-navigation.jumpAlignedMs');
+const CONTINUATION_COMMITTED_BUDGET = performanceTimingBudget(
+  'artist-tree-scroll-navigation.continuationCommittedMs',
+);
 
 async function openContextMenuForArtist(ui, artist) {
   await ui.openArtistTreeContextMenu(artist);
@@ -24,6 +27,7 @@ async function openContextMenuForArtist(ui, artist) {
 async function jumpToArtist(ui, artist, { expectLoader = null } = {}) {
   const loaderObservation = expectLoader === false ? await ui.observeLoaderVisibility() : null;
   await openContextMenuForArtist(ui, artist);
+  const jumpStartedEpoch = await ui.readBrowserEpoch();
   const jumpStartedAt = performance.now();
   await ui.scrollToArtistAction.click();
   await expect.poll(
@@ -47,8 +51,9 @@ async function jumpToArtist(ui, artist, { expectLoader = null } = {}) {
     throw error;
   });
   const timing = evaluateTimingBudget(performance.now() - jumpStartedAt, JUMP_ALIGNED_BUDGET);
+  const resourceTimings = await ui.readArtistJumpResourceTimings(artist, jumpStartedEpoch);
   await test.info().attach('artist-jump-timing', {
-    body: JSON.stringify({ artist, ...timing }, null, 2),
+    body: JSON.stringify({ artist, ...timing, resourceTimings }, null, 2),
     contentType: 'application/json',
   });
   console.log(formatTimingBudgetOutcome(`Artist jump to ${artist}`, timing));
@@ -185,6 +190,11 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     for (let step = 0; step < 200 && upwardArtists.size < 20; step += 1) {
       // parity-check: allow-read-only-measurement-evaluate -- capture a visible card across slow native wheel input
       const before = await ui.captureVisibleCardAnchor();
+      const diagnosticsBefore = await galleryActions.readVirtualGridDiagnostics();
+      const diagnosticSequenceBefore = Math.max(
+        0,
+        ...(diagnosticsBefore?.events || []).map(event => Number(event.sequence || 0)),
+      );
       const box = await ui.galleryScroll.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.wheel(0, -160);
@@ -192,17 +202,43 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       // parity-check: allow-read-only-measurement-evaluate -- reject reverse-scroll prepend jumps
       const continuity = await ui.readVisibleCardAnchorContinuity(before);
       await before.dispose();
-      if (continuity.connected && continuity.delta !== null) {
-        stableAnchorComparisons += 1;
-        if (continuity.delta < -2 || continuity.delta > 220) {
-          await testInfo.attach('reverse-scroll-displacement', {
-            body: JSON.stringify({ step, wheelDeltaY: -160, continuity }),
-            contentType: 'application/json',
-          });
-        }
-        expect(continuity.delta).toBeGreaterThanOrEqual(-2);
-        expect(continuity.delta).toBeLessThanOrEqual(220);
+      const diagnosticsAfter = await galleryActions.readVirtualGridDiagnostics();
+      const renderGenerationChanged = Number(diagnosticsAfter?.latestRender?.renderGeneration || 0)
+        !== Number(diagnosticsBefore?.latestRender?.renderGeneration || 0);
+      const gridEvents = (diagnosticsAfter?.events || []).filter(
+        event => Number(event.sequence || 0) > diagnosticSequenceBefore,
+      );
+      const coordinateRestore = gridEvents
+        .filter(event => event.type === 'scroll-restore-settled')
+        .at(-1) || null;
+      const restoredWheelDelta = coordinateRestore
+        ? Number(diagnosticsAfter?.latestScroll?.scrollTop || 0)
+          - Number(coordinateRestore.scrollTop || 0)
+        : null;
+      const visibleDrift = Math.abs(Number(continuity.delta) - 160);
+    if (
+      !continuity.connected
+        || visibleDrift !== 0
+    ) {
+      await testInfo.attach('reverse-scroll-displacement', {
+        body: JSON.stringify({
+          step,
+          wheelDeltaY: -160,
+          continuity,
+          renderGenerationChanged,
+            coordinateRestore,
+            restoredWheelDelta,
+            gridEvents,
+          latestScroll: diagnosticsAfter?.latestScroll || null,
+          latestRender: diagnosticsAfter?.latestRender || null,
+          latestMeasurement: diagnosticsAfter?.latestMeasurement || null,
+        }),
+        contentType: 'application/json',
+      });
       }
+    expect(continuity.connected).toBe(true);
+    expect(visibleDrift).toBe(0);
+    stableAnchorComparisons += 1;
       upwardArtists.add(await ui.galleryContextName.textContent());
     }
     // parity-check: allow-read-only-measurement-evaluate -- diagnose reverse-page ownership and boundary state
@@ -266,7 +302,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       if (!url.searchParams.has('gallery_cursor') || continuationRequest) return;
       continuationRequest = request;
       continuationPending = true;
-      continuationStartedAt = Date.now();
+      continuationStartedAt = performance.now();
       if (!requestGeometry) requestGeometry = ui.readContinuationGeometry();
     });
     page.on('response', response => {
@@ -283,7 +319,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
         await expect.poll(() => page.evaluate(key => (
           (state.view.artist_groups || []).some(group => (group.albums || []).some(album => album.key === key))
         ), appendedAlbumKey), { timeout: 3000 }).toBe(true);
-        continuationDuration = Date.now() - continuationStartedAt;
+        continuationDuration = performance.now() - continuationStartedAt;
       })().catch(error => { continuationError = error; }).finally(() => { continuationPending = false; });
     });
     for (let step = 0; step < 30; step += 1) {
@@ -305,7 +341,16 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     expect(geometry.remaining).toBeGreaterThanOrEqual(geometry.viewport * 6);
     if (Number.isFinite(minimumRemaining)) expect(minimumRemaining).toBeGreaterThan(0);
     expect(continuationDuration).not.toBeNull();
-    expect(continuationDuration).toBeLessThan(3000);
+    const continuationTiming = evaluateTimingBudget(
+      continuationDuration,
+      CONTINUATION_COMMITTED_BUDGET,
+    );
+    await test.info().attach('root-gallery-continuation-timing', {
+      body: JSON.stringify({ requestGeometry: geometry, ...continuationTiming }, null, 2),
+      contentType: 'application/json',
+    });
+    console.log(formatTimingBudgetOutcome('Root gallery continuation commit', continuationTiming));
+    expectTimingBudgetOutcome(expect, continuationTiming, 'Root gallery continuation commit');
     const appendedCard = ui.albumCardByKey(appendedAlbumKey);
     let crossedBoundary = false;
     for (let step = 0; step < 100; step += 1) {

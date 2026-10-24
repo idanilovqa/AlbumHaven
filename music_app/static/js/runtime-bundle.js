@@ -1407,6 +1407,17 @@ function buildSelectedArtistChronologicalArtistGroups(primaryGroups = [], family
   }];
 }
 
+function expandCompactSelectedArtistGroups(payload) {
+  if (!payload || payload.artist_groups_from_selected_sections !== true
+      || Array.isArray(payload.artist_groups)) return payload;
+  payload.artist_groups = buildSelectedArtistRuntimeArtistGroups(
+    payload,
+    Array.isArray(payload.primary_artist_groups) ? payload.primary_artist_groups : [],
+    Array.isArray(payload.family_artist_groups) ? payload.family_artist_groups : [],
+  );
+  return payload;
+}
+
 function buildSelectedArtistRuntimeArtistGroups(view, primaryGroups = [], familyGroups = []) {
   if (normalizeRuntimeSelectedArtistFamilyDisplayMode(view?.selected_artist_family_display_mode ?? view?.artist_page?.family_display_mode) === 'chronological') {
     return buildSelectedArtistChronologicalArtistGroups(primaryGroups, familyGroups);
@@ -1711,6 +1722,29 @@ function applyViewPayload(payload, options = {}) {
       ? nextView.loaded_library_categories
       : previousView.non_album_library_categories || nextView.loaded_library_categories)
   )];
+  const previousNonAlbumCategories = previousView.non_album_library_categories
+    || previousView.loaded_library_categories || previousView.visible_library_categories || [];
+  const nextNonAlbumCategories = nextView.non_album_library_categories
+    || nextView.loaded_library_categories || nextView.visible_library_categories || [];
+  const sameNonAlbumScope = (
+    String(previousView.selected_artist || '').trim() === String(nextView.selected_artist || '').trim()
+    && String(previousView.query || '').trim() === String(nextView.query || '').trim()
+    && previousNonAlbumCategories.length === nextNonAlbumCategories.length
+    && previousNonAlbumCategories.every((category) => nextNonAlbumCategories.includes(category))
+  );
+  if (
+    nextView.non_album_tracks_deferred
+    && !previousView.non_album_tracks_deferred
+    && (
+      previousView.non_album_tracks?.length
+      || previousView.library_non_album_tracks?.length
+    )
+    && sameNonAlbumScope
+  ) {
+    nextView.non_album_tracks = previousView.non_album_tracks;
+    nextView.library_non_album_tracks = previousView.library_non_album_tracks;
+    nextView.non_album_tracks_deferred = false;
+  }
   if (nextView.gallery_page && !options.rootGalleryContinuation && !nextPayload?.gallery_page_scope) {
     // Source hydration may retain the navigation URL. Continuations must follow
     // the actual loaded page scope, not those retained browser parameters.
@@ -1767,9 +1801,11 @@ function applyViewPayload(payload, options = {}) {
       && String(nextView.selected_artist || '').trim(),
     );
     const selectedArtistChanged = Boolean(selectionChanged && nextSelectedArtist);
-    state.ui.pendingSidebarRevealArtist = (clearedSearchWithSelection || selectedArtistChanged)
-      ? String(nextView.selected_artist || '')
-      : '';
+    if (clearedSearchWithSelection || selectedArtistChanged) {
+      state.ui.pendingSidebarRevealArtist = String(nextView.selected_artist || '');
+    } else if (!nextSelectedArtist) {
+      state.ui.pendingSidebarRevealArtist = '';
+    }
   }
   state.view = nextView;
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
@@ -5386,9 +5422,8 @@ const state = {
   coverLookup: {
     drawerOpen: false,
     tasks: [],
-    tasksHydrated: false,
-    tasksLoadFailed: false,
-    taskSummary: null,
+    notificationCounts: null,
+    tasksNextCursor: null,
     pollingTimer: 0,
     selectionTimer: 0,
     taskOpenSelectionGesture: null,
@@ -6956,12 +6991,13 @@ function transitionGalleryMain(action) {
     const hydrationUrl = buildApiUrl(buildGallerySourceHydrationView({
       currentView: state.view,
       hydrationCategories,
-    }), { omitSidebar: true });
+    }), { omitSidebar: false });
     void fetchAndRender(hydrationUrl, false, {
       preserveScroll: true,
       preserveAbsoluteScroll: true,
       preserveGalleryOptionsMenu: true,
-      preserveSidebarState: true,
+      preserveSidebarState: false,
+      fallbackToAllArtistsWhenSelectionMissing: true,
       preserveGalleryBrowseLocationState: true,
       skipPendingViewTransition: true,
     });
@@ -9513,6 +9549,7 @@ Object.defineProperty(window, '__ALBUM_HAVEN_STREAMING_DIAGNOSTICS__', {
 
 const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
 const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
+const ARTIST_TREE_TOGGLE_STARTING_EVENT = 'album-haven:artist-tree-toggle-starting';
 let cancelPendingArtistTreeResize = null;
 
 function isArtistsDrawerElement(value) {
@@ -9684,7 +9721,11 @@ function toggleArtistTreeFold() {
   const { button, navigationButton, rail } = getArtistTreeFoldElements();
   const moveFocusWithinRail = Boolean(rail?.contains?.(document.activeElement));
   const wasFolded = Boolean(state.ui.artistTreeFolded);
-  state.ui.artistTreeFolded = !wasFolded;
+  const nextFolded = !wasFolded;
+  window.dispatchEvent(new CustomEvent(ARTIST_TREE_TOGGLE_STARTING_EVENT, {
+    detail: { folded: nextFolded },
+  }));
+  state.ui.artistTreeFolded = nextFolded;
   state.ui.shellLayoutPreferences = {
     ...(state.ui.shellLayoutPreferences || {}),
     artistTreeFolded: state.ui.artistTreeFolded,
@@ -11241,7 +11282,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
       ? payload.library_non_album_tracks
       : state.view.non_album_tracks;
     state.view.non_album_tracks_deferred = false;
-    if (typeof syncGalleryMainControls === 'function') syncGalleryMainControls();
+    if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_tracks;
   })().finally(() => {
     deferredNonAlbumHydrationPromise = null;
@@ -11831,11 +11872,16 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
     return false;
   }
   imageElement.setAttribute('data-cover-visual-state', 'ready');
+  imageElement.removeAttribute('data-gallery-cover-object-retry');
   imageElement.removeAttribute('aria-hidden');
-  const loadedCoverPath = imageElement.getAttribute('data-cover-path') || '';
-  if (readCoverUrlQueryParam(imageElement.currentSrc || imageElement.src || '', 'path') === loadedCoverPath) {
-    clearFailedLocalDisplayCoverPath(loadedCoverPath);
-  }
+  const releaseObjectUrl = () => {
+    if (
+      typeof galleryCoverPreviewCache !== 'undefined'
+      && typeof galleryCoverPreviewCache.releaseImageObjectUrl === 'function'
+    ) {
+      galleryCoverPreviewCache.releaseImageObjectUrl(imageElement);
+    }
+  };
   if (typeof imageElement.decode === 'function') {
     const decodedSource = String(imageElement.currentSrc || imageElement.src || '');
     Promise.resolve(imageElement.decode()).then(() => {
@@ -11851,7 +11897,9 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
       imageElement.setAttribute('data-cover-decoded-at-ms', String(performance.now()));
     }).catch(() => {
       // The existing image error path remains authoritative for failed cover decoding.
-    });
+    }).finally(releaseObjectUrl);
+  } else {
+    releaseObjectUrl();
   }
   return true;
 }
@@ -11860,6 +11908,33 @@ function handleAlbumDisplayCoverImageError(imageElement) {
   if (!imageElement) return false;
   if (imageElement instanceof HTMLImageElement) {
     markAlbumDisplayCoverImagePending(imageElement);
+  }
+  const currentSource = imageElement instanceof HTMLImageElement
+    ? String(imageElement.currentSrc || imageElement.src || '').trim()
+    : '';
+  const productionUrl = imageElement instanceof HTMLImageElement && typeof imageElement.getAttribute === 'function'
+    ? String(imageElement.getAttribute('data-production-cover-src') || '').trim()
+    : '';
+  if (
+    imageElement instanceof HTMLImageElement
+    && typeof galleryCoverPreviewCache !== 'undefined'
+    && typeof galleryCoverPreviewCache.releaseImageObjectUrl === 'function'
+  ) {
+    galleryCoverPreviewCache.releaseImageObjectUrl(imageElement);
+  }
+  if (
+    currentSource.startsWith('blob:')
+    && productionUrl
+    && imageElement.getAttribute('data-gallery-cover-object-retry') !== '1'
+    && typeof galleryCoverLoadScheduler !== 'undefined'
+    && typeof galleryCoverLoadScheduler.enqueue === 'function'
+  ) {
+    imageElement.setAttribute('data-gallery-cover-object-retry', '1');
+    galleryCoverLoadScheduler.enqueue(productionUrl, {
+      image: imageElement,
+      priority: String(imageElement.getAttribute('data-gallery-cover-priority') || 'near'),
+    });
+    return false;
   }
   if (typeof imageElement.getAttribute === 'function') {
     rememberFailedLocalDisplayCoverPath(imageElement.getAttribute('data-cover-path') || '');
@@ -12599,6 +12674,7 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   document.body.classList.add('modal-open');
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
 }
 
 function suspendGalleryCoverLoadsForTrackModal() {
@@ -13090,6 +13166,7 @@ function openTrackModal(album, options = {}) {
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
   attachSharedPlayer();
 }
 
@@ -13161,6 +13238,26 @@ function resolveTrackModalActionAlbum(button) {
   }
   if (currentAlbum) return currentAlbum;
   return findIndexedTrackModalLogicalRelease(fallbackAlbum) || fallbackAlbum;
+}
+
+async function resolveHydratedTrackModalActionAlbum(button) {
+  const album = resolveTrackModalActionAlbum(button);
+  if (!album || !albumRequiresHydration(album)) return album;
+  const albumKey = String(
+    getTrackModalButtonAlbumKey(button)
+    || getAlbumRequestKey(album)
+    || getAlbumIdentity(album)
+    || album.key
+    || '',
+  ).trim();
+  if (!albumKey) return null;
+  try {
+    return await loadTrackModalAlbumDetails(albumKey);
+  } catch (error) {
+    console.error('[AlbumHaven][AlbumDetails] Failed to load full album details for action.', error);
+    showToast('Unable to load album details.', 'error', 3200);
+    return null;
+  }
 }
 
 function resolveTrackModalDuplicateSourceAlbum(button) {
@@ -14970,6 +15067,7 @@ function formatLogHistoryTimestamp(value) {
 // of albums. Continuations never own the foreground/search request slot.
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
+const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -15034,6 +15132,12 @@ async function loadNextRootGalleryPage() {
       > ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
+    semanticScrollAnchor: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.() || null,
+    semanticScrollOwnerGeneration: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.getUserScrollIntentGeneration?.(),
     viewRevision: readViewStateRevision(),
     url: buildRootGalleryPageUrl(view),
     cursor: page.next_cursor,
@@ -15063,6 +15167,14 @@ async function loadNextRootGalleryPage() {
     let recoveryEndArtist = '';
     let recoveryArtists = [];
     if (response.status === 409) {
+      let recoveryRequestCount = 1;
+      const fetchRecoveryResponse = async () => {
+        if (recoveryRequestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
+          throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+        }
+        recoveryRequestCount += 1;
+        return fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      };
       const conflict = await response.json();
       if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
       // Catalog changes invalidate the cursor. Recover the retained window
@@ -15077,7 +15189,7 @@ async function loadNextRootGalleryPage() {
       if (recoveryStartArtist && (scroll.scrollTop > 0 || state.view.gallery_page?.anchor_artist)) {
         url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
       }
-      response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      response = await fetchRecoveryResponse();
       for (let index = 1; response.status === 400 && url.searchParams.has('gallery_anchor_artist'); index += 1) {
         const failure = await response.json();
         if (!ownsRootBrowseIdentity()) return false;
@@ -15088,7 +15200,7 @@ async function loadNextRootGalleryPage() {
         recoveryStartArtist = String(retainedGroups[index]?.artist || '').trim();
         if (!recoveryStartArtist) throw new Error(message);
         url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
-        response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+        response = await fetchRecoveryResponse();
       }
       restarted = true;
     }
@@ -15135,7 +15247,12 @@ async function loadNextRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    const renderOptions = { preserveScroll: true, preserveMountedGalleryChildren: true };
+    const renderOptions = {
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    };
     if (restarted) renderView(renderOptions);
     else renderArtistGroups(renderOptions);
     // Fill only the visible buffer, including a short initial page. Rechecking
@@ -15163,6 +15280,12 @@ async function loadPreviousRootGalleryPage() {
 
   const request = {
     controller: new AbortController(),
+    semanticScrollAnchor: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.() || null,
+    semanticScrollOwnerGeneration: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.getUserScrollIntentGeneration?.(),
     cursor: page.previous_cursor,
     revision: page.revision,
     viewRevision: Number(state.ui.viewStateRevision || 0),
@@ -15208,7 +15331,12 @@ async function loadPreviousRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    renderArtistGroups({ preserveScroll: true, preserveMountedGalleryChildren: true });
+    renderArtistGroups({
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    });
     return true;
   } catch (error) {
     if (error?.name !== 'AbortError') {
@@ -15492,6 +15620,7 @@ async function performPendingScanCompletionViewRefresh() {
     const refreshApplied = await refreshCurrentViewAfterBackgroundCompletion({
       preserveScroll: true,
       restartIfSameUrl: true,
+      shouldApplyResponse: data => data?.view_data_source !== 'transient_scan_state',
     });
     if (!refreshApplied) {
       throw new Error('The post-scan gallery refresh lost view-state ownership before it could apply.');
@@ -15624,6 +15753,7 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
     const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
+      preserveMountedGalleryChildren: true,
     });
     if (refreshApplied) return true;
     if (
@@ -15953,7 +16083,10 @@ async function readGalleryResponse(response, ownsResponse) {
     if (ownsResponse()) window.location.assign('/login');
     throw new Error('Sign in again to continue.');
   }
-  const data = await response.json();
+  const responsePayload = await response.json();
+  const data = typeof expandCompactSelectedArtistGroups === 'function'
+    ? expandCompactSelectedArtistGroups(responsePayload)
+    : responsePayload;
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
   }
@@ -15965,8 +16098,9 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   const url = new URL(apiUrl, 'http://localhost');
   if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums'
     || !url.searchParams.has('gallery_page_size')
+    || (url.searchParams.has('payload_tier') && url.searchParams.get('payload_tier') !== 'full')
     || ['q', 'artist', 'genre', 'mood', 'style', 'duration_min', 'duration_max',
-      'related_artist', 'primary_filter', 'gallery_cursor', 'payload_tier', 'root_sidebar']
+      'related_artist', 'primary_filter', 'gallery_cursor', 'root_sidebar']
       .some(key => url.searchParams.has(key))) return 0;
   const scope = state.view.gallery_page_scope || state.view;
   if (String(scope.gallery_scope || '') !== String(url.searchParams.get('gallery_scope') || '')) return 0;
@@ -15993,7 +16127,12 @@ async function recoverRootGalleryRefreshFirstPage(
   let currentResponse = response;
   let currentUrl = apiUrl;
   let restarted = false;
+  let requestCount = currentResponse ? 1 : 0;
   const fetchArtist = async artist => {
+    if (requestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
+      throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+    }
+    requestCount += 1;
     const url = new URL(apiUrl, 'http://localhost');
     url.searchParams.delete('gallery_cursor');
     url.searchParams.set('gallery_page_size', '50');
@@ -16331,6 +16470,35 @@ async function fetchAndRender(url, push = true, options = {}) {
       firstPageRevisionRestarted = recovered.restarted === true;
     }
     let data = await readGalleryResponse(response, ownsInitialResponse);
+    const selectedArtist = String(data?.selected_artist || '').trim();
+    const selectedArtistStillVisible = Array.isArray(data?.artists_sidebar)
+      && data.artists_sidebar.some((item) => (
+        String(item?.artist_display || item?.artist || '').trim() === selectedArtist
+      ));
+    if (
+      requestOptions.fallbackToAllArtistsWhenSelectionMissing === true
+      && selectedArtist
+      && !String(data?.query || '').trim()
+      && Array.isArray(data?.artists_sidebar)
+      && !selectedArtistStillVisible
+    ) {
+      const fallbackUrl = new URL(apiUrl, 'http://localhost');
+      for (const name of [
+        'artist', 'related_artist', 'primary_filter', 'family_display',
+        'selected_artist_family_display_mode', 'gallery_anchor_artist',
+        'gallery_cursor', 'gallery_page_direction',
+      ]) fallbackUrl.searchParams.delete(name);
+      fallbackUrl.searchParams.set('all_artists', '1');
+      apiUrl = `${fallbackUrl.pathname}${fallbackUrl.search}`;
+      response = await fetch(apiUrl, {
+        headers: { Accept: 'application/json' },
+        signal: controller?.signal,
+      });
+      if (response.status === 503) {
+        response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
+      }
+      data = await readGalleryResponse(response, ownsInitialResponse);
+    }
     if (rootRefreshCoverage > 0) {
       data = {
         ...data,
@@ -16441,6 +16609,11 @@ async function fetchAndRender(url, push = true, options = {}) {
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
     applyViewPayload(payloadToApply, responseApplyOptions);
+    const appliedInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    if (Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0) {
+      state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
+    }
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
       artistCount: Number(state.view?.artist_count || 0),
@@ -16464,6 +16637,9 @@ async function fetchAndRender(url, push = true, options = {}) {
     );
     renderView({
       ...responseApplyOptions,
+      ...(responseApplyOptions.preserveScroll === true && hasMountedGalleryContent
+        ? { preserveMountedGalleryChildren: true }
+        : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
@@ -17133,7 +17309,13 @@ async function pollStatus() {
       if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
         invalidateAllHydratedTrackModalAlbumDetails();
       }
-      state.ui.pendingInventoryMutationViewRefresh = true;
+      const appliedViewInventoryRevision = Number(
+        state.ui.appliedViewInventoryMutationRevision,
+      );
+      if (!Number.isSafeInteger(appliedViewInventoryRevision)
+        || appliedViewInventoryRevision < currentInventoryRevision) {
+        state.ui.pendingInventoryMutationViewRefresh = true;
+      }
     }
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
@@ -20283,6 +20465,139 @@ async function refreshLoadedProblematicFilesAfterSaveCompletion() {
   return true;
 }
 
+async function reconcileCommittedTagEditDestination(terminalPayload, context = {}) {
+  const status = String(
+    terminalPayload?.status || terminalPayload?.save_task_status || '',
+  ).trim().toLowerCase();
+  const destinationArtist = String(terminalPayload?.destination_artist || '').trim();
+  const destinationAlbumKey = String(
+    terminalPayload?.destination_album_key || '',
+  ).trim();
+  const destinationAlbumId = Number(terminalPayload?.destination_album_id || 0);
+  const shouldApplyResponse = typeof context.shouldApplyResponse === 'function'
+    ? context.shouldApplyResponse
+    : () => true;
+  if (
+    status !== 'completed'
+    || !destinationArtist
+    || !shouldApplyResponse(terminalPayload)
+  ) return false;
+
+  const orphanedArtists = new Set(
+    (Array.isArray(terminalPayload?.orphaned_source_artists)
+      ? terminalPayload.orphaned_source_artists
+      : [])
+      .map((artist) => String(artist || '').trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  const selectedArtistKey = selectedArtist.toLocaleLowerCase();
+  if (
+    !selectedArtist
+    || (
+      selectedArtistKey !== destinationArtist.toLocaleLowerCase()
+      && !orphanedArtists.has(selectedArtistKey)
+    )
+  ) return false;
+
+  const activeQuery = String(state.view?.query || '').trim();
+  const destinationView = {
+    ...state.view,
+    selected_artist: destinationArtist,
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    ...(activeQuery ? {
+      search_context: {
+        ...(state.view?.search_context || {}),
+        selected_artist: destinationArtist,
+        selected_artist_source: 'requested_artist',
+      },
+    } : {}),
+  };
+  const refreshed = await fetchAndRender(
+    buildApiUrl(destinationView, { rootFullPayload: true }),
+    false,
+    {
+      ...(context.renderOptions || {}),
+      restartIfSameUrl: true,
+      shouldApplyResponse,
+    },
+  );
+  if (
+    !refreshed
+    || !shouldApplyResponse(terminalPayload)
+    || String(state.view?.selected_artist || '').trim() !== destinationArtist
+  ) return false;
+
+  if (destinationAlbumKey) {
+    const updatedDestinationAlbums = (
+      Array.isArray(terminalPayload?.updated_albums) ? terminalPayload.updated_albums : []
+    ).filter((album) => (
+      getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+      || (
+        destinationAlbumId > 0
+        && Number(album?.album_id || 0) === destinationAlbumId
+      )
+    ));
+    const destinationVisible = collectVisibleAlbumsUnique().some((album) => (
+      getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+      || updatedDestinationAlbums.some((updatedAlbum) => (
+        albumsShareTrackPath(album, getAlbumTrackPaths(updatedAlbum))
+        || albumsShareLogicalReleaseIdentity(album, updatedAlbum)
+      ))
+    ));
+    if (!destinationVisible) return false;
+  }
+
+  const destinationSidebarKey = destinationArtist.toLocaleLowerCase();
+  const sidebarArtists = Array.isArray(state.view?.artists_sidebar)
+    ? state.view.artists_sidebar
+    : [];
+  if (!sidebarArtists.some((item) => (
+    String(item?.artist || '').trim().toLocaleLowerCase() === destinationSidebarKey
+  ))) {
+    const destinationGroup = [
+      ...(state.view?.primary_artist_groups || []),
+      ...(state.view?.artist_groups || []),
+    ].find((group) => (
+      String(group?.artist || group?.artist_display || '').trim().toLocaleLowerCase()
+        === destinationSidebarKey
+    ));
+    const albumCount = Number(destinationGroup?.album_count || destinationGroup?.count || 0)
+      || Math.max(1, Array.isArray(destinationGroup?.albums) ? destinationGroup.albums.length : 0);
+    state.view.artists_sidebar = [
+      ...sidebarArtists,
+      { artist: destinationArtist, count: albumCount },
+    ].sort((left, right) => String(left?.artist || '').localeCompare(
+      String(right?.artist || ''),
+      undefined,
+      { sensitivity: 'base' },
+    ));
+  }
+
+  if (orphanedArtists.size) {
+    state.view.artists_sidebar = (state.view.artists_sidebar || []).filter((item) => (
+      !orphanedArtists.has(String(item?.artist || '').trim().toLocaleLowerCase())
+    ));
+    for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
+      state.view[key] = (state.view[key] || []).filter((group) => (
+        !orphanedArtists.has(
+          String(group?.artist || group?.artist_display || '').trim().toLocaleLowerCase(),
+        )
+      ));
+    }
+  }
+  if (typeof buildUrl === 'function' && window?.history?.replaceState) {
+    window.history.replaceState(
+      { ...window.history.state, ...state.view },
+      '',
+      buildUrl(state.view),
+    );
+  }
+  return true;
+}
+
 async function watchSaveTask(taskId, context = {}) {
   const normalizedId = String(taskId || '').trim();
   if (!normalizedId) return;
@@ -20331,7 +20646,7 @@ async function watchSaveTask(taskId, context = {}) {
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
   const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
-  const absoluteScrollPosition = context.absoluteScrollPosition
+  let absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
     ? {
@@ -20339,19 +20654,58 @@ async function watchSaveTask(taskId, context = {}) {
       scrollTop: Number(context.absoluteScrollPosition.scrollTop),
     }
     : null;
-  const renderOptions = context.preserveAbsoluteScroll === true
+  let absoluteScrollOwnerGeneration = Number.isSafeInteger(
+    context.absoluteScrollOwnerGeneration,
+  )
+    ? context.absoluteScrollOwnerGeneration
+    : null;
+  let renderOptions = context.preserveAbsoluteScroll === true
     ? {
       preserveScroll: true,
       preserveAbsoluteScroll: true,
       ...(absoluteScrollPosition ? { absoluteScrollPosition } : {}),
     }
     : { preserveScroll: true };
+  const refreshAbsoluteScrollForUserIntent = () => {
+    if (
+      !Number.isSafeInteger(absoluteScrollOwnerGeneration)
+      || context.preserveAbsoluteScroll !== true
+      || (!originStillOwnsView() && !currentViewMatchesOriginRequest())
+      || typeof virtualGrid === 'undefined'
+      || typeof virtualGrid?.getUserScrollIntentGeneration !== 'function'
+      || typeof document === 'undefined'
+      || typeof document.getElementById !== 'function'
+    ) return false;
+    const currentGeneration = virtualGrid.getUserScrollIntentGeneration();
+    if (
+      !Number.isSafeInteger(currentGeneration)
+      || currentGeneration === absoluteScrollOwnerGeneration
+    ) return false;
+    const galleryScroll = document.getElementById('albums-scroll');
+    if (
+      !galleryScroll
+      || !Number.isFinite(Number(galleryScroll.scrollTop))
+      || !Number.isFinite(Number(galleryScroll.scrollLeft))
+    ) return false;
+    absoluteScrollPosition = {
+      scrollLeft: Number(galleryScroll.scrollLeft),
+      scrollTop: Number(galleryScroll.scrollTop),
+    };
+    absoluteScrollOwnerGeneration = currentGeneration;
+    renderOptions = { ...renderOptions, absoluteScrollPosition };
+    return true;
+  };
+  const currentRenderOptions = () => {
+    refreshAbsoluteScrollForUserIntent();
+    return renderOptions;
+  };
   const currentViewRenderOptions = () => (
     originStillOwnsView() || currentViewMatchesOriginRequest()
-      ? { ...renderOptions, preserveGalleryOptionsMenu: true }
+      ? { ...currentRenderOptions(), preserveGalleryOptionsMenu: true }
       : { preserveScroll: true, preserveGalleryOptionsMenu: true }
   );
   const restoreOwnedAbsoluteScroll = () => {
+    refreshAbsoluteScrollForUserIntent();
     if (
       !absoluteScrollPosition
       || (!originStillOwnsView() && !currentViewMatchesOriginRequest())
@@ -20371,7 +20725,7 @@ async function watchSaveTask(taskId, context = {}) {
     galleryScroll.scrollTop = absoluteScrollPosition.scrollTop;
     return true;
   };
-  const providedTerminalPayload = context.terminalPayload
+  let providedTerminalPayload = context.terminalPayload
     && typeof context.terminalPayload === 'object'
     && !Array.isArray(context.terminalPayload)
     ? {
@@ -20388,8 +20742,11 @@ async function watchSaveTask(taskId, context = {}) {
       ).trim().toLowerCase(),
     }
     : null;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const consumesProvidedTerminalPayload = attempt === 0 && providedTerminalPayload;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const consumesProvidedTerminalPayload = Boolean(
+      providedTerminalPayload
+      && (attempt === 0 || providedTerminalPayload.status === 'completed'),
+    );
     try {
       let data = providedTerminalPayload;
       if (!consumesProvidedTerminalPayload) {
@@ -20403,12 +20760,42 @@ async function watchSaveTask(taskId, context = {}) {
       }
       const responseTaskId = String(data.task_id || '').trim();
       if (responseTaskId && responseTaskId !== normalizedId) {
+        providedTerminalPayload = null;
         await waitForBrowserTimeout(500);
         continue;
       }
       if (data.status === 'completed') {
+        const committedInventoryMutationRevision = Number(data.inventory_mutation_revision);
+        const responseContainsCommittedInventoryMutation = (responseData) => (
+          !Number.isSafeInteger(committedInventoryMutationRevision)
+          || committedInventoryMutationRevision <= 0
+          || (
+            Number(responseData?.inventory_mutation_revision) >= committedInventoryMutationRevision
+            && responseData?.gallery_page?.projection_stale !== true
+          )
+        );
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         await refreshLoadedProblematicFilesAfterSaveCompletion();
+        let destinationViewReconciled = false;
+        if (data.destination_artist && canReconcileOriginView()) {
+          try {
+            destinationViewReconciled = await reconcileCommittedTagEditDestination(
+              data,
+              {
+                renderOptions: currentViewRenderOptions(),
+                shouldApplyResponse: responseData => (
+                  !mutationWasSuperseded()
+                  && responseContainsCommittedInventoryMutation(responseData)
+                ),
+              },
+            );
+          } catch (destinationError) {
+            console.warn(
+              '[AlbumHaven][SaveTask] Saved tags, but failed to open the committed destination artist.',
+              destinationError,
+            );
+          }
+        }
         const finalizedAlbums = applyExplicitFinalizedAlbumArtistEdits(
           Array.isArray(data.updated_albums) ? data.updated_albums : [],
           context.tagEdits,
@@ -20446,15 +20833,37 @@ async function watchSaveTask(taskId, context = {}) {
           && !finalizedAlbumsCoverOriginalMembership
         );
         let modalUpdatedAlbums = finalizedAlbums;
-        let viewRefreshed = false;
+        let viewRefreshed = destinationViewReconciled;
         let viewReconciledLocally = false;
+        const currentViewContainsAffectedAlbum = () => {
+          const affectedAlbums = [originalAlbum, ...finalizedAlbums].filter(Boolean);
+          if (!affectedAlbums.length) return true;
+          return collectVisibleAlbumsUnique().some((visibleAlbum) => (
+            affectedAlbums.some((affectedAlbum) => {
+              const visibleAliases = getAlbumRuntimeIdentityAliases(visibleAlbum);
+              const sharesRuntimeIdentity = Array.from(
+                getAlbumRuntimeIdentityAliases(affectedAlbum),
+              ).some((alias) => visibleAliases.has(alias));
+              return sharesRuntimeIdentity
+                || albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(affectedAlbum))
+                || albumsShareLogicalReleaseIdentity(visibleAlbum, affectedAlbum);
+            })
+          ));
+        };
         if (data.requires_view_refresh) {
           if (
+            !viewRefreshed
+            &&
             canReconcileOriginView()
             && finalizedAlbums.length
             && (
               !structuralTagEditRequiresCanonicalView
               || finalizedAlbumsHaveCanonicalRuntimeIdentities
+            )
+            && !(
+              structuralPartialMembershipRequiresCanonicalRefresh
+              && Number.isSafeInteger(committedInventoryMutationRevision)
+              && committedInventoryMutationRevision > 0
             )
           ) {
             try {
@@ -20469,7 +20878,7 @@ async function watchSaveTask(taskId, context = {}) {
               );
               if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
               renderView({
-                ...renderOptions,
+                ...currentRenderOptions(),
                 preserveMountedGalleryChildren: true,
               });
               viewReconciledLocally = true;
@@ -20481,11 +20890,14 @@ async function watchSaveTask(taskId, context = {}) {
             }
           }
           if (
+            !viewRefreshed
+            &&
             (
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
             && !mutationWasSuperseded()
+            && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
               let refreshView = state.view;
@@ -20522,9 +20934,22 @@ async function watchSaveTask(taskId, context = {}) {
                     ? { retainMountedGalleryIfEquivalent: true }
                     : {}),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: () => !mutationWasSuperseded(),
+                  shouldApplyResponse: responseData => (
+                    !mutationWasSuperseded()
+                    && responseContainsCommittedInventoryMutation(responseData)
+                  ),
                 },
               );
+              if (
+                !viewRefreshed
+                && Number.isSafeInteger(committedInventoryMutationRevision)
+                && committedInventoryMutationRevision > 0
+                && !mutationWasSuperseded()
+                && (originStillOwnsView() || currentViewContainsAffectedAlbum())
+              ) {
+                await waitForBrowserTimeout(500);
+                continue;
+              }
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
                 window.history.replaceState(
                   { ...window.history.state, ...state.view }, '', buildUrl(state.view),
@@ -20583,7 +21008,7 @@ async function watchSaveTask(taskId, context = {}) {
             );
             if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
             renderView({
-              ...renderOptions,
+              ...currentRenderOptions(),
               preserveMountedGalleryChildren: true,
             });
             viewReconciledLocally = true;
@@ -20599,8 +21024,8 @@ async function watchSaveTask(taskId, context = {}) {
             },
           );
           if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
-          renderView(renderOptions);
-        } else if (!originStillOwnsView()) {
+          renderView(currentRenderOptions());
+        } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
             await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
           } catch (refreshError) {
@@ -20650,6 +21075,48 @@ async function watchSaveTask(taskId, context = {}) {
               ...modalUpdatedAlbums,
             ]);
           }
+          if (
+            structuralTagEditRequiresMountedGalleryChildReplacement
+            && data.requires_view_refresh
+            && !finalizedAlbums.length
+            && trackModalOpen
+            && typeof loadTrackModalAlbumDetails === 'function'
+          ) {
+            const currentModalAlbum = state.modalReleases[state.modalReleaseIndex] || originalAlbum;
+            const currentModalPaths = getAlbumTrackPaths(currentModalAlbum);
+            const canonicalModalCandidates = modalUpdatedAlbums.length
+              ? modalUpdatedAlbums
+              : collectVisibleAlbumsUnique();
+            const canonicalModalAlbum = canonicalModalCandidates.find((album) => (
+              albumsShareTrackPath(album, currentModalPaths)
+              || albumsShareRuntimeIdentityAlias(album, currentModalAlbum)
+              || albumsShareLogicalReleaseIdentity(album, currentModalAlbum)
+            ));
+            const canonicalModalKey = getAlbumRequestKey(canonicalModalAlbum);
+            if (canonicalModalKey) {
+              try {
+                const hydratedModalAlbum = await loadTrackModalAlbumDetails(canonicalModalKey);
+                if (hydratedModalAlbum) {
+                  modalUpdatedAlbums = canonicalModalCandidates.map((album) => (
+                    album === canonicalModalAlbum ? hydratedModalAlbum : album
+                  ));
+                  updateOpenTrackModalAfterTagEdit(
+                    originalAlbum,
+                    modalUpdatedAlbums,
+                    {
+                      patchVisibleState: !viewRefreshed,
+                      preserveHydratedModalAfterCanonicalSave: true,
+                    },
+                  );
+                }
+              } catch (hydrationError) {
+                console.warn(
+                  '[AlbumHaven][SaveTask] Saved tags, but failed to refresh open album details.',
+                  hydrationError,
+                );
+              }
+            }
+          }
         }
         if (data.log_entry) {
           await prependUtilityLogHistoryEntry(data.log_entry);
@@ -20658,20 +21125,24 @@ async function watchSaveTask(taskId, context = {}) {
           await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
         }
         restoreOwnedAbsoluteScroll();
-        if (!consumesProvidedTerminalPayload) {
-          const completionMessage = String(
-            context.tagEditAlert?.completionMessage || '',
-          ).trim();
-          if (completionMessage) {
-            showRepairAlert(
-              completionMessage,
-              'success',
-              2000,
-              { title: 'Tags updated', dismissible: false },
-            );
-          } else {
-            showRepairAlert('Library view updated from saved files.', 'success', 1000);
-          }
+        const completionMessage = String(
+          context.tagEditAlert?.completionMessage || '',
+        ).trim();
+        if (completionMessage) {
+          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+            .map((warning) => String(warning || '').trim())
+            .filter(Boolean);
+          const hasCompletionWarning = completionWarnings.length > 0;
+          showRepairAlert(
+            [completionMessage, ...completionWarnings].join(' '),
+            hasCompletionWarning ? 'warning' : 'success',
+            hasCompletionWarning ? 8000 : 2000,
+            {
+              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+            },
+          );
+        } else if (!consumesProvidedTerminalPayload) {
+          showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
         settleTagEditViewMutation(tagEditMutationClaim);
         return;
@@ -20701,7 +21172,7 @@ async function watchSaveTask(taskId, context = {}) {
               preserveScroll: true,
             },
           );
-          renderView(renderOptions);
+          renderView(currentRenderOptions());
         }
         if (originalAlbum && canReconcileOriginView()) {
           const reconciledAlbums = viewRefreshed
@@ -20740,6 +21211,14 @@ async function watchSaveTask(taskId, context = {}) {
       console.warn('[AlbumHaven][SaveTask] Could not check save task status.', error);
     }
     await waitForBrowserTimeout(500);
+  }
+  if (!mutationWasSuperseded()) {
+    showRepairAlert(
+      'Tag changes are still being finalized. Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    );
   }
   if (problematicMutation) settleProblematicSaveTaskMutation(normalizedId);
   settleTagEditViewMutation(tagEditMutationClaim);
@@ -21230,20 +21709,40 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
-    const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
     if (!album.detail_loaded) {
-      await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
-      if (!ownsNavigation()
-          || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
-      // A changed complete summary may have replaced the preview detail owner.
-      const current = getProblematicAlbumForTrackPath(trackPath);
-      if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
-        await state.utility.detailLoadPromises[current.key];
-        if (!ownsNavigation()
-            || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
+      while (album && !album.detail_loaded) {
+        const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+        state.utility.selectedProblematicKey = album.key || '';
+        await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
+        if (!ownsNavigation()) return;
+        const currentSummary = state.utility.completeLoadPromise
+          || state.utility.initialLoadPromise;
+        if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+          const current = getProblematicAlbumForTrackPath(trackPath);
+          if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
+            await state.utility.detailLoadPromises[current.key];
+            if (!ownsNavigation()) return;
+          }
+          if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+            album = getProblematicAlbumForTrackPath(trackPath);
+            if (album?.detail_loaded
+                || !currentSummary
+                || typeof currentSummary.then !== 'function') break;
+          }
+        }
+        if (!currentSummary || typeof currentSummary.then !== 'function') {
+          if (!state.utility.loaded) return;
+          album = getProblematicAlbumForTrackPath(trackPath);
+          if (!album) return;
+          continue;
+        }
+        await currentSummary;
+        if (!ownsNavigation()) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
       }
     }
-    if (!getProblematicAlbumForTrackPath(trackPath)) return;
+    if (!album) return;
+    state.utility.selectedProblematicKey = album.key || '';
     openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {
@@ -25303,6 +25802,15 @@ async function loadProblematicFiles(force = false, options = {}) {
     }
     return result;
   }
+  const pendingCompleteLoad = state.utility.completeLoadPromise;
+  if (
+    state.utility.problematicFilesComplete === false
+    && pendingCompleteLoad
+    && pendingCompleteLoad.problematicSummaryRequestToken
+      === Number(state.utility.problematicSummaryRequestToken || 0)
+  ) {
+    return pendingCompleteLoad;
+  }
   if (state.utility.loaded && !force) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
@@ -25394,6 +25902,10 @@ async function loadProblematicFiles(force = false, options = {}) {
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
         const completePayloadPromise = fetchSummary('/utilities/problematic-files');
+        if (state.utility.loadPromise === requestPromise) {
+          state.utility.loading = false;
+          state.utility.loadPromise = null;
+        }
         if (canRenderBoundedPage()
             && ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage())) {
           renderUtilityModalContent();
@@ -26784,6 +27296,8 @@ function closeUtilityModal(skipAppearanceGuard = false) {
   if (!els.overlay) return;
   utilityOpenGeneration += 1;
   if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
+  if (typeof disposeProblematicFilesVirtualList === 'function') disposeProblematicFilesVirtualList();
+  if (els.list) els.list.scrollTop = 0;
   state.utility.problemDropdownOpen = false;
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = true;
@@ -27097,6 +27611,7 @@ function applyTagEditsToNonAlbumView(album, updates) {
     });
   });
   view.non_album_tracks = Array.from(nextByPath.values());
+  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
   return view.non_album_tracks;
 }
 
@@ -27183,8 +27698,9 @@ function isCustomCollectionException(value) {
 
 function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoices(), currentValue = '') {
   const selected = String(currentValue || '').trim();
-  return values.map((value) => (
-    `<button type="button" role="option" aria-selected="${value === selected ? 'true' : 'false'}" tabindex="-1" data-tag-editor-exception-option="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+  const choices = ['', ...values.filter((value) => String(value || '').trim())];
+  return choices.map((value) => (
+    `<button type="button" role="option" aria-selected="${value === selected ? 'true' : 'false'}" tabindex="-1" data-tag-editor-exception-option="${escapeHtml(value)}">${escapeHtml(value || 'None')}</button>`
   )).join('');
 }
 
@@ -27340,6 +27856,44 @@ function parseOptionalInteger(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function inferOptimisticBlankAlbumMembership(target, tracks) {
+  if (String(target?.album || '').trim()) return '';
+  const targetNumber = parseOptionalInteger(String(target?.track_number ?? '').split('/', 1)[0]);
+  const containerParts = (track) => {
+    const parts = String(track?.path || '').replaceAll('\\', '/').split('/').filter(Boolean);
+    parts.pop();
+    if (/(?:^|[^a-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*\d{1,2}(?:$|[^a-z0-9])/i.test(parts.at(-1) || '')) {
+      parts.pop();
+    }
+    return parts.map((part) => part.toLocaleLowerCase());
+  };
+  const targetContainer = containerParts(target);
+  if (targetNumber == null || targetNumber <= 0 || !targetContainer.length) return '';
+  const targetPath = String(target?.path || '').replaceAll('/', '\\').toLocaleLowerCase();
+  const siblings = tracks.flatMap((candidate) => {
+    const candidatePath = String(candidate?.path || '').replaceAll('/', '\\').toLocaleLowerCase();
+    const candidateAlbum = String(candidate?.album || '').trim();
+    const candidateNumber = parseOptionalInteger(String(candidate?.track_number ?? '').split('/', 1)[0]);
+    const sameContainer = JSON.stringify(containerParts(candidate)) === JSON.stringify(targetContainer);
+    const meaningfulAlbum = candidateAlbum
+      && !['unknown', 'unknown artist', 'unknown album', 'none', 'null'].includes(candidateAlbum.toLocaleLowerCase())
+      && !/^[!\-\s[(]*non[\s_-]*album(?:\b.*)?$/i.test(candidateAlbum);
+    return candidatePath && candidatePath !== targetPath && sameContainer
+      && candidateNumber != null && candidateNumber > 0 && meaningfulAlbum
+      ? [[candidateAlbum, candidateNumber]]
+      : [];
+  });
+  const albumNames = new Map(siblings.map(([name]) => [name.toLocaleLowerCase(), name]));
+  if (siblings.length < 2 || albumNames.size !== 1) return '';
+  if (!siblings.some(([, number]) => Math.abs(number - targetNumber) === 1)) return '';
+  const inferredAlbum = albumNames.values().next().value;
+  const folderKey = (value) => String(value || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}_]+/gu, '');
+  const albumKey = folderKey(inferredAlbum);
+  return albumKey && targetContainer.some((part) => folderKey(part).includes(albumKey))
+    ? inferredAlbum
+    : '';
+}
+
 function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   const sourceTracks = deepCloneJson(Array.isArray(album?.tracks) ? album.tracks : []) || [];
   if (!sourceTracks.length) return [];
@@ -27393,7 +27947,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   updatedTracks.forEach((track) => {
     if (String(track?.exception_type || '').trim()) return;
     const albumArtist = String(track?.album_artist || album?.album_artist || '').trim();
-    const albumName = String(track?.album ?? album?.name ?? '').trim();
+    const inferredAlbumName = inferOptimisticBlankAlbumMembership(track, updatedTracks);
+    if (inferredAlbumName) track.is_problematic = true;
+    const albumName = String(track?.album || inferredAlbumName).trim();
     if (!albumName) return;
     const edits = updates?.[String(track?.path || '')];
     const hasEditionEdit = Boolean(
@@ -27868,6 +28424,23 @@ function getCoverLookupModalElements() {
   };
 }
 
+function loadCoverLookupDrawerHoverIcon(button) {
+  const icon = button?.querySelector?.('.cover-lookup-drawer-glyph-hover[data-src]');
+  const src = String(icon?.dataset?.src || '').trim();
+  if (!src) return false;
+  icon.src = src;
+  delete icon.dataset.src;
+  return true;
+}
+
+const coverLookupDrawerButton = document.getElementById?.('cover-lookup-drawer-button');
+coverLookupDrawerButton?.addEventListener?.('mouseenter', () => {
+  loadCoverLookupDrawerHoverIcon(coverLookupDrawerButton);
+});
+coverLookupDrawerButton?.addEventListener?.('focus', () => {
+  loadCoverLookupDrawerHoverIcon(coverLookupDrawerButton);
+});
+
 const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
 const COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS = 2000;
@@ -28123,6 +28696,13 @@ function normalizeCoverLookupCandidateSnapshot(value) {
   };
 }
 
+function coverLookupCandidateGenerationKey(value) {
+  const generation = String(value || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generation)
+    ? generation.replaceAll('-', '').toLowerCase()
+    : generation;
+}
+
 function getCoverLookupCandidateSource(task, candidateSnapshot) {
   const normalizedTask = task && typeof task === 'object' ? task : null;
   const normalizedSnapshot = normalizeCoverLookupCandidateSnapshot(candidateSnapshot);
@@ -28184,50 +28764,12 @@ function coverLookupCandidateTimestamp(value) {
 function applyCoverLookupCandidateSource(candidateSource) {
   if (!candidateSource) return;
   const modal = state.coverLookup.modal;
-  const generation = String(candidateSource.generation || '').trim();
-  const overrideGeneration = String(modal.remoteSelectionOverrideGeneration || '').trim();
-  const overrideCandidateId = String(
-    modal.remoteSelectionOverrideCandidateId || modal.selectedRemoteId || '',
-  );
-  const overrideUrl = normalizeCoverLookupCandidateUrl(
-    modal.remoteSelectionOverrideUrl || '',
-  ).toLowerCase();
-  const candidateMatchesOverride = (candidate) => (
-    overrideUrl
-      ? normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === overrideUrl
-      : String(candidate?.id || '') === overrideCandidateId
-  );
-  const retainedOverride = (modal.possibleMatches || []).find(candidateMatchesOverride);
-  modal.candidateGeneration = generation;
-  let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
-  const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
-  if (hasExplicitRemoteSelection) {
-    const incomingOverride = possibleMatches.find(candidateMatchesOverride);
-    const selectedOverride = overrideGeneration !== generation
-      ? (retainedOverride || incomingOverride)
-      : incomingOverride;
-    if (selectedOverride) {
-      const selectedOverrideId = String(selectedOverride.id || '');
-      const selectedOverrideUrl = normalizeCoverLookupCandidateUrl(
-        selectedOverride.url,
-      ).toLowerCase();
-      const selectedOverrideIsPresent = possibleMatches.some((candidate) => (
-        String(candidate?.id || '') === selectedOverrideId
-        && normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === selectedOverrideUrl
-      ));
-      if (!selectedOverrideIsPresent) {
-        possibleMatches = [selectedOverride, ...possibleMatches.filter((candidate) => (
-          String(candidate?.id || '') !== selectedOverrideId
-          && (
-            !selectedOverrideUrl
-            || normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() !== selectedOverrideUrl
-          )
-        ))];
-      }
-    }
-    modal.possibleMatches = possibleMatches;
-    modal.selectedRemoteId = String(selectedOverride?.id || '');
-    return;
+  const generation = coverLookupCandidateGenerationKey(candidateSource.generation);
+  if (generation !== coverLookupCandidateGenerationKey(modal.candidateGeneration)) {
+    modal.candidateGeneration = generation;
+    modal.remoteSelectionOverrideGeneration = '';
+    modal.remoteSelectionOverrideCandidateId = '';
+    modal.remoteSelectionOverrideUrl = '';
   }
   modal.possibleMatches = possibleMatches;
   const hasPendingNonRemoteSelection = Boolean(
@@ -28236,6 +28778,10 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || (modal.localCovers || []).some((cover) => Boolean(cover?.is_active))
     || String(modal.activeLocalSelectionPath || '')
     || String(getCoverLookupActiveLocalPath() || '')
+  );
+  const userOverrodeThisGeneration = Boolean(
+    generation
+    && coverLookupCandidateGenerationKey(modal.remoteSelectionOverrideGeneration) === generation
   );
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
   const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
@@ -29114,39 +29660,20 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
-function buildCoverLookupDrawerTerminalSignatures(tasks) {
-  return Object.fromEntries((Array.isArray(tasks) ? tasks : []).map((task) => {
-    const taskId = String(task?.id || '').trim();
-    const status = String(task?.status || '').trim();
-    const terminalSignature = isCompletedCoverLookupTask(task)
-      ? `${status}|${String(task?.result_kind || '').trim()}|${String(task?.finished_at || '').trim()}`
-      : '';
-    return [taskId, terminalSignature];
-  }).filter(([taskId]) => taskId));
-}
+const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
+const COVER_LOOKUP_TASK_OVERSCAN = 10;
+const COVER_LOOKUP_TASK_ESTIMATED_HEIGHT = 74;
 
-function hasPendingCoverLookupDrawerTerminalPublication(tasks) {
-  const renderedSignatures = state.coverLookup.drawerRenderedTerminalSignatures;
-  if (!renderedSignatures || typeof renderedSignatures !== 'object') return false;
-  return (Array.isArray(tasks) ? tasks : []).some((task) => {
-    if (!isCompletedCoverLookupTask(task)) return false;
-    const taskId = String(task?.id || '').trim();
-    if (!taskId) return false;
-    const currentSignature = buildCoverLookupDrawerTerminalSignatures([task])[taskId];
-    return renderedSignatures[taskId] !== currentSignature;
-  });
-}
-
-let coverLookupTaskBadgeRevision = 0;
-
-function renderCoverLookupTaskBadgeCount(badgeCount) {
-  const badge = document.getElementById('cover-lookup-drawer-badge');
-  const button = document.getElementById('cover-lookup-drawer-button');
-  if (!badge || !button) return;
-  const normalizedCount = Math.max(0, Number(badgeCount) || 0);
-  badge.hidden = normalizedCount <= 0;
-  badge.textContent = String(normalizedCount || '');
-  button.classList.toggle('has-active-lookups', normalizedCount > 0);
+function getCoverLookupTaskRenderWindow(tasks, body) {
+  const rowHeight = Math.max(
+    1,
+    Number(state.coverLookup.taskEstimatedHeight || COVER_LOOKUP_TASK_ESTIMATED_HEIGHT),
+  );
+  const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
+  const visibleStart = Math.floor(Math.max(0, Number(body.scrollTop || 0)) / rowHeight);
+  const start = Math.min(maximumStart, Math.max(0, visibleStart - COVER_LOOKUP_TASK_OVERSCAN));
+  const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
+  return { start, end, rowHeight };
 }
 
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
@@ -29158,11 +29685,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const clearButton = document.getElementById('cover-lookup-drawer-clear');
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
-  const tasks = (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
-    .filter((task) => !(
-      String(task?.status || '') === 'completed'
-      && Boolean(task?.notification_action_taken)
-    ));
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -29174,49 +29697,43 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
-  const activeCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
-  const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
-  const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
-  const summaryBadgeCount = Number(state.coverLookup.taskSummary?.badge_count);
-  const historyPending = !state.coverLookup.tasksHydrated && Number.isFinite(summaryBadgeCount);
-  const badgeCount = historyPending
-    ? Math.max(0, summaryBadgeCount)
-    : activeCount + pendingNotificationCount;
-  const displayedActiveCount = historyPending
-    ? Math.max(0, Number(state.coverLookup.taskSummary?.active_count) || 0)
-    : activeCount;
-  const displayedTerminalCount = historyPending
-    ? Math.max(0, Number(state.coverLookup.taskSummary?.pending_notification_count) || 0)
-    : terminalCount;
+  const loadedActiveCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
+  const loadedTerminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
+  const counts = state.coverLookup.notificationCounts;
+  const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
+  const activeCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.active_count || 0), loadedActiveCount)
+    : loadedActiveCount;
+  const terminalCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
+    : loadedTerminalCount;
+  const badgeCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.total_count || 0), tasks.length)
+    : tasks.length;
   if (summary) {
     summary.textContent = [
       displayedActiveCount ? `${displayedActiveCount} active` : '',
       displayedTerminalCount ? `${displayedTerminalCount} finished` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
   }
-  renderCoverLookupTaskBadgeCount(badgeCount);
+  badge.hidden = badgeCount <= 0;
+  badge.textContent = String(badgeCount || '');
+  if (badgeCount > 0) loadCoverLookupDrawerHoverIcon(button);
+  button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
     clearButton.hidden = false;
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  const preserveTextSelection = state.coverLookup.drawerOpen
-    && preserveInteraction
-    && hasActiveCoverLookupDrawerTextSelection(body);
-  const preservePressedAction = state.coverLookup.drawerOpen
-    && preserveInteraction
-    && Boolean(
-      body.querySelector?.('.cover-lookup-task-open:active')
-      || body.querySelector?.('.cover-lookup-task-actions :active')
-    );
-  const preserveActiveAction = state.coverLookup.drawerOpen
-    && preserveInteraction
-    && hasActiveCoverLookupDrawerAction(body)
-    && (
-      preservePressedAction
-      || !hasPendingCoverLookupDrawerTerminalPublication(tasks)
-    );
-  const preserveSelectedNotificationText = preserveTextSelection || preserveActiveAction;
+  if (!state.coverLookup.drawerOpen) {
+    body.innerHTML = '';
+    state.coverLookup.taskRenderWindowStart = 0;
+    syncCoverLookupElapsedTimer();
+    return;
+  }
+
+  const preserveSelectedNotificationText = preserveInteraction
+    && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
       body.innerHTML = historyPending && badgeCount > 0
@@ -29227,23 +29744,28 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     syncCoverLookupElapsedTimer();
     return;
   }
-  const taskMarkup = tasks.map((task) => {
+  const renderWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  state.coverLookup.taskRenderWindowStart = renderWindow.start;
+  const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
+  const taskMarkup = visibleTasks.map((task) => {
     const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
     const isCoverUpdated = status === 'completed' && String(task?.result_kind || '') === 'cover-updated';
-    const foundCount = Array.isArray(task?.possible_matches)
-      ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
-      : 0;
+    const foundCount = Number.isFinite(Number(task?.possible_match_count))
+      ? Math.max(0, Number(task.possible_match_count))
+      : Array.isArray(task?.possible_matches)
+        ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+        : 0;
     const statusLabel = status === 'failed'
-      ? 'Lookup failed'
+      ? (String(task?.result_kind || '') === 'interrupted' ? 'Lookup interrupted' : 'Lookup failed')
       : status === 'canceled'
       ? 'Canceled'
       : isNoResult
       ? 'No covers found'
-      : isCoverUpdated
-      ? 'Art chosen'
+          : isCoverUpdated
+            ? 'Art chosen'
       : status === 'completed'
         ? `${foundCount ? `${foundCount} ` : ''}covers found`
       : status === 'pending'
@@ -29267,7 +29789,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? String(buildAlbumDisplayCoverUrl(task?.album_payload || {}) || '').trim()
       : '';
     const coverMarkup = coverUrl
-      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
+      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
       <div class="cover-lookup-task-card ${taskStateClass}">
@@ -29311,8 +29833,17 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     `;
   }).join('');
   if (!preserveSelectedNotificationText) {
-    body.innerHTML = taskMarkup;
-    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
+    const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
+    const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
+    body.innerHTML = `
+      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
+      ${taskMarkup}
+      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
+    `;
+    const measuredCard = body.querySelector?.('.cover-lookup-task-card');
+    const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
+    const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;
+    if (measuredHeight > 0) state.coverLookup.taskEstimatedHeight = measuredHeight + measuredGap;
   }
   syncCoverLookupElapsedTimer();
 }
@@ -29346,6 +29877,7 @@ async function clearCompletedCoverLookupTasks() {
       throw new Error(data.error || 'Failed to clear completed cover lookups');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
   } catch (error) {
@@ -29383,6 +29915,7 @@ async function clearCoverLookupTaskNotification(taskId) {
       throw new Error(data.error || 'Failed to clear notification');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
     showToast('Notification cleared.', 'success', 2200);
@@ -29395,7 +29928,39 @@ async function clearCoverLookupTaskNotification(taskId) {
   }
 }
 
-function buildCoverLookupCard(item, kind = 'local') {
+function releaseDeferredCoverLookupPreviews(root) {
+  const images = root?.querySelectorAll?.('[data-cover-lookup-deferred-src]') || [];
+  images.forEach((image) => {
+    const src = String(image.getAttribute('data-cover-lookup-deferred-src') || '').trim();
+    if (!src) return;
+    image.src = src;
+    image.removeAttribute('data-cover-lookup-deferred-src');
+  });
+}
+
+function scheduleDeferredCoverLookupPreviews(root) {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const requestFrame = typeof window.requestAnimationFrame === 'function'
+      ? callback => window.requestAnimationFrame(callback)
+      : typeof window.setTimeout === 'function'
+      ? callback => window.setTimeout(callback, 0)
+      : callback => callback();
+    requestFrame(() => requestFrame(() => releaseDeferredCoverLookupPreviews(root)));
+  };
+  const priorityImage = root?.querySelector?.('.cover-lookup-art-preview-image[fetchpriority="high"]');
+  if (!priorityImage || priorityImage.complete) {
+    release();
+    return;
+  }
+  priorityImage.addEventListener('load', release, { once: true });
+  priorityImage.addEventListener('error', release, { once: true });
+  window.setTimeout?.(release, 500);
+}
+
+function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
@@ -29462,9 +30027,14 @@ function buildCoverLookupCard(item, kind = 'local') {
     ? `data-cover-lookup-open-lightbox="1" data-cover-src="${escapeHtml(fullImageUrl)}" data-cover-alt="${previewAlt}"`
     : `data-cover-src="${escapeHtml(fullImageUrl)}" data-cover-alt="${previewAlt}"`;
   const previewButtonLabel = 'Open full-size cover art';
-  const previewLoadingAttrs = isRemoteKind
+  const previewLoadingAttrs = isRemoteKind && !prioritizeRemotePreview
     ? 'loading="lazy" fetchpriority="low"'
-    : 'loading="eager"';
+    : isRemoteKind
+      ? 'loading="eager" fetchpriority="high"'
+      : 'loading="eager"';
+  const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
+    ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
+    : `src="${escapeHtml(imageUrl)}"`;
   const actionLabel = kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
@@ -29479,7 +30049,7 @@ function buildCoverLookupCard(item, kind = 'local') {
       <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
-          ${imageUrl ? `<img class="cover-lookup-art-preview-image" src="${imageUrl}" alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
+        ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
           <button class="cover-lookup-art-preview-button" type="button" ${previewAttrs} aria-label="${previewButtonLabel}">
             <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
               <path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-.75 1.75h1.5v2h2v1.5h-2v2h-1.5v-2h-2v-1.5h2v-2Z" fill="currentColor"></path>
@@ -29655,7 +30225,7 @@ function renderCoverLookupModal() {
     : '';
   const possibleMatchesMarkup = possibleMatches.length
     ? `
-        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
+        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item, index) => buildCoverLookupCard(item, 'remote', index === 0)).join('')}</div>` : ''}
         ${groupedDiscogsMatches.length ? `<div class="cover-lookup-subsection-title">Discogs</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="discogs">${groupedDiscogsMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${groupedArchiveMatches.length ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="cover_art_archive">${groupedArchiveMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${manualLinkMatches.length ? `<div class="cover-lookup-subsection-title">MANUAL LINKS</div><div class="cover-lookup-gallery">${manualLinkMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
@@ -29719,13 +30289,51 @@ function renderCoverLookupModal() {
       </section>
     `;
   restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
+  scheduleDeferredCoverLookupPreviews(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();
   }
 }
 
-let coverLookupTasksRequestSequence = 0;
+const coverLookupTasksRequestSequences = { replace: 0, refresh: 0, append: 0, active: 0 };
+
+function updateCoverLookupNotificationCounts(data) {
+  if (!Number.isFinite(Number(data?.total_count))) return;
+  state.coverLookup.notificationCounts = {
+    total_count: Math.max(0, Number(data.total_count || 0)),
+    active_count: Math.max(0, Number(data.active_count || 0)),
+    finished_count: Math.max(0, Number(data.finished_count || 0)),
+  };
+}
+
+async function loadCoverLookupNotificationCounts(options = {}) {
+  try {
+    const response = await fetch('/utilities/cover-lookup/tasks/counts', {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || 'Failed to load cover lookup notification counts');
+    }
+    updateCoverLookupNotificationCounts(data);
+    renderCoverLookupDrawer();
+  } catch (error) {
+    console.warn('[AlbumHaven][CoverLookup] Failed to load notification counts.', error);
+    if (options.toast !== false) {
+      showToast(error.message || 'Failed to load cover lookup notification counts.', 'error', 2800);
+    }
+  }
+}
+
+function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
+  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks);
+  if (mode === 'replace') return incoming;
+  const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
+  const remaining = current.filter((task) => !incomingIds.has(String(task?.id || '')));
+  return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
+}
 
 async function loadCoverLookupTaskSummary() {
   const allows = window.AlbumHavenCapabilities?.allows;
@@ -29752,32 +30360,75 @@ async function loadCoverLookupTaskSummary() {
 }
 
 async function loadCoverLookupTasks(options = {}) {
-  const requestSequence = ++coverLookupTasksRequestSequence;
-  state.coverLookup.tasksLoadFailed = false;
+  const activeOnly = options.activeOnly === true;
+  const append = options.append === true;
+  const requestMode = activeOnly
+    ? 'active'
+    : append
+      ? 'append'
+      : options.mergeFirstPage === true
+        ? 'refresh'
+        : 'replace';
+  const requestSequence = ++coverLookupTasksRequestSequences[requestMode];
+  const previousActiveTaskIds = activeOnly
+    ? new Set(
+      (state.coverLookup.tasks || [])
+        .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
+        .map((task) => String(task?.id || ''))
+        .filter(Boolean),
+    )
+    : new Set();
   try {
-    const response = await fetch('/utilities/cover-lookup/tasks', { headers: { Accept: 'application/json' } });
+    const params = new URLSearchParams({ limit: '50' });
+    if (activeOnly) params.set('active_only', 'true');
+    if (append && state.coverLookup.tasksNextCursor) {
+      params.set('cursor', state.coverLookup.tasksNextCursor);
+    }
+    const response = await fetch(`/utilities/cover-lookup/tasks?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
     const data = await response.json().catch(() => ({}));
-    if (requestSequence !== coverLookupTasksRequestSequence) return;
+    if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
-    state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
-    state.coverLookup.tasksHydrated = true;
-    renderCoverLookupDrawer();
-    (state.coverLookup.tasks || []).forEach((task) => {
-      applyCoverLookupTaskUpdates(task);
-    });
-    const snapshot = JSON.stringify(state.coverLookup.tasks.map((task) => ({
+    updateCoverLookupNotificationCounts(data);
+    const incomingTasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const incomingTaskIds = new Set(
+      incomingTasks.map((task) => String(task?.id || '')).filter(Boolean),
+    );
+    const missingActiveTask = activeOnly
+      && Array.from(previousActiveTaskIds).some((taskId) => !incomingTaskIds.has(taskId));
+    const nextTasks = mergeCoverLookupTaskSummaries(incomingTasks, requestMode);
+    if (requestMode !== 'active') {
+      state.coverLookup.tasksNextCursor = String(data.next_cursor || '') || null;
+    }
+    const snapshot = JSON.stringify(nextTasks.map((task) => ({
       id: task.id,
       status: task.status,
       progress: task.progress,
+      progress_label: task.progress_label,
+      message: task.message,
+      result_kind: task.result_kind,
+      artist: task.artist,
+      album: task.album,
+      year: task.year,
+      notification_action_taken: Boolean(task.notification_action_taken),
+      possible_match_count: Number(task.possible_match_count || 0),
+      candidate_updated_at: String(task.candidate_updated_at || ''),
       selected_candidate_id: task.selected_candidate_id,
       possible_match_ids: buildCoverLookupCandidateSnapshot(task),
       updated_albums_count: Array.isArray(task.updated_albums) ? task.updated_albums.length : 0,
     })));
+    const tasksChanged = snapshot !== state.coverLookup.tasksSnapshot;
+    state.coverLookup.tasks = nextTasks;
+    if (tasksChanged) renderCoverLookupDrawer();
+    nextTasks.forEach((task) => {
+      applyCoverLookupTaskUpdates(task);
+    });
     const modalTaskId = String(state.coverLookup.modal.taskId || '');
-    if (modalTaskId && snapshot !== state.coverLookup.tasksSnapshot) {
-      const task = state.coverLookup.tasks.find((item) => String(item?.id || '') === modalTaskId);
+    if (modalTaskId && tasksChanged) {
+      const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
         state.coverLookup.modal.statusText = String(task.message || task.progress_label || '');
@@ -29788,7 +30439,15 @@ async function loadCoverLookupTasks(options = {}) {
           state.coverLookup.modal.candidateSnapshot,
         );
         applyCoverLookupCandidateSource(candidateSource);
-        if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
+      const partialCandidatesAdvanced = ['pending', 'running'].includes(taskStatus)
+        && (
+          Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0)
+          || coverLookupCandidateTimestamp(task.candidate_updated_at)
+            > coverLookupCandidateTimestamp(state.coverLookup.modal.candidateSnapshot?.updated_at)
+        );
+      if (partialCandidatesAdvanced) {
+        await refreshCoverLookupGallery(false);
+      } else if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
           if (options.refreshModalGallery !== false) {
             await refreshCoverLookupGallery(false);
           } else {
@@ -29807,9 +30466,15 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
+    if (missingActiveTask) {
+      await loadCoverLookupTasks({
+        toast: false,
+        mergeFirstPage: true,
+        refreshModalGallery: options.refreshModalGallery,
+      });
+    }
   } catch (error) {
-    if (requestSequence !== coverLookupTasksRequestSequence) return;
-    state.coverLookup.tasksLoadFailed = true;
+    if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     console.warn('[AlbumHaven][CoverLookup] Failed to load lookup tasks.', error);
     renderCoverLookupDrawer({ preserveInteraction: false });
     if (options.toast !== false) {
@@ -29818,24 +30483,83 @@ async function loadCoverLookupTasks(options = {}) {
   }
 }
 
+let coverLookupPollingRequest = null;
+let coverLookupBackgroundPollTicks = 0;
+let coverLookupPollInFlight = false;
+let coverLookupHistoryRequest = null;
+
+async function loadNextCoverLookupTaskPage(options = {}) {
+  if (!state.coverLookup.tasksNextCursor) return;
+  if (coverLookupHistoryRequest) return coverLookupHistoryRequest;
+  const request = loadCoverLookupTasks({ ...options, append: true });
+  coverLookupHistoryRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (coverLookupHistoryRequest === request) coverLookupHistoryRequest = null;
+  }
+}
+
+function handleCoverLookupDrawerScroll(event) {
+  const body = event?.currentTarget || document.getElementById('cover-lookup-drawer-body');
+  if (!body || !state.coverLookup.drawerOpen) return Promise.resolve();
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const nextWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  if (nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)) {
+    renderCoverLookupDrawer({ preserveInteraction: false });
+  }
+  const remaining = Number(body.scrollHeight || 0)
+    - Number(body.scrollTop || 0)
+    - Number(body.clientHeight || 0);
+  const prefetchThreshold = Math.max(600, Number(body.clientHeight || 0) * 2);
+  if (remaining > prefetchThreshold || !state.coverLookup.tasksNextCursor) return Promise.resolve();
+  return loadNextCoverLookupTaskPage({ toast: false });
+}
+
+async function loadCoverLookupTasksForPolling(options = {}) {
+  if (coverLookupPollingRequest) return coverLookupPollingRequest;
+  const request = loadCoverLookupTasks({ ...options, activeOnly: true });
+  coverLookupPollingRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (coverLookupPollingRequest === request) {
+      coverLookupPollingRequest = null;
+    }
+  }
+}
+
 function ensureCoverLookupPolling() {
   if (state.coverLookup.pollingTimer) return;
   state.coverLookup.pollingTimer = window.setInterval(async () => {
-    await loadCoverLookupTasks({ toast: false });
-    const snapshot = state.coverLookup.modal.candidateSnapshot;
+    if (coverLookupPollInFlight) return;
     const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
-    const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
-      String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
-      && ['pending', 'running'].includes(String(task?.status || ''))
-    ));
-    if (
-      modalOpen
-      && !hasMatchingActiveTask
-      && ['pending', 'running'].includes(String(snapshot?.status || ''))
-    ) {
-      await refreshCoverLookupGallery(false);
+    if (!modalOpen) {
+      coverLookupBackgroundPollTicks += 1;
+      if (coverLookupBackgroundPollTicks < 25) return;
+      coverLookupBackgroundPollTicks = 0;
+    } else {
+      coverLookupBackgroundPollTicks = 0;
     }
-  }, 2500);
+    coverLookupPollInFlight = true;
+    try {
+      await loadCoverLookupTasksForPolling({ toast: false });
+      const snapshot = state.coverLookup.modal.candidateSnapshot;
+      const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
+        String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
+        && ['pending', 'running'].includes(String(task?.status || ''))
+      ));
+      if (
+        modalOpen
+        && !hasMatchingActiveTask
+        && ['pending', 'running'].includes(String(snapshot?.status || ''))
+      ) {
+        await refreshCoverLookupGallery(false);
+      }
+    } finally {
+      coverLookupPollInFlight = false;
+    }
+  }, 100);
 }
 
 function stopCoverLookupPollingIfIdle() {
@@ -29846,6 +30570,7 @@ function stopCoverLookupPollingIfIdle() {
   if (state.coverLookup.pollingTimer) {
     window.clearInterval(state.coverLookup.pollingTimer);
     state.coverLookup.pollingTimer = 0;
+    coverLookupBackgroundPollTicks = 0;
   }
 }
 
@@ -29991,10 +30716,7 @@ async function openCoverLookupModal(album, options = {}) {
   }
   renderCoverLookupModal();
   ensureCoverLookupPolling();
-  await Promise.all([
-    loadCoverLookupTasks({ toast: false, refreshModalGallery: false }),
-    refreshCoverLookupGallery(),
-  ]);
+  await refreshCoverLookupGallery();
 }
 
 function closeCoverLookupModal() {
@@ -30013,6 +30735,18 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
+  state.coverLookup.modal.saving = false;
+  state.coverLookup.modal.album = null;
+  state.coverLookup.modal.taskId = '';
+  state.coverLookup.modal.localCovers = [];
+  state.coverLookup.modal.otherArt = [];
+  state.coverLookup.modal.possibleMatches = [];
+  state.coverLookup.modal.candidateSnapshot = null;
+  state.coverLookup.modal.candidateGeneration = '';
+  state.coverLookup.modal.statusText = '';
+  state.coverLookup.modal.statusTone = 'neutral';
+  state.coverLookup.modal.manualUrlText = '';
+  if (els.body) els.body.innerHTML = '';
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
     els.saveRemote.disabled = true;
@@ -30054,7 +30788,6 @@ async function startCoverLookupForAlbum(album, options = {}) {
   const backgroundOnly = Boolean(options?.backgroundOnly);
   const triggerButton = backgroundOnly ? options?.triggerButton : null;
   const triggerWasDisabled = Boolean(triggerButton?.disabled);
-  const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
   if (!backgroundOnly) {
     const selectedLocalCard = document.getElementById('cover-lookup-modal-body')
       ?.querySelector?.('[data-select-local-cover][data-cover-lookup-local-active]');
@@ -30113,9 +30846,8 @@ async function startCoverLookupForAlbum(album, options = {}) {
       5000,
       { placement: 'top-center' },
     );
-    await loadCoverLookupTasks({ toast: false });
-    if (!backgroundOnly && modalOpen) {
-      await refreshCoverLookupGallery(false);
+    if (backgroundOnly) {
+      await loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     }
   } catch (error) {
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);
@@ -31370,6 +32102,12 @@ async function confirmManualTagEdit() {
       scrollTop: Number(state.tagEditor.originGalleryScrollPosition.scrollTop),
     }
     : null;
+  const absoluteScrollOwnerGeneration = (
+    typeof virtualGrid !== 'undefined'
+    && typeof virtualGrid?.getUserScrollIntentGeneration === 'function'
+  )
+    ? virtualGrid.getUserScrollIntentGeneration()
+    : null;
   const renderOptions = {
     preserveScroll: true,
     preserveAbsoluteScroll: true,
@@ -31395,10 +32133,11 @@ async function confirmManualTagEdit() {
   showRepairAlert(
     tagEditAlert.savingMessage,
     'info',
-    null,
+    2000,
     { title: 'Saving tags', dismissible: false },
   );
   let failedLogHistoryEntryId = '';
+  let failedSaveTaskError = '';
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -31411,6 +32150,12 @@ async function confirmManualTagEdit() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      if (
+        data.save_task_id
+        && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
+      ) {
+        failedSaveTaskError = String(data.error || '').trim();
+      }
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {
@@ -31468,6 +32213,9 @@ async function confirmManualTagEdit() {
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
       absoluteScrollPosition,
+      ...(Number.isSafeInteger(absoluteScrollOwnerGeneration)
+        ? { absoluteScrollOwnerGeneration }
+        : {}),
       problematicMutationOriginKey,
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
@@ -31495,12 +32243,18 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    if (responseIsTerminal) {
+    if (responseIsTerminal && !completedResponseNeedsCanonicalRefresh) {
+      const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+        .map((warning) => String(warning || '').trim())
+        .filter(Boolean);
+      const hasCompletionWarning = completionWarnings.length > 0;
       showRepairAlert(
-        tagEditAlert.completionMessage,
-        'success',
-        2000,
-        { title: 'Tags updated', dismissible: false },
+        [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
+        hasCompletionWarning ? 'warning' : 'success',
+        hasCompletionWarning ? 8000 : 2000,
+        {
+          title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+        },
       );
     }
     if (responseIsTerminal) {
@@ -31552,7 +32306,7 @@ async function confirmManualTagEdit() {
       restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
     }
     showRepairAlert(
-      String(error?.message || '').trim() || 'Failed to edit tags.',
+      failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {
@@ -33984,12 +34738,13 @@ function flushListenSessionOnUnload(reason = 'unload') {
 // BEGIN js/runtime/gallery-cover-preview-cache.js
 
 const GALLERY_COVER_PREVIEW_CACHE_PREFIX = 'album-haven-gallery-previews-';
-const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v1';
+const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v2';
 const GALLERY_COVER_PREVIEW_CACHE_NAME = `${GALLERY_COVER_PREVIEW_CACHE_PREFIX}${GALLERY_COVER_PREVIEW_CACHE_VERSION}`;
 const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
+const GALLERY_COVER_PRODUCTION_URL_HEADER = 'X-Album-Haven-Cover-Production-Url';
 
 class GalleryCoverPreviewCache {
   constructor(options = {}) {
@@ -34000,6 +34755,9 @@ class GalleryCoverPreviewCache {
     this.cacheName = String(options.cacheName || GALLERY_COVER_PREVIEW_CACHE_NAME);
     this.maxActiveObjectUrls = Math.max(1, Number(options.maxActiveObjectUrls || MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS));
     this.activeObjectUrls = new Map();
+    this.imageObjectUrls = new WeakMap();
+    this.objectUrlConsumerCounts = new Map();
+    this.retiredObjectUrls = new Set();
     this.inFlight = new Map();
     this.writeChains = new Map();
     this.liveFetches = new Map();
@@ -34151,13 +34909,16 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  createCacheableResponse(response, blob) {
+  createCacheableResponse(response, blob, productionUrl) {
     if (typeof globalThis.Response !== 'function') return null;
     const contentType = String(blob?.type || this.responseContentType(response) || '').trim();
     return new globalThis.Response(blob, {
       status: Number(response?.status || 200),
       statusText: String(response?.statusText || ''),
-      headers: contentType ? { 'Content-Type': contentType } : undefined,
+      headers: {
+        ...(contentType ? { 'Content-Type': contentType } : {}),
+        [GALLERY_COVER_PRODUCTION_URL_HEADER]: productionUrl,
+      },
     });
   }
 
@@ -34189,37 +34950,49 @@ class GalleryCoverPreviewCache {
     return this.latestRequestedProductionUrls.get(this.baseCacheKey(productionUrl)) === productionUrl;
   }
 
-  async purgeSupersededEntries(cache, productionUrl, shouldContinue = () => true) {
-    const baseKey = this.baseCacheKey(productionUrl);
-    if (typeof cache?.keys !== 'function') return;
-    const requests = await cache.keys();
-    if (!shouldContinue()) return;
-    for (const request of requests) {
-      if (!shouldContinue()) return;
-      const cachedUrl = String(request?.url || request || '');
-      if (
-        cachedUrl !== productionUrl
-        && this.normalizeProductionUrl(cachedUrl)
-        && this.baseCacheKey(cachedUrl) === baseKey
-      ) {
-        await cache.delete(request);
-        if (!shouldContinue()) return;
-      }
-    }
-  }
-
   rememberObjectUrl(productionUrl, objectUrl) {
     const previous = this.activeObjectUrls.get(productionUrl);
-    if (previous && previous !== objectUrl) this.urlApi?.revokeObjectURL?.(previous);
+    if (previous && previous !== objectUrl) this.retireObjectUrl(previous);
     this.activeObjectUrls.delete(productionUrl);
     this.activeObjectUrls.set(productionUrl, objectUrl);
     while (this.activeObjectUrls.size > this.maxActiveObjectUrls) {
       const oldest = this.activeObjectUrls.entries().next().value;
       if (!oldest) break;
       this.activeObjectUrls.delete(oldest[0]);
-      this.urlApi?.revokeObjectURL?.(oldest[1]);
+      this.retireObjectUrl(oldest[1]);
     }
     this.syncActiveDiagnostics();
+  }
+
+  retireObjectUrl(objectUrl) {
+    if (this.objectUrlConsumerCounts.has(objectUrl)) {
+      this.retiredObjectUrls.add(objectUrl);
+      return;
+    }
+    this.urlApi?.revokeObjectURL?.(objectUrl);
+  }
+
+  retainImageObjectUrl(image, objectUrl) {
+    const previous = this.imageObjectUrls.get(image);
+    if (previous === objectUrl) return;
+    this.releaseImageObjectUrl(image);
+    if (!String(objectUrl || '').startsWith('blob:')) return;
+    this.imageObjectUrls.set(image, objectUrl);
+    this.objectUrlConsumerCounts.set(objectUrl, Number(this.objectUrlConsumerCounts.get(objectUrl) || 0) + 1);
+  }
+
+  releaseImageObjectUrl(image) {
+    const objectUrl = this.imageObjectUrls.get(image);
+    if (!objectUrl) return;
+    this.imageObjectUrls.delete(image);
+    const remaining = Number(this.objectUrlConsumerCounts.get(objectUrl) || 0) - 1;
+    if (remaining > 0) {
+      this.objectUrlConsumerCounts.set(objectUrl, remaining);
+      return;
+    }
+    this.objectUrlConsumerCounts.delete(objectUrl);
+    if (!this.retiredObjectUrls.delete(objectUrl)) return;
+    this.urlApi?.revokeObjectURL?.(objectUrl);
   }
 
   syncActiveDiagnostics() {
@@ -34271,18 +35044,12 @@ class GalleryCoverPreviewCache {
         );
         await this.deferCacheWrite(async () => {
           if (!shouldContinue()) return;
-          try {
-            await this.purgeSupersededEntries(cache, productionUrl, shouldContinue);
-          } catch (error) {
-            this.recordDiagnostic('superseded-entry-purge-failure', productionUrl, error);
-          }
-          if (!shouldContinue()) return;
-          await cache.put(productionUrl, cacheCandidate);
+          await cache.put(baseKey, cacheCandidate);
           wroteCacheEntry = true;
         });
         if (!shouldContinue()) {
           if (wroteCacheEntry || !this.isLatestRequestedProductionUrl(productionUrl)) {
-            await cache.delete(productionUrl);
+            await cache.delete(baseKey);
           }
           return {
             blob,
@@ -34310,9 +35077,10 @@ class GalleryCoverPreviewCache {
   async loadBlob(productionUrl, snapshot, signal = null, abortController = null, priorityOwner = null) {
     this.throwIfAborted(signal);
     const cache = await this.openCache();
-    const cachedResponse = await cache.match(productionUrl);
+    const cacheKey = this.baseCacheKey(productionUrl);
+    const cachedResponse = await cache.match(cacheKey);
     this.throwIfAborted(signal);
-    if (cachedResponse) {
+    if (cachedResponse?.headers?.get?.(GALLERY_COVER_PRODUCTION_URL_HEADER) === productionUrl) {
       try {
         const blob = await this.validatedBlob(cachedResponse);
         this.throwIfAborted(signal);
@@ -34321,7 +35089,7 @@ class GalleryCoverPreviewCache {
         if (signal?.aborted) this.throwIfAborted(signal);
         if (error?.name === 'AbortError') throw error;
         try {
-          await cache.delete(productionUrl);
+          await cache.delete(cacheKey);
         } catch (deleteError) {
           this.recordDiagnostic('invalid-cache-delete-failure', productionUrl, deleteError);
         }
@@ -34366,7 +35134,7 @@ class GalleryCoverPreviewCache {
         });
         this.throwIfAborted(signal);
         blob = await this.validatedBlob(response);
-        cacheCandidate = this.createCacheableResponse(response, blob);
+        cacheCandidate = this.createCacheableResponse(response, blob, productionUrl);
         this.throwIfAborted(signal);
       } catch (error) {
         promotionRetry = Boolean(
@@ -34645,12 +35413,12 @@ class GalleryCoverPreviewCache {
     const objectUrl = this.activeObjectUrls.get(normalizedUrl);
     if (objectUrl) {
       this.activeObjectUrls.delete(normalizedUrl);
-      this.urlApi?.revokeObjectURL?.(objectUrl);
+      this.retireObjectUrl(objectUrl);
       this.syncActiveDiagnostics();
     }
     try {
       const cache = await this.openCache();
-      return Boolean(await cache.delete(normalizedUrl));
+      return Boolean(await cache.delete(this.baseCacheKey(normalizedUrl)));
     } catch (error) {
       this.recordDiagnostic('fallback', normalizedUrl, error);
       return false;
@@ -34660,8 +35428,12 @@ class GalleryCoverPreviewCache {
   destroy() {
     this.generation += 1;
     this.abortInFlight('cache-destroyed');
-    this.activeObjectUrls.forEach((objectUrl) => this.urlApi?.revokeObjectURL?.(objectUrl));
+    new Set([...this.activeObjectUrls.values(), ...this.retiredObjectUrls])
+      .forEach((objectUrl) => this.urlApi?.revokeObjectURL?.(objectUrl));
     this.activeObjectUrls.clear();
+    this.imageObjectUrls = new WeakMap();
+    this.objectUrlConsumerCounts.clear();
+    this.retiredObjectUrls.clear();
     this.syncActiveDiagnostics();
     this.liveFetches.clear();
     this.inFlight.clear();
@@ -34687,6 +35459,7 @@ function beginGalleryCoverImageRequest(image, productionUrl) {
 function commitGalleryCoverImageRequest(request, result) {
   if (!request || galleryCoverImageRequestTokens.get(request.image) !== request.requestToken) return false;
   request.image.setAttribute('data-production-cover-src', result.productionUrl);
+  galleryCoverPreviewCache.retainImageObjectUrl(request.image, result.displayUrl);
   request.image.src = result.displayUrl;
   return true;
 }
@@ -35698,7 +36471,7 @@ class VirtualArtistGrid {
     this.layoutConfig = CARD_GALLERY_LAYOUT_CONFIG;
     this.columnGap = 14;
     this.rowGap = 14;
-    this.sectionHeaderHeight = 54;
+    this.sectionHeaderHeight = 42;
     this.showArtistSectionHeaders = true;
     this.sectionMarginBottom = 28;
     this.labelHeight = 40;
@@ -35743,8 +36516,12 @@ class VirtualArtistGrid {
     this._measureTimeout = 0;
     this._touchScrollGestureActive = false;
     this._touchScrollGestureHadScroll = false;
+    this._touchScrollGestureTarget = null;
+    this._scrollAnchorVisualPhase = 0;
+    this._userScrollIntentGeneration = 0;
     this._deferredSetGroups = null;
     this._deferredArtistTreeSettlement = false;
+    this._artistTreeReflowAnchor = undefined;
     this._deferredResizeOptions = null;
     this._resetScrollAfterMeasure = false;
     this.isScrollSettled = true;
@@ -35761,6 +36538,7 @@ class VirtualArtistGrid {
     this.onUserScrollIntent = this.onUserScrollIntent.bind(this);
     this.onTouchScrollEnd = this.onTouchScrollEnd.bind(this);
     this.onResize = this.onResize.bind(this);
+    this.onArtistTreeToggleStarting = this.onArtistTreeToggleStarting.bind(this);
     this.onArtistTreeSettled = this.onArtistTreeSettled.bind(this);
     this.onPointerDown = this.onPointerDown.bind(this);
     this.onAlbumCardPointerGestureEnd = this.onAlbumCardPointerGestureEnd.bind(this);
@@ -35776,12 +36554,22 @@ class VirtualArtistGrid {
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('pointerup', this.onAlbumCardPointerGestureEnd, { capture: true });
       document.addEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
+      document.addEventListener('touchend', this.onTouchScrollEnd, { passive: true, capture: true });
+      document.addEventListener('touchcancel', this.onTouchScrollEnd, { passive: true, capture: true });
     }
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('album-haven:artist-tree-toggle-starting', this.onArtistTreeToggleStarting);
     window.addEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
   }
 
   recordDiagnosticEvent(type, details = {}) {
+    const epoch = (
+      typeof performance !== 'undefined'
+      && Number.isFinite(Number(performance.timeOrigin))
+      && typeof performance.now === 'function'
+    )
+      ? Number(performance.timeOrigin) + performance.now()
+      : Date.now();
     const event = {
       sequence: ++this._diagnosticSequence,
       type: String(type || 'unknown'),
@@ -35790,6 +36578,7 @@ class VirtualArtistGrid {
       renderRafOwner: Number(this._activeRenderRafOwner || this._raf || 0),
       measureRafOwner: Number(this._activeMeasureRafOwner || this._measureRaf || 0),
       ...details,
+      epoch,
     };
     this.diagnostics.events.push(event);
     if (this.diagnostics.events.length > this.diagnostics.maxEvents) {
@@ -35826,8 +36615,12 @@ class VirtualArtistGrid {
     if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
       document.removeEventListener('pointerup', this.onAlbumCardPointerGestureEnd, { capture: true });
       document.removeEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
+      document.removeEventListener('touchend', this.onTouchScrollEnd, { capture: true });
+      document.removeEventListener('touchcancel', this.onTouchScrollEnd, { capture: true });
     }
+    this.clearTouchScrollGestureTarget();
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('album-haven:artist-tree-toggle-starting', this.onArtistTreeToggleStarting);
     window.removeEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
     if (this._scrollRestoreRaf) {
       cancelBrowserAnimationFrame(this._scrollRestoreRaf);
@@ -35853,6 +36646,7 @@ class VirtualArtistGrid {
     this._touchScrollGestureHadScroll = false;
     this._deferredSetGroups = null;
     this._deferredArtistTreeSettlement = false;
+    this._artistTreeReflowAnchor = undefined;
     this._deferredResizeOptions = null;
     if (this._measureRaf) {
       cancelBrowserAnimationFrame(this._measureRaf);
@@ -35985,7 +36779,7 @@ class VirtualArtistGrid {
     return true;
   }
 
-  captureScrollAnchor() {
+  captureScrollAnchor(options = {}) {
     if (!this.scrollEl || !this.containerEl) return null;
     const scrollLeft = Number(this.scrollEl.scrollLeft || 0);
     const scrollTop = Number(this.scrollEl.scrollTop || 0);
@@ -35998,9 +36792,12 @@ class VirtualArtistGrid {
       return { scrollLeft, scrollTop };
     }
     const cardTriggers = Array.from(this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'));
-    const anchorCardTrigger = cardTriggers.find((element) => (
-      (element.closest?.('.album-card') || element).getBoundingClientRect().bottom >= scrollRect.top + 1
-    )) || cardTriggers[0] || null;
+    const anchorCardTrigger = cardTriggers.find((element) => {
+      const visibleElement = options.requireVisibleTrigger
+        ? element
+        : element.closest?.('.album-card') || element;
+      return visibleElement.getBoundingClientRect().bottom >= scrollRect.top + 1;
+    }) || cardTriggers[0] || null;
     if (anchorCardTrigger instanceof HTMLElement) {
       const anchorCard = anchorCardTrigger.closest?.('.album-card');
       const anchorRect = (anchorCard || anchorCardTrigger).getBoundingClientRect();
@@ -36041,11 +36838,32 @@ class VirtualArtistGrid {
     };
   }
 
+  applyScrollAnchorVisualPhase(nextPhase) {
+    const normalizedPhase = Math.round((Number(nextPhase) || 0) * 64) / 64;
+    this._scrollAnchorVisualPhase = normalizedPhase;
+    this.containerEl.style.translate = normalizedPhase ? `0 ${normalizedPhase}px` : '';
+  }
+
+  applyAnchoredScrollTop(requestedScrollTop) {
+    const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
+    const requestedScrollDelta = Number(requestedScrollTop || 0) - previousScrollTop;
+    this.scrollEl.scrollTop = requestedScrollTop;
+    const appliedScrollDelta = Number(this.scrollEl.scrollTop || 0) - previousScrollTop;
+    this.applyScrollAnchorVisualPhase(
+      Number(this._scrollAnchorVisualPhase || 0) + appliedScrollDelta - requestedScrollDelta,
+    );
+  }
+
+  getUserScrollIntentGeneration() {
+    return this._userScrollIntentGeneration;
+  }
+
   restoreScrollAnchor(anchor) {
     if (!this.scrollEl || !anchor) return;
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
     // At the root, hydration must preserve the top rather than follow a preview card.
     if (Number(anchor.scrollTop || 0) <= 0) {
+      this.applyScrollAnchorVisualPhase(0);
       this.scrollEl.scrollTop = 0;
       return;
     }
@@ -36099,12 +36917,14 @@ class VirtualArtistGrid {
       const resolvedAnchorCardTrigger = anchorCardTrigger || renamedKeyTrigger || fallbackAlbumTrigger;
       if (resolvedAnchorCardTrigger instanceof HTMLElement && typeof this.scrollEl.getBoundingClientRect === 'function') {
         const scrollRect = this.scrollEl.getBoundingClientRect();
-        const anchorElement = anchor.anchorBox === 'card'
-          ? resolvedAnchorCardTrigger.closest?.('.album-card') || resolvedAnchorCardTrigger
-          : resolvedAnchorCardTrigger;
+        const anchorElement = anchor.anchorBox === 'row'
+          ? resolvedAnchorCardTrigger.closest?.('.album-row') || resolvedAnchorCardTrigger
+          : anchor.anchorBox === 'card'
+            ? resolvedAnchorCardTrigger.closest?.('.album-card') || resolvedAnchorCardTrigger
+            : resolvedAnchorCardTrigger;
         const anchorRect = anchorElement.getBoundingClientRect();
         const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
-        this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
+        this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + delta);
         return;
       }
       if (sectionOccurrenceKey && anchorAlbumName) {
@@ -36135,7 +36955,9 @@ class VirtualArtistGrid {
           const modeledSectionTop = Number(modeledSection.top);
           if (Number.isFinite(modeledBlockOffset) && Number.isFinite(modeledSectionTop)) {
             const modeledCardTop = modeledSectionTop + this.sectionHeaderHeight + modeledBlockOffset;
-            this.scrollEl.scrollTop = Math.max(0, modeledCardTop - Number(anchor.offsetTop || 0));
+            this.applyAnchoredScrollTop(
+              Math.max(0, modeledCardTop - Number(anchor.offsetTop || 0)),
+            );
             return;
           }
         }
@@ -36158,7 +36980,16 @@ class VirtualArtistGrid {
     const scrollRect = this.scrollEl.getBoundingClientRect();
     const anchorRect = anchorRow.getBoundingClientRect();
     const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
-    this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
+    this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + delta);
+  }
+
+  restoreOwnedScrollAnchor(anchor) {
+    this.restoreScrollAnchor(anchor);
+    this._pendingStabilizationScroll = {
+      generation: this._stabilizeGeneration,
+      scrollLeft: Number(this.scrollEl?.scrollLeft || 0),
+      scrollTop: Number(this.scrollEl?.scrollTop || 0),
+    };
   }
 
   scrollToArtist(artist) {
@@ -36176,10 +37007,11 @@ class VirtualArtistGrid {
     this._absoluteScrollRestore = null;
     this.invalidateScrollStabilization();
     this._resetScrollAfterMeasure = false;
-    this.scrollEl.scrollTop = Math.max(
+    this.applyScrollAnchorVisualPhase(0);
+    this.applyAnchoredScrollTop(Math.max(
       0,
       Number(section.top || 0) + Number(this.sectionHeaderHeight || 0),
-    );
+    ));
     this.lastKey = '';
     this.render(true);
     const renderedHeader = Array.from(this.containerEl.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
@@ -36189,8 +37021,12 @@ class VirtualArtistGrid {
       ? renderedHeader.parentElement?.querySelector?.('.artist-rows')
       : null;
     if (renderedRows instanceof HTMLElement) {
-      const renderedDelta = renderedRows.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top;
-      if (Math.abs(renderedDelta) > 0.5) this.scrollEl.scrollTop += renderedDelta;
+      const scrollRect = this.scrollEl.getBoundingClientRect();
+      const scrollContentTop = scrollRect.top + Number(this.scrollEl.clientTop || 0);
+      const renderedDelta = renderedRows.getBoundingClientRect().top - scrollContentTop;
+      if (Math.abs(renderedDelta) >= (1 / 64)) {
+        this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + renderedDelta);
+      }
     }
     return true;
   }
@@ -36269,7 +37105,11 @@ class VirtualArtistGrid {
       && options.resetScrollForUserArtistSelection !== true
       && options.preserveAbsoluteScroll !== true
       && !this._absoluteScrollRestore
-      && (this._touchScrollGestureActive || !this.isScrollSettled)
+      && (
+        this._touchScrollGestureActive
+        || !this.isScrollSettled
+        || !this.hasMeasurableScrollSurface()
+      )
     );
     if (shouldDeferMountedGroupUpdate) {
       this._deferredSetGroups = {
@@ -36286,9 +37126,18 @@ class VirtualArtistGrid {
     }
     this._deferredSetGroups = null;
     this._deferredArtistTreeSettlement = false;
+    this._artistTreeReflowAnchor = undefined;
     this._deferredResizeOptions = null;
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
-    const hasPendingScrollRender = Boolean(supersededScrollRenderRafOwner);
+    const ownedAbsoluteScrollPosition = (
+      options.preserveAbsoluteScroll !== false
+      && this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
+    )
+      ? {
+        scrollLeft: this._absoluteScrollRestore.scrollLeft,
+        scrollTop: this._absoluteScrollRestore.scrollTop,
+      }
+      : null;
     this._renderGeneration += 1;
     const renderGeneration = this._renderGeneration;
     this._preserveExistingChildrenGeneration = options.preserveMountedGalleryChildren
@@ -36340,16 +37189,24 @@ class VirtualArtistGrid {
       : null;
     const preservedAbsoluteScroll = preserveScroll && (
       options.preserveAbsoluteScroll === true
-      || (hasPendingScrollRender && options.preserveAbsoluteScroll !== false)
+      || ownedAbsoluteScrollPosition
     )
       ? {
         renderGeneration,
-        scrollLeft: requestedAbsoluteScroll?.scrollLeft ?? Number(this.scrollEl?.scrollLeft || 0),
-        scrollTop: requestedAbsoluteScroll?.scrollTop ?? Number(this.scrollEl?.scrollTop || 0),
+        scrollLeft: requestedAbsoluteScroll?.scrollLeft
+          ?? ownedAbsoluteScrollPosition?.scrollLeft
+          ?? Number(this.scrollEl?.scrollLeft || 0),
+        scrollTop: requestedAbsoluteScroll?.scrollTop
+          ?? ownedAbsoluteScrollPosition?.scrollTop
+          ?? Number(this.scrollEl?.scrollTop || 0),
       }
       : null;
+    const semanticScrollAnchorIsCurrent = options.semanticScrollAnchor && (
+      !Number.isSafeInteger(options.semanticScrollOwnerGeneration)
+      || options.semanticScrollOwnerGeneration === this._userScrollIntentGeneration
+    );
     const preservedAnchor = preserveScroll && !preservedAbsoluteScroll
-      ? this.captureScrollAnchor()
+      ? (semanticScrollAnchorIsCurrent ? options.semanticScrollAnchor : this.captureScrollAnchor())
       : null;
     this._absoluteScrollRestore = preservedAbsoluteScroll;
     const sections = [];
@@ -36431,6 +37288,7 @@ class VirtualArtistGrid {
     this.lastKey = '';
     this.recalculate();
     if (!preserveScroll && this.scrollEl) {
+      this.applyScrollAnchorVisualPhase(0);
       this.scrollEl.scrollTop = 0;
     }
     if (preservedAbsoluteScroll && this.scrollEl) {
@@ -36458,6 +37316,8 @@ class VirtualArtistGrid {
         ) return;
         this._scrollRestoreRaf = null;
         restoreScroll();
+        if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
+        if (typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
         const latestRender = this.diagnostics.latestRender;
         if (
           Number(latestRender?.renderGeneration || 0) !== renderGeneration
@@ -36481,6 +37341,7 @@ class VirtualArtistGrid {
     if (!preserveScroll && this.scrollEl) {
       const resetScroll = () => {
         if (renderGeneration !== this._renderGeneration) return;
+        this.applyScrollAnchorVisualPhase(0);
         this.scrollEl.scrollTop = 0;
         this.primeVisibleCoverImages();
       };
@@ -36568,8 +37429,25 @@ class VirtualArtistGrid {
     return `row:${this.columns}:${albumKey}`;
   }
 
+  hasMeasurableScrollSurface() {
+    const rect = this.scrollEl?.getBoundingClientRect?.();
+    if (!rect) return true;
+    const width = Number(rect.width);
+    const height = Number(rect.height);
+    return !(
+      Number.isFinite(width)
+      && Number.isFinite(height)
+      && (width <= 0 || height <= 0)
+    );
+  }
+
+  hasDeferredMountedGroupUpdate() {
+    return Boolean(this._deferredSetGroups);
+  }
+
   recalculate(options = {}) {
-    this.sectionHeaderHeight = this.showArtistSectionHeaders ? 54 : 0;
+    if (!this.hasMeasurableScrollSurface()) return false;
+    this.sectionHeaderHeight = this.showArtistSectionHeaders ? 42 : 0;
     const layoutConfig = this.getLayoutConfig();
     const selectedCardWidth = resolveGalleryCardWidth(layoutConfig);
     const width = Math.max(1, this.scrollEl.clientWidth - 4);
@@ -36600,7 +37478,9 @@ class VirtualArtistGrid {
     if (!options.preserveColumnGeometry) {
       this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
       this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-        ? (width - (this.columns - 1) * this.columnGap) / this.columns
+        ? Math.floor(
+          ((width - (this.columns - 1) * this.columnGap) / this.columns) * 1000,
+        ) / 1000
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
@@ -36613,8 +37493,18 @@ class VirtualArtistGrid {
       this.cardTrackWidth = mobileGeometry.cardTrackWidth;
     }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
+    const measuredRowHeight = this.sections.flatMap((section) => (
+      section.rowGeometryKey === rowGeometryKey
+        ? (section.blockHeights || []).filter((_height, index) => {
+          const measureKey = String(section.blockMeasureKeys?.[index] || '');
+          return measureKey.startsWith('row:')
+            && String(section.measuredBlockKeys?.[index] || '') === measureKey;
+        })
+        : []
+    )).find(height => Number(height) > 0);
     const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
-      || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);
+      || (displayMode === 'covers' ? this.cardTrackWidth : measuredRowHeight)
+      || this.collapsedRowHeight;
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {
@@ -36639,22 +37529,26 @@ class VirtualArtistGrid {
       const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
       const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
       section.blocksData = blocks;
-      if (!Array.isArray(section.blockHeights) || section.blockHeights.length !== blocks.length) {
-        const previousBlockHeights = Array.isArray(section.blockHeights)
-          ? section.blockHeights
-          : [];
-        section.blockHeights = blocks.map((block, index) => {
-          if (block.kind === 'subheading') return this.subsectionLabelHeight;
-          const previousHeight = Number(previousBlockHeights[index] || 0);
-          return previousHeight > 0 ? previousHeight : estimatedRowHeight;
-        });
-      } else {
-        section.blockHeights = blocks.map((block, index) => (
-          block.kind === 'subheading'
-            ? this.subsectionLabelHeight
-            : (section.blockHeights[index] || estimatedRowHeight)
-        ));
-      }
+      const previousBlockHeights = Array.isArray(section.blockHeights)
+        ? section.blockHeights
+        : [];
+      const sectionMeasuredRowHeight = previousBlockHeights.find((height, index) => {
+        const measureKey = String(previousMeasureKeys[index] || '');
+        return measureKey.startsWith('row:')
+          && String(previousMeasuredKeys[index] || '') === measureKey
+          && Number(height) > 0;
+      });
+      const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
+        || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
+        || estimatedRowHeight;
+      section.blockHeights = blocks.map((block, index) => {
+        if (block.kind === 'subheading') return this.subsectionLabelHeight;
+        const measureKey = nextMeasureKeys[index];
+        const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
+          && previousMeasuredKeys[index] === measureKey
+          && Number(previousBlockHeights[index]) > 0;
+        return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
+      });
       section.blockMeasureKeys = nextMeasureKeys;
       section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
         previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
@@ -36701,6 +37595,9 @@ class VirtualArtistGrid {
       this._absoluteScrollRestore,
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
+    if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore) {
+      this._userScrollIntentGeneration += 1;
+    }
     if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
       && typeof loadNextRootGalleryPage === 'function') {
       if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
@@ -36756,8 +37653,17 @@ class VirtualArtistGrid {
     this.updateScrollDiagnostic(renderRafOwner);
   }
 
+  clearTouchScrollGestureTarget() {
+    const target = this._touchScrollGestureTarget;
+    this._touchScrollGestureTarget = null;
+    if (!target || typeof target.removeEventListener !== 'function') return;
+    target.removeEventListener('touchend', this.onTouchScrollEnd);
+    target.removeEventListener('touchcancel', this.onTouchScrollEnd);
+  }
+
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
+    if (event?.type !== 'touchstart') this._userScrollIntentGeneration += 1;
     if (event?.type === 'wheel') {
       if (this._measureRaf) {
         cancelBrowserAnimationFrame(this._measureRaf);
@@ -36767,6 +37673,19 @@ class VirtualArtistGrid {
       this.scheduleSettledMeasurement();
     }
     if (event?.type === 'touchstart') {
+      const touchTarget = event.target;
+      if (touchTarget !== this._touchScrollGestureTarget) {
+        this.clearTouchScrollGestureTarget();
+        if (
+          touchTarget
+          && touchTarget !== this.scrollEl
+          && typeof touchTarget.addEventListener === 'function'
+        ) {
+          this._touchScrollGestureTarget = touchTarget;
+          touchTarget.addEventListener('touchend', this.onTouchScrollEnd, { passive: true });
+          touchTarget.addEventListener('touchcancel', this.onTouchScrollEnd, { passive: true });
+        }
+      }
       const pendingMeasurement = Boolean(this._measureRaf || this._measureTimeout);
       if (this._measureRaf) {
         cancelBrowserAnimationFrame(this._measureRaf);
@@ -36785,6 +37704,7 @@ class VirtualArtistGrid {
 
   onTouchScrollEnd(event) {
     if (Number(event?.touches?.length || 0) > 0) return;
+    this.clearTouchScrollGestureTarget();
     if (!this._touchScrollGestureActive) return;
     const hadScroll = this._touchScrollGestureHadScroll;
     this._touchScrollGestureActive = false;
@@ -36808,6 +37728,12 @@ class VirtualArtistGrid {
       const deferredSetGroups = this._deferredSetGroups;
       const deferredArtistTreeSettlement = this._deferredArtistTreeSettlement;
       const deferredResizeOptions = this._deferredResizeOptions;
+      const deferredReflowAnchor = deferredArtistTreeSettlement
+        && this._artistTreeReflowAnchor !== undefined
+        ? this._artistTreeReflowAnchor
+        : deferredArtistTreeSettlement || deferredResizeOptions
+          ? this.captureScrollAnchor()
+          : undefined;
       this._deferredArtistTreeSettlement = false;
       this._deferredResizeOptions = null;
       if (deferredSetGroups) {
@@ -36821,26 +37747,41 @@ class VirtualArtistGrid {
         );
       }
       if (deferredArtistTreeSettlement) {
-        this.applyArtistTreeSettlement(deferredResizeOptions);
+        this._artistTreeReflowAnchor = undefined;
+        this.applyArtistTreeSettlement(deferredResizeOptions, deferredReflowAnchor);
         return;
       }
-      if (deferredResizeOptions) this.onResize(deferredResizeOptions);
-      if (deferredSetGroups || deferredResizeOptions) return;
+      if (deferredResizeOptions) {
+        this.onResize(deferredResizeOptions);
+        this.stabilizeReflowAnchor(deferredReflowAnchor);
+        return;
+      }
+      if (deferredSetGroups) return;
       this.scheduleMeasureRows(true);
     }, 96);
   }
 
-  applyArtistTreeSettlement(resizeOptions = null) {
-    const anchor = this.captureScrollAnchor();
+  stabilizeReflowAnchor(anchor) {
+    if (!anchor || this._resetScrollAfterMeasure) return;
+    this.stabilizeScrollAfterMeasurement(anchor);
+    // Reflow can virtualize the old anchor. Mount its restored row before
+    // reconciling the exact trigger offset against the new card geometry.
+    this.render(true);
+    this.measureRenderedRows(anchor);
+    this.stabilizeScrollAfterMeasurement(anchor);
+  }
+
+  applyArtistTreeSettlement(resizeOptions = null, preservedAnchor = undefined) {
+    const anchor = preservedAnchor === undefined
+      ? this.captureScrollAnchor()
+      : preservedAnchor;
     if (resizeOptions) this.onResize(resizeOptions);
     this.onResize({ preserveCardTrackWidth: true });
-    if (anchor && !this._resetScrollAfterMeasure) {
-      this.stabilizeScrollAfterMeasurement(anchor);
-      // Reflow can virtualize the old anchor. Mount its restored row before
-      // reconciling the exact trigger offset against the new card geometry.
-      this.render(true);
-      this.stabilizeScrollAfterMeasurement(anchor);
-    }
+    this.stabilizeReflowAnchor(anchor);
+  }
+
+  onArtistTreeToggleStarting() {
+    this._artistTreeReflowAnchor = this.captureScrollAnchor({ requireVisibleTrigger: true });
   }
 
   onArtistTreeSettled() {
@@ -36852,10 +37793,24 @@ class VirtualArtistGrid {
       return;
     }
     this._deferredArtistTreeSettlement = false;
-    this.applyArtistTreeSettlement();
+    const preservedAnchor = this._artistTreeReflowAnchor;
+    this._artistTreeReflowAnchor = undefined;
+    this.applyArtistTreeSettlement(null, preservedAnchor);
   }
 
   onResize(options = {}) {
+    const deferredSetGroups = this._deferredSetGroups;
+    if (deferredSetGroups && this.hasMeasurableScrollSurface()) {
+      this._deferredSetGroups = null;
+      this.setGroups(
+        deferredSetGroups.primaryGroups,
+        deferredSetGroups.familyGroups,
+        deferredSetGroups.fallbackGroups,
+        deferredSetGroups.options,
+        deferredSetGroups.layoutConfig,
+      );
+      return;
+    }
     if (this._touchScrollGestureActive || !this.isScrollSettled) {
       this._deferredResizeOptions = { ...options };
       this.recordDiagnosticEvent('resize-deferred', {
@@ -36868,7 +37823,7 @@ class VirtualArtistGrid {
       ?.classList?.contains?.('is-transitioning');
     if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;
     this.lastKey = '';
-    this.recalculate(options);
+    if (this.recalculate(options) === false) return;
     this.render(true);
     this.scheduleMeasureRows(true);
   }
@@ -37166,9 +38121,14 @@ class VirtualArtistGrid {
   }
 
   releaseDetachedAlbumCardAncestors() {
-    // Retain reusable cards, not their removed section and uncached siblings.
+    // Retain decoded/in-flight cover pixels, not the rest of each removed card.
     for (const card of this.albumCardNodeCache.values()) {
-      if (card.isConnected === false && card.parentNode) card.remove();
+      if (card.isConnected !== false) continue;
+      if (card.parentNode) card.remove();
+      const retainedCover = card.querySelector?.('.cover');
+      if (!retainedCover || typeof card.replaceChildren !== 'function') continue;
+      card.replaceChildren(retainedCover);
+      card.setAttribute?.('data-gallery-card-cover-only', '1');
     }
   }
 
@@ -37182,24 +38142,37 @@ class VirtualArtistGrid {
         !retainedCard
         || retainedCard === nextCard
         || String(retainedCard?.getAttribute?.('data-gallery-card-render-key') || '') !== renderKey
-        || typeof nextCard.replaceWith !== 'function'
       ) {
         return;
       }
-      nextCard.replaceWith(retainedCard);
+      const retainedImage = retainedCard.querySelector?.('img[data-production-cover-src]');
+      if (retainedCard.getAttribute?.('data-gallery-card-cover-only') === '1') {
+        const retainedCover = retainedCard.querySelector?.('.cover');
+        const nextCover = nextCard.querySelector?.('.cover');
+        if (
+          !retainedCover
+          || typeof nextCover?.replaceWith !== 'function'
+          || typeof retainedCard.replaceChildren !== 'function'
+          || typeof nextCard.replaceWith !== 'function'
+        ) {
+          this.albumCardNodeCache.delete(cacheKey);
+          return;
+        }
+        nextCover.replaceWith(retainedCover);
+        retainedCard.replaceChildren(...Array.from(nextCard.childNodes || []));
+        retainedCard.removeAttribute?.('data-gallery-card-cover-only');
+        nextCard.replaceWith(retainedCard);
+      } else {
+        if (typeof nextCard.replaceWith !== 'function') return;
+        nextCard.replaceWith(retainedCard);
+      }
       this.albumCardNodeCache.delete(cacheKey);
       this.albumCardNodeCache.set(cacheKey, retainedCard);
-      const retainedImage = retainedCard.querySelector?.('img[data-production-cover-src]');
       const productionUrl = String(retainedImage?.getAttribute?.('data-production-cover-src') || '').trim();
       const retainedImageDecoded = retainedImage instanceof HTMLImageElement
         && Boolean(retainedImage.complete)
         && Number(retainedImage.naturalWidth || 0) > 0;
-      const decodedObjectUrlEvicted = Boolean(productionUrl)
-        && retainedImageDecoded
-        && typeof galleryCoverPreviewCache !== 'undefined'
-        && typeof galleryCoverPreviewCache.hasActive === 'function'
-        && !galleryCoverPreviewCache.hasActive(productionUrl);
-      if (productionUrl && (!retainedImageDecoded || decodedObjectUrlEvicted)) {
+      if (productionUrl && !retainedImageDecoded) {
         retainedImage.setAttribute('data-gallery-cover-src', productionUrl);
         retainedImage.removeAttribute('data-gallery-cover-loading');
       }
@@ -37460,6 +38433,7 @@ class VirtualArtistGrid {
         || renderGeneration !== this._renderGeneration
       ) return;
       if (resetScroll) {
+        this.applyScrollAnchorVisualPhase(0);
         this.scrollEl.scrollTop = 0;
       } else if (
         preservedAbsoluteScroll
@@ -37468,7 +38442,12 @@ class VirtualArtistGrid {
         this.scrollEl.scrollLeft = preservedAbsoluteScroll.scrollLeft;
         this.scrollEl.scrollTop = preservedAbsoluteScroll.scrollTop;
       } else {
+        const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
         this.restoreScrollAnchor(anchor);
+        if (anchor?.albumKey && Math.abs(Number(this.scrollEl.scrollTop || 0) - previousScrollTop) > 1) {
+          this.render(true);
+          this.restoreScrollAnchor(anchor);
+        }
       }
       this._pendingStabilizationScroll = {
         generation: stabilizeGeneration,
@@ -37489,11 +38468,14 @@ class VirtualArtistGrid {
     });
   }
 
-  measureRenderedRows() {
+  measureRenderedRows(reflowAnchor = undefined) {
+    if (!this.hasMeasurableScrollSurface()) return;
     const absoluteScrollActive = (
       this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
     );
-    const preservedAnchor = absoluteScrollActive ? null : this.captureScrollAnchor();
+    const preservedAnchor = absoluteScrollActive
+      ? null
+      : reflowAnchor === undefined ? this.captureScrollAnchor() : reflowAnchor;
     let changed = false;
     const rowMeasurements = [];
     const rows = this.containerEl.querySelectorAll('.album-row[data-section-key][data-block-index]');
@@ -37514,7 +38496,7 @@ class VirtualArtistGrid {
         });
         return;
       }
-      const measured = Math.ceil(rowEl.getBoundingClientRect().height);
+      const measured = rowEl.getBoundingClientRect().height;
       rowMeasurements.push({
         blockIndex,
         measureKeyPresent: Boolean(measureKey),
@@ -37527,7 +38509,7 @@ class VirtualArtistGrid {
         section.measuredBlockKeys = [];
       }
       section.measuredBlockKeys[blockIndex] = measureKey;
-      if (measured > 0 && Math.abs((section.blockHeights[blockIndex] || 0) - measured) > 1) {
+      if (measured > 0 && Math.abs((section.blockHeights[blockIndex] || 0) - measured) >= (1 / 64)) {
         section.blockHeights[blockIndex] = measured;
         changed = true;
       }
@@ -37570,7 +38552,7 @@ class VirtualArtistGrid {
       this._activeRenderRafOwner = measurementRenderRafOwner;
     }
     try {
-      this.render(true);
+      this.render(true, { preserveExistingChildren: true });
     } finally {
       this._activeRenderRafOwner = previousActiveRenderRafOwner;
     }
@@ -37603,8 +38585,12 @@ class VirtualArtistGrid {
       };
     }
     const contentTop = section.top + this.sectionHeaderHeight;
-    const localStart = Math.max(0, start - contentTop);
-    const localEnd = Math.max(0, end - contentTop);
+    const keepSelectedPrimaryMounted = section.sectionType === 'primary'
+      && String(state?.view?.selected_artist || '').trim();
+    const localStart = keepSelectedPrimaryMounted ? 0 : Math.max(0, start - contentTop);
+    const localEnd = keepSelectedPrimaryMounted
+      ? Number(section.blocksHeight || 0)
+      : Math.max(0, end - contentTop);
     let firstIndex = 0;
     while (
       firstIndex < blocks.length
@@ -39829,6 +40815,7 @@ async function handleUtilityBootstrapClick(event) {
   if (openLogHistoryAlertButton) {
     event.preventDefault();
     const selectedLogHistoryId = openLogHistoryAlertButton.getAttribute('data-log-history-entry-id') || '';
+    closeTagEditor();
     hideRepairAlert();
     openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
@@ -40508,17 +41495,21 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalCoverLookupButton = event.target.closest('[data-open-track-modal-cover-lookup="1"]');
   if (trackModalCoverLookupButton) {
     event.preventDefault();
-    openCoverLookupModal(resolveTrackModalActionAlbum(trackModalCoverLookupButton));
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalCoverLookupButton);
+    if (album) openCoverLookupModal(album);
     return;
   }
 
   const trackModalFetchCoverButton = event.target.closest('[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]');
   if (trackModalFetchCoverButton) {
     event.preventDefault();
-    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), {
-      backgroundOnly: true,
-      triggerButton: trackModalFetchCoverButton,
-    });
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalFetchCoverButton);
+    if (album) {
+      startCoverLookupForAlbum(album, {
+        backgroundOnly: true,
+        triggerButton: trackModalFetchCoverButton,
+      });
+    }
     return;
   }
 
@@ -40527,7 +41518,7 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     state.coverLookup.drawerOpen = !state.coverLookup.drawerOpen;
     ensureCoverLookupPolling();
-    loadCoverLookupTasks({ toast: false });
+    loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     renderCoverLookupDrawer();
     return;
   }
@@ -40601,7 +41592,7 @@ async function handleUtilityBootstrapClick(event) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
-    }).finally(() => loadCoverLookupTasks({ toast: false }));
+    }).finally(() => loadCoverLookupTasks({ toast: false, mergeFirstPage: true }));
     return;
   }
 
@@ -41615,6 +42606,11 @@ function handleGalleryBootstrapClick(event) {
   if (allArtistsLink) {
     event.preventDefault();
     const isLibraryHome = allArtistsLink.getAttribute?.('data-library-home') === '1';
+    const opensMobileHome = Boolean(
+      isLibraryHome
+      && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout()
+    );
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -41627,6 +42623,7 @@ function handleGalleryBootstrapClick(event) {
     ).trim().toLowerCase();
     const alreadyAtLibraryHome = Boolean(
       isLibraryHome
+      && !opensMobileHome
       && currentSurface === 'albums'
       && !String(state.view?.query || '').trim()
       && !String(state.view?.selected_artist || '').trim()
@@ -41686,9 +42683,16 @@ function handleGalleryBootstrapClick(event) {
     closeArtistsDrawer({ restoreFocus: false });
     const nextView = {
       ...state.view,
+      ...(opensMobileHome ? {
+        surface: {
+          ...(state.view?.surface || {}),
+          active: 'home',
+        },
+        surface_request: 'home',
+      } : {}),
       query: activeSearchQuery,
       selected_artist: '',
-      all_artists_active: true,
+      all_artists_active: !opensMobileHome,
       related_filter_artists: [],
       primary_filter_active: false,
       ...(isLibraryHome ? { search_context: null } : {}),
@@ -41696,8 +42700,8 @@ function handleGalleryBootstrapClick(event) {
     state.gallery.sidebarArtistsOverride = null;
     state.gallery.sidebarShowAllArtistsOverride = null;
     state.ui.pendingSidebarSelectedArtist = '';
-    state.ui.pendingSidebarAllArtistsActive = true;
-    const reusableRootBrowseView = typeof getReusableRootBrowseView === 'function'
+    state.ui.pendingSidebarAllArtistsActive = !opensMobileHome;
+    const reusableRootBrowseView = !opensMobileHome && typeof getReusableRootBrowseView === 'function'
       ? getReusableRootBrowseView(nextView)
       : null;
     if (reusableRootBrowseView) {
@@ -41709,17 +42713,17 @@ function handleGalleryBootstrapClick(event) {
       scheduleBrowserAnimationFrame(() => {
         renderArtistGroups({ preserveScroll: true });
       });
-      Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
-        omitSidebar: true,
-      }), false, {
+      Promise.resolve(fetchAndRender(buildApiUrl(
+        nextView,
+        isLibraryHome ? {} : { omitSidebar: true },
+      ), false, {
         preserveScroll: true,
       })).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
       return;
     }
     renderSidebar();
-    Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
-      omitSidebar: true,
-    }), true)).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
+    Promise.resolve(fetchAndRender(buildApiUrl(nextView), true))
+      .then(resumeCoverLoads, () => resumeCoverLoads(true, true));
     return;
   }
 
@@ -41888,7 +42892,10 @@ function scrollRootGalleryToArtist(artist) {
     related_filter_artists: [],
     primary_filter_active: false,
   };
-  const url = buildApiUrl(nextView, { galleryAnchorArtist: targetArtist });
+  const url = buildApiUrl(nextView, {
+    galleryAnchorArtist: targetArtist,
+    omitSidebar: true,
+  });
   renderLibraryLoader(state.status);
   return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
     if (result === false || rootGalleryArtistAlignmentGeneration !== navigationGeneration) return false;
@@ -42085,6 +43092,37 @@ function applyImmediateSidebarArtistSelection(sidebarArtistLink, artist) {
   sidebarList.albumHavenActiveSidebarLink = sidebarArtistLink;
   state.ui.pendingSidebarSelectedArtist = artist;
   state.ui.pendingSidebarAllArtistsActive = false;
+  return true;
+}
+
+function applyImmediateExactSearchArtistSelection(query) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  if (!normalizedQuery) return false;
+  const mountedMatches = Array.from(
+    document.querySelectorAll('#sidebar-list [data-sidebar-artist]'),
+  ).filter((link) => (
+    String(link.getAttribute?.('data-sidebar-artist') || '')
+      .trim()
+      .toLocaleLowerCase() === normalizedQuery
+  ));
+  const sidebarList = document.getElementById?.('sidebar-list')
+    || mountedMatches[0]?.closest?.('#sidebar-list');
+  const sidebarArtists = Array.isArray(sidebarList?.albumHavenSidebarArtistsSource)
+    ? sidebarList.albumHavenSidebarArtistsSource
+    : [];
+  const sourceMatches = sidebarArtists.filter((entry) => (
+    String(entry?.artist || '').trim().toLocaleLowerCase() === normalizedQuery
+  ));
+  if (sourceMatches.length !== 1) return false;
+  const artist = String(sourceMatches[0]?.artist || '').trim();
+  if (!artist) return false;
+  if (mountedMatches.length === 1) {
+    if (applyImmediateSidebarArtistSelection(mountedMatches[0], artist)) return true;
+  }
+  state.ui.pendingSidebarSelectedArtist = artist;
+  state.ui.pendingSidebarAllArtistsActive = false;
+  state.ui.pendingSidebarRevealArtist = artist;
+  renderSidebar();
   return true;
 }
 
@@ -42712,6 +43750,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  applyImmediateExactSearchArtistSelection(nextQuery);
   const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else {
@@ -42921,6 +43960,18 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     return;
   }
   const previousView = state.view;
+  const mountedSelectedArtist = String(previousView?.selected_artist || '').trim();
+  const pendingExactSearchArtist = String(
+    state.ui?.pendingSidebarSelectedArtist || '',
+  ).trim();
+  const retainsMountedExactArtist = Boolean(
+    mountedSelectedArtist
+    && pendingExactSearchArtist
+    && pendingExactSearchArtist.toLocaleLowerCase() === mountedSelectedArtist.toLocaleLowerCase()
+    && String(normalizedQuery || '').trim().toLocaleLowerCase()
+      === pendingExactSearchArtist.toLocaleLowerCase()
+    && isMountedSelectedGalleryComplete(mountedSelectedArtist, null)
+  );
   const next = {
     ...withActiveGallerySources(state.view, state.gallery.mainState),
     query: normalizedQuery,
@@ -42929,6 +43980,13 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     related_filter_artists: [],
     primary_filter_active: false,
   };
+  if (retainsMountedExactArtist) {
+    applyViewPayload({
+      ...previousView,
+      query: normalizedQuery,
+      all_artists_active: false,
+    }, { trackSidebarReveal: false });
+  }
   state.gallery.sidebarArtistsOverride = null;
   state.gallery.sidebarShowAllArtistsOverride = null;
   state.ui.pendingSearchClearOnBlur = false;
@@ -42970,7 +44028,8 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     }
   };
   const request = fetchAndRender(hydrationUrl, true, {
-    preserveScroll: String(previousView.query || '') === normalizedQuery,
+    preserveScroll: retainsMountedExactArtist
+      || String(previousView.query || '') === normalizedQuery,
     restartIfSameUrl: true,
     skipPendingViewTransition: true,
     showSearchProgress: true,
@@ -43307,7 +44366,17 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
 
 function tryRenderOptimisticSidebarArtistSelection(nextView, options = {}) {
   const query = String(state.view?.query || '').trim();
+  const selectedArtist = String(nextView.selected_artist || '').trim();
   const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
+  const selectedAlbums = optimisticGroups?.primaryGroups?.[0]?.albums;
+  const expectedAlbumCount = readSidebarAlbumCount(state.view?.artists_sidebar, selectedArtist);
+  if (
+    query
+    && String(state.view?.selected_artist || '').trim() === selectedArtist
+    && state.view?.search_context?.artist_name_match_artists?.includes(selectedArtist)
+    && Array.isArray(selectedAlbums)
+    && selectedAlbums.length === expectedAlbumCount
+  ) return true;
   const reusableSelectedArtistBrowseView = query
     && (!optimisticGroups || optimisticGroups.skipFetch)
     && typeof getReusableSelectedArtistBrowseView === 'function'
@@ -43897,16 +44966,15 @@ function captureMobileParentGalleryAnchorArtist() {
  const rows = section?.querySelector('.artist-rows');
  const firstCard = section?.querySelector('.album-card');
  if (!scroll || !rows || !firstCard) return '';
- const scrollTop = scroll.getBoundingClientRect().top;
- return Math.abs(rows.getBoundingClientRect().top - scrollTop) <= 1
- && firstCard.getBoundingClientRect().top >= scrollTop - 1
+  const scrollTop = scroll.getBoundingClientRect().top + Number(scroll.clientTop || 0);
+  return rows.getBoundingClientRect().top === scrollTop
+    && firstCard.getBoundingClientRect().top >= scrollTop
  ? requestedArtist
  : '';
 }
 function mobileGalleryParentIsSettled() {
   return !state.busy && !state.ui?.pendingInventoryMutationViewRefresh
-    && !state.ui?.activeViewRequestController && !state.ui?.pendingViewRequest
-    && (typeof rootGalleryPageRequest === 'undefined' || !rootGalleryPageRequest);
+    && !state.ui?.activeViewRequestController && !state.ui?.pendingViewRequest;
 }
 function restoreMobileGalleryParent(descriptor) {
   const parentPosition = descriptor?.parentPosition;
@@ -43918,11 +44986,16 @@ function restoreMobileGalleryParent(descriptor) {
     : '';
   const liveParent = descriptor && mobileLiveGalleryParents.get(descriptor);
   const canReuseLiveParent = atParent && liveParent && mobileGalleryParentIsSettled()
-    && liveParent.view === state.view && liveParent.groups === state.view?.artist_groups
     && liveParent.revision === state.status?.inventory_mutation_revision
-    && descriptor.parentViewUrl === buildUrl(state.view);
+    && descriptor.parentViewUrl === buildUrl(state.view)
+    && (
+      typeof virtualGrid === 'undefined'
+      || !virtualGrid?.hasDeferredMountedGroupUpdate?.()
+    );
+  let jumpScrollAnchor = null;
   if (
     galleryAnchorArtist
+    && !descriptor?.parentScrollAnchor
     && typeof state !== 'undefined'
     && galleryAnchorArtist === String(state.view?.gallery_page?.anchor_artist || '').trim()
   ) {
@@ -43934,16 +45007,36 @@ function restoreMobileGalleryParent(descriptor) {
       && virtualGrid?.scrollToArtist?.(mountedGalleryArtist)
     ) {
       stabilizeRootGalleryArtistAlignment(mountedGalleryArtist);
-      if (canReuseLiveParent) return;
+      if (canReuseLiveParent) {
+        if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+        return;
+      }
+      jumpScrollAnchor = virtualGrid?.captureScrollAnchor?.() || null;
     }
   }
-  const position = atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
-  const options = { preserveScroll: !galleryAnchorArtist };
+  const semanticScrollAnchor = atParent
+    ? descriptor?.parentScrollAnchor || jumpScrollAnchor
+    : null;
+  const position = semanticScrollAnchor
+    ? null
+    : atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
+  const preserveParentScroll = !galleryAnchorArtist || Boolean(semanticScrollAnchor);
+  const options = {
+    preserveScroll: preserveParentScroll,
+    preserveMountedGalleryChildren: preserveParentScroll,
+  };
   // Root '/' can display the canonical album gallery as well as Home. Retain
   // the owning view route, not its data, through this page's history entry.
   if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
   if (galleryAnchorArtist) {
     options.galleryAnchorArtist = galleryAnchorArtist;
+  }
+  if (semanticScrollAnchor) {
+    options.semanticScrollAnchor = semanticScrollAnchor;
+    const ownerGeneration = virtualGrid?.getUserScrollIntentGeneration?.();
+    if (Number.isSafeInteger(ownerGeneration)) {
+      options.semanticScrollOwnerGeneration = ownerGeneration;
+    }
   }
   if (position) {
     options.preserveAbsoluteScroll = true;
@@ -43955,16 +45048,34 @@ function restoreMobileGalleryParent(descriptor) {
       virtualGrid.render(true);
     }
   }
+  let semanticScrollPositionApplied = false;
   if (
-    atParent
-    && !galleryAnchorArtist
-    && descriptor?.parentScrollAnchor
+    semanticScrollAnchor
     && typeof virtualGrid !== 'undefined'
-    && typeof virtualGrid?.restoreScrollAnchor === 'function'
+    && typeof virtualGrid?.restoreOwnedScrollAnchor === 'function'
   ) {
-    virtualGrid.restoreScrollAnchor(descriptor.parentScrollAnchor);
+    virtualGrid.render(true);
+    virtualGrid.restoreOwnedScrollAnchor(semanticScrollAnchor);
+    const ownerGeneration = options.semanticScrollOwnerGeneration;
+    if (Number.isSafeInteger(ownerGeneration) && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        if (
+          mobilePageState.pages.length
+          || virtualGrid?.getUserScrollIntentGeneration?.() !== ownerGeneration
+        ) return;
+        virtualGrid.restoreOwnedScrollAnchor(semanticScrollAnchor);
+        if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+      });
+    }
+    semanticScrollPositionApplied = true;
   }
-  if (position && options.absoluteScrollPositionApplied && canReuseLiveParent) return;
+  if (
+    canReuseLiveParent
+    && (semanticScrollPositionApplied || (position && options.absoluteScrollPositionApplied))
+  ) {
+    if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+    return;
+  }
   handleGalleryBootstrapPopState(options);
 }
 function presentMobilePage(descriptor) {
@@ -44969,13 +46080,21 @@ window.addEventListener('popstate', () => {
 
 // BEGIN js/runtime/bootstrap-init.js
 
-const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 5000;
+const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 0;
 
 restorePlayerAppearance();
 attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof loadCoverLookupNotificationCounts === 'function') {
+  void loadCoverLookupNotificationCounts({ toast: false });
+}
+document.getElementById('cover-lookup-drawer-body')?.addEventListener(
+  'scroll',
+  handleCoverLookupDrawerScroll,
+  { passive: true },
+);
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();
@@ -45081,8 +46200,11 @@ const shouldApplyEmbeddedSidebarHydration = Boolean(
   && embeddedStartupViewPatch.artists_sidebar.length
 );
 const shouldTreatStartupPreviewAsVisibleReady = Boolean(
-  shouldApplyEmbeddedSidebarHydration
-  && startupHydrationFollowupEndpoint
+  bootstrap.startupPreview?.renderedGalleryMarkup
+  || (
+    shouldApplyEmbeddedSidebarHydration
+    && startupHydrationFollowupEndpoint
+  )
 );
 if (shouldStartImmediateHydration) {
   startupMetrics.beginInitialRefresh();
@@ -45112,7 +46234,14 @@ if (shouldTreatStartupPreviewAsVisibleReady) {
     ]
     : (Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : []);
   rebuildAlbumIndex(startupPreviewGroups);
-  renderView({ preserveMountedGallery: true });
+  renderView(
+    bootstrap.startupPreview?.renderedGalleryMarkup
+      && !bootstrap.partialView
+      && !startupHydrationRequired
+      && !state.view?.initial_view_partial
+      ? { preserveMountedGalleryChildren: true }
+      : { preserveMountedGallery: true },
+  );
 } else {
   renderView();
 }
@@ -45157,7 +46286,7 @@ if (
   && typeof startupMetrics?.completeVisibleInitialRefresh === 'function'
 ) {
   startupMetrics.completeVisibleInitialRefresh(state.view, {
-    hydrationTier: 'sidebar',
+    hydrationTier: startupHydrationTier,
     source: 'startup_preview',
   });
 }
@@ -45204,7 +46333,9 @@ renderLibraryLoader({
 });
 scheduleBrowserTimeout(pollStatus, 500);
 if (shouldStartImmediateHydration) {
-  const resolvedStartupHydrationFollowupEndpoint = resolveInitialHydrationEndpoint({
+  const resolvedStartupHydrationFollowupEndpoint = (
+    !startupHydrationFollowupEndpoint && startupHydrationTier !== 'sidebar'
+  ) ? '' : resolveInitialHydrationEndpoint({
     followupEndpoint: startupHydrationFollowupEndpoint,
   }, {
     ...galleryDisplayPreferenceResolutionOptions,

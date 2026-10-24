@@ -1932,6 +1932,54 @@ def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_s
     assert library_state["relation_projection_duration_ms"] == 12.5
 
 
+@pytest.mark.parametrize(
+    ("build_timestamp", "expected_rebuilt", "expected_reason"),
+    [
+        ("2026-10-22T12:00:01+00:00", True, "missing_projection"),
+        ("2026-10-22T11:59:59+00:00", False, "healthy"),
+    ],
+)
+def test_runtime_relation_readiness_retains_rebuild_completed_during_startup(
+    monkeypatch,
+    build_timestamp,
+    expected_rebuilt,
+    expected_reason,
+):
+    from datetime import datetime
+
+    runtime = SimpleNamespace(
+        config={
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+            "SHARED_LIBRARY_BROWSE_ONLY": True,
+        },
+        logger=_LoggerStub(),
+        library_state={},
+        relation_projection_startup_started_at=datetime.fromisoformat(
+            "2026-10-22T12:00:00+00:00"
+        ),
+    )
+    monkeypatch.setattr(
+        state_module,
+        "ensure_relation_projection_ready",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "startup_rebuilt": False,
+            "rebuild_reason": "healthy",
+            "last_rebuild_reason": "missing_projection",
+            "last_rebuild_timestamp": build_timestamp,
+            "duration_ms": 1.0,
+            "relation_views": {},
+        },
+    )
+
+    result = state_module.ensure_runtime_relation_projection_ready(runtime)
+
+    assert result["startup_rebuilt"] is expected_rebuilt
+    assert result["rebuild_reason"] == expected_reason
+    assert runtime.library_state["relation_projection_startup_rebuilt"] is expected_rebuilt
+    assert runtime.library_state["relation_projection_rebuild_reason"] == expected_reason
+
+
 def test_postgres_relation_refresh_publishes_terminal_status_from_committed_artists(
     config,
     monkeypatch,
@@ -1986,6 +2034,57 @@ def test_postgres_relation_refresh_publishes_terminal_status_from_committed_arti
     assert library_state["relations_phase"] == "Artist Family ready"
     assert library_state["relations_source"] == "local"
     assert library_state["relations_in_progress"] is False
+
+
+def test_postgres_scan_publication_waits_for_gallery_projection(config, monkeypatch):
+    from music_app.services import gallery_projection_postgres
+
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/album_haven_test"
+    )
+    library_state = {"scan_generation": 7}
+    publication_state = {
+        "file_cache": {"track-1": {"path": "track-1", "album": "Album"}},
+        "last_scan": 789.5,
+        "separate_release_keys": set(),
+    }
+    canonical_views = {
+        "artists": ["Canonical Artist"],
+        "artists_sidebar": [{"artist": "Canonical Artist", "count": 1}],
+    }
+    events = []
+
+    def save_snapshot(*_args, **_kwargs):
+        events.append("snapshot")
+        return {
+            "relation_views": canonical_views,
+            "relations_last_built": 456.75,
+        }
+
+    monkeypatch.setattr(
+        state_module,
+        "library_root_cache_identity",
+        lambda _config: "root",
+    )
+    monkeypatch.setattr(
+        state_module,
+        "save_cache_to_disk_for_config",
+        save_snapshot,
+    )
+    monkeypatch.setattr(
+        gallery_projection_postgres,
+        "ensure_gallery_projection_ready",
+        lambda selected_config: events.append(("gallery", selected_config)),
+    )
+
+    state_module.refresh_relation_views_for_state(
+        library_state,
+        config,
+        expected_scan_generation=7,
+        publication_state=publication_state,
+    )
+
+    assert events == ["snapshot", ("gallery", config)]
 
 
 @pytest.mark.parametrize("guarded", [False, True])
@@ -5381,3 +5480,86 @@ def test_startup_persistence_recovery_preserves_journal_and_exclusion_migration_
     monkeypatch.setattr(state_module, "_call_hydrate_library_state_from_disk", lambda *_args, **_kwargs: pytest.fail("Recovery must not hydrate the whole library"))
     state_module.recover_runtime_library_persistence_on_startup(runtime)
     assert calls == [("recover", runtime), ("migrate", config)]
+
+
+def test_relation_projection_rebuild_scheduler_is_bounded_and_non_blocking(monkeypatch):
+    submitted: list[tuple[object, tuple[object, ...]]] = []
+    rebuilt: list[dict[str, object]] = []
+
+    class DeferredExecutor:
+        def submit(self, callback, *args):
+            submitted.append((callback, args))
+            return object()
+
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", DeferredExecutor())
+    monkeypatch.setattr(
+        state_module,
+        "ensure_relation_projection_ready",
+        lambda config, **_kwargs: rebuilt.append(config) or {"ready": True},
+    )
+    monkeypatch.setattr(
+        state_module,
+        "_RELATION_REBUILD_PENDING",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        state_module,
+        "_RELATION_REBUILD_REQUEST_GENERATION",
+        0,
+        raising=False,
+    )
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"}
+    state_module.schedule_relation_projection_rebuild(
+        config,
+        reason="structural_tag_edit_requires_full_projection",
+    )
+    state_module.schedule_relation_projection_rebuild(config, reason="duplicate")
+
+    assert len(submitted) == 1
+    callback, args = submitted[0]
+    callback(*args)
+    assert rebuilt == [config]
+
+    state_module.schedule_relation_projection_rebuild(config, reason="later")
+    assert len(submitted) == 2
+
+
+def test_relation_projection_rebuild_scheduler_repeats_for_request_arriving_during_build(monkeypatch):
+    submitted: list[tuple[object, tuple[object, ...]]] = []
+    rebuilt: list[str] = []
+
+    class DeferredExecutor:
+        def submit(self, callback, *args):
+            submitted.append((callback, args))
+            return object()
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"}
+
+    def rebuild(_config, **_kwargs):
+        rebuilt.append("rebuild")
+        if len(rebuilt) == 1:
+            state_module.schedule_relation_projection_rebuild(
+                config,
+                reason="edit_committed_during_rebuild",
+            )
+        return {"ready": True}
+
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", DeferredExecutor())
+    monkeypatch.setattr(state_module, "ensure_relation_projection_ready", rebuild)
+    monkeypatch.setattr(state_module, "_RELATION_REBUILD_PENDING", False, raising=False)
+    monkeypatch.setattr(
+        state_module,
+        "_RELATION_REBUILD_REQUEST_GENERATION",
+        0,
+        raising=False,
+    )
+
+    state_module.schedule_relation_projection_rebuild(config, reason="first")
+
+    callback, args = submitted[0]
+    callback(*args)
+
+    assert rebuilt == ["rebuild", "rebuild"]
+    assert len(submitted) == 1

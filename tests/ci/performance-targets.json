@@ -257,6 +257,96 @@
           "project": "synthetic-large-library",
           "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
           "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Stale projection keeps selected startup and superseding Home responsive"
+        }
+      ]
+    },
+    {
+      "name": "edit-tags-post-edit",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js",
+          "case": "FTC-TAGS-026P synthetic-large repeated Edit Tags recovery › repeated saves leave navigation responsive"
+        }
+      ]
+    },
+    {
+      "name": "cover-lookup",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js",
+          "case": "FTC-COVERS-019P Cover Lookup interaction timing › opens, renders a candidate, selects it, and accepts Save within the interaction budgets"
+        }
+      ]
+    },
+    {
+      "name": "album-title-search",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/albumTitleSearchPerformance.spec.js",
+          "case": "FTC-SEARCH-NAV-029P synthetic-large album-title search performance › correct album becomes visible within the approved budget"
+        }
+      ]
+    },
+    {
+      "name": "track-title-search",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/trackTitleSearchPerformance.spec.js",
+          "case": "FTC-SEARCH-NAV-030P synthetic-large track-title search performance › correct album and highlighted track become visible within approved budgets"
         }
       ]
     },
@@ -402,6 +492,12 @@
         {
           "config": "playwright.synthetic-large-library.config.cjs",
           "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/gallerySearchHomeAnchor.spec.js",
+          "case": "FTC-GALLERY-NAV-037 synthetic-large desktop search and Home anchoring › search and Home destinations do not rebound after settling"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
           "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
           "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Cards › native touch swipes track the commanded gesture without reverse movement or layout jitter"
         },
@@ -428,6 +524,24 @@
           "project": "synthetic-large-library",
           "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
           "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › desktop Covers › native wheel input tracks the commanded gesture without reverse movement or layout jitter"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
+          "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap › mobile Cards › real continuation response during held touch keeps gallery coordinates stable"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
+          "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap › desktop Cards › full preserve-scroll response during wheel sequence keeps gallery coordinates stable"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
+          "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap › desktop Cards › real continuation response during wheel sequence keeps gallery coordinates stable"
         }
       ]
     },
@@ -695,6 +809,27 @@
           "project": "scan-performance",
           "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
           "case": "isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return"
+        }
+      ]
+    },
+    {
+      "name": "notification-history",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js",
+          "case": "FTC-NOTIFICATIONS-001P large notification history › keeps history bounded and leaves search responsive"
         }
       ]
     }

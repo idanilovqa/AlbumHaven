@@ -11,6 +11,9 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 
 
+_POSTGRES_RELATION_WARMUP_DELAY_SECONDS = 5.0
+
+
 class _BoundedExecutorAdmission:
     """Bound queued and running work submitted to an owned executor."""
 
@@ -65,6 +68,7 @@ def _start_library_warmup(
     recover_persistence=None,
 ):
     stop_requested = threading.Event()
+    runtime.relation_projection_startup_started_at = datetime.now(timezone.utc)
     database_url = str(
         runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
     ).strip()
@@ -94,7 +98,7 @@ def _start_library_warmup(
                         raise
                     except Exception:
                         runtime.logger.exception("Postgres scan timestamp hydration failed.")
-                if stop_requested.is_set():
+                if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
                     return
                 ensure_relations(runtime, cancel_requested=stop_requested)
                 return
@@ -381,6 +385,17 @@ def create_asgi_app():
     from config import APP_NAME, APP_VERSION
     from music_app.services.lastfm_retry import start_lastfm_retry_worker, stop_lastfm_retry_worker
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_relocation import (
+        GeneratedPreviewRelocationWorker,
+    )
+    from music_app.services.generated_preview_storage import (
+        preview_storage_policy_from_mapping,
+        record_generated_preview,
+    )
+    from music_app.services.generated_preview_storage_postgres import (
+        PostgresGeneratedPreviewStorageRepository,
+        is_generated_preview_storage_postgres_available,
+    )
     from music_app.services.auth_welcome_worker import start_welcome_retry_worker
     from music_app.services.library_reconciliation import (
         LibraryWatchService,
@@ -424,11 +439,64 @@ def create_asgi_app():
         from music_app.services.log_history import resolve_media_host_history_scope
         host_scope = resolve_media_host_history_scope(runtime.config)
         _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
+        preview_storage_repository = None
+        if is_generated_preview_storage_postgres_available(runtime.config):
+            preview_storage_repository = PostgresGeneratedPreviewStorageRepository(
+                runtime.config
+            )
+        _app.state.generated_preview_storage_repository = preview_storage_repository
+        preview_storage_state = None
+        if preview_storage_repository is not None:
+            try:
+                preview_storage_state = preview_storage_repository.load()
+            except Exception:
+                runtime.logger.exception(
+                    "Generated preview storage state was unavailable at startup."
+                )
+        preview_inventory_recorder = None
+        if preview_storage_repository is not None:
+            def preview_inventory_recorder(source_path, preview_path) -> None:
+                try:
+                    record_generated_preview(
+                        preview_storage_repository, source_path, preview_path
+                    )
+                except Exception:
+                    runtime.logger.exception(
+                        "Generated preview inventory record failed for %s.",
+                        preview_path,
+                    )
+
+        _app.state.generated_preview_inventory_recorder = preview_inventory_recorder
+        runtime.config["_GENERATED_PREVIEW_INVENTORY_RECORDER"] = (
+            preview_inventory_recorder
+        )
+        _app.state.generated_preview_storage_policy = (
+            preview_storage_policy_from_mapping(preview_storage_state)
+        )
+        runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = (
+            _app.state.generated_preview_storage_policy
+        )
         _app.state.cover_preview_backfill = CoverPreviewBackfill(
             runtime.config,
             logger=runtime.logger,
         )
         _app.state.cover_preview_backfill.start()
+        _app.state.generated_preview_relocation = None
+        if preview_storage_repository is not None:
+            def update_preview_storage_policy(state) -> None:
+                policy = preview_storage_policy_from_mapping(state)
+                _app.state.generated_preview_storage_policy = policy
+                runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = policy
+
+            _app.state.generated_preview_relocation = GeneratedPreviewRelocationWorker(
+                preview_storage_repository,
+                logger=runtime.logger,
+                on_state=update_preview_storage_policy,
+                discover_inventory=(
+                    _app.state.cover_preview_backfill.inventory_existing_previews
+                ),
+            )
+            _app.state.generated_preview_relocation.start()
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -453,6 +521,12 @@ def create_asgi_app():
                 (
                     "cover preview backfill",
                     _app.state.cover_preview_backfill.stop,
+                ),
+                (
+                    "generated preview relocation",
+                    _app.state.generated_preview_relocation.stop
+                    if _app.state.generated_preview_relocation is not None
+                    else lambda: None,
                 ),
                 (
                     "library warmup",

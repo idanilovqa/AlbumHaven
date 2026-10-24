@@ -60,14 +60,15 @@ export class ArtistPageSettingsActions {
   async expectCollapsibleNonAlbumSection(title, trackTitles, options = {}) {
     const timeout = options.timeout || 10000;
     const section = this.artistPageSettings.nonAlbumSectionByTitle(title);
+    const summary = this.artistPageSettings.nonAlbumSectionSummaryByTitle(title);
     await expect(section).toHaveCount(1, { timeout });
-    await expect(section.locator('summary')).toHaveAttribute('aria-expanded', 'true');
+    await expect(summary).toHaveAttribute('aria-expanded', 'true');
     for (const trackTitle of trackTitles) {
       await expect(section).toContainText(trackTitle, { timeout });
     }
-    await section.locator('summary').click();
+    await summary.click();
     await expect(section).not.toHaveAttribute('open', '');
-    await section.locator('summary').click();
+    await summary.click();
     await expect(section).toHaveAttribute('open', '');
   }
 

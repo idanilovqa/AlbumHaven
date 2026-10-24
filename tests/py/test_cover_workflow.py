@@ -505,6 +505,51 @@ def test_resolve_album_context_uses_saved_library_roots_and_disc_parent(config):
     assert context.track_paths == {str(track_path)}
 
 
+@pytest.mark.parametrize(
+    ("category", "layout_mode"),
+    [
+        ("new_arrivals_roots", None),
+        ("hoarding_library_roots", None),
+        ("main_library_roots", "genre/artist"),
+    ],
+)
+def test_resolve_album_context_allows_album_directly_under_any_configured_root(
+    config,
+    category: str,
+    layout_mode: str | None,
+):
+    library_root = (Path(config["DATA_DIR"]) / category).resolve()
+    album_root = (library_root / "Album").resolve()
+    track_path = (album_root / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+
+    root_entry = {
+        "id": f"{category}-1",
+        "path": str(library_root),
+    }
+    if layout_mode:
+        root_entry["layout_mode"] = layout_mode
+    settings = {
+        "main_library_roots": [{
+            "id": "main-1",
+            "path": str(config["MUSIC_DIR"]),
+            "layout_mode": "artist",
+        }],
+        category: [root_entry],
+    }
+    save_library_root_settings(
+        config,
+        settings,
+    )
+
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+
+    assert context is not None
+    assert context.album_root == album_root
+    assert context.track_paths == {str(track_path)}
+
+
 def test_resolve_album_context_rejects_tracks_outside_configured_library_roots(config, tmp_path: Path):
     outside_track = (tmp_path / "outside" / "Artist" / "Album" / "song.mp3").resolve()
     outside_track.parent.mkdir(parents=True, exist_ok=True)
@@ -901,6 +946,46 @@ def test_validate_local_cover_source_rejects_outside_path(config, tmp_path: Path
     assert validate_local_cover_source(config, album_root, str(inside_cover)) == inside_cover
     with pytest.raises(ValueError, match="outside the album folder"):
         validate_local_cover_source(config, album_root, str(outside_cover))
+
+
+def test_validate_local_cover_source_rejects_managed_preview(config, tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    managed_preview = (
+        album_root / ".album-haven" / "v1" / "cover_variants" / "aa" / "aabb.jpg"
+    )
+    managed_preview.parent.mkdir(parents=True)
+    managed_preview.write_bytes(b"preview")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [
+                {"id": "main-1", "path": str(tmp_path), "layout_mode": "artist"}
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="managed preview"):
+        validate_local_cover_source(config, album_root, str(managed_preview))
+
+
+def test_best_remaining_local_cover_ignores_managed_preview(tmp_path: Path):
+    album_root = tmp_path / "Artist" / "Album"
+    regular = album_root / "booklet.jpg"
+    managed_preview = (
+        album_root / ".album-haven" / "cover_variants" / "aa" / "aabb.jpg"
+    )
+    _write_jpeg(regular, (220, 40, 40), size=(32, 20))
+    _write_jpeg(managed_preview, (40, 40, 220), size=(480, 480))
+
+    chosen = cover_workflow.choose_best_remaining_local_cover(
+        album_root,
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+        score_image=score_image,
+    )
+
+    assert chosen == regular
 
 
 def test_validate_local_cover_source_requires_configured_library_root(config, tmp_path: Path):

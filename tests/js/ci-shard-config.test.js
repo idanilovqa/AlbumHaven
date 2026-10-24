@@ -13,7 +13,8 @@ test('functional shard resolver preserves the existing port and artifact mapping
     outputDir: 'functional-output-gallery-search-visual',
     blobName: 'functional-blob-gallery-search-visual',
   });
-  assert.equal(resolveFunctionalShard('playback-utilities').portBase, 5500);
+  assert.equal(resolveFunctionalShard('cover-providers-2').portBase, 5350);
+  assert.equal(resolveFunctionalShard('playback-utilities-3').portBase, 5600);
   assert.throws(() => resolveFunctionalShard('unknown'), /Unknown functional shard/);
 });
 
@@ -28,7 +29,7 @@ test('performance shard resolver preserves the existing fixture and target mappi
     basePort: 4213,
     targets: ['playback-start', 'gapless-playback'],
   });
-  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 12);
+  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 17);
   assert.deepEqual(resolvePerformanceShard('gallery-artwork-diversity'), {
     shard: 'gallery-artwork-diversity',
     fixtureProfile: 'synthetic-large-library',
@@ -76,5 +77,6 @@ test('CLI writes scalar and ten-slot target outputs for GitHub Actions', () => {
   assert.match(output, /target2=problematic-files-focused/);
   assert.match(output, /target3=none/);
   assert.match(output, /target11=none/);
-  assert.match(output, /target12=none/);
+  assert.match(output, /target16=none/);
+  assert.match(output, /target17=none/);
 });

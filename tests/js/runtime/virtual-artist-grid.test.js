@@ -222,6 +222,7 @@ function createRuntimeContext() {
   const containerEl = {
     innerHTML: '',
     children: [],
+    style: {},
     syncInnerHtml() {
       this.innerHTML = this.children.map((child) => child.innerHTML || '').join('');
     },
@@ -899,6 +900,93 @@ test('scroll anchoring retains the card box when its title moves within the card
   assert.equal(scrollEl.scrollTop, 1030, 'restoration follows the card, not the unchanged title coordinate');
 });
 
+test('scroll anchoring restores exact card geometry after interaction transforms are removed', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const trigger = context.createAlbumTitleButton(
+    'same-album',
+    { top: 52, bottom: 72 },
+    'artist:all:Anchor Artist:0',
+    'Same Album',
+    '2026',
+  );
+  const originalClosest = trigger.closest?.bind(trigger);
+  let cardTop = 11;
+  const card = {
+    getBoundingClientRect: () => ({ top: cardTop, bottom: cardTop + 200 }),
+  };
+  const row = {
+    getBoundingClientRect: () => ({ top: 12, bottom: 212 }),
+  };
+  trigger.closest = selector => {
+    if (selector === '.album-card') return card;
+    if (selector === '.album-row') return row;
+    return originalClosest?.(selector);
+  };
+  context.__albumTitleButtons = [trigger];
+  scrollEl.scrollTop = 1000;
+
+  const anchor = virtualGrid.captureScrollAnchor();
+  assert.equal(anchor.anchorBox, 'card');
+  assert.equal(anchor.offsetTop, 11);
+
+  cardTop = 10;
+  virtualGrid.restoreScrollAnchor(anchor);
+
+  assert.equal(
+    scrollEl.scrollTop,
+    999,
+    'the card hover/press transform must not become a gallery scroll correction',
+  );
+});
+
+for (const offsetTop of [136.125, 136.28125]) {
+  test(`scroll anchoring preserves a ${offsetTop - 136}px row phase when scrollTop is quantized`, () => {
+    const { context, scrollEl, containerEl, topSpacerEl, bottomSpacerEl } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    const trigger = context.createAlbumTitleButton(
+      'fractional-anchor',
+      { top: 136, bottom: 336 },
+      'artist:all:Fractional Artist:0',
+      'Fractional Album',
+      '2026',
+    );
+    const originalClosest = trigger.closest?.bind(trigger);
+    const row = {
+      getBoundingClientRect: () => ({ top: 136, bottom: 336 }),
+    };
+    trigger.closest = selector => {
+      if (selector === '.album-row') return row;
+      return originalClosest?.(selector);
+    };
+    context.__albumTitleButtons = [trigger];
+    topSpacerEl.style.height = '500px';
+    bottomSpacerEl.style.height = '400px';
+    let quantizedScrollTop = 5424;
+    Object.defineProperty(scrollEl, 'scrollTop', {
+      configurable: true,
+      get: () => quantizedScrollTop,
+      set: value => { quantizedScrollTop = Math.round(Number(value)); },
+    });
+
+    virtualGrid.restoreScrollAnchor({
+      albumKey: 'fractional-anchor',
+      albumName: 'Fractional Album',
+      albumYear: '2026',
+      sectionOccurrenceKey: 'artist:all:Fractional Artist:0',
+      anchorBox: 'row',
+      offsetTop,
+      scrollLeft: 0,
+      scrollTop: 5424,
+    });
+
+    assert.equal(scrollEl.scrollTop, 5424);
+    assert.equal(topSpacerEl.style.height, '500px');
+    assert.equal(bottomSpacerEl.style.height, '400px');
+    assert.equal(containerEl.style.translate, `0 ${offsetTop - 136}px`);
+  });
+}
+
 for (const scenario of ['visible title', 'visible artwork', 'renamed key', 'removed occurrence']) {
 test(`scroll anchoring restores the captured trigger for ${scenario}`, () => {
   const { context, scrollEl } = createRuntimeContext();
@@ -1048,7 +1136,7 @@ test('scroll anchoring restores an offscreen same-release card from the virtual 
 
   virtualGrid.restoreScrollAnchor(anchor);
 
-  assert.equal(scrollEl.scrollTop, 3408);
+  assert.equal(scrollEl.scrollTop, 3396);
 });
 
 test('scroll anchoring restores the exact offscreen release when title and year are duplicated', () => {
@@ -1089,7 +1177,102 @@ test('scroll anchoring restores the exact offscreen release when title and year 
 
   virtualGrid.restoreScrollAnchor(anchor);
 
-  assert.equal(scrollEl.scrollTop, 3408);
+  assert.equal(scrollEl.scrollTop, 3396);
+});
+
+test('scroll anchoring preserves fractional phase for an offscreen modeled release', () => {
+  const { context, scrollEl, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const sectionOccurrenceKey = 'artist:all:Fractional Offscreen Artist:0';
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'fractional-offscreen-release',
+    { top: 79.75, bottom: 517.75 },
+    sectionOccurrenceKey,
+    'Fractional Offscreen Release',
+    '2004',
+  )];
+  scrollEl.scrollTop = 4200;
+  const anchor = virtualGrid.captureScrollAnchor();
+  context.__albumTitleButtons = [];
+  virtualGrid.columns = 1;
+  const albums = [{
+    key: 'fractional-offscreen-release',
+    name: 'Fractional Offscreen Release',
+    year: 2004,
+  }];
+  virtualGrid.sections = [{
+    kind: 'artist',
+    sectionKey: 'all:Fractional Offscreen Artist:0',
+    top: 3000,
+    blockOffsets: [434],
+    blocksData: virtualGrid.getBlocksForSection({ group: { albums } }),
+    group: { albums },
+  }];
+  let quantizedScrollTop = 4200;
+  Object.defineProperty(scrollEl, 'scrollTop', {
+    configurable: true,
+    get: () => quantizedScrollTop,
+    set: value => { quantizedScrollTop = Math.round(Number(value)); },
+  });
+
+  virtualGrid.restoreScrollAnchor(anchor);
+
+  assert.equal(scrollEl.scrollTop, 3396);
+  assert.equal(containerEl.style.translate, '0 -0.25px');
+});
+
+test('ordinary wheel intent preserves accumulated visual phase', () => {
+  const { context, scrollEl, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  scrollEl.scrollTop = 4200;
+  virtualGrid.applyScrollAnchorVisualPhase(-120.25);
+
+  virtualGrid.onUserScrollIntent({ type: 'wheel' });
+
+  assert.equal(scrollEl.scrollTop, 4200);
+  assert.equal(containerEl.style.translate, '0 -120.25px');
+});
+
+test('ordinary scrolling preserves visual phase at the clamped gallery end', () => {
+  const { context, scrollEl, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  let scrollTop = 5000;
+  Object.defineProperty(scrollEl, 'scrollTop', {
+    configurable: true,
+    get: () => scrollTop,
+    set: value => { scrollTop = Math.max(0, Math.min(5000, Number(value))); },
+  });
+  virtualGrid.applyScrollAnchorVisualPhase(-120.25);
+
+  virtualGrid.onUserScrollIntent({ type: 'wheel' });
+  assert.equal(scrollTop, 5000);
+  assert.equal(containerEl.style.translate, '0 -120.25px');
+
+  scrollTop = 4900;
+  virtualGrid.onScroll();
+  assert.equal(scrollTop, 4900);
+  assert.equal(containerEl.style.translate, '0 -120.25px');
+
+  scrollTop = 4900;
+  virtualGrid.onScroll();
+  assert.equal(scrollTop, 4900);
+  assert.equal(containerEl.style.translate, '0 -120.25px');
+});
+
+test('non-preserving gallery reset clears accumulated visual anchor phase', () => {
+  const { context, scrollEl, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  scrollEl.scrollTop = 4200;
+  virtualGrid.applyScrollAnchorVisualPhase(-0.25);
+
+  virtualGrid.setGroups([], [], [], { preserveScroll: false });
+
+  assert.equal(scrollEl.scrollTop, 0);
+  assert.equal(virtualGrid._scrollAnchorVisualPhase, 0);
+  assert.equal(containerEl.style.translate, '');
 });
 
 test('scroll anchoring keeps exact stable identity when the release metadata changes', () => {
@@ -1130,7 +1313,7 @@ test('scroll anchoring keeps exact stable identity when the release metadata cha
 
   virtualGrid.restoreScrollAnchor(anchor);
 
-  assert.equal(scrollEl.scrollTop, 3408);
+  assert.equal(scrollEl.scrollTop, 3396);
 });
 
 test('scroll anchoring restores an offscreen Featured On release from its modeled block', () => {
@@ -1173,7 +1356,7 @@ test('scroll anchoring restores an offscreen Featured On release from its modele
 
   virtualGrid.restoreScrollAnchor(anchor);
 
-  assert.equal(scrollEl.scrollTop, 3894);
+  assert.equal(scrollEl.scrollTop, 3882);
 });
 
 test('setGroups absolute scroll preservation restores captured numeric coordinates immediately and on the next frame', () => {
@@ -1272,6 +1455,35 @@ test('setGroups absolute scroll preservation can retain an explicit interaction-
   );
 });
 
+test('settled setGroups scroll restoration rechecks root gallery pagination', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 900;
+  let paginationChecks = 0;
+  context.scheduleBrowserAnimationFrame = callback => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  context.loadNextRootGalleryPage = () => {
+    paginationChecks += 1;
+    return Promise.resolve(true);
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollLeft: 0, scrollTop: 9040 },
+  });
+  assert.equal(paginationChecks, 0, 'pagination must wait until scroll restoration settles');
+  scheduledFrames.get(virtualGrid._scrollRestoreRaf)();
+
+  assert.equal(paginationChecks, 1);
+});
+
 test('setGroups renders the immediate virtual window from the explicit preserved coordinate', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -1360,7 +1572,7 @@ test('setGroups carries forward unchanged row measurements across optimistic reg
   );
 });
 
-test('setGroups keeps provisional row heights when one inserted album shifts downstream rows', () => {
+test('setGroups retains only measured row heights whose identities survive an inserted album', () => {
   const { context } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   virtualGrid.render = () => {};
@@ -1410,15 +1622,16 @@ test('setGroups keeps provisional row heights when one inserted album shifts dow
   });
 
   const regroupedSection = virtualGrid.sectionByKey.get(sectionKey);
+  const estimatedRowHeight = measuredHeights[0];
   assert.deepEqual(
-    regroupedSection.blockHeights.slice(0, measuredHeights.length),
-    measuredHeights,
+    Array.from(regroupedSection.blockHeights.slice(0, measuredHeights.length)),
+    [...measuredHeights.slice(0, 2), ...Array(measuredHeights.length - 2).fill(estimatedRowHeight)],
     'changed downstream rows must keep their measured height as the provisional rerender geometry',
   );
   assert.equal(
     regroupedSection.blockHeights.at(-1),
-    virtualGrid.collapsedRowHeight,
-    'a genuinely new trailing row should start from the collapsed estimate',
+    estimatedRowHeight,
+    'a genuinely new trailing row should start from the current measured estimate',
   );
   assert.equal(
     regroupedSection.measuredBlockKeys[0],
@@ -1717,6 +1930,155 @@ test('explicit semantic preservation survives a pending scroll render during a p
 
   assert.ok(restored.includes(anchor), 'restore the viewed album rather than obsolete coordinates');
   assert.equal(scrollEl.scrollTop, 1720);
+});
+
+test('background refresh uses a semantic anchor while a scroll render is pending', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  const anchor = { scrollLeft: 0, scrollTop: 5320, albumKey: 'viewed-album', offsetTop: 12 };
+  const restored = [];
+  virtualGrid.captureScrollAnchor = () => anchor;
+  virtualGrid.restoreScrollAnchor = value => {
+    restored.push(value);
+    scrollEl.scrollTop = 1720;
+  };
+  scrollEl.scrollTop = 5320;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  assert.ok(virtualGrid._raf, 'the current scroll still has a queued render');
+
+  virtualGrid.setGroups([], [], [], { preserveScroll: true });
+  scheduledFrames.at(-1)();
+
+  assert.ok(restored.includes(anchor));
+  assert.equal(scrollEl.scrollTop, 1720);
+});
+
+test('refreshed mobile parent restores its saved semantic anchor instead of the stale mounted card', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  const departureAnchor = {
+    scrollLeft: 0,
+    scrollTop: 5320,
+    albumKey: 'departure-album',
+    sectionOccurrenceKey: 'artist:departure',
+    offsetTop: 12,
+  };
+  const staleMountedAnchor = {
+    ...departureAnchor,
+    albumKey: 'album-now-at-old-coordinate',
+    sectionOccurrenceKey: 'artist:wrong',
+  };
+  const restored = [];
+  virtualGrid.captureScrollAnchor = () => staleMountedAnchor;
+  virtualGrid.restoreScrollAnchor = anchor => restored.push(anchor);
+  scrollEl.scrollTop = 5320;
+
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    semanticScrollAnchor: departureAnchor,
+  });
+  scheduledFrames.at(-1)();
+
+  assert.ok(restored.includes(departureAnchor));
+  assert.ok(!restored.includes(staleMountedAnchor));
+});
+
+test('newer user scroll invalidates a saved mobile parent semantic anchor before refresh applies', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  const departureAnchor = {
+    scrollLeft: 0,
+    scrollTop: 5320,
+    albumKey: 'departure-album',
+    sectionOccurrenceKey: 'artist:departure',
+    offsetTop: 12,
+  };
+  const liveAnchor = {
+    ...departureAnchor,
+    scrollTop: 6180,
+    albumKey: 'newer-user-position',
+    sectionOccurrenceKey: 'artist:newer',
+  };
+  const restored = [];
+  virtualGrid.captureScrollAnchor = () => liveAnchor;
+  virtualGrid.restoreScrollAnchor = anchor => restored.push(anchor);
+
+  scrollEl.dispatchEvent({ type: 'touchstart', target: scrollEl, touches: [{}] });
+  scrollEl.scrollTop = liveAnchor.scrollTop;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    preserveMountedGalleryChildren: true,
+    semanticScrollAnchor: departureAnchor,
+    semanticScrollOwnerGeneration: 0,
+  });
+
+  assert.deepEqual(restored, []);
+  assert.equal(virtualGrid._renderGeneration, 0);
+
+  scrollEl.dispatchEvent({ type: 'touchend', target: scrollEl, touches: [] });
+  const settle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.equal(typeof settle?.callback, 'function');
+  settle.callback();
+  scheduledFrames.at(-1)();
+
+  assert.ok(restored.includes(liveAnchor));
+  assert.ok(!restored.includes(departureAnchor));
+});
+
+test('delayed presentation measurement preserves mounted gallery children', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const section = {
+    sectionKey: 'artist:presentation-measurement',
+    blockHeights: [120],
+    blockMeasureKeys: ['row:1:presentation-album'],
+    measuredBlockKeys: [''],
+  };
+  virtualGrid.sectionByKey = new Map([[section.sectionKey, section]]);
+  context.__rows = [createMeasuredRow(section.sectionKey, 0, { rowHeight: 360 })];
+  context.__rowSelectorQueryCount = 1;
+  virtualGrid.captureScrollAnchor = () => ({
+    albumKey: 'presentation-album',
+    offsetTop: 24,
+    scrollLeft: 0,
+    scrollTop: 4454,
+  });
+  virtualGrid.recalculate = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.stabilizeScrollAfterMeasurement = () => {};
+  const renders = [];
+  virtualGrid.render = (force, options) => renders.push({ force, options });
+
+  virtualGrid.measureRenderedRows();
+
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].force, true);
+  assert.equal(renders[0].options?.preserveExistingChildren, true);
 });
 
 test('mobile album return refresh preserves a jump-scroll coordinate while its virtual render is pending', () => {
@@ -2665,6 +3027,10 @@ test('scroll render timer completes a pending frame when animation frames are st
   assert.ok(diagnostics.events.length <= diagnostics.maxEvents);
   assert.ok(diagnostics.events.some((event) => event.type === 'scroll-event'));
   assert.ok(diagnostics.events.some((event) => event.type === 'render-completed'));
+  assert.ok(
+    diagnostics.events.every((event) => Number.isFinite(event.epoch)),
+    'every diagnostic event must retain its creation time',
+  );
   assert.equal(diagnostics.latestScroll.scrollTop, 7169);
   assert.equal(diagnostics.latestRender.viewportTop, 7169);
   assert.equal(diagnostics.latestRender.viewportBottom, 7809);
@@ -3072,6 +3438,56 @@ test('scroll render timer completes a pending frame when animation frames are st
   assert.equal(section.blockHeights[0], 318);
   assert.equal(section.measuredBlockKeys[0], 'row:3:alpha|beta|gamma');
 }
+
+test('row height reconciliation preserves browser layout-unit precision', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const section = {
+    sectionKey: 'artist:fractional-row',
+    blockHeights: [319],
+    blockMeasureKeys: ['row:3:alpha|beta|gamma'],
+    measuredBlockKeys: [''],
+  };
+  virtualGrid.sectionByKey = new Map([[section.sectionKey, section]]);
+  context.__rows = [createMeasuredRow(section.sectionKey, 0, { rowHeight: 318.625 })];
+  context.__rowSelectorQueryCount = 1;
+  virtualGrid.captureScrollAnchor = () => null;
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.stabilizeScrollAfterMeasurement = () => {};
+
+  virtualGrid.measureRenderedRows();
+
+  assert.equal(section.blockHeights[0], 318.625);
+});
+
+test('row height reconciliation ignores collapsed measurements while the gallery is hidden', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const section = {
+    sectionKey: 'artist:hidden-row',
+    blockHeights: [111],
+    blockMeasureKeys: ['row:1:hidden-album'],
+    measuredBlockKeys: [''],
+  };
+  virtualGrid.sectionByKey = new Map([[section.sectionKey, section]]);
+  context.__rows = [createMeasuredRow(section.sectionKey, 0, { rowHeight: 2 })];
+  context.__rowSelectorQueryCount = 1;
+  scrollEl.getBoundingClientRect = () => ({ width: 0, height: 0 });
+  virtualGrid.captureScrollAnchor = () => null;
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.stabilizeScrollAfterMeasurement = () => {};
+
+  virtualGrid.measureRenderedRows();
+
+  assert.equal(section.blockHeights[0], 111);
+  assert.equal(
+    section.measuredBlockKeys[0],
+    '',
+    'a hidden row must remain eligible for measurement when the gallery becomes visible',
+  );
+});
 
 {
   const { context, containerEl } = createRuntimeContext();
@@ -3911,6 +4327,7 @@ test('selected primary section remains mounted while browsing related family sec
     context.CARD_GALLERY_LAYOUT_CONFIG,
   );
 
+  assert.match(containerEl.innerHTML, /aria-label="Open Selected Artist 10 tracklist"/);
   scrollEl.scrollTop = Math.max(0, virtualGrid.totalHeight - scrollEl.clientHeight);
   virtualGrid.render(true);
 
@@ -4148,10 +4565,85 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   const retainedImage = new context.HTMLImageElement();
   retainedImage.complete = true;
   retainedImage.naturalWidth = 480;
+  const retainedCover = {
+    querySelector(selector) {
+      return selector === 'img[data-production-cover-src]' ? retainedImage : null;
+    },
+  };
+  const retainedCard = {
+    isConnected: false,
+    parentNode: {
+      removeChild(node) { node.parentNode = null; },
+    },
+    childNodes: [retainedCover, { kind: 'metadata' }, { kind: 'actions' }],
+    attributes: {
+      'data-gallery-card-key': 'compact-retained-card',
+      'data-gallery-card-render-key': 'same-render',
+    },
+    getAttribute(name) { return this.attributes[name] || ''; },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    removeAttribute(name) { delete this.attributes[name]; },
+    querySelector(selector) {
+      if (selector === '.cover') return retainedCover;
+      if (selector === '.cover img' || selector === 'img[data-production-cover-src]') return retainedImage;
+      return null;
+    },
+    replaceChildren(...children) { this.childNodes = children; },
+    remove() { this.parentNode?.removeChild(this); },
+  };
+  virtualGrid.albumCardNodeCache.set('compact-retained-card', retainedCard);
+
+  virtualGrid.releaseDetachedAlbumCardAncestors();
+
+  assert.deepEqual(
+    retainedCard.childNodes,
+    [retainedCover],
+    'detached cache entries must discard non-cover card DOM',
+  );
+  assert.equal(retainedCard.parentNode, null);
+
+  let nextCard;
+  let nextCover = {
+    replaceWith(node) {
+      nextCard.childNodes[0] = node;
+      nextCover = node;
+    },
+  };
+  const nextMetadata = { kind: 'fresh-metadata' };
+  const nextActions = { kind: 'fresh-actions' };
+  let replacement = null;
+  nextCard = {
+    childNodes: [nextCover, nextMetadata, nextActions],
+    attributes: {
+      'data-gallery-card-key': 'compact-retained-card',
+      'data-gallery-card-render-key': 'same-render',
+    },
+    getAttribute(name) { return this.attributes[name] || ''; },
+    querySelector(selector) { return selector === '.cover' ? nextCover : null; },
+    replaceWith(node) { replacement = node; },
+  };
+  virtualGrid.reuseRenderedAlbumCards({
+    querySelectorAll() { return [nextCard]; },
+  });
+
+  assert.equal(nextCover, retainedCover, 'the decoded cover subtree must move into the fresh card');
+  assert.equal(replacement, retainedCard, 'the compact cache shell must regain the fresh card content');
+  assert.deepEqual(retainedCard.childNodes, [retainedCover, nextMetadata, nextActions]);
+  assert.equal(retainedCard.getAttribute('data-gallery-card-cover-only'), '');
+  assert.equal(virtualGrid.albumCardNodeCache.get('compact-retained-card'), retainedCard);
+}
+
+{
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const retainedImage = new context.HTMLImageElement();
+  retainedImage.complete = true;
+  retainedImage.naturalWidth = 480;
   retainedImage.setAttribute(
     'data-production-cover-src',
     'http://127.0.0.1:4173/cover?path=joseph&size=480&v=initial',
   );
+  retainedImage.setAttribute('src', 'blob:http://127.0.0.1/revoked-joseph');
   context.galleryCoverPreviewCache = {
     hasActive(productionUrl) {
       assert.match(productionUrl, /\/cover\?path=joseph/);
@@ -4192,10 +4684,15 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   });
 
   assert.equal(replacement, retainedCard, 'the decoded card node should survive regrouping and virtual-row reconciliation');
-  assert.match(
+  assert.equal(
     retainedImage.getAttribute('data-gallery-cover-src'),
-    /\/cover\?path=joseph/,
-    'a retained node whose blob was evicted must rehydrate from the production cache key',
+    '',
+    'a retained decoded node must not queue redundant browser decoding',
+  );
+  assert.equal(
+    retainedImage.getAttribute('src'),
+    'blob:http://127.0.0.1/revoked-joseph',
+    'revoking an already decoded blob must not discard the retained image pixels',
   );
 }
 
@@ -4583,7 +5080,37 @@ test('selected gallery scale controls the breakpoint while cards fill available 
   );
 });
 
-test('Artist Tree settlement adds a column and fills the row when a multi-row gallery can fit it with a slight card reduction', () => {
+test('responsive gallery uses one precise track width for its model and rendered rows', () => {
+  const { scrollEl, section, virtualGrid } = createResponsiveGalleryScenario(100, 760);
+  const gridTemplate = extractFirstGridTemplate(
+    virtualGrid.renderSection(section, 0, Number.POSITIVE_INFINITY),
+  );
+
+  assert.equal(virtualGrid.cardTrackWidth, 242.666);
+  assert.equal(
+    gridTemplate,
+    `repeat(${virtualGrid.columns}, minmax(0, ${virtualGrid.cardTrackWidth}px))`,
+  );
+  assert.ok(
+    virtualGrid.cardTrackWidth * virtualGrid.columns
+      + virtualGrid.columnGap * (virtualGrid.columns - 1)
+      <= scrollEl.clientWidth - 4,
+  );
+});
+
+test('responsive gallery full rows leave at most one pixel unused', () => {
+  const { scrollEl, virtualGrid } = createResponsiveGalleryScenario(100, 760);
+  const availableWidth = scrollEl.clientWidth - 4;
+  const usedWidth = virtualGrid.cardTrackWidth * virtualGrid.columns
+    + virtualGrid.columnGap * (virtualGrid.columns - 1);
+
+  assert.ok(
+    Math.abs(availableWidth - usedWidth) <= 1,
+    `expected full row to fill ${availableWidth}px, used ${usedWidth}px`,
+  );
+});
+
+test('Artist Tree settlement adds a column with precise tracks and bounded unused width', () => {
   const { scrollEl, virtualGrid } = createResponsiveGalleryScenario(100, 1672, 32);
   const initialCardTrackWidth = virtualGrid.cardTrackWidth;
 
@@ -4592,11 +5119,10 @@ test('Artist Tree settlement adds a column and fills the row when a multi-row ga
 
   assert.equal(virtualGrid.columns, 7);
   assert.ok(virtualGrid.cardTrackWidth < initialCardTrackWidth);
-  assert.equal(
-    virtualGrid.cardTrackWidth * virtualGrid.columns
-      + virtualGrid.columnGap * (virtualGrid.columns - 1),
-    1844,
-  );
+  const usedWidth = virtualGrid.cardTrackWidth * virtualGrid.columns
+    + virtualGrid.columnGap * (virtualGrid.columns - 1);
+  assert.ok(usedWidth <= 1844);
+  assert.ok(1844 - usedWidth <= 1);
 });
 
 test('row height reconciliation retains both ordinary and Artist Tree settled column geometry', () => {
@@ -4656,6 +5182,68 @@ test('Artist Tree settlement restores the same visible album after reflow virtua
   assert.equal(context.__albumTitleButtons.length, 1, 'The original anchor must be mounted again');
   assert.equal(context.__albumTitleButtons[0].getBoundingClientRect().top, 40);
   assert.notEqual(scrollEl.scrollTop, beforeScroll, 'Reflow must adjust scroll rather than keep obsolete row coordinates');
+});
+
+test('Artist Tree settlement measures mounted rows before declaring the original anchor stable', () => {
+  const { virtualGrid } = createResponsiveGalleryScenario(100, 1104, 60);
+  const anchor = { albumKey: 'responsive-29', offsetTop: 40, scrollTop: 2400 };
+  const calls = [];
+  virtualGrid.stabilizeScrollAfterMeasurement = (candidate) => calls.push(['stabilize', candidate]);
+  virtualGrid.render = () => calls.push(['render']);
+  virtualGrid.measureRenderedRows = () => calls.push(['measure']);
+
+  virtualGrid.stabilizeReflowAnchor(anchor);
+
+  assert.deepEqual(calls, [
+    ['stabilize', anchor],
+    ['render'],
+    ['measure'],
+    ['stabilize', anchor],
+  ]);
+});
+
+test('Artist Tree settlement keeps the semantic anchor captured before layout transition', () => {
+  const { virtualGrid } = createResponsiveGalleryScenario(100, 1104, 60);
+  const originalAnchor = { albumKey: 'responsive-29', offsetTop: 71.1875, scrollTop: 2718 };
+  const shiftedAnchor = { albumKey: 'responsive-5', offsetTop: -328.125, scrollTop: 2718 };
+  let visibleAnchor = originalAnchor;
+  let settledAnchor = null;
+  virtualGrid.captureScrollAnchor = () => visibleAnchor;
+  virtualGrid.applyArtistTreeSettlement = (_resizeOptions, anchor) => { settledAnchor = anchor; };
+
+  assert.equal(typeof virtualGrid.onArtistTreeToggleStarting, 'function');
+  virtualGrid.onArtistTreeToggleStarting();
+  visibleAnchor = shiftedAnchor;
+  virtualGrid.onArtistTreeSettled();
+
+  assert.equal(settledAnchor, originalAnchor);
+});
+
+test('Artist Tree reflow anchors the first visible artwork instead of metadata from the prior card', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const metadataOnly = context.createAlbumTitleButton(
+    'metadata-only',
+    { top: -80, bottom: -60 },
+    'artist:all:Previous Artist:0',
+  );
+  const visibleArtwork = context.createAlbumTitleButton(
+    'visible-artwork',
+    { top: 71, bottom: 371 },
+    'artist:all:Visible Artist:0',
+  );
+  const originalClosest = metadataOnly.closest?.bind(metadataOnly);
+  metadataOnly.closest = selector => selector === '.album-card'
+    ? { getBoundingClientRect: () => ({ top: -328, bottom: 56 }) }
+    : originalClosest?.(selector);
+  context.__albumTitleButtons = [metadataOnly, visibleArtwork];
+  let settledAnchor = null;
+  virtualGrid.applyArtistTreeSettlement = (_resizeOptions, anchor) => { settledAnchor = anchor; };
+
+  virtualGrid.onArtistTreeToggleStarting();
+  virtualGrid.onArtistTreeSettled();
+
+  assert.equal(settledAnchor.albumKey, 'visible-artwork');
 });
 
 test('Artist Tree settlement preserves absolute restoration and pending scroll resets', () => {
@@ -4878,6 +5466,62 @@ test('picture-only rows cover a partial viewport row immediately after switching
   assert.equal(section.blockHeights[0], grid.cardTrackWidth, 'resizing without changing columns must update row geometry');
 });
 
+test('hidden gallery resize preserves the last visible Covers geometry', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const grid = vm.runInContext('virtualGrid', context);
+  grid.render = () => {};
+  grid.primeVisibleCoverImages = () => {};
+  context.state.gallery.mainState = context.createGalleryMainState({ view: 'covers' });
+  grid.setGroups([], [], [{
+    artist: 'Hidden Covers Artist',
+    albums: Array.from({ length: 6 }, (_, index) => ({
+      key: `hidden-cover-${index}`,
+      name: `Hidden Cover ${index}`,
+      album_artist: 'Hidden Covers Artist',
+      tracks: [],
+    })),
+  }]);
+  const section = grid.sections[0];
+  section.blockHeights[0] = 111;
+  const visibleGeometryKey = section.rowGeometryKey;
+  scrollEl.clientWidth = 0;
+  scrollEl.clientHeight = 0;
+  scrollEl.getBoundingClientRect = () => ({ width: 0, height: 0 });
+
+  grid.recalculate();
+
+  assert.equal(section.blockHeights[0], 111);
+  assert.equal(section.rowGeometryKey, visibleGeometryKey);
+});
+
+test('hidden gallery defers mounted group updates until measurable geometry returns', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const grid = vm.runInContext('virtualGrid', context);
+  grid.primeVisibleCoverImages = () => {};
+  const visibleRect = scrollEl.getBoundingClientRect;
+  const group = artist => ({
+    artist,
+    albums: [{ key: `${artist}-album`, name: `${artist} Album`, album_artist: artist, tracks: [] }],
+  });
+  grid.setGroups([], [], [group('Before')]);
+
+  scrollEl.getBoundingClientRect = () => ({ width: 0, height: 632 });
+  grid.setGroups([], [], [group('After')], {
+    preserveScroll: true,
+    preserveMountedGalleryChildren: true,
+  });
+
+  assert.equal(grid.sections[0].group.artist, 'Before');
+  assert.equal(grid._deferredSetGroups.fallbackGroups[0].artist, 'After');
+
+  scrollEl.getBoundingClientRect = visibleRect;
+  grid.onResize();
+
+  assert.equal(grid._deferredSetGroups, null);
+  assert.equal(grid.sections[0].group.artist, 'After');
+  assert.ok(grid.sections[0].blockHeights.length > 0);
+});
+
 test('combining selected family artists preserves their albums and reports one display group', () => {
   const { context, containerEl } = createRuntimeContext();
   const primary = { artist: 'Neal Morse', albums: [{ key: 'neal', name: 'Solo', album_artist: 'Neal Morse', tracks: [] }] };
@@ -5005,13 +5649,73 @@ test('startup preview cards survive layout events until an authoritative virtual
 });
 
 
+test('virtual artist sections model the rendered 32px header and 10px bottom margin', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+
+  virtualGrid.recalculate();
+
+  assert.equal(virtualGrid.sectionHeaderHeight, 42);
+});
+
+test('a prepended artist reuses a measured row height for matching card geometry', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const group = artist => ({
+    artist,
+    albums: [{ key: `${artist}-album`, name: `${artist} Album`, album_artist: artist, tracks: [] }],
+  });
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  virtualGrid.setGroups([], [], [group('Existing')]);
+  const existing = virtualGrid.sections[0];
+  existing.blockHeights[0] = 394.875;
+  existing.measuredBlockKeys[0] = existing.blockMeasureKeys[0];
+
+  virtualGrid.setGroups([], [], [group('Prepended'), group('Existing')], { preserveScroll: true });
+
+  const prepended = virtualGrid.sections.find(section => section.group?.artist === 'Prepended');
+  assert.equal(prepended.blockHeights[0], 394.875);
+});
+
+test('recalculation replaces stale unmeasured row estimates before they mount', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const group = artist => ({
+    artist,
+    albums: [{ key: `${artist}-album`, name: `${artist} Album`, album_artist: artist, tracks: [] }],
+  });
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.setGroups([], [], [group('Offscreen'), group('Measured')]);
+
+  const offscreen = virtualGrid.sections.find(section => section.group?.artist === 'Offscreen');
+  const measured = virtualGrid.sections.find(section => section.group?.artist === 'Measured');
+  offscreen.blockHeights[0] = 420;
+  offscreen.measuredBlockKeys[0] = '';
+  measured.blockHeights[0] = 394.875;
+  measured.measuredBlockKeys[0] = measured.blockMeasureKeys[0];
+
+  virtualGrid.recalculate({ preserveColumnGeometry: true });
+
+  assert.equal(offscreen.blockHeights[0], 394.875);
+});
+
 test('scrollToArtist puts the first album row at the gallery top without applying artist filter', () => {
   const { context, scrollEl, containerEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
+  scrollEl.clientTop = 2;
   virtualGrid.setGroups([
     { artist: 'Alpha', albums: [{ key: 'alpha::one', name: 'One', tracks: [] }] },
     { artist: 'Beta', albums: [{ key: 'beta::two', name: 'Two', tracks: [] }] },
   ], [], null, {});
+  let quantizedScrollTop = 0;
+  Object.defineProperty(scrollEl, 'scrollTop', {
+    configurable: true,
+    get: () => quantizedScrollTop,
+    set: value => { quantizedScrollTop = Math.round(Number(value)); },
+  });
   const target = virtualGrid.sections.find((section) => section.group?.artist === 'Beta');
   const selectedArtistBefore = context.state.view.selected_artist;
   virtualGrid._scrollRestoreRaf = 73;
@@ -5032,7 +5736,10 @@ test('scrollToArtist puts the first album row at the gallery top without applyin
   );
 
   assert.equal(virtualGrid.scrollToArtist('Beta'), true);
-  assert.equal(scrollEl.scrollTop, target.top + virtualGrid.sectionHeaderHeight - 24.25);
+  const requestedScrollTop = target.top + virtualGrid.sectionHeaderHeight - 26.25;
+  const quantizationRemainder = Math.round(requestedScrollTop) - requestedScrollTop;
+  assert.equal(scrollEl.scrollTop, Math.round(requestedScrollTop));
+  assert.equal(containerEl.style.translate, `0 ${quantizationRemainder}px`);
   assert.equal(context.state.view.selected_artist, selectedArtistBefore);
   assert.equal(virtualGrid._scrollRestoreRaf, null);
   assert.equal(virtualGrid._resetScrollAfterMeasure, false);
@@ -5245,6 +5952,122 @@ test('pagination group updates wait until an active touch gesture settles', () =
   assert.deepEqual(renders, [932]);
 });
 
+test('background preserve-scroll group updates wait until an active touch gesture settles', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const renders = [];
+  virtualGrid.render = () => { renders.push(scrollEl.scrollTop); };
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.scrollTop = 1900;
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.scrollTop = 1948;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Background Refresh Artist', artist_display: 'Background Refresh Artist', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+
+  assert.equal(virtualGrid._renderGeneration, 0);
+  assert.equal(virtualGrid.sections.length, 0);
+  assert.deepEqual(renders, []);
+
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+  const settle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.equal(typeof settle?.callback, 'function');
+  settle.callback();
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Background Refresh Artist');
+  assert.deepEqual(renders, [1948]);
+});
+
+test('pagination group updates replay when touch release reaches the document', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.scrollTop = 900;
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.scrollTop = 932;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Deferred Artist', artist_display: 'Deferred Artist', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+
+  const gestureSettle = context.__scheduledBrowserTimeouts.at(-1);
+  gestureSettle.callback();
+  assert.equal(virtualGrid._renderGeneration, 0);
+
+  context.document.dispatchEvent({ type: 'touchend', touches: [] });
+  const releaseSettle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.notEqual(
+    releaseSettle?.id,
+    gestureSettle.id,
+    'document-level touch release must schedule deferred continuation replay',
+  );
+  releaseSettle.callback();
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Deferred Artist');
+});
+
+test('pagination group updates replay when the touched descendant detaches before release', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  const listeners = new Map();
+  const touchTarget = {
+    addEventListener(type, listener) {
+      const current = listeners.get(type) || [];
+      current.push(listener);
+      listeners.set(type, current);
+    },
+    removeEventListener(type, listener) {
+      const current = listeners.get(type) || [];
+      listeners.set(type, current.filter(candidate => candidate !== listener));
+    },
+    dispatchEvent(event) {
+      for (const listener of listeners.get(event?.type) || []) listener.call(this, event);
+    },
+  };
+
+  scrollEl.scrollTop = 900;
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}], target: touchTarget });
+  scrollEl.scrollTop = 932;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Detached Touch Artist', artist_display: 'Detached Touch Artist', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+
+  const gestureSettle = context.__scheduledBrowserTimeouts.at(-1);
+  gestureSettle.callback();
+  assert.equal(virtualGrid._renderGeneration, 0);
+
+  touchTarget.dispatchEvent({ type: 'touchend', touches: [] });
+  const releaseSettle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.notEqual(
+    releaseSettle?.id,
+    gestureSettle.id,
+    'the original touch target must release deferred work even after it leaves the document',
+  );
+  releaseSettle.callback();
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Detached Touch Artist');
+});
+
 test('pagination group updates coalesce behind an active wheel scroll', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -5448,20 +6271,33 @@ test('an immediate gallery render supersedes deferred Artist Tree settlement', (
   assert.deepEqual(captured, []);
 });
 
-test('pagination regrouping flushes before coalesced Artist Tree settlement', () => {
+test('coalesced pagination and Artist Tree settlement retain the pre-regroup semantic anchor', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const captures = [];
   const resizedArtists = [];
+  const stabilizedArtists = [];
   virtualGrid.captureScrollAnchor = () => {
-    captures.push(virtualGrid.sections[0]?.group?.artist || 'none');
-    return null;
+    const artist = virtualGrid.sections[0]?.group?.artist || 'none';
+    captures.push(artist);
+    return { artist };
   };
   virtualGrid.onResize = () => {
     resizedArtists.push(virtualGrid.sections[0]?.group?.artist || 'none');
   };
+  virtualGrid.stabilizeScrollAfterMeasurement = anchor => {
+    stabilizedArtists.push(anchor.artist);
+  };
   virtualGrid.render = () => {};
   virtualGrid.primeVisibleCoverImages = () => {};
+
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Viewed Artist', artist_display: 'Viewed Artist', albums: [] }],
+    { preserveScroll: false },
+  );
+  captures.length = 0;
 
   scrollEl.dispatchEvent({ type: 'wheel' });
   virtualGrid.setGroups(
@@ -5475,22 +6311,35 @@ test('pagination regrouping flushes before coalesced Artist Tree settlement', ()
 
   context.__scheduledBrowserTimeouts.at(-1).callback();
 
-  assert.deepEqual(captures, ['none', 'Updated Artist']);
+  assert.deepEqual(captures, ['Viewed Artist', 'Viewed Artist']);
   assert.deepEqual(resizedArtists, ['Updated Artist']);
+  assert.deepEqual(stabilizedArtists, ['Viewed Artist', 'Viewed Artist']);
 });
 
 test('window resize waits for an active touch gesture final position', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const reflows = [];
+  const captures = [];
+  const stabilizations = [];
+  let visibleArtist = 'Viewed Artist';
+  virtualGrid.captureScrollAnchor = () => {
+    captures.push(visibleArtist);
+    return { artist: visibleArtist };
+  };
   virtualGrid.recalculate = options => {
     reflows.push({ phase: 'recalculate', scrollTop: scrollEl.scrollTop, options });
+    visibleArtist = 'Wrong Artist';
   };
   virtualGrid.render = () => {
     reflows.push({ phase: 'render', scrollTop: scrollEl.scrollTop });
   };
   virtualGrid.scheduleMeasureRows = () => {
     reflows.push({ phase: 'measure', scrollTop: scrollEl.scrollTop });
+  };
+  virtualGrid.stabilizeScrollAfterMeasurement = anchor => {
+    stabilizations.push(anchor.artist);
+    visibleArtist = anchor.artist;
   };
 
   scrollEl.scrollTop = 4100;
@@ -5504,8 +6353,16 @@ test('window resize waits for an active touch gesture final position', () => {
   scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
   context.__scheduledBrowserTimeouts.at(-1).callback();
 
-  assert.deepEqual(reflows.map(reflow => reflow.phase), ['recalculate', 'render', 'measure']);
-  assert.deepEqual(reflows.map(reflow => reflow.scrollTop), [4172, 4172, 4172]);
+  assert.deepEqual(reflows.map(reflow => reflow.phase), [
+    'recalculate',
+    'render',
+    'measure',
+    'render',
+  ]);
+  assert.deepEqual(reflows.map(reflow => reflow.scrollTop), [4172, 4172, 4172, 4172]);
+  assert.deepEqual(captures, ['Viewed Artist']);
+  assert.deepEqual(stabilizations, ['Viewed Artist', 'Viewed Artist']);
+  assert.equal(visibleArtist, 'Viewed Artist');
 });
 
 test('an immediate gallery render supersedes deferred window resize', () => {
@@ -5523,20 +6380,104 @@ test('an immediate gallery render supersedes deferred window resize', () => {
   assert.equal(virtualGrid._deferredResizeOptions, null);
 });
 
-test('gallery cards prefer presentation-only title and year values', () => {
-  const { context } = createRuntimeContext();
-  const markup = context.albumCardHtml({
-    key: 'lost-final-season',
-    name: 'Lost: The Final Season: Original Television Soundtrack',
-    display_name: 'Lost: The Final Season (Original Television Soundtrack)',
-    album_artist: 'Michael Giacchino',
-    year: '2010-09-14',
-    display_year: '2010',
+test('row fallback restoration preserves fractional phase when scrollTop is quantized', () => {
+  const { context, scrollEl, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  let quantizedScrollTop = 5424;
+  Object.defineProperty(scrollEl, 'scrollTop', {
+    configurable: true,
+    get: () => quantizedScrollTop,
+    set: value => { quantizedScrollTop = Math.round(Number(value)); },
+  });
+  const row = new context.HTMLElement();
+  row.getAttribute = name => ({
+    'data-section-key': 'artist:fractional-row',
+    'data-block-index': '7',
+  })[name] || '';
+  row.getBoundingClientRect = () => ({ top: 136, bottom: 336 });
+  containerEl.querySelectorAll = selector => (
+    selector === '.album-row[data-section-key][data-block-index]' ? [row] : []
+  );
+
+  virtualGrid.restoreScrollAnchor({
+    sectionKey: 'artist:fractional-row',
+    blockIndex: '7',
+    offsetTop: 136.375,
+    scrollLeft: 0,
+    scrollTop: 5424,
   });
 
-  assert.match(
-    markup,
-    /data-gallery-metadata-text>Lost: The Final Season \(Original Television Soundtrack\)<\/span>/,
+  assert.equal(scrollEl.scrollTop, 5424);
+  assert.equal(containerEl.style.translate, '0 0.375px');
+});
+
+test('owned semantic anchor restoration does not become user scroll or paginate', () => {
+  const { context, scrollEl, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const pagination = [];
+  context.loadPreviousRootGalleryPage = () => pagination.push('previous');
+  context.loadNextRootGalleryPage = () => pagination.push('next');
+  const row = new context.HTMLElement();
+  row.getAttribute = name => ({
+    'data-section-key': 'artist:owned-row',
+    'data-block-index': '2',
+  })[name] || '';
+  row.getBoundingClientRect = () => ({ top: 136, bottom: 336 });
+  containerEl.querySelectorAll = selector => (
+    selector === '.album-row[data-section-key][data-block-index]' ? [row] : []
   );
-  assert.match(markup, /data-gallery-metadata-text>Michael Giacchino · 2010<\/span>/);
+
+  virtualGrid.restoreOwnedScrollAnchor({
+    sectionKey: 'artist:owned-row',
+    blockIndex: '2',
+    offsetTop: 100,
+    scrollLeft: 0,
+    scrollTop: 100,
+  });
+  scrollEl.dispatchEvent({ type: 'scroll', target: scrollEl });
+
+  assert.equal(scrollEl.scrollTop, 36);
+  assert.equal(virtualGrid.getUserScrollIntentGeneration(), 0);
+  assert.deepEqual(pagination, []);
+});
+
+test('touch taps retain semantic anchor ownership until the gesture actually scrolls', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+
+  assert.equal(virtualGrid.getUserScrollIntentGeneration(), 0);
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}], target: scrollEl });
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [], target: scrollEl });
+  assert.equal(virtualGrid.getUserScrollIntentGeneration(), 0);
+
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}], target: scrollEl });
+  scrollEl.scrollTop = 24;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  assert.equal(virtualGrid.getUserScrollIntentGeneration(), 1);
+  scrollEl.scrollTop = 48;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  assert.equal(virtualGrid.getUserScrollIntentGeneration(), 2);
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [], target: scrollEl });
+  scrollEl.scrollTop = 64;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  assert.equal(virtualGrid.getUserScrollIntentGeneration(), 3);
+});
+
+test('first touch scroll advances semantic ownership before it starts pagination', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const paginationOwnerGenerations = [];
+  context.loadPreviousRootGalleryPage = () => {
+    paginationOwnerGenerations.push(virtualGrid.getUserScrollIntentGeneration());
+  };
+  context.loadNextRootGalleryPage = () => {
+    paginationOwnerGenerations.push(virtualGrid.getUserScrollIntentGeneration());
+  };
+
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}], target: scrollEl });
+  scrollEl.scrollTop = 24;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+
+  assert.deepEqual(paginationOwnerGenerations, [1, 1]);
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [], target: scrollEl });
 });

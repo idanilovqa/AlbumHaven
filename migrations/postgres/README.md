@@ -227,7 +227,7 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0088` are unreleased branch migrations. Their presence in a
+`0081` through `0091` are unreleased branch migrations. Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order
 before starting the matching application version. Run `0083` outside an
@@ -236,13 +236,29 @@ ledger entry only after PostgreSQL reports the index valid. Apply `0084`
 transactionally, then let normal relation readiness publish the first matching
 artist-search projection. Migrations `0087` and `0088` add library-source
 indicator storage and the active physical-parent lookup index respectively.
+Migration `0091_add_gallery_projection_artist_lookup_indexes.sql` adds
+library/scope/artist/ordinal indexes for anchored root-gallery lookup and
+artist-boundary reads without changing projection rows or runtime privileges.
+Apply `0091` transactionally during a controlled migration window because its
+ordinary index builds can briefly block projection writes; reads remain
+available.
+
+`0092_add_locale_independent_search_prefilter.sql` adds an immutable UTF-8 hex
+normalizer and two ordinary GIN trigram indexes for track-title and private-path
+search. Apply it transactionally during a controlled migration window: reads
+remain available, but the index builds briefly block writes to
+`library.local_tracks` and `library.local_track_files`. Roll back the matching
+application query first, then drop the two indexes and finally drop
+`library.search_utf8_hex(text)`.
 
 Rollback is migration-specific. Revoke the `0081` delete grant only after the
 root-setting writer is rolled back. Restore the `0063` missing-album function to
 undo `0082`; confirmed deletions are not reversible, and restoring `0063`
 intentionally makes subsequent removals mark relation data stale. Drop the
-`0083` index concurrently; search stays correct on the slower scan path. Roll
-back the projection-reading application code before dropping the `0084`
+`0083` index concurrently; search stays correct on the slower scan path. Drop
+both `0091` indexes to roll back that migration; anchored lookup remains
+correct on the slower scan path. Roll back the projection-reading application
+code before dropping the `0084`
 function and table, preventing a relation-ready process from querying an absent
 table. Keep the live-SQL fallback for absent, stale, or incompatible projection
 readiness throughout rollout and rollback.

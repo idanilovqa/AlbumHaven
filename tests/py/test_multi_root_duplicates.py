@@ -731,3 +731,19 @@ def test_membership_still_rejects_only_strict_subset_from_competing_sources():
     assert rejected_local_album_paths(entries) == {
         str(Path("hoard/subset/01.flac")): "Duplicate track outside album folder",
     }
+
+
+def test_membership_ignores_unknown_scanned_exception_text():
+    entries = [
+        {
+            **asdict(_track(folder, number)),
+            "library_root_id": root,
+            "exception_type": "Unknown exception",
+        }
+        for folder, root, numbers in [("main/full", 1, (1, 2)), ("hoard/subset", 2, (1,))]
+        for number in numbers
+    ]
+
+    assert rejected_local_album_paths(entries) == {
+        str(Path("hoard/subset/01.flac")): "Duplicate track outside album folder",
+    }

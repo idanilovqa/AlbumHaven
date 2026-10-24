@@ -363,5 +363,5 @@ def test_live_appearance_aggregate_upgrade_uses_staged_migration_runner() -> Non
     ]
 
     assert "isolatedPostgres.apply_migrations(setup_url, legacy)" in aggregate
-    assert "isolatedPostgres.apply_migrations(setup_url, upgrade)" in aggregate
+    assert "isolatedPostgres.apply_migrations(setup_url, migrations)" in aggregate
     assert "connection.execute(path.read_text(encoding=\"utf-8\"))" not in aggregate

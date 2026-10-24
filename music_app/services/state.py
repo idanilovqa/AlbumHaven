@@ -5,6 +5,7 @@ from music_app.services.log_history import resolve_media_host_history_scope
 import threading
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from os.path import normcase
 from pathlib import Path
 
@@ -58,6 +59,7 @@ from music_app.services.scan_state import refresh_library_state
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
+    _raise_if_projection_cancelled,
     ensure_relation_projection_ready,
 )
 
@@ -66,6 +68,9 @@ _SCAN_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="album
 _HYDRATE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-hydrate")
 _COVER_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cover")
 _MBID_ASSERTION_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-mbid")
+_RELATION_REBUILD_LOCK = threading.Lock()
+_RELATION_REBUILD_PENDING = False
+_RELATION_REBUILD_REQUEST_GENERATION = 0
 _BULK_COVER_JOB_WORKERS = 1
 _WATCHER_COVER_REFRESH_MAX_ATTEMPTS = 3
 _SCAN_FILE_ERROR_HISTORY_LIMIT = 50
@@ -614,6 +619,20 @@ def ensure_runtime_relation_projection_ready(
         library_state["last_error"] = str(exc)
         library_state["relation_projection_rebuild_reason"] = "startup_rebuild_failed"
         raise
+    startup_started_at = getattr(app, "relation_projection_startup_started_at", None)
+    try:
+        rebuilt_during_startup = (
+            isinstance(startup_started_at, datetime)
+            and datetime.fromisoformat(str(result.get("last_rebuild_timestamp") or ""))
+            >= startup_started_at
+        )
+    except (TypeError, ValueError):
+        rebuilt_during_startup = False
+    if not result.get("startup_rebuilt") and rebuilt_during_startup:
+        result["startup_rebuilt"] = True
+        result["rebuild_reason"] = str(
+            result.get("last_rebuild_reason") or result.get("rebuild_reason") or "healthy"
+        )
     library_state["relation_views"] = dict(result.get("relation_views") or {})
     library_state["relation_projection_ready"] = bool(result.get("ready"))
     library_state["relation_projection_builder_version"] = str(
@@ -637,7 +656,58 @@ def ensure_runtime_relation_projection_ready(
             raise
         except Exception:
             app.logger.exception("Gallery summary preparation failed; computed browse remains available")
+        else:
+            _raise_if_projection_cancelled(cancel_requested)
+            PostgresLibraryBrowseRepository(app.config).queue_settings_projection_prewarm()
     return result
+
+
+def _run_scheduled_relation_projection_rebuild(
+    config: dict[str, object],
+    logger: object | None,
+    reason: str,
+) -> None:
+    global _RELATION_REBUILD_PENDING
+    while True:
+        with _RELATION_REBUILD_LOCK:
+            requested_generation = _RELATION_REBUILD_REQUEST_GENERATION
+        try:
+            if logger is not None:
+                logger.info("Deferred relation projection rebuild started: %s", reason)
+            ensure_relation_projection_ready(config, logger=logger)
+        except Exception:
+            if logger is not None:
+                logger.exception("Deferred relation projection rebuild failed: %s", reason)
+        with _RELATION_REBUILD_LOCK:
+            if requested_generation != _RELATION_REBUILD_REQUEST_GENERATION:
+                continue
+            _RELATION_REBUILD_PENDING = False
+            return
+
+
+def schedule_relation_projection_rebuild(
+    config: dict[str, object],
+    *,
+    reason: str,
+    logger: object | None = None,
+) -> None:
+    global _RELATION_REBUILD_PENDING, _RELATION_REBUILD_REQUEST_GENERATION
+    with _RELATION_REBUILD_LOCK:
+        _RELATION_REBUILD_REQUEST_GENERATION += 1
+        if _RELATION_REBUILD_PENDING:
+            return
+        _RELATION_REBUILD_PENDING = True
+    try:
+        _HYDRATE_EXECUTOR.submit(
+            _run_scheduled_relation_projection_rebuild,
+            dict(config),
+            logger,
+            str(reason or "structural_tag_edit_requires_full_projection"),
+        )
+    except Exception:
+        with _RELATION_REBUILD_LOCK:
+            _RELATION_REBUILD_PENDING = False
+        raise
 
 def scan_percent_for_state(library_state: dict[str, object]) -> int:
     total = int(library_state.get("scan_total") or 0)
@@ -915,6 +985,12 @@ def refresh_relation_views_for_state(
         return
 
     save_relation_snapshot()
+    if publication_state is not None and postgres_relation_projection:
+        from music_app.services.gallery_projection_postgres import (
+            ensure_gallery_projection_ready,
+        )
+
+        ensure_gallery_projection_ready(config)
 
 
 def _run_snapshot_commit_for_current_generation(

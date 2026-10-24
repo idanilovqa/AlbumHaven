@@ -17,7 +17,7 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
-test('completed lookup starts its single gallery request before the task list settles', async () => {
+test('opening Cover Lookup starts one gallery request without loading notification history', async () => {
   class TestButton {
     constructor() {
       this.hidden = false;
@@ -32,10 +32,6 @@ test('completed lookup starts its single gallery request before the task list se
   const overlay = { hidden: true };
   const saveButton = new TestButton();
   let galleryRequestCount = 0;
-  let resolveTasksRequest;
-  const tasksResponse = new Promise((resolve) => {
-    resolveTasksRequest = resolve;
-  });
   const context = {
     window: {},
     state: {
@@ -52,9 +48,6 @@ test('completed lookup starts its single gallery request before the task list se
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
     showToast: () => {},
     fetch: async (url) => {
-      if (url === '/utilities/cover-lookup/tasks') {
-        return tasksResponse;
-      }
       if (url === '/utilities/cover-lookup/gallery') {
         galleryRequestCount += 1;
         return {
@@ -89,19 +82,6 @@ test('completed lookup starts its single gallery request before the task list se
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(galleryRequestCount, 1);
 
-  resolveTasksRequest({
-    ok: true,
-    json: async () => ({
-      ok: true,
-      tasks: [{
-        id: 'sola-scriptura-lookup',
-        status: 'completed',
-        progress: 100,
-        album_payload: album,
-        possible_matches: [{ id: 'apple-sola-scriptura' }],
-      }],
-    }),
-  });
   await openPromise;
 
   assert.equal(galleryRequestCount, 1);
@@ -222,6 +202,60 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
   await startPromise;
 });
 
+test('start response cannot hydrate a later Cover Lookup modal session', async () => {
+  const album = {
+    album_artist: 'Neal Morse',
+    name: 'Sola Scriptura',
+    year: 2007,
+  };
+  let resolveStartRequest;
+  const startResponse = new Promise((resolve) => { resolveStartRequest = resolve; });
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [],
+        modal: { album, pastedImages: [], manualBusy: false },
+      },
+    },
+    URLSearchParams,
+    console,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async (url) => {
+      if (url === '/utilities/cover-lookup/start') return startResponse;
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    document: {
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-modal-body': { querySelector: () => null },
+      }[id] || null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.collectManualCoverLookupUrls = () => [];
+  context.renderCoverLookupDrawer = () => {};
+  context.renderCoverLookupModal = () => {};
+  let appliedGalleries = 0;
+  context.applyCoverLookupGalleryPayload = () => { appliedGalleries += 1; };
+
+  const pending = context.startCoverLookupForAlbum(album);
+  vm.runInContext('coverLookupModalSession += 1', context);
+  resolveStartRequest({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      task: { id: 'stale-lookup', status: 'running', album_payload: album },
+      gallery: { local_covers: [], other_art: [] },
+    }),
+  });
+  await pending;
+
+  assert.equal(appliedGalleries, 0);
+});
+
 test('background lookup marks its trigger busy before the start request settles', async () => {
   const album = {
     album_artist: 'Neal Morse',
@@ -271,7 +305,12 @@ test('background lookup marks its trigger busy before the start request settles'
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.renderCoverLookupDrawer = () => {};
   context.ensureCoverLookupPolling = () => {};
-  context.loadCoverLookupTasks = async () => {};
+  let taskReloads = 0;
+  let taskReloadOptions = null;
+  context.loadCoverLookupTasks = async (options) => {
+    taskReloads += 1;
+    taskReloadOptions = options;
+  };
 
   const startPromise = context.startCoverLookupForAlbum(album, {
     backgroundOnly: true,
@@ -296,12 +335,19 @@ test('background lookup marks its trigger busy before the start request settles'
 
   assert.equal(triggerButton.disabled, false);
   assert.equal(attributes.has('aria-busy'), false);
+  assert.equal(taskReloads, 1, 'background lookup keeps its immediate status refresh');
+  assert.equal(
+    taskReloadOptions?.mergeFirstPage,
+    true,
+    'the status refresh must retain the accepted task until persistence catches up',
+  );
 });
 
 
 test('gallery responses cannot overwrite another album or a newer gallery request', async () => {
   const requests = [], applied = [];
   const context = vm.createContext({
+    document: { getElementById: () => null },
     state: { coverLookup: { modal: { album: { key: 'first' } } } }, console,
     fetch: () => new Promise(resolve => requests.push(resolve)),
     showToast: () => { throw new Error('Stale requests must not notify'); },
@@ -401,7 +447,7 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
     const f = loadCapabilityCoverRoute(actions, { initial: true });
     f.restore();
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(f.effects, ['present', 'body', 'render', 'poll', 'tasks', 'gallery', 'history']);
+    assert.deepEqual(f.effects, ['present', 'body', 'render', 'poll', 'gallery', 'history']);
     assert.equal(f.overlay.hidden, false);
     assert.equal(f.context.state.coverLookup.modal.album.key, 'one');
     assert.equal(vm.runInContext('coverLookupModalSession', f.context), 1);

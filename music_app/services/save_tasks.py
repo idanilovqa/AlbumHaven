@@ -9,6 +9,7 @@ registry, async execution handoff, and finalization bookkeeping live here.
 import asyncio
 from collections.abc import Callable
 from concurrent.futures import Future
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ from music_app.services.cache import (
     save_cache_to_disk_for_config,
 )
 from music_app.services.library_roots import library_root_cache_identity
+from music_app.services.edit_tag_timings import EditTagTimingRecorder
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
 
@@ -316,7 +318,51 @@ def _normalize_empty_exception_rebase_entries(
 
 def save_task_result(task_id: str) -> JsonDict:
     with _SAVE_TASKS_LOCK:
-        return dict(_SAVE_TASKS.get(task_id, {}))
+        result = dict(_SAVE_TASKS.get(task_id, {}))
+    return {key: value for key, value in result.items() if not key.startswith("_")}
+
+
+def latest_structural_tag_edit_destination(
+    resource_keys: set[str] | frozenset[str],
+    *,
+    completed_after_monotonic: float,
+) -> JsonDict | None:
+    requested_keys = frozenset(
+        str(key or "").strip()
+        for key in resource_keys
+        if str(key or "").strip()
+    )
+    if not requested_keys:
+        return None
+    with _SAVE_TASKS_LOCK:
+        candidates = [
+            task
+            for task in _SAVE_TASKS.values()
+            if task.get("status") == "completed"
+            and float(task.get("_structural_completed_monotonic") or 0.0)
+            >= completed_after_monotonic
+            and requested_keys.issubset(
+                frozenset(task.get("_structural_resource_keys") or ())
+            )
+            and int(task.get("destination_album_id") or 0) > 0
+        ]
+        if not candidates:
+            return None
+        latest = max(
+            candidates,
+            key=lambda task: float(task.get("_structural_completed_monotonic") or 0.0),
+        )
+        return {
+            "destination_album_id": int(latest["destination_album_id"]),
+            "destination_album_key": str(latest.get("destination_album_key") or ""),
+            "destination_artist": str(latest.get("destination_artist") or ""),
+        }
+
+
+def save_task_timing_recorder(task_id: str) -> EditTagTimingRecorder | None:
+    with _SAVE_TASKS_LOCK:
+        recorder = _SAVE_TASKS.get(task_id, {}).get("_timing_recorder")
+    return recorder if isinstance(recorder, EditTagTimingRecorder) else None
 
 
 def update_save_task(task_id: str, **changes) -> None:
@@ -453,12 +499,14 @@ def _finalize_save_task(
     changed_field_names: set[str],
     structural_edit_fields: set[str],
     log_entry: JsonDict,
+    relation_projection_edit_fields: set[str] | None = None,
     scoped_postgres_exception_only: bool = False,
     run_state_mutation: StateMutationGuard | None = None,
     compensate_save_task: StructuralTagEditCompensator | None = None,
     before_persistence_commit: Callable[[object], object] | None = None,
     complete_scoped_persistence: Callable[[], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
+    timing_recorder: EditTagTimingRecorder | None = None,
 ) -> None:
     finalize_started = perf_counter()
     persistence_started = finalize_started
@@ -588,10 +636,18 @@ def _finalize_save_task(
                 )
             except Exception as exc:
                 record_runtime_failure("Album state rebuild", exc)
-        relation_projection_edit_fields = structural_edit_fields | {"artist"}
+        relation_projection_fields = (
+            relation_projection_edit_fields
+            if relation_projection_edit_fields is not None
+            else {"artist", "album_artist"}
+        )
         if (
-            changed_field_names & relation_projection_edit_fields
+            changed_field_names & relation_projection_fields
             and not scoped_postgres_exception_only
+            and (
+                not isinstance(committed_relation_state, dict)
+                or committed_relation_state.get("projection_mode") != "stale"
+            )
         ):
             try:
                 if isinstance(committed_relation_state, dict) and isinstance(
@@ -705,6 +761,9 @@ def _finalize_save_task(
     }
     if warnings:
         completion["warnings"] = warnings
+    if timing_recorder is not None:
+        completion.update(timing_recorder.snapshot())
+        completion["_timing_recorder"] = timing_recorder
     update_save_task(task_id, **completion)
 
 
@@ -744,10 +803,12 @@ def finalize_structural_tag_edit_save_task(
     structural_edit_fields: set[str],
     log_entry: JsonDict,
     relation_projection_edit_fields: set[str] | None = None,
+    schedule_relation_projection_rebuild: Callable[[str], object] | None = None,
     run_state_mutation: StateMutationGuard | None = None,
     structural_tag_edit_reservation: object | None = None,
     before_persistence_commit: Callable[[object], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
+    timing_recorder: EditTagTimingRecorder | None = None,
 ) -> None:
     finalize_started = perf_counter()
     try:
@@ -758,13 +819,18 @@ def finalize_structural_tag_edit_save_task(
                 if before_persistence_commit is not None
                 else {}
             )
-            persistence_result = persist_structural_tag_edit(
-                changed_paths=set(changed_paths),
-                previous_file_entries=previous_file_cache,
-                updated_file_entries=updated_file_cache,
-                changed_field_names=set(changed_field_names),
-                **persistence_options,
-            )
+            with (
+                timing_recorder.measure("postgres_commit")
+                if timing_recorder is not None
+                else nullcontext()
+            ):
+                persistence_result = persist_structural_tag_edit(
+                    changed_paths=set(changed_paths),
+                    previous_file_entries=previous_file_cache,
+                    updated_file_entries=updated_file_cache,
+                    changed_field_names=set(changed_field_names),
+                    **persistence_options,
+                )
             persistence_ms = (perf_counter() - persistence_started) * 1000.0
         except Exception as exc:
             compensation_succeeded = True
@@ -800,6 +866,20 @@ def finalize_structural_tag_edit_save_task(
             return
 
         warnings: list[str] = []
+        if (
+            persistence_result.get("projection_mode") == "stale"
+            and schedule_relation_projection_rebuild is not None
+        ):
+            rebuild_reason = str(
+                persistence_result.get("rebuild_reason")
+                or "structural_tag_edit_requires_full_projection"
+            )
+            _post_commit_value(
+                warnings,
+                "Relation projection rebuild scheduling",
+                lambda: schedule_relation_projection_rebuild(rebuild_reason),
+                None,
+            )
         committed_separate_release_key = str(
             persistence_result.get("separate_release_key") or ""
         ).strip()
@@ -810,6 +890,10 @@ def finalize_structural_tag_edit_save_task(
 
         def refresh_runtime_state() -> None:
             st = get_state()
+            st["inventory_mutation_revision"] = max(
+                int(st.get("inventory_mutation_revision") or 0),
+                int(persistence_result.get("inventory_mutation_revision") or 0),
+            )
             current_separate_release_keys = set(separate_release_keys)
             if committed_separate_release_key:
                 current_separate_release_keys.add(
@@ -841,12 +925,15 @@ def finalize_structural_tag_edit_save_task(
                 else relation_projection_edit_fields
             )
             if changed_field_names & required_relation_fields:
-                if not isinstance(committed_relation_views, dict):
+                if (
+                    not isinstance(committed_relation_views, dict)
+                    and persistence_result.get("projection_mode") != "stale"
+                ):
                     warnings.append(
                         "Relation state refresh failed after persistence committed: "
                         "Postgres persistence returned no canonical relation projection state."
                     )
-                else:
+                elif isinstance(committed_relation_views, dict):
                     st["relation_views"] = dict(committed_relation_views)
                     st["relations_last_built"] = committed_relations_last_built
             try:
@@ -882,59 +969,90 @@ def finalize_structural_tag_edit_save_task(
                     )
 
         state_guard = run_state_mutation or (lambda action: action())
-        _post_commit_value(
-            warnings,
-            "Runtime state refresh",
-            lambda: state_guard(refresh_runtime_state),
-            None,
-        )
-        try:
-            updated_albums = find_albums_by_track_paths(requested_track_paths)
-        except Exception as exc:
-            _fail_save_task(
-                task_id,
-                config=config,
-                logger=logger,
-                append_log_history=append_log_history,
-                log_app_event=log_app_event,
-                log_entry=log_entry,
-                changed_paths=set(changed_paths),
-                error=exc,
+        with (
+            timing_recorder.measure("runtime_reconciliation")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            _post_commit_value(
+                warnings,
+                "Runtime state refresh",
+                lambda: state_guard(refresh_runtime_state),
+                None,
             )
-            return
-        _post_commit_value(
-            warnings,
-            "History update",
-            lambda: append_log_history(config, log_entry),
-            None,
+        warning_count_before_canonical_lookup = len(warnings)
+        with (
+            timing_recorder.measure("canonical_album_lookup")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            updated_albums = _post_commit_value(
+                warnings,
+                "Canonical album reconciliation",
+                lambda: find_albums_by_track_paths(requested_track_paths),
+                [],
+            )
+        reconciliation_pending = (
+            len(warnings) > warning_count_before_canonical_lookup
         )
-        _post_commit_value(
-            warnings,
-            "Application event log",
-            lambda: log_app_event(
-                config,
-                logger,
-                str(log_entry.get("action") or "Library save completed"),
-                level="info",
-                **{
-                    key: value
-                    for key, value in log_entry.items()
-                    if key not in {"id", "timestamp", "action"}
-                },
-            ),
-            None,
-        )
-        updated_problematic_album = _post_commit_value(
-            warnings,
-            "Problematic album refresh",
-            lambda: find_problematic_album_by_track_paths(requested_track_paths),
-            None,
-        )
+        with (
+            timing_recorder.measure("history_publication")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            _post_commit_value(
+                warnings,
+                "History update",
+                lambda: append_log_history(config, log_entry),
+                None,
+            )
+        with (
+            timing_recorder.measure("event_publication")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            _post_commit_value(
+                warnings,
+                "Application event log",
+                lambda: log_app_event(
+                    config,
+                    logger,
+                    str(log_entry.get("action") or "Library save completed"),
+                    level="info",
+                    **{
+                        key: value
+                        for key, value in log_entry.items()
+                        if key not in {"id", "timestamp", "action"}
+                    },
+                ),
+                None,
+            )
+        with (
+            timing_recorder.measure("problematic_album_lookup")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            updated_problematic_album = _post_commit_value(
+                warnings,
+                "Problematic album refresh",
+                lambda: find_problematic_album_by_track_paths(requested_track_paths),
+                None,
+            )
         completion = {
             "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "updated_albums": updated_albums,
             "updated_problematic_album": updated_problematic_album,
+            "reconciliation_pending": reconciliation_pending,
+            "destination_album_id": persistence_result.get("destination_album_id"),
+            "destination_album_key": persistence_result.get("destination_album_key"),
+            "destination_artist": persistence_result.get("destination_artist_name"),
+            "inventory_mutation_revision": persistence_result.get(
+                "inventory_mutation_revision"
+            ),
+            "orphaned_source_artists": list(
+                persistence_result.get("orphaned_source_artists") or []
+            ),
             "requires_view_refresh": bool(
                 changed_field_names & structural_edit_fields
             )
@@ -956,6 +1074,15 @@ def finalize_structural_tag_edit_save_task(
         }
         if warnings:
             completion["warnings"] = warnings
+        if timing_recorder is not None:
+            completion.update(timing_recorder.snapshot())
+            completion["_timing_recorder"] = timing_recorder
+        reservation_resource_keys = frozenset(
+            getattr(structural_tag_edit_reservation, "_resource_keys", ()) or ()
+        )
+        if reservation_resource_keys:
+            completion["_structural_resource_keys"] = reservation_resource_keys
+            completion["_structural_completed_monotonic"] = perf_counter()
         update_save_task(task_id, **completion)
     finally:
         release = getattr(structural_tag_edit_reservation, "release", None)

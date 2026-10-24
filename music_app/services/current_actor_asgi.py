@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 import threading
 
@@ -25,10 +26,32 @@ async def current_actor_from_request(request: Request, *, refresh: bool = False)
             raise RuntimeError("Current actor request cache is invalid.")
         return cached
     resolver = _resolver(request)
-    actor = await run_in_threadpool(
-        resolver.resolve,
-        request.cookies.get(_SESSION_COOKIE),
-    )
+    raw_session_token = request.cookies.get(_SESSION_COOKIE)
+    if refresh:
+        actor = await run_in_threadpool(resolver.resolve, raw_session_token)
+    else:
+        inflight = getattr(request.app.state, "current_actor_inflight", None)
+        if inflight is None:
+            inflight = {}
+            request.app.state.current_actor_inflight = inflight
+        inflight_key = (id(resolver), raw_session_token)
+        resolution = inflight.get(inflight_key)
+        if resolution is None or resolution.done():
+            resolution = asyncio.create_task(
+                run_in_threadpool(
+                    resolver.resolve, raw_session_token
+                )
+            )
+            inflight[inflight_key] = resolution
+
+            def _clear_inflight(done) -> None:
+                if inflight.get(inflight_key) is done:
+                    inflight.pop(inflight_key, None)
+                if not done.cancelled():
+                    done.exception()
+
+            resolution.add_done_callback(_clear_inflight)
+        actor = await asyncio.shield(resolution)
     if not isinstance(actor, CurrentActor):
         raise RuntimeError("Current actor resolver returned invalid context.")
     request.state.current_actor = actor

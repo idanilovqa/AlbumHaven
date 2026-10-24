@@ -279,7 +279,7 @@ export class ProductionViewObserver {
     this.galleryGeneration = 0;
     this.mutationGeneration = 0;
     this.galleryPayloadObserved = false;
-    this.allowBootstrapFallback = false;
+    this.bootstrapPresenceEligible = false;
 
     this.documentGeneration = 0;
     const resetDocumentObservation = () => {
@@ -292,7 +292,7 @@ export class ProductionViewObserver {
       this.galleryGeneration += 1;
       this.galleryPayloadObserved = false;
       this.galleryScope = null;
-      this.allowBootstrapFallback = true;
+      this.bootstrapPresenceEligible = true;
       this.authorityGeneration += 1;
       this.activeRequests.clear();
       this.latestFullPayload = null;
@@ -311,7 +311,7 @@ export class ProductionViewObserver {
     events.on('documentcommitted', resetDocumentObservation);
     events.on('request', (request) => {
       if (isSaveTaskRequest(request)) {
-        this.allowBootstrapFallback = false;
+        this.bootstrapPresenceEligible = false;
         const sequence = this.nextSaveTaskRequestSequence + 1;
         this.nextSaveTaskRequestSequence = sequence;
         this.latestSaveTaskRequestSequence = sequence;
@@ -333,7 +333,7 @@ export class ProductionViewObserver {
       detail.documentGeneration = this.documentGeneration;
       detail.mutationGeneration = this.mutationGeneration;
       this.nextRequestSequence = detail.sequence;
-      this.allowBootstrapFallback = false;
+      this.bootstrapPresenceEligible = false;
       const galleryScopeChanged = detail.gallery
         && this.galleryScope !== null && this.galleryScope !== detail.scope;
       if (detail.full
@@ -461,11 +461,14 @@ export class ProductionViewObserver {
             this.stateRevision += 1;
           }
         };
-        if (response.status() === 503) {
+        if (response.status() === 503 || (response.status() === 409 && detail.append)) {
           this.pendingPayloadReads.set(detail.sequence, detail);
           Promise.resolve(response.json())
             .then(payload => {
-              if (!['search_projection_pending', 'gallery_projection_pending'].includes(payload?.code)) recordHttpFailure();
+              const recoverable = response.status() === 409
+                ? payload?.restart_required === true
+                : ['search_projection_pending', 'gallery_projection_pending'].includes(payload?.code);
+              if (!recoverable) recordHttpFailure();
             })
             .catch(recordHttpFailure)
             .finally(() => {
@@ -601,7 +604,7 @@ export class ProductionViewObserver {
   }
 
   acceptBootstrapPresence(payload, stateRevision) {
-    if (!this.allowBootstrapFallback || this.stateRevision !== stateRevision
+    if (!this.bootstrapPresenceEligible || this.stateRevision !== stateRevision
       || this.activeRequests.size || this.pendingPayloadReads.size
       || this.latestFullPayloadError || this.latestGalleryPageError) return false;
     // Inline evidence stays category-bound; completeness requires an exact mounted family.
@@ -649,7 +652,7 @@ export class ProductionViewObserver {
       stateRevision: this.stateRevision,
       topologyRevision: this.topologyRevision,
       galleryArtistTopologies: Object.fromEntries(this.galleryArtistTopologies),
-      allowBootstrapFallback: this.allowBootstrapFallback,
+      bootstrapPresenceEligible: this.bootstrapPresenceEligible,
     };
   }
 

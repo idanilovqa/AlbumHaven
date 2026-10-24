@@ -143,10 +143,11 @@ export function createManagedAppLifecycle(options = {}) {
   const ackPath = path.join(controlDirectory, ACK_FILE);
   let activeRestart = null;
   let activeOperation = null;
+  let activeRequestIdentity = null;
   let activeFailureReport = null;
   let failureAcknowledgment = null;
 
-  async function performRestart(operation = 'restart') {
+  async function performRestart(operation = 'restart', requestFields = {}) {
     if (operation === 'report-failure' && failureAcknowledgment) return failureAcknowledgment;
     const nonce = String(createNonce() || '').trim();
     if (!nonce || nonce.length > 256) {
@@ -154,7 +155,11 @@ export function createManagedAppLifecycle(options = {}) {
     }
 
     removeFileIfPresent(ackPath);
-    writeJsonAtomically(requestPath, { nonce, ...(operation === 'stop' ? { action: 'stop' } : operation !== 'restart' ? { operation } : {}) });
+    writeJsonAtomically(requestPath, {
+      nonce,
+      ...(operation === 'stop' ? { action: 'stop' } : operation !== 'restart' ? { operation } : {}),
+      ...requestFields,
+    });
     const deadline = now() + timeoutMs;
 
     while (now() <= deadline) {
@@ -182,20 +187,26 @@ export function createManagedAppLifecycle(options = {}) {
     throw new Error(`Timed out waiting for managed app restart ${nonce}.`);
   }
 
-  function scheduleRestart(operation) {
+  function scheduleRestart(operation, requestFields = {}) {
+    const requestIdentity = JSON.stringify([operation, requestFields]);
     if (activeRestart && activeOperation === 'stop' && operation !== 'stop') {
       return Promise.reject(new Error('Managed app stop is in progress.'));
     }
-    if (activeRestart && activeOperation === operation) return activeRestart;
+    if (activeRestart && activeRequestIdentity === requestIdentity) return activeRestart;
     const previous = activeRestart;
     const pending = (async () => {
       if (previous) await previous;
-      return performRestart(operation);
+      return performRestart(operation, requestFields);
     })().finally(() => {
-      if (activeRestart === pending) { activeRestart = null; activeOperation = null; }
+      if (activeRestart === pending) {
+        activeRestart = null;
+        activeOperation = null;
+        activeRequestIdentity = null;
+      }
     });
     activeRestart = pending;
     activeOperation = operation;
+    activeRequestIdentity = requestIdentity;
     return pending;
   }
 
@@ -222,8 +233,12 @@ export function createManagedAppLifecycle(options = {}) {
     restart() {
       return scheduleRestart('restart');
     },
-    cleanupWatcherFixture() {
-      return scheduleRestart('watcher-cleanup');
+    cleanupWatcherFixture(ownedDirectoryName = 'watcher-reconciliation') {
+      const normalizedName = String(ownedDirectoryName || '').trim();
+      if (!['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(normalizedName)) {
+        return Promise.reject(new Error('Watcher cleanup requires a runner-owned directory identity.'));
+      }
+      return scheduleRestart('watcher-cleanup', { ownedDirectoryName: normalizedName });
     },
   };
 }

@@ -15,6 +15,15 @@ test('phone geometry is two or three columns; rows fill the width and covers sta
   const two = resolveMobileGalleryGeometry({ availableWidth: 360, viewportWidth: 390, columns: 2, mode: 'cards', gap: 14 });
   assert.equal(two.columns, 2);
   assert.equal(two.cardTrackWidth, 173);
+  const fractional = resolveMobileGalleryGeometry({
+    availableWidth: 366,
+    viewportWidth: 390,
+    columns: 3,
+    mode: 'cards',
+    gap: 13,
+  });
+  assert.equal(fractional.cardTrackWidth, 113);
+  assert.equal(fractional.estimatedRowHeight, 221);
   const three = resolveMobileGalleryGeometry({ availableWidth: 360, viewportWidth: 390, columns: 3, mode: 'covers', gap: 14 });
   assert.equal(three.columns, 3);
   assert.equal(three.estimatedRowHeight, three.cardTrackWidth);

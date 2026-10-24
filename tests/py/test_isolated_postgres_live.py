@@ -283,6 +283,52 @@ def test_live_missing_album_projection_respects_effective_rarity(watcher_repair_
     assert repository._load_missing_album_rows("owner::absent") == []
 
 
+def test_live_problematic_files_retains_source_album_after_rarity_override(watcher_repair_inventory):
+    from music_app.services.cache import persist_structural_tag_edit_for_config
+    from music_app.services.exception_overrides import set_track_exception_override
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    first = fixture.entry("Owner/Rarity Source/01.flac", album="Rarity Source")
+    second = fixture.entry("Owner/Rarity Source/02.flac", album="Rarity Source")
+    first["track_number"] = 2
+    cover = Path(first["path"]).with_name("cover.jpg")
+    cover.write_bytes(b"existing-test-cover")
+    for entry in (first, second):
+        entry.update(
+            cover_path=str(cover),
+            local_cover_width=1200,
+            local_cover_height=1200,
+        )
+    fixture.seed(first, second)
+    repository = PostgresLibraryBrowseRepository(
+        fixture.config,
+        connect=isolatedPostgres._connect,
+    )
+
+    assert all(item["name"] != "Rarity Source" for item in repository.build_problematic_files_payload()["items"])
+
+    set_track_exception_override(fixture.config, first["path"], "Non-album rarity")
+    persist_structural_tag_edit_for_config(
+        fixture.config,
+        changed_paths={first["path"]},
+        previous_file_entries={first["path"]: dict(first)},
+        updated_file_entries={
+            first["path"]: {**first, "exception_type": "Non-album rarity"}
+        },
+        changed_field_names={"exception_type"},
+    )
+
+    item = next(
+        item
+        for item in repository.build_problematic_files_payload()["items"]
+        if item["name"] == "Rarity Source"
+    )
+    detail = repository.build_problematic_file_detail_payload(item["key"])
+    assert detail is not None
+    assert first["path"] in detail["track_paths"]
+
+
 @pytest.mark.parametrize("other_root", [False, True])
 @pytest.mark.parametrize("operation", ["update", "delete"])
 def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repair_inventory, other_root, operation):
@@ -443,7 +489,11 @@ def test_live_artist_search_projection_requires_matching_stale_authority(
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     fingerprint = "a" * 64
-    builder_version = "local-relation-builder-v10"
+    from music_app.services.relation_projection_postgres import (
+        RELATION_PROJECTION_BUILDER_VERSION,
+    )
+
+    builder_version = RELATION_PROJECTION_BUILDER_VERSION
     with isolatedPostgres._connect(setup_url) as connection:
         library_id = connection.execute(
             """
@@ -4100,6 +4150,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
             assert non_album_root_io_blocks < _NON_ALBUM_ROOT_IO_BLOCK_CEILING
 
             connection.execute("set local enable_seqscan = off")
+            connection.execute("set local enable_indexonlyscan = off")
 
             probes = [
                 (

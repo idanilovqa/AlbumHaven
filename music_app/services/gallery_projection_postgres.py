@@ -59,6 +59,16 @@ def gallery_projection_context(connection):
         "select to_regclass('library.gallery_projection_state') is not null as installed"))
     if not isinstance(installed, dict) or installed.get("installed") is not True:
         return None
+    compatible = _first(connection.execute("""
+        select exists (
+            select 1 from information_schema.columns
+            where table_schema = 'library'
+              and table_name = 'gallery_projection_occurrences'
+              and column_name = 'revision'
+        ) as compatible
+    """))
+    if not isinstance(compatible, dict) or compatible.get("compatible") is not True:
+        return None
     return _first(connection.execute("""
         select state.library_id, state.generation
         from app.bootstrap_owners owner
@@ -87,6 +97,19 @@ def _latest_compatible_header(connection, context, view_state):
         order by source_generation desc
         limit 1
     """, {**context, "scope_key": gallery_projection_scope_key(view_state), "builder_version": BUILDER_VERSION}))
+
+
+def load_gallery_projection_sidebar(connection, view_state, *, context=None):
+    context = context if context is not None else gallery_projection_context(connection)
+    if not context:
+        return None
+    header = _ready_header(connection, context, view_state)
+    if not header:
+        return None
+    return (
+        [dict(item) for item in list(header.get("sidebar") or [])],
+        int(header["album_count"]),
+    )
 
 
 def load_gallery_projection_page(connection, view_state, params, *, context=None, allow_stale=False):
@@ -118,10 +141,12 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
             select min(ordinal) as ordinal
             from library.gallery_projection_occurrences
             where library_id = %(library_id)s and scope_key = %(scope_key)s
+              and revision = %(revision)s
               and payload->>'artist_name' = %(anchor_artist)s
         """, {
             "library_id": context["library_id"],
             "scope_key": gallery_projection_scope_key(view_state),
+            "revision": header["revision"],
             "anchor_artist": anchor_artist,
         }))
         if anchor_row and anchor_row.get("ordinal") is not None:
@@ -144,6 +169,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
                 select payload->>'artist_id' as artist_id
                 from library.gallery_projection_occurrences
                 where library_id = %(library_id)s and scope_key = %(scope_key)s
+                  and revision = %(revision)s
                   and ordinal = %(ordinal)s
             )
             select min(occurrence.ordinal) as first_ordinal,
@@ -151,10 +177,12 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
             from library.gallery_projection_occurrences occurrence
             cross join target
             where occurrence.library_id = %(library_id)s and occurrence.scope_key = %(scope_key)s
+              and occurrence.revision = %(revision)s
               and occurrence.payload->>'artist_id' = target.artist_id
         """, {
             "library_id": context["library_id"],
             "scope_key": scope_key,
+            "revision": header["revision"],
             "ordinal": min(max(0, int(ordinal)), count - 1),
         }))
         if not boundary or boundary.get("first_ordinal") is None or boundary.get("end_ordinal") is None:
@@ -174,10 +202,11 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     rows = connection.execute("""
         select payload from library.gallery_projection_occurrences
         where library_id = %(library_id)s and scope_key = %(scope_key)s
+          and revision = %(revision)s
           and ordinal >= %(offset)s and ordinal < %(end)s
         order by ordinal
     """, {"library_id": context["library_id"], "scope_key": gallery_projection_scope_key(view_state),
-            "offset": offset, "end": end}).fetchall()
+            "revision": header["revision"], "offset": offset, "end": end}).fetchall()
     page = [dict(row["payload"]) for row in rows]
     if len(page) != end - offset:
         return None
@@ -198,22 +227,30 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     return page, header["sidebar"], int(header["album_count"]), metadata
 
 
+def _publish_gallery_projection_on_connection(
+    connection, context, view_state, snapshot,
+):
+    row = _first(connection.execute("""
+        select library.replace_gallery_projection(
+            %(library_id)s, %(scope_key)s, %(generation)s, %(builder_version)s,
+            %(revision)s, %(sidebar)s, %(album_count)s, %(occurrences)s
+        ) as published
+    """, {**context, "scope_key": gallery_projection_scope_key(view_state),
+          "builder_version": BUILDER_VERSION, "revision": snapshot["revision"],
+          "sidebar": Jsonb(snapshot["sidebar"]), "album_count": snapshot["album_count"],
+          "occurrences": Jsonb(projection_occurrences(snapshot))}))
+    return bool(row and row.get("published"))
+
+
 def publish_gallery_projection(config, context, view_state, snapshot, *, connect=None):
     from music_app.services.library_browse_postgres import _connect
     if config.get("SHARED_LIBRARY_BROWSE_ONLY") or not context:
         return False
     connector = connect or _connect
     with connector(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
-        row = _first(connection.execute("""
-            select library.replace_gallery_projection(
-                %(library_id)s, %(scope_key)s, %(generation)s, %(builder_version)s,
-                %(revision)s, %(sidebar)s, %(album_count)s, %(occurrences)s
-            ) as published
-        """, {**context, "scope_key": gallery_projection_scope_key(view_state),
-              "builder_version": BUILDER_VERSION, "revision": snapshot["revision"],
-              "sidebar": Jsonb(snapshot["sidebar"]), "album_count": snapshot["album_count"],
-              "occurrences": Jsonb(projection_occurrences(snapshot))}))
-        return bool(row and row.get("published"))
+        return _publish_gallery_projection_on_connection(
+            connection, context, view_state, snapshot,
+        )
 
 
 def _queue(config, key, action, *, trailing=False, generation=None):

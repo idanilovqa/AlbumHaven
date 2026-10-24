@@ -30,7 +30,7 @@
 .settings-host .settings-nav nav { display: grid; gap: 5px; }
 .settings-host .settings-nav-item { min-height: 44px; padding: 0 13px; display: flex; align-items: center; gap: 13px; border-radius: 9px; color: var(--muted); font-size: 14px; text-decoration: none; }
 .settings-host .settings-nav-item span { width: 22px; color: var(--muted); font-size: 20px; text-align: center; }
-.settings-host .settings-nav-item.is-active { color: var(--ink); background: var(--surface-2); box-shadow: inset 3px 0 var(--green); }
+.settings-host .settings-nav-item.is-active { color: var(--ink); background: var(--surface-2); }
 .settings-host .settings-nav-item.is-future { color: var(--muted); }
 .settings-host .admin-notice { margin: 0 0 18px; }
 .settings-host .members-table { border: 1px solid var(--line); }

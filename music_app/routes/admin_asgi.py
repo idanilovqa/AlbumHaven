@@ -9,6 +9,7 @@ import threading
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -40,6 +41,12 @@ from music_app.services.admin_mail_actions_postgres import (
 )
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.capability_assignments import AssignmentConflict, assignment_editor, member_role_label
+from music_app.services.generated_preview_storage import (
+    preview_storage_policy_from_mapping,
+    validate_custom_root,
+)
+from music_app.services.generated_preview_storage_postgres import PreviewStorageConflict
+from music_app.services.library_roots import configured_library_root_paths_snapshot
 
 
 router = APIRouter()
@@ -108,7 +115,137 @@ _ADMIN_ACTIONS = (
     "accounts.invitation.copy",
     "accounts.invitation.send",
     "accounts.reauthenticate",
+    "system.preview_storage.read",
+    "system.preview_storage.manage",
+    "system.preview_storage.cancel",
+    "system.preview_storage.retry",
 )
+
+_PREVIEW_STORAGE_ACTIVE_STATES = frozenset({"queued", "running", "cancel_requested"})
+
+
+@router.get("/admin/server", response_class=HTMLResponse)
+async def admin_server(request: Request) -> Response:
+    return await _render_admin(
+        request,
+        "admin-server.html",
+        allowed_actions=_allowed_actions(request),
+    )
+
+
+@router.get("/admin/server/preview-storage")
+async def get_preview_storage(request: Request) -> Response:
+    try:
+        state = await run_in_threadpool(_preview_storage_repository(request).load)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Album preview storage is temporarily unavailable."},
+            status_code=503,
+        )
+    return _preview_storage_response(state)
+
+
+@router.put("/admin/server/preview-storage", status_code=202)
+async def update_preview_storage(request: Request) -> Response:
+    payload = await _bounded_json_object(request)
+    if (
+        payload is None
+        or set(payload) != {"mode", "path", "expected_revision", "confirmed"}
+        or payload.get("mode") not in {"album_folders", "custom"}
+        or not isinstance(payload.get("path"), str)
+        or type(payload.get("expected_revision")) is not int
+        or not isinstance(payload.get("confirmed"), bool)
+    ):
+        return JSONResponse({"detail": "Preview storage request was invalid."}, status_code=400)
+    try:
+        repository = _preview_storage_repository(request)
+        worker = _preview_storage_worker(request)
+    except RuntimeError:
+        return JSONResponse(
+            {"detail": "Album preview storage is temporarily unavailable."},
+            status_code=503,
+        )
+    try:
+        current = await run_in_threadpool(repository.load)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Album preview storage is temporarily unavailable."},
+            status_code=503,
+        )
+    if int(current.get("revision") or 0) != payload["expected_revision"]:
+        return JSONResponse(
+            {"detail": "Preview storage revision conflict. Reload and try again."},
+            status_code=409,
+        )
+    if str(current.get("operation_state") or "idle") in _PREVIEW_STORAGE_ACTIVE_STATES:
+        return JSONResponse(
+            {"detail": "A preview relocation is already active."}, status_code=409
+        )
+    if current.get("requested_mode") is not None:
+        return JSONResponse(
+            {"detail": "Resume or retry the existing preview relocation before choosing another location."},
+            status_code=409,
+        )
+    mode = str(payload["mode"])
+    root = str(payload["path"]).strip() or None if mode == "custom" else None
+    if _same_preview_storage_location(current, mode=mode, root=root):
+        return _preview_storage_response(current, unchanged=True)
+    if not payload["confirmed"]:
+        return JSONResponse(
+            {"detail": "Preview relocation confirmation is required."}, status_code=409
+        )
+    if mode == "custom":
+        try:
+            root = str(
+                await run_in_threadpool(
+                    validate_custom_root,
+                    payload["path"],
+                    configured_library_root_paths_snapshot(_app_config(request)),
+                )
+            )
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception:
+            return JSONResponse(
+                {"detail": "Album preview storage validation is temporarily unavailable."},
+                status_code=503,
+            )
+    requested = None
+    try:
+        requested = await run_in_threadpool(
+            repository.request_location,
+            mode=mode,
+            root=root,
+            expected_revision=payload["expected_revision"],
+        )
+        state = await run_in_threadpool(
+            repository.begin_operation,
+            operation_id=uuid4().hex,
+        )
+    except PreviewStorageConflict as exc:
+        if requested is not None:
+            worker.wake()
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    except Exception:
+        if requested is not None:
+            worker.wake()
+        return JSONResponse(
+            {"detail": "Album preview relocation could not be started."},
+            status_code=503,
+        )
+    _publish_preview_storage_state(request, state or requested)
+    worker.wake()
+    return _preview_storage_response(state or requested, status_code=202)
+
+
+@router.post("/admin/server/preview-storage/cancel", status_code=202)
+async def cancel_preview_storage(request: Request) -> Response:
+    return await _transition_preview_storage(request, "cancel")
+
+
+@router.post("/admin/server/preview-storage/retry", status_code=202)
+async def retry_preview_storage(request: Request) -> Response:
+    return await _transition_preview_storage(request, "retry_failed")
 
 
 @router.get("/admin/members", response_class=HTMLResponse)
@@ -531,6 +668,87 @@ async def _password_payload(request: Request) -> dict[str, object] | None:
 async def _empty_payload(request: Request) -> dict[str, object] | None:
     payload = await _bounded_json_object(request)
     return payload if payload == {} else None
+
+
+async def _transition_preview_storage(request: Request, method_name: str) -> Response:
+    if await _empty_payload(request) is None:
+        return JSONResponse({"detail": "Preview storage request was invalid."}, status_code=400)
+    try:
+        repository = _preview_storage_repository(request)
+        worker = _preview_storage_worker(request)
+        current = await run_in_threadpool(repository.load)
+        operation_id = str(current.get("operation_id") or "").strip()
+        if not operation_id:
+            raise PreviewStorageConflict("No preview relocation is available.")
+        state = await run_in_threadpool(getattr(repository, method_name), operation_id)
+    except PreviewStorageConflict as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Album preview relocation could not be updated."},
+            status_code=503,
+        )
+    _publish_preview_storage_state(request, state)
+    worker.wake()
+    return _preview_storage_response(state, status_code=202)
+
+
+def _same_preview_storage_location(
+    state: Mapping[str, object], *, mode: str, root: str | None
+) -> bool:
+    if str(state.get("mode") or "album_folders") != mode:
+        return False
+    if mode == "album_folders":
+        return True
+    active_root = str(state.get("active_root") or "").strip()
+    return Path(active_root).resolve(strict=False) == Path(str(root)).resolve(strict=False)
+
+
+def _preview_storage_response(
+    state: Mapping[str, object], *, status_code: int = 200, unchanged: bool = False
+) -> JSONResponse:
+    payload = {
+        **dict(state),
+        "failure_summary": list(state.get("failure_summary") or [])[:20],
+        "suggested_path": str(
+            Path.home() / "Documents" / "Album Haven" / "Generated Previews"
+        ),
+        **({"unchanged": True} if unchanged else {}),
+    }
+    return JSONResponse(
+        jsonable_encoder(payload),
+        status_code=status_code,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+def _publish_preview_storage_state(request: Request, state: Mapping[str, object]) -> None:
+    policy = preview_storage_policy_from_mapping(state)
+    request.app.state.generated_preview_storage_policy = policy
+    _app_config(request)["_GENERATED_PREVIEW_STORAGE_POLICY"] = policy
+
+
+def _preview_storage_repository(request: Request):
+    repository = getattr(
+        request.app.state, "generated_preview_storage_repository", None
+    )
+    if repository is None:
+        raise RuntimeError("Generated preview storage is unavailable.")
+    return repository
+
+
+def _preview_storage_worker(request: Request):
+    worker = getattr(request.app.state, "generated_preview_relocation", None)
+    if worker is None:
+        raise RuntimeError("Generated preview relocation is unavailable.")
+    return worker
+
+
+def _app_config(request: Request) -> dict[str, object]:
+    config = getattr(request.app.state, "config", None)
+    if not isinstance(config, dict):
+        raise RuntimeError("Application configuration is unavailable.")
+    return config
 
 
 async def _queue_mail_action(request: Request, account_id: int, action: str):

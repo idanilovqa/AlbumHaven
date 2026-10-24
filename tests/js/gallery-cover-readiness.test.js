@@ -256,10 +256,11 @@ test('native empty artwork is opt-in and never masks a pending visible image', a
     albumCardSelector: '.album-card', coverImageSelector: '.cover img',
     coverPlaceholderSelector: '.cover-placeholder', titleSelector: '.title',
     galleryScrollSelector: '#scroll', minimumCount: 1, requireVisible: true,
+    emptyArtboxSelector: '[data-album-artbox-state="empty"]',
     allowPlaceholder: false, allowEmptyArtwork: true, requireLocalImage: false,
   };
   const emptyCard = new FakeElement(bounds);
-  emptyCard.querySelector = selector => selector === '[data-album-artbox-state="empty"]'
+  emptyCard.querySelector = selector => selector === selectors.emptyArtboxSelector
     ? empty : selector === '.title' ? { textContent: 'No artwork' } : null;
   const cards = [emptyCard];
   const keys = ['document', 'HTMLElement', 'HTMLImageElement', 'getComputedStyle'];

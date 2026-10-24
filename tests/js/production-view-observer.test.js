@@ -449,6 +449,41 @@ for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
   });
 }
 
+test('stale cursor conflict stays recoverable until the anchor reload settles', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const stale = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar&gallery_cursor=stale');
+  page.emit('request', stale);
+  page.emit('response', response(stale, { restart_required: true }, { ok: false, status: 409 }));
+  page.emit('requestfinished', stale);
+  await flushPromises();
+  assert.equal(observer.read().latestGalleryPageError, null);
+
+  const recovery = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar&gallery_anchor_artist=Artist');
+  page.emit('request', recovery);
+  page.emit('response', response(recovery, {
+    artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'Album' }] }],
+    gallery_page: { revision: 'fresh', has_more: false, next_cursor: null },
+  }));
+  page.emit('requestfinished', recovery);
+  await flushPromises();
+  assert.equal(observer.read().latestGalleryPageError, null);
+  assert.equal(observer.read().latestGalleryPage?.revision, 'fresh');
+});
+
+test('stale cursor anchor recovery still surfaces a repeated conflict', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const recovery = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar&gallery_anchor_artist=Artist');
+  page.emit('request', recovery);
+  page.emit('response', response(recovery, { restart_required: true }, { ok: false, status: 409 }));
+  page.emit('requestfinished', recovery);
+  await flushPromises();
+  assert.match(observer.read().latestGalleryPageError, /HTTP 409/);
+});
+
 test('topology authority separates append activity, replacement, and canonical saves', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
@@ -482,7 +517,7 @@ test('topology authority separates append activity, replacement, and canonical s
   await deliver('http://localhost/view-data?surface=albums&payload_tier=sidebar', { artist_groups: [] });
   assert.ok(observer.read().topologyRevision > saved.topologyRevision);
   assert.equal(observer.read().latestFullPayload, null, 'A replacement cannot retain pre-save full authority');
-  assert.equal(observer.read().allowBootstrapFallback, false);
+ assert.equal(observer.read().bootstrapPresenceEligible, false);
   const replaced = observer.read().topologyRevision;
   page.emit('documentcommitted');
   assert.ok(observer.read().topologyRevision > replaced);
@@ -522,7 +557,7 @@ for (const required of [false, true]) {
     const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
     const events = new FakePage();
     const observer = new ProductionViewObserver(events, events);
-    assert.equal(observer.read().allowBootstrapFallback, false, 'uncommitted documents have no authority');
+ assert.equal(observer.read().bootstrapPresenceEligible, false, 'uncommitted documents have no authority');
     events.emit('documentcommitted');
     const gallery = Object.create(GalleryPage.prototype);
     gallery.productionViewObserver = observer;
@@ -547,6 +582,43 @@ for (const required of [false, true]) {
     assert.equal(observer.read().canonicalScopeComplete, false, 'eligibility alone cannot prove absence');
   });
 }
+
+test('canonical album detached by virtualization is settled rather than a pending transition', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
+  const events = new FakePage();
+  const observer = new ProductionViewObserver(events, events);
+  events.emit('documentcommitted');
+  const gallery = Object.create(GalleryPage.prototype);
+  gallery.productionViewObserver = observer;
+  gallery.readProductionBootstrapPayload = async () => ({
+    bootstrap: { startupHydration: { required: false, tier: 'full', trigger: 'none' } },
+    initial_view: {
+      payload_tier: 'full', query: 'Neal Morse', visible_library_categories: ['main_library'],
+      artist_groups: [{ artist: 'Neal Morse & The Resonance', albums: [{ name: 'No Hill For A Climber' }] }],
+    },
+  });
+  gallery.readAppliedGalleryProjection = async () => ({
+    payload_tier: 'full', query: 'Neal Morse', locationQuery: 'Neal Morse', surface: 'albums',
+    visible_library_categories: ['main_library'], busy: false, pendingViewTransition: false,
+    artist_groups: [{ artist: 'Neal Morse & The Resonance', albums: [{ name: 'No Hill For A Climber' }] }],
+  });
+  gallery.page = { locator: () => ({ count: async () => 0 }), url: () => 'http://localhost/?q=Neal%20Morse' };
+  gallery.albumCard = { detailsButtonByArtistAndAlbum: () => ({ count: async () => 0 }) };
+  gallery.libraryLoader = { isVisible: async () => false };
+  gallery.artistHeadings = { allTextContents: async () => ['Neal Morse'] };
+
+  const state = await gallery.readAlbumTargetState({
+    artist: 'Neal Morse & The Resonance', album: 'No Hill For A Climber', query: 'Neal Morse',
+  });
+
+  assert.equal(state.canonicalMatch, true);
+  assert.equal(state.canonicalReadyMatch, true);
+  assert.equal(state.attachedMatch, false);
+  assert.equal(state.canonicalApplied, true);
+  assert.equal(state.busy, false);
+  assert.equal(state.pendingViewTransition, false);
+});
 
 async function committedFamilyGallery() {
   const { ProductionViewObserver } = await import(observerUrl);
@@ -658,13 +730,13 @@ for (const endpoint of ['/view-data', '/view-data?payload_tier=sidebar', '/home-
     const page = new FakePage();
     const observer = new ProductionViewObserver(page, page);
     page.emit('documentcommitted');
-    assert.equal(observer.read().allowBootstrapFallback, true);
+ assert.equal(observer.read().bootstrapPresenceEligible, true);
     const current = request(`http://localhost${endpoint}`);
     page.emit('request', current);
-    assert.equal(observer.read().allowBootstrapFallback, false);
+ assert.equal(observer.read().bootstrapPresenceEligible, false);
     assert.equal(observer.read().activeRequestCount, 1);
     page.emit('requestfinished', current);
-    assert.equal(observer.read().allowBootstrapFallback, false, 'request completion cannot revive inline state');
+ assert.equal(observer.read().bootstrapPresenceEligible, false, 'request completion cannot revive inline state');
   });
 }
 
@@ -680,7 +752,7 @@ test('late outgoing payload reads cannot become current bootstrap document autho
   resolveBody({ payload_tier: 'full', query: 'Outgoing', artist_groups: [{ artist: 'Outgoing', albums: [] }] });
   page.emit('requestfinished', outgoing);
   await flushPromises();
-  assert.equal(observer.read().allowBootstrapFallback, true);
+ assert.equal(observer.read().bootstrapPresenceEligible, true);
   assert.equal(observer.read().latestFullPayload, null);
   assert.deepEqual(observer.read().observedGalleryGroups, []);
   assert.equal(observer.read().latestFullPayloadError, null);
@@ -704,7 +776,7 @@ for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
       page.emit('requestfinished', current);
     }
     await flushPromises();
-    assert.equal(observer.read().allowBootstrapFallback, false);
+ assert.equal(observer.read().bootstrapPresenceEligible, false);
     assert.equal(observer.read().latestFullPayload, null);
     assert.match(observer.read().latestFullPayloadError, failure === 'requestfailed' ? /Request failed/ : new RegExp(failure));
   });
@@ -1885,6 +1957,97 @@ test('same-query Partner-to-Lead reparenting retains the complete authoritative 
       window: { location: { href: 'http://127.0.0.1/?q=Control%20Signal%20Partner&artist=Control%20Signal%20Lead' } } }),
   } });
   assert.equal(snapshot.authoritativeMountedFamily, true);
+});
+
+test('queried album projection transfers only the matching target', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(
+    __dirname,
+    '..',
+    'e2e',
+    'poms',
+    'galleryPage.js',
+  )).href);
+  const vm = require('node:vm');
+  const applied = {
+    query: 'ДДТ',
+    gallery_scope: 'all',
+    artist_groups: [
+      { artist: 'ДДТ', albums: [{ name: 'Other' }, { name: 'Target' }] },
+      { artist: 'Unrelated', albums: [{ name: 'Target' }] },
+    ],
+    primary_artist_groups: [{ artist: 'ДДТ', albums: [{ name: 'Target' }] }],
+    family_artist_groups: [{ artist: 'Family', albums: [{ name: 'Family album' }] }],
+  };
+  const snapshot = await GalleryPage.prototype.readAppliedAlbumTargetProjection.call({
+    page: {
+      evaluate: (fn, argument) => vm.runInNewContext(
+        `(${fn.toString()})(${JSON.stringify(argument)})`,
+        {
+          state: { view: applied, ui: {} },
+          URL,
+          window: { location: { href: 'http://127.0.0.1/?q=%D0%94%D0%94%D0%A2' } },
+        },
+      ),
+    },
+  }, { artist: 'ДДТ', album: 'Target' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.artist_groups)), [
+    { artist: 'ДДТ', albums: [{ name: 'Target' }] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.primary_artist_groups)), [
+    { artist: 'ДДТ', albums: [{ name: 'Target' }] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.family_artist_groups)), []);
+  assert.equal(snapshot.query, 'ДДТ');
+  assert.equal(snapshot.locationQuery, 'ДДТ');
+});
+
+test('queried absent album projection retains matching artist authority', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(
+    __dirname,
+    '..',
+    'e2e',
+    'poms',
+    'galleryPage.js',
+  )).href);
+  const vm = require('node:vm');
+  const applied = {
+    query: 'Control Signal Partner',
+    selected_artist: 'Control Signal Lead',
+    artist_groups: [
+      { artist: 'Control Signal Lead', albums: [{ name: 'Lead solo' }] },
+      { artist: 'Control Signal Partner', albums: [{ name: 'Partner solo' }] },
+    ],
+    primary_artist_groups: [
+      { artist: 'Control Signal Lead', albums: [{ name: 'Lead solo' }] },
+    ],
+    family_artist_groups: [
+      { artist: 'Control Signal Partner', albums: [{ name: 'Partner solo' }] },
+    ],
+  };
+  const snapshot = await GalleryPage.prototype.readAppliedAlbumTargetProjection.call({
+    page: {
+      evaluate: (fn, argument) => vm.runInNewContext(
+        `(${fn.toString()})(${JSON.stringify(argument)})`,
+        {
+          state: { view: applied, ui: {} },
+          URL,
+          window: {
+            location: {
+              href: 'http://127.0.0.1/?q=Control%20Signal%20Partner&artist=Control%20Signal%20Lead',
+            },
+          },
+        },
+      ),
+    },
+  }, { artist: 'Control Signal Partner', album: 'Guest-only album' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.artist_groups)), [
+    { artist: 'Control Signal Partner', albums: [] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.family_artist_groups)), [
+    { artist: 'Control Signal Partner', albums: [] },
+  ]);
 });
 
 test('bounded gallery pages expose browse telemetry without claiming a complete inventory', async () => {

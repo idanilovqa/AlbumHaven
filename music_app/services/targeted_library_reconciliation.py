@@ -299,7 +299,7 @@ class TargetedLibraryReconciler:
                 ),
                 active_track_paths=tuple(sorted(active_entries, key=str.casefold)),
             )
-            if self._after_commit is not None:
+            if self._after_commit is not None and result.revision:
                 self._after_commit(result)
             return result
         except Exception as exc:

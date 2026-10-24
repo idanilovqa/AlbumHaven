@@ -7,10 +7,11 @@ const source = fs.readFileSync(path.resolve(__dirname, '../../../music_app/stati
 function fixture({ mobile = false } = {}) {
   const pending = [], renders = [], timers = [];
   const scroll = { scrollTop: 0, clientHeight: 500, scrollHeight: 1000 };
+  const semanticScrollAnchor = { albumKey: 'a1', offset: 24, scrollLeft: 0, scrollTop: 400 };
   const state = { ui: {}, busy: false, view: { query: '', selected_artist: '', surface_request: 'albums', artist_count: 6045, album_count: 20000, artists_sidebar: [{ artist: 'A', count: 5 }], artist_groups: [{ artist: 'A', albums: [{ key: 'a1' }] }], gallery_page: { next_cursor: 'page-1', revision: 'r1', has_more: true, page_size: 8 } } };
-  const context = vm.createContext({ state, URL, URLSearchParams, AbortController, console, window: { innerWidth: mobile ? 390 : 1024, location: { href: 'https://localhost/', assign() {} }, matchMedia: query => ({ matches: mobile && /max-width/.test(query) }) }, document: { documentElement: { clientWidth: mobile ? 390 : 1024 }, getElementById: id => id === 'albums-scroll' ? scroll : null }, buildApiUrl: () => '/view-data?surface=albums', getAlbumCardRenderKey: album => album.key, applyViewPayload: data => { state.view = { ...state.view, ...data }; }, renderArtistGroups: options => renders.push(options), scheduleBrowserAnimationFrame: callback => timers.push(callback), showToast() {}, fetch: (url, options) => new Promise((resolve, reject) => pending.push({ url, options, resolveResponse: resolve, resolve: data => resolve({ ok: true, status: 200, json: async () => data }), reject })) });
+  const context = vm.createContext({ state, URL, URLSearchParams, AbortController, console, window: { innerWidth: mobile ? 390 : 1024, location: { href: 'https://localhost/', assign() {} }, matchMedia: query => ({ matches: mobile && /max-width/.test(query) }) }, document: { documentElement: { clientWidth: mobile ? 390 : 1024 }, getElementById: id => id === 'albums-scroll' ? scroll : null }, virtualGrid: { captureScrollAnchor: () => semanticScrollAnchor, getUserScrollIntentGeneration: () => 7 }, buildApiUrl: () => '/view-data?surface=albums', getAlbumCardRenderKey: album => album.key, applyViewPayload: data => { state.view = { ...state.view, ...data }; }, renderArtistGroups: options => renders.push(options), scheduleBrowserAnimationFrame: callback => timers.push(callback), showToast() {}, fetch: (url, options) => new Promise((resolve, reject) => pending.push({ url, options, resolveResponse: resolve, resolve: data => resolve({ ok: true, status: 200, json: async () => data }), reject })) });
   vm.runInContext(source, context);
-  return { context, state, scroll, pending, renders, timers };
+  return { context, state, scroll, pending, renders, timers, semanticScrollAnchor };
 }
 const page = (groups, extra = {}) => ({ artist_groups: groups, gallery_page: { next_cursor: null, revision: 'r1', has_more: false, page_size: 50 }, ...extra });
 test('root page appends split artist albums without duplicates and preserves authoritative sidebar/totals', async () => {
@@ -22,6 +23,8 @@ test('root page appends split artist albums without duplicates and preserves aut
   assert.deepEqual(JSON.parse(JSON.stringify(f.state.view.artist_groups)), [{ artist: 'A', albums: [{ key: 'a1' }, { key: 'a2' }] }, { artist: 'B', albums: [{ key: 'a1' }] }]);
   assert.equal(f.state.view.artists_sidebar, sidebar); assert.equal(f.state.view.artist_count, 6045); assert.equal(f.state.view.album_count, 20000);
   assert.equal(f.renders[0].preserveScroll, true); assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
+  assert.deepEqual(f.renders[0].semanticScrollAnchor, f.semanticScrollAnchor);
+  assert.equal(f.renders[0].semanticScrollOwnerGeneration, 7);
 });
 
 test('forward continuation preserves anchored backward-page ownership', async () => {
@@ -232,6 +235,33 @@ test('stale cursor recovery survives deletion of the first retained artist', asy
   assert.equal(await f.context.loadNextRootGalleryPage(), true);
   assert.equal(f.state.view.artist_groups[0].artist, 'Survivor');
   assert.ok(requests.length <= 4, 'missing-anchor recovery must remain bounded');
+});
+
+test('stale cursor recovery caps missing retained-artist requests', async () => {
+  const f = fixture();
+  f.scroll.scrollTop = 300;
+  const retained = Array.from({ length: 12 }, (_, index) => ({
+    artist: `Missing ${index}`, albums: [{ key: `missing-${index}` }],
+  }));
+  f.state.view.artist_groups = retained;
+  f.context.renderView = options => f.renders.push(options);
+  const requests = [];
+  f.context.fetch = async url => {
+    requests.push(url);
+    if (new URL(url, 'https://localhost').searchParams.has('gallery_cursor')) {
+      return { status: 409, ok: false, json: async () => ({ restart_required: true }) };
+    }
+    return {
+      status: 400,
+      ok: false,
+      json: async () => ({ error: 'Gallery artist anchor is unavailable.' }),
+    };
+  };
+
+  assert.equal(await f.context.loadNextRootGalleryPage(), false);
+  assert.equal(requests.length, 8, 'the original cursor request counts toward the recovery cap');
+  assert.equal(f.state.view.artist_groups, retained);
+  assert.equal(f.renders.length, 0);
 });
 
 test('stale cursor recovery retains trailing releases after insertions enlarge the window', async () => {

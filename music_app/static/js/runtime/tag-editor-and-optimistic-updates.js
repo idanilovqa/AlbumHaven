@@ -850,6 +850,12 @@ async function confirmManualTagEdit() {
       scrollTop: Number(state.tagEditor.originGalleryScrollPosition.scrollTop),
     }
     : null;
+  const absoluteScrollOwnerGeneration = (
+    typeof virtualGrid !== 'undefined'
+    && typeof virtualGrid?.getUserScrollIntentGeneration === 'function'
+  )
+    ? virtualGrid.getUserScrollIntentGeneration()
+    : null;
   const renderOptions = {
     preserveScroll: true,
     preserveAbsoluteScroll: true,
@@ -875,10 +881,11 @@ async function confirmManualTagEdit() {
   showRepairAlert(
     tagEditAlert.savingMessage,
     'info',
-    null,
+    2000,
     { title: 'Saving tags', dismissible: false },
   );
   let failedLogHistoryEntryId = '';
+  let failedSaveTaskError = '';
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -891,6 +898,12 @@ async function confirmManualTagEdit() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      if (
+        data.save_task_id
+        && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
+      ) {
+        failedSaveTaskError = String(data.error || '').trim();
+      }
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {
@@ -948,6 +961,9 @@ async function confirmManualTagEdit() {
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
       absoluteScrollPosition,
+      ...(Number.isSafeInteger(absoluteScrollOwnerGeneration)
+        ? { absoluteScrollOwnerGeneration }
+        : {}),
       problematicMutationOriginKey,
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
@@ -975,12 +991,18 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    if (responseIsTerminal) {
+    if (responseIsTerminal && !completedResponseNeedsCanonicalRefresh) {
+      const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+        .map((warning) => String(warning || '').trim())
+        .filter(Boolean);
+      const hasCompletionWarning = completionWarnings.length > 0;
       showRepairAlert(
-        tagEditAlert.completionMessage,
-        'success',
-        2000,
-        { title: 'Tags updated', dismissible: false },
+        [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
+        hasCompletionWarning ? 'warning' : 'success',
+        hasCompletionWarning ? 8000 : 2000,
+        {
+          title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+        },
       );
     }
     if (responseIsTerminal) {
@@ -1032,7 +1054,7 @@ async function confirmManualTagEdit() {
       restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
     }
     showRepairAlert(
-      String(error?.message || '').trim() || 'Failed to edit tags.',
+      failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {

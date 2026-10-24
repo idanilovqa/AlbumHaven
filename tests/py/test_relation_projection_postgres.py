@@ -323,6 +323,209 @@ def _complete_relation_views(folder_related=None):
     }
 
 
+def test_patch_structural_relation_views_replaces_orphaned_typo_artist():
+    relation_views = {
+        **_complete_relation_views(),
+        "artists": ["Morse Portnoy George", "Ovderhead"],
+        "artists_sidebar": [
+            {"artist": "Morse Portnoy George", "count": 4},
+            {"artist": "Ovderhead", "count": 1},
+        ],
+        "alias_to_canonical": {
+            "Morse Portnoy George": "Morse Portnoy George",
+            "Ovderhead": "Ovderhead",
+        },
+        "canonical_to_aliases": {
+            "Morse Portnoy George": ["Morse Portnoy George"],
+            "Ovderhead": ["Ovderhead"],
+        },
+        "folder_related": {
+            "Morse Portnoy George": set(),
+            "Ovderhead": set(),
+        },
+    }
+
+    patched = projection.patch_structural_relation_views(
+        relation_views,
+        affected_rows=[
+            {
+                "owner_artist_name": "Overhead",
+                "album_artist": "Overhead",
+                "member_artist_name": "Overhead",
+            }
+        ],
+        source_artist_names={"Ovderhead"},
+        destination_artist_names={"Overhead"},
+        source_album_vacated=True,
+    )
+
+    assert patched["artists"] == ["Morse Portnoy George", "Overhead"]
+    assert patched["artists_sidebar"] == [
+        {"artist": "Morse Portnoy George", "count": 4},
+        {"artist": "Overhead", "count": 1},
+    ]
+    assert patched["alias_to_canonical"] == {
+        "Morse Portnoy George": "Morse Portnoy George",
+        "Overhead": "Overhead",
+    }
+    assert patched["canonical_to_aliases"] == {
+        "Morse Portnoy George": ["Morse Portnoy George"],
+        "Overhead": ["Overhead"],
+    }
+    assert patched["folder_related"] == {
+        "Morse Portnoy George": set(),
+        "Overhead": set(),
+    }
+    assert relation_views["artists_sidebar"][-1] == {
+        "artist": "Ovderhead",
+        "count": 1,
+    }
+
+
+def test_patch_structural_relation_views_keeps_referenced_source_artist():
+    relation_views = {
+        **_complete_relation_views(),
+        "artists": ["Ovderhead"],
+        "artists_sidebar": [{"artist": "Ovderhead", "count": 2}],
+    }
+
+    patched = projection.patch_structural_relation_views(
+        relation_views,
+        affected_rows=[
+            {"owner_artist_name": "Overhead", "album_artist": "Overhead"},
+        ],
+        source_artist_names={"Ovderhead"},
+        destination_artist_names={"Overhead"},
+        source_album_vacated=True,
+    )
+
+    assert patched["artists_sidebar"] == [
+        {"artist": "Ovderhead", "count": 1},
+        {"artist": "Overhead", "count": 1},
+    ]
+
+
+def test_patch_structural_relation_views_canonicalizes_case_only_artist_rename():
+    relation_views = {
+        **_complete_relation_views(),
+        "artists": ["overhead"],
+        "artists_sidebar": [{"artist": "overhead", "count": 1}],
+    }
+
+    patched = projection.patch_structural_relation_views(
+        relation_views,
+        affected_rows=[
+            {"owner_artist_name": "Overhead", "album_artist": "Overhead"},
+        ],
+        source_artist_names={"overhead"},
+        destination_artist_names={"Overhead"},
+        source_album_vacated=True,
+    )
+
+    assert patched["artists"] == ["Overhead"]
+    assert patched["artists_sidebar"] == [{"artist": "Overhead", "count": 1}]
+
+
+def test_patch_structural_relation_views_keeps_source_on_partial_artist_transfer():
+    relation_views = {
+        **_complete_relation_views(),
+        "artists": ["Ovderhead"],
+        "artists_sidebar": [{"artist": "Ovderhead", "count": 1}],
+    }
+
+    patched = projection.patch_structural_relation_views(
+        relation_views,
+        affected_rows=[{"owner_artist_name": "Overhead"}],
+        source_artist_names={"Ovderhead"},
+        destination_artist_names={"Overhead"},
+        source_album_vacated=False,
+    )
+
+    assert patched["artists"] == ["Ovderhead", "Overhead"]
+    assert patched["artists_sidebar"] == [
+        {"artist": "Ovderhead", "count": 1},
+        {"artist": "Overhead", "count": 1},
+    ]
+
+
+@pytest.mark.parametrize(
+    "relation_overrides",
+    [
+        {"alias_to_canonical": {"Ovderhead": "Overhead"}},
+        {"family_to_artists": {"Progressive Metal": ["Ovderhead"]}},
+        {"folder_related": {"Ovderhead": {"Overhead"}}},
+    ],
+)
+def test_patch_structural_relation_views_refuses_unsafe_relation_shapes(
+    relation_overrides,
+):
+    relation_views = {**_complete_relation_views(), **relation_overrides}
+
+    with pytest.raises(projection.TargetedRelationPatchUnsupported):
+        projection.patch_structural_relation_views(
+            relation_views,
+            affected_rows=[{"owner_artist_name": "Overhead"}],
+            source_artist_names={"Ovderhead"},
+            destination_artist_names={"Overhead"},
+        )
+
+
+def test_patch_artist_search_projection_in_transaction_deletes_source_and_upserts_destination(
+    monkeypatch,
+):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    relation_views = _complete_relation_views()
+    relation_views["artists"] = ["Overhead", "Unrelated Artist"]
+    relation_views["artists_sidebar"] = ["Overhead", "Unrelated Artist"]
+    relation_views["canonical_to_aliases"] = {"Overhead": []}
+    executed: list[tuple[str, dict[str, object]]] = []
+
+    class RecordingConnection:
+        def execute(self, sql, params):
+            executed.append((sql, params))
+            return _Cursor([{"patch_row_count": 2}])
+
+    patch_count = projection.patch_artist_search_projection_in_transaction(
+        RecordingConnection(),
+        relation_views,
+        affected_artist_names={"Ovderhead", "Overhead"},
+        metadata={
+            "builder_version": projection.RELATION_PROJECTION_BUILDER_VERSION,
+            "source_fingerprint": "a" * 64,
+        },
+        relations_last_built=123.5,
+    )
+
+    assert patch_count == 2
+    assert len(executed) == 1
+    sql, params = executed[0]
+    assert "patch_local_artist_search_projection" in sql
+    assert params["affected_normalized_keys"] == ["ovderhead", "overhead"]
+    assert params["rows"] == [{
+        "normalized_artist_key": "overhead",
+        "canonical_artist_name": "Overhead",
+    }]
+    assert "Unrelated Artist" not in repr(params)
+
+
+def test_patch_artist_search_projection_in_transaction_rejects_unbounded_identity_set():
+    class UnexpectedConnection:
+        def execute(self, _sql, _params):
+            raise AssertionError("Unbounded patch must fail before SQL execution")
+
+    with pytest.raises(ValueError, match="at most 256"):
+        projection.patch_artist_search_projection_in_transaction(
+            UnexpectedConnection(),
+            _complete_relation_views(),
+            affected_artist_names={f"Artist {index}" for index in range(257)},
+            metadata={
+                "builder_version": projection.RELATION_PROJECTION_BUILDER_VERSION,
+                "source_fingerprint": "b" * 64,
+            },
+            relations_last_built=123.5,
+        )
+
+
 def test_relation_source_fingerprint_is_order_independent_and_source_sensitive():
     rows = _morse_rows()
 
@@ -333,6 +536,20 @@ def test_relation_source_fingerprint_is_order_independent_and_source_sensitive()
     changed = deepcopy(rows)
     changed[1]["album_artist"] = "Morse Portnoy and George"
     assert projection.relation_source_fingerprint(rows) != projection.relation_source_fingerprint(changed)
+
+
+def test_relation_source_fingerprint_cooperates_during_large_source_hashing():
+    source = _morse_rows()[0]
+    rows = [{**source, "album_id": index + 1} for index in range(513)]
+    cooperative_yields = []
+
+    fingerprint = projection.relation_source_fingerprint(
+        rows,
+        cooperate=lambda: cooperative_yields.append(None),
+    )
+
+    assert fingerprint
+    assert len(cooperative_yields) >= 2
 
 
 def test_relation_source_fingerprint_changes_with_root_category():
@@ -538,6 +755,33 @@ def test_ensure_relation_projection_ready_rebuilds_missing_projection_and_persis
         assert phase in rendered_log
     for private_value in ("C:/Music", "MPG A", "MPG B", "song.mp3"):
         assert private_value not in rendered_log
+
+
+def test_cancellable_relation_projection_build_cooperates_with_foreground_work(
+    monkeypatch,
+):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    rows = _morse_rows()
+    relation_views = projection.build_relation_views_from_postgres_rows(_config(), rows)
+    database = _ProjectionDatabase(source_rows=rows)
+    cooperative_callbacks = []
+
+    def build(_config, _rows, *, cooperate=None):
+        cooperative_callbacks.append(cooperate)
+        cooperate()
+        return relation_views
+
+    monkeypatch.setattr(projection, "build_relation_views_from_postgres_rows", build)
+
+    result = projection.ensure_relation_projection_ready(
+        _config(),
+        connect=database.connect,
+        cancel_requested=Event(),
+    )
+
+    assert result["ready"] is True
+    assert len(cooperative_callbacks) == 1
+    assert callable(cooperative_callbacks[0])
 
 
 def test_healthy_relation_snapshot_rebuilds_missing_artist_search_projection(monkeypatch):
@@ -1010,6 +1254,7 @@ def test_ensure_relation_projection_ready_healthy_fast_path_loads_only_projectio
         fingerprint,
         reason="scan_publication",
         duration_ms=7,
+        built_at="2026-10-22T12:00:01+00:00",
         source_row_count=2,
         phase_timings_ms={"source_load": 3},
     )
@@ -1056,6 +1301,8 @@ def test_ensure_relation_projection_ready_healthy_fast_path_loads_only_projectio
     assert result["ready"] is True
     assert result["startup_rebuilt"] is False
     assert result["rebuild_reason"] == "healthy"
+    assert result["last_rebuild_reason"] == "scan_publication"
+    assert result["last_rebuild_timestamp"] == "2026-10-22T12:00:01+00:00"
     assert result["relation_views"] == relation_views
     assert result["source_row_count"] == 2
     assert result["phase_timings_ms"] == {"source_load": 3.0}
@@ -1129,6 +1376,26 @@ def test_relation_projection_completeness_requires_every_builder_owned_key(missi
     assert projection.relation_projection_structure_complete(relation_views) is False
 
 
+def test_relation_projection_source_query_does_not_multiply_memberships_by_track_files():
+    sql = " ".join(projection.load_relation_source_rows_sql().split()).lower()
+
+    location_branch, separator, member_branch = sql.rpartition(" union all ")
+
+    assert separator
+    assert "join library.local_album_featured_artists" in member_branch
+    assert "join library.local_tracks" in location_branch
+    assert "library.local_album_featured_artists" not in location_branch
+
+
+def test_relation_projection_source_query_collapses_track_files_by_album_directory():
+    sql = " ".join(projection.load_relation_source_rows_sql().split()).lower()
+
+    assert "relation_locations as materialized" in sql
+    assert "group by live_files.library_id, live_files.album_id" in sql
+    assert "regexp_replace(" in sql
+    assert "'(^|/)[^/]*$'" in sql
+
+
 def test_relation_projection_source_query_uses_safe_generated_stale_normalization():
     sql = projection.load_relation_source_rows_sql()
 
@@ -1151,9 +1418,9 @@ def test_relation_projection_source_query_marks_only_single_track_artist_albums_
     sql = " ".join(projection.load_relation_source_rows_sql().split()).lower()
 
     assert "album_track_artist_summary" in sql
-    assert "count(*) = count(library.local_tracks.artist_id)" in sql
-    assert "count(distinct library.local_tracks.artist_id) = 1" in sql
-    assert "album_track_artist_summary.sole_track_artist_id = member_artist.id" in sql
+    assert "count(*) = count(live_files.track_artist_id)" in sql
+    assert "count(distinct live_files.track_artist_id) = 1" in sql
+    assert "album_facts.sole_track_artist_id = member_artist.id" in sql
     assert "as member_artist_is_album_wide_track_artist" in sql
 
 
@@ -1188,7 +1455,7 @@ def test_relation_projection_source_query_prefers_soundtrack_path_evidence_over_
         "library.local_album_featured_artists.metadata ->> 'relation_evidence_kind'"
     )
     album_metadata_evidence = sql.index(
-        "library.local_albums.metadata ->> 'relation_evidence_kind'"
+        "album_facts.metadata ->> 'relation_evidence_kind'"
     )
 
     assert derived_path_evidence < featured_metadata_evidence
@@ -1201,8 +1468,8 @@ def test_relation_projection_source_query_derives_soundtrack_from_private_path_w
     evidence_case_end = sql.index("then 'soundtrack_root'", evidence_case_start)
     evidence_case = sql[evidence_case_start:evidence_case_end]
 
-    assert "library.library_roots.root_path" in evidence_case
-    assert "library.local_track_files.private_path" in evidence_case
+    assert "relation_locations.root_path" in evidence_case
+    assert "relation_locations.private_path" in evidence_case
     assert "(soundtracks?|ost)(/|$)" in evidence_case
     assert all(
         collaboration_token not in evidence_case

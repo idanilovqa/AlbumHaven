@@ -1149,6 +1149,10 @@ async function prewarmFunctionalFixture(port, options = {}) {
   const viewUrl = `${baseUrl}/view-data?surface=albums&omit_sidebar=1`;
   const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
     || fetchHttpResponseComplete;
+  const timeoutMs = Number(options.timeoutMs || MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS);
+  const pollIntervalMs = Number(options.pollIntervalMs || 1000);
+  const sleepFn = options.sleepFn || sleep;
+  const nowFn = options.nowFn || Date.now;
   const reportFailure = (stage, response = null) => {
     if (typeof options.diagnosticWriteFn !== 'function') return;
     const rawStatusCode = Number(response?.statusCode);
@@ -1166,13 +1170,32 @@ async function prewarmFunctionalFixture(port, options = {}) {
     reportFailure('index', indexResponse);
     return false;
   }
-  const viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
-    requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
-    headers: requestHeaders,
-  });
-  if (!viewResponse?.ok) {
-    reportFailure('view-data', viewResponse);
-    return false;
+  const deadline = nowFn() + timeoutMs;
+  let viewResponse;
+  while (true) {
+    const remainingMs = deadline - nowFn();
+    if (remainingMs <= 0) {
+      reportFailure('view-data', viewResponse);
+      return false;
+    }
+    viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
+      requestTimeoutMs: remainingMs,
+      headers: requestHeaders,
+    });
+    if (viewResponse?.ok) break;
+    let pendingCode = null;
+    try {
+      pendingCode = JSON.parse(String(viewResponse?.body || '')).code;
+    } catch {
+      // Non-JSON errors are terminal warmup failures.
+    }
+    if (Number(viewResponse?.statusCode) !== 503
+      || !['search_projection_pending', 'gallery_projection_pending'].includes(pendingCode)
+      || nowFn() >= deadline) {
+      reportFailure('view-data', viewResponse);
+      return false;
+    }
+    await sleepFn(Math.min(pollIntervalMs, Math.max(0, deadline - nowFn())));
   }
 
   let payload;
@@ -1475,8 +1498,14 @@ function writeJsonAtomically(targetPath, value) {
 
 async function cleanupManagedWatcherFixture(childEnv, options = {}) {
   const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
-  const mediaRoot = resolveWritableFixtureMediaRoot(childEnv);
-  const ownedRoot = path.join(mediaRoot, 'cases', 'watcher-reconciliation');
+  const ownedDirectoryName = String(options.ownedDirectoryName || 'watcher-reconciliation').trim();
+  if (!['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+    throw new Error('Watcher cleanup requires a runner-owned directory identity.');
+  }
+  const mediaRoot = resolveWritableFixtureMediaRoot(childEnv, {
+    allowedProfiles: ['functional-core', 'synthetic-large-library'],
+  });
+  const ownedRoot = path.join(mediaRoot, 'cases', ownedDirectoryName);
   const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [
     '-m', 'tests.e2e.support.watcherFixture', '--owned-root', ownedRoot,
   ], { cwd: repoRoot, env: childEnv, timeout: ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS });
@@ -1509,6 +1538,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
 
   const requestPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_REQUEST_FILE);
   const ackPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_ACK_FILE);
+  fs.rmSync(requestPath, { force: true });
+  fs.rmSync(ackPath, { force: true });
   const startManagedIsolatedAppFn = options.startManagedIsolatedAppFn || startManagedIsolatedApp;
   const stopManagedIsolatedAppFn = options.stopManagedIsolatedAppFn || stopManagedIsolatedApp;
   const cleanupWatchedInventoryFn = options.cleanupWatchedInventoryFn || cleanupManagedWatcherFixture;
@@ -1616,10 +1647,18 @@ function createManagedIsolatedAppRestartController(options = {}) {
     }
     const operation = request.operation ?? request.action ?? 'restart';
     if (!['restart', 'stop', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
-    if (operation === 'watcher-cleanup' && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))) {
-      throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
+    if (operation === 'watcher-cleanup'
+        && Object.keys(request).some((key) => !['nonce', 'operation', 'ownedDirectoryName'].includes(key))) {
+      throw new Error('Watcher cleanup accepts only a runner-owned directory identity.');
     }
-    return { nonce, operation };
+    const ownedDirectoryName = operation === 'watcher-cleanup'
+      ? String(request.ownedDirectoryName || 'watcher-reconciliation').trim()
+      : null;
+    if (operation === 'watcher-cleanup'
+        && !['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+      throw new Error('Watcher cleanup requires a runner-owned directory identity.');
+    }
+    return { nonce, operation, ownedDirectoryName };
   };
 
   const processPendingRequest = async () => {
@@ -1656,7 +1695,9 @@ function createManagedIsolatedAppRestartController(options = {}) {
         if (request.operation === 'watcher-cleanup') {
           phase = 'fixture-cleanup';
           try {
-            await cleanupWatchedInventoryFn(childEnv);
+            await cleanupWatchedInventoryFn(childEnv, {
+              ownedDirectoryName: request.ownedDirectoryName,
+            });
           } catch (error) {
             error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
             error.lifecycle = { exitReason: 'fake-database-cleanup-error',
@@ -3078,6 +3119,38 @@ function reportManagedPortOwners(port, options = {}) {
   }
 }
 
+function resolveManagedRestartControlRoot(childEnv = {}, ownedIsolatedTempRoot = null) {
+  if (ownedIsolatedTempRoot) return path.resolve(ownedIsolatedTempRoot);
+
+  const preparedProfileSession = (
+    String(childEnv.ALBUM_HAVEN_PERFORMANCE_PROFILE_SESSION || '').trim() === '1'
+  );
+  if (!preparedProfileSession) return null;
+
+  const runnerTemp = String(childEnv.RUNNER_TEMP || '').trim();
+  const profileRoot = String(childEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();
+  const resolvedRunnerTemp = runnerTemp ? path.resolve(runnerTemp) : '';
+  const resolvedProfileRoot = profileRoot ? path.resolve(profileRoot) : '';
+  const relativeProfileRoot = resolvedRunnerTemp && resolvedProfileRoot
+    ? path.relative(resolvedRunnerTemp, resolvedProfileRoot)
+    : '';
+  const profileParent = resolvedProfileRoot ? path.basename(path.dirname(resolvedProfileRoot)) : '';
+  const isRunnerOwnedProfile = Boolean(
+    relativeProfileRoot
+    && !relativeProfileRoot.startsWith(`..${path.sep}`)
+    && relativeProfileRoot !== '..'
+    && !path.isAbsolute(relativeProfileRoot)
+    && path.basename(resolvedProfileRoot) === 'prepared-profile'
+    && profileParent.startsWith('album-haven-performance-shard-')
+    && fs.existsSync(resolvedProfileRoot)
+    && fs.statSync(resolvedProfileRoot).isDirectory()
+  );
+  if (!isRunnerOwnedProfile) {
+    throw new Error('Managed restart control requires a runner-owned performance profile directory.');
+  }
+  return resolvedProfileRoot;
+}
+
 async function runManagedPlaywrightAttempt(options = {}) {
   const {
     passthroughArgv,
@@ -3173,10 +3246,14 @@ async function runManagedPlaywrightAttempt(options = {}) {
         },
       });
       managedIsolatedAppStarted = true;
-      if (ownedIsolatedTempRoot || options.createManagedIsolatedAppRestartControllerFn) {
+      const managedRestartControlRoot = resolveManagedRestartControlRoot(
+        childEnv,
+        ownedIsolatedTempRoot,
+      );
+      if (managedRestartControlRoot || options.createManagedIsolatedAppRestartControllerFn) {
         managedIsolatedRestartController = createManagedIsolatedAppRestartControllerFn({
           childEnv,
-          ownedIsolatedTempRoot,
+          ownedIsolatedTempRoot: managedRestartControlRoot,
           initialChild: managedIsolatedChild,
           ports: [resolvedIsolatedAppPort, resolvedIsolatedProviderPort],
           seedAllFunctionalCoverMisses,
@@ -3548,6 +3625,7 @@ module.exports = {
     writeIsolatedE2ETempRootLease,
     createOwnedIsolatedE2ETempRoot,
     cleanupIsolatedE2ETempRoots,
+    resolveManagedRestartControlRoot,
     readPortOwningProcesses,
     resolvePlaywrightCompletionExitCode,
     resolvePlaywrightFinalResultExitCode,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from music_app.services.cover_lookup_tasks_postgres import CoverLookupTasksPostgresAdapter
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
@@ -20,9 +22,43 @@ def load_cover_lookup_notifications(config: dict[str, object]) -> list[dict[str,
     )
 
 
-def load_cover_lookup_notification_summaries(config: dict[str, object]) -> list[dict[str, object]]:
-    return _filter_notification_tasks(
-        _cover_lookup_notifications_adapter(config).load_notification_summaries()
+def load_cover_lookup_notification_summaries(
+    config: dict[str, object],
+) -> list[dict[str, object]]:
+    adapter = _cover_lookup_notifications_adapter(config)
+    load_summaries = getattr(adapter, "load_notification_summaries", None)
+    if callable(load_summaries):
+        return _filter_notification_tasks(load_summaries())
+    return _filter_notification_tasks(adapter.load_notifications())
+
+
+def count_cover_lookup_notifications(config: dict[str, object]) -> dict[str, int]:
+    return _cover_lookup_notifications_adapter(config).count_notifications()
+
+
+def interrupt_stale_cover_lookup_notifications(
+    config: dict[str, object],
+    *,
+    stale_before: datetime,
+    completed_at: datetime,
+) -> set[str]:
+    return _cover_lookup_notifications_adapter(config).interrupt_stale_notifications(
+        stale_before=stale_before,
+        completed_at=completed_at,
+    )
+
+
+def load_cover_lookup_notification_summary_page(
+    config: dict[str, object],
+    *,
+    limit: int,
+    cursor: str | None,
+    active_only: bool,
+) -> dict[str, object]:
+    return _cover_lookup_notifications_adapter(config).load_notification_summary_page(
+        limit=limit,
+        cursor=cursor,
+        active_only=active_only,
     )
 
 

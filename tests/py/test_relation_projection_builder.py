@@ -161,6 +161,27 @@ def test_public_postgres_wrapper_delegates_to_the_pure_owner(monkeypatch):
     ) == expected
 
 
+def test_relation_builder_cooperates_during_large_source_normalization():
+    cooperative_yields = []
+    rows = [
+        _row(
+            album_id=index + 1,
+            artist=f"Artist {index:04d}",
+            relative_path=fr"Artist {index:04d}\Album\01.flac",
+        )
+        for index in range(513)
+    ]
+
+    result = projection.build_relation_views_from_postgres_rows(
+        {"MUSIC_DIR": Path(r"C:\compatibility-only")},
+        rows,
+        cooperate=lambda: cooperative_yields.append(None),
+    )
+
+    assert result["artists"]
+    assert len(cooperative_yields) >= 2
+
+
 def test_postgres_relation_builder_never_calls_filesystem_methods(monkeypatch):
     def fail(*_args, **_kwargs):
         raise AssertionError("Postgres relation projection touched the filesystem")

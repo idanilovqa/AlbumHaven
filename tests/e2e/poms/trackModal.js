@@ -136,6 +136,7 @@ export class TrackModal extends BasePage {
       async finish() {
         if (finished) return [];
         finished = true;
+        // parity-check: allow-read-only-measurement-evaluate -- finalize the owned DOM observation and return samples
         return observation.evaluate((ownedObservation) => ownedObservation.finish());
       },
     };

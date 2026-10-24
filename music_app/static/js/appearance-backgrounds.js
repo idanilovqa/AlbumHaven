@@ -1101,7 +1101,11 @@
     const root = document.documentElement;
     let initial = empty(), csrfToken = '', loaded = false, mounted = null, unsubscribe = null, sessionGeneration = 0;
     let remountEditor = null;
-    let activePlayerTab = 'surface', activeWaveformTab = 'waveform', loopCreateAllowed = false;
+  let activePlayerTab = 'surface', activeWaveformTab = 'waveform', loopCreateAllowed = false;
+  try {
+    const capabilities = JSON.parse(document.getElementById('capability-bootstrap')?.textContent || '{}');
+    loopCreateAllowed = capabilities.allowed_actions?.['library.loops.create'] === true;
+  } catch (_failure) { /* Invalid capability bootstrap denies the privileged control. */ }
     try {
       const bootstrap = JSON.parse(document.getElementById('appearance-bootstrap')?.textContent || '{}');
       const preference = normalizePreferences(bootstrap);

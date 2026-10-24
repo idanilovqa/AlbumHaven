@@ -23,7 +23,7 @@ from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.services.app_logging import log_app_event
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
-    display_cover_variant_cache_root,
+    display_cover_variant_cache_roots,
     find_existing_cover_display_variant,
     normalize_cover_variant_priority,
     normalize_cover_variant_revision,
@@ -216,7 +216,10 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
         "request": request,
         "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
         "runtime_asset_version": runtime_asset_version,
-        "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
+        "account_menu_allowed_actions": allowed_actions_for_request(
+            request,
+            ("accounts.read", "system.preview_storage.read"),
+        ),
         "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
         "account_menu_csrf_token": issue_session_csrf(
             request.cookies.get("__Host-album_haven_session"),
@@ -262,7 +265,12 @@ def _request_targets_root_albums_surface(query_args: Any, query_raw: str, select
         return False
     if normalize_gallery_scale_percent(query_args.get("gallery_scale_percent")) != DEFAULT_GALLERY_SCALE_PERCENT:
         return False
-    if any(str(value or "").strip() for value in query_args.getlist("category")):
+    requested_categories = [
+        value for value in query_args.getlist("category") if str(value or "").strip()
+    ]
+    if requested_categories and set(normalize_visible_categories(requested_categories, "all")) != set(
+        normalize_visible_categories([], "all")
+    ):
         return False
     if str(query_args.get("family_display") or "").strip():
         return False
@@ -339,6 +347,7 @@ def _build_startup_hydration_endpoint(
     active_surface: str = "albums",
     payload_tier: str = "",
     omit_sidebar: bool = False,
+    root_sidebar: bool = False,
     all_artists_active: bool = False,
 ) -> str:
     normalized_surface = resolve_active_view_surface(active_surface)
@@ -350,6 +359,8 @@ def _build_startup_hydration_endpoint(
         params.append(("payload_tier", normalized_payload_tier))
     if omit_sidebar:
         params.append(("omit_sidebar", "1"))
+    if root_sidebar:
+        params.append(("root_sidebar", "1"))
     if (
         normalized_surface == "albums"
         and normalized_payload_tier != "sidebar"
@@ -563,6 +574,12 @@ def _build_startup_hydration_contract(
             gallery_scale_percent,
             visible_library_categories,
             active_surface=normalized_surface,
+            root_sidebar=bool(
+                initial_view_partial
+                and normalized_surface == "albums"
+                and selected_artist
+                and not query_raw
+            ),
             all_artists_active=all_artists_active,
         ),
         "followupEndpoint": "",
@@ -602,21 +619,28 @@ def _build_postgres_root_startup_view(
     library_state: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, object] | None, float]:
     payload_started_at = time.perf_counter()
+    repository = PostgresLibraryBrowseRepository(config)
+    preview_query_params = QueryParams([
+        (key, value) for key, value in QueryParams(query_args).multi_items()
+        if key not in {"gallery_cursor", "gallery_page_size"}
+    ])
+    startup_query_params = QueryParams([
+        *preview_query_params.multi_items(),
+        *([] if str(query_args.get("surface") or "").strip().casefold() == "home"
+          else [("gallery_page_size", "8")]),
+    ])
     try:
-        payload = PostgresLibraryBrowseRepository(config).build_root_startup_preview_payload(
-            query_params=QueryParams([
-                (key, value) for key, value in QueryParams(query_args).multi_items()
-                if key not in {"gallery_cursor", "gallery_page_size"}
-            ] + ([] if str(query_args.get("surface") or "").strip().casefold() == "home"
-                 else [("gallery_page_size", "8")])),
+        payload = repository.build_root_startup_preview_payload(
+            query_params=startup_query_params,
             library_state=library_state,
+            queue_projection_refresh=False,
         )
     except GalleryProjectionPending:
-        initial_view = _build_empty_initial_view(
-            config=config, query_raw="", selected_artist="", active_surface="albums",
+        payload = repository.build_root_startup_preview_payload(
+            query_params=preview_query_params,
+            library_state=library_state,
+            bounded_gallery_only=True,
         )
-        initial_view["gallery_projection_pending"] = True
-        return initial_view, None, round((time.perf_counter() - payload_started_at) * 1000, 2)
     initial_view = build_initial_view_preview(payload)
     preview_sidebar = [
         dict(item)
@@ -647,33 +671,57 @@ def _build_postgres_selected_artist_startup_view(
     payload_started_at = time.perf_counter()
     repository = PostgresLibraryBrowseRepository(config)
     selected_query_args = QueryParams(query_args)
-    if not selected_query_args.get("q") and not selected_query_args.get("payload_tier"):
-        selected_query_args = QueryParams([
-            *selected_query_args.multi_items(), ("payload_tier", "gallery_summary"),
-        ])
+    if not selected_query_args.get("q"):
+        selected_query_items = list(selected_query_args.multi_items())
+        if not selected_query_args.get("payload_tier"):
+            selected_query_items.append(("payload_tier", "gallery_summary"))
+        if not selected_query_args.get("root_sidebar"):
+            selected_query_items.append(("root_sidebar", "1"))
+        selected_query_args = QueryParams(selected_query_items)
     payload = repository.build_selected_artist_payload(
         query_params=selected_query_args,
         library_state=library_state,
     )
-    root_sidebar: list[object] | None = None
     if not str(query_args.get("q") or "").strip():
-        root_sidebar_payload = repository.build_root_sidebar_payload(
-            query_params=query_args,
-        )
-        root_sidebar = list(
-            root_sidebar_payload.get("artists_sidebar") or []
-        )
-        payload["artists_sidebar"] = root_sidebar
-        payload["artist_count"] = int(
-            root_sidebar_payload.get("artist_count")
-            or len(root_sidebar)
-        )
-        payload["show_all_artists_sidebar_link"] = (
-            root_sidebar_payload.get("show_all_artists_sidebar_link") is not False
-        )
+        try:
+            root_sidebar_payload = repository.build_projected_root_sidebar_payload(
+                query_params=selected_query_args,
+            )
+        except GalleryProjectionPending:
+            root_sidebar_payload = {}
+        payload.update({
+            field: root_sidebar_payload[field]
+            for field in (
+                "artists_sidebar",
+                "artist_count",
+                "show_all_artists_sidebar_link",
+            )
+            if field in root_sidebar_payload
+        })
+        payload["initial_view_partial"] = True
+        if not list(payload.get("artists_sidebar") or []):
+            selected_artist = str(
+                payload.get("selected_artist") or query_args.get("artist") or ""
+            ).strip()
+            selected_groups = [
+                group
+                for group in list(payload.get("primary_artist_groups") or [])
+                if str(group.get("artist") or "").strip().casefold()
+                == selected_artist.casefold()
+            ]
+            if selected_artist:
+                payload["artists_sidebar"] = [{
+                    "artist": selected_artist,
+                    "artist_display": str(
+                        (selected_groups[0] if selected_groups else {}).get("artist_display")
+                        or selected_artist
+                    ),
+                    "count": sum(
+                        len(list(group.get("albums") or []))
+                        for group in selected_groups
+                    ),
+                }]
     initial_view = build_initial_view_preview(payload)
-    if root_sidebar is not None:
-        initial_view["artists_sidebar"] = root_sidebar
     payload_elapsed_ms = round((time.perf_counter() - payload_started_at) * 1000, 2)
     return initial_view, payload_elapsed_ms
 
@@ -1158,12 +1206,6 @@ async def refresh_api(request: Request) -> JSONResponse:
     full_rescan = bool(payload.get("full_rescan"))
     accepted_state_updates: dict[str, object] = {}
     if full_rescan:
-        if not library_state.get("albums"):
-            state_service.hydrate_library_state_for_config(
-                library_state,
-                config,
-                logger_for_prewarm=route_logger,
-            )
         accepted_state_updates = {
             "rescan_ignore_existing_cache": True,
             "scan_processed": 0,
@@ -1265,7 +1307,13 @@ def _cover_response(
     requested_size = normalize_cover_variant_size(size)
     normalized_revision = normalize_cover_variant_revision(revision)
 
-    cache_root: Path | None = None
+    cache_roots: tuple[Path, ...] = ()
+    storage_policy = getattr(
+        request.app.state, "generated_preview_storage_policy", None
+    )
+    inventory_recorder = getattr(
+        request.app.state, "generated_preview_inventory_recorder", None
+    )
     if requested_size > 0 and normalized_revision:
         candidate = resolve_configured_media_path(
             config,
@@ -1276,18 +1324,22 @@ def _cover_response(
         )
         if candidate is None:
             return _not_found()
-        cache_root = display_cover_variant_cache_root(
+        cache_roots = display_cover_variant_cache_roots(
             candidate,
             data_dir=config.get("DATA_DIR"),
+            storage_policy=storage_policy,
         )
-        cached_variant = find_existing_cover_display_variant(
-            candidate,
-            cache_root=cache_root,
-            max_size=requested_size,
-            revision=normalized_revision,
-        )
-        if cached_variant is not None:
-            return _conditional_file_response(request, cached_variant, max_age=31536000)
+        for cache_root in cache_roots:
+            cached_variant = find_existing_cover_display_variant(
+                candidate,
+                cache_root=cache_root,
+                max_size=requested_size,
+                revision=normalized_revision,
+            )
+            if cached_variant is not None:
+                return _conditional_file_response(
+                    request, cached_variant, max_age=31536000
+                )
 
     resolved = resolve_configured_media_path(
         config,
@@ -1297,10 +1349,10 @@ def _cover_response(
     if resolved is None:
         return _not_found()
     if requested_size > 0:
-        if cache_root is None:
-            cache_root = display_cover_variant_cache_root(
+        if not cache_roots:
+            cache_roots = display_cover_variant_cache_roots(
                 resolved,
-                data_dir=config.get("DATA_DIR"),
+                storage_policy=storage_policy,
             )
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
@@ -1309,21 +1361,29 @@ def _cover_response(
             {"revision": normalized_revision} if normalized_revision else {}
         )
         try:
-            cached_variant = find_existing_cover_display_variant(
-                resolved,
-                cache_root=cache_root,
-                max_size=requested_size,
-                **revision_options,
-            )
-            if cached_variant is not None:
-                resolved = cached_variant
-            elif config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
-                resolved = resolve_cover_display_variant(
+            cached_variant = None
+            for cache_root in cache_roots:
+                cached_variant = find_existing_cover_display_variant(
                     resolved,
                     cache_root=cache_root,
                     max_size=requested_size,
+                    **revision_options,
+                )
+                if cached_variant is not None:
+                    break
+            if cached_variant is not None:
+                resolved = cached_variant
+            elif config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
+                generation_options = {}
+                if inventory_recorder is not None:
+                    generation_options["on_published"] = inventory_recorder
+                resolved = resolve_cover_display_variant(
+                    resolved,
+                    cache_root=cache_roots[0],
+                    max_size=requested_size,
                     priority=request_priority,
                     **revision_options,
+                    **generation_options,
                 )
         except Exception:
             _app_logger(request).exception(

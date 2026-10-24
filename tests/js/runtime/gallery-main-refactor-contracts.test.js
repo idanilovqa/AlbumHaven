@@ -1508,7 +1508,7 @@ test('gallery bar stays hidden throughout active search transitions', () => {
 
 test('server-rendered searches hide the gallery bar only until an artist is resolved', () => {
   assert.match(indexTemplateSource,
-    /gallery_bar\('Gallery',[^)]*hidden=query and not effective_selected_artist\)/s);
+    /gallery_bar\('Gallery'[^)]*hidden=query and not effective_selected_artist\)/);
 });
 
 test('root gallery summary counts canonical albums once across artist credits after filtering', () => {

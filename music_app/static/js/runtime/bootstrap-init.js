@@ -1,10 +1,18 @@
-const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 5000;
+const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 0;
 
 restorePlayerAppearance();
 attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof loadCoverLookupNotificationCounts === 'function') {
+  void loadCoverLookupNotificationCounts({ toast: false });
+}
+document.getElementById('cover-lookup-drawer-body')?.addEventListener(
+  'scroll',
+  handleCoverLookupDrawerScroll,
+  { passive: true },
+);
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();
@@ -110,8 +118,11 @@ const shouldApplyEmbeddedSidebarHydration = Boolean(
   && embeddedStartupViewPatch.artists_sidebar.length
 );
 const shouldTreatStartupPreviewAsVisibleReady = Boolean(
-  shouldApplyEmbeddedSidebarHydration
-  && startupHydrationFollowupEndpoint
+  bootstrap.startupPreview?.renderedGalleryMarkup
+  || (
+    shouldApplyEmbeddedSidebarHydration
+    && startupHydrationFollowupEndpoint
+  )
 );
 if (shouldStartImmediateHydration) {
   startupMetrics.beginInitialRefresh();
@@ -141,7 +152,14 @@ if (shouldTreatStartupPreviewAsVisibleReady) {
     ]
     : (Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : []);
   rebuildAlbumIndex(startupPreviewGroups);
-  renderView({ preserveMountedGallery: true });
+  renderView(
+    bootstrap.startupPreview?.renderedGalleryMarkup
+      && !bootstrap.partialView
+      && !startupHydrationRequired
+      && !state.view?.initial_view_partial
+      ? { preserveMountedGalleryChildren: true }
+      : { preserveMountedGallery: true },
+  );
 } else {
   renderView();
 }
@@ -186,7 +204,7 @@ if (
   && typeof startupMetrics?.completeVisibleInitialRefresh === 'function'
 ) {
   startupMetrics.completeVisibleInitialRefresh(state.view, {
-    hydrationTier: 'sidebar',
+    hydrationTier: startupHydrationTier,
     source: 'startup_preview',
   });
 }
@@ -233,7 +251,9 @@ renderLibraryLoader({
 });
 scheduleBrowserTimeout(pollStatus, 500);
 if (shouldStartImmediateHydration) {
-  const resolvedStartupHydrationFollowupEndpoint = resolveInitialHydrationEndpoint({
+  const resolvedStartupHydrationFollowupEndpoint = (
+    !startupHydrationFollowupEndpoint && startupHydrationTier !== 'sidebar'
+  ) ? '' : resolveInitialHydrationEndpoint({
     followupEndpoint: startupHydrationFollowupEndpoint,
   }, {
     ...galleryDisplayPreferenceResolutionOptions,

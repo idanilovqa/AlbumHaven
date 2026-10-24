@@ -31,6 +31,48 @@ export function isDisplayedImageEvidenceReady(state) {
   );
 }
 
+// Runs in the browser so image load/decode completion wakes the measurement immediately.
+export async function waitForDisplayedImageDecode(element) {
+  if (!(element instanceof HTMLImageElement)) {
+    throw new Error('Displayed image evidence requires an image element.');
+  }
+  if (!(element.complete && element.naturalWidth > 0)) {
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        element.removeEventListener('load', onLoad);
+        element.removeEventListener('error', onError);
+      };
+      const onLoad = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error('Displayed image failed before decode.'));
+      };
+      element.addEventListener('load', onLoad, { once: true });
+      element.addEventListener('error', onError, { once: true });
+      if (element.complete) {
+        if (element.naturalWidth > 0) onLoad();
+        else onError();
+      }
+    });
+  }
+  if (typeof element.decode === 'function') await element.decode();
+  const bounds = element.getBoundingClientRect();
+  return {
+    currentSrc: String(element.currentSrc || '').trim(),
+    productionSrc: String(element.getAttribute('data-production-cover-src') || '').trim(),
+    hasVisualState: element.hasAttribute('data-cover-visual-state'),
+    visualState: String(element.getAttribute('data-cover-visual-state') || '').trim(),
+    complete: element.complete,
+    naturalWidth: element.naturalWidth,
+    naturalHeight: element.naturalHeight,
+    width: bounds.width,
+    height: bounds.height,
+  };
+}
+
 // Runs in the browser as a read-only observation of the exact displayed Blob.
 export async function readDisplayedBlobBytes(element, expected) {
   const sourceUrl = new URL(expected.currentSrc);
@@ -458,13 +500,10 @@ export class CoverLookupActions {
   }
 
   async waitForRemoteCandidateCountAtLeast(minimumCount, options = {}) {
-    await expect.poll(
-      () => this.coverLookup.remoteCoverCards.count(),
-      {
-        message: `Expected at least ${minimumCount} remote cover candidates.`,
-        timeout: options.timeout || 30000,
-      },
-    ).toBeGreaterThanOrEqual(Number(minimumCount));
+    await expect(
+      this.coverLookup.remoteCoverCards.nth(Number(minimumCount) - 1),
+      `Expected at least ${minimumCount} remote cover candidates.`,
+    ).toBeVisible({ timeout: options.timeout || 30000 });
   }
 
   async waitForRemoteCandidateId(candidateId, options = {}) {
@@ -506,7 +545,7 @@ export class CoverLookupActions {
   async selectRemoteCandidateByIdAndSave(candidateId, options = {}) {
     const timeout = options.timeout || 30000;
     await this.selectRemoteCandidateById(candidateId, { timeout });
-    return (await this.saveSelectedRemoteCandidate({ timeout })).payload;
+    return this.saveSelectedRemoteCandidate({ timeout });
   }
 
   async saveSelectedRemoteCandidate(options = {}) {
@@ -622,6 +661,21 @@ export class CoverLookupActions {
         timeout: options.timeout || 30000,
       },
     ).toBeGreaterThan(0);
+  }
+
+  async waitForRemoteCandidateDecoded(candidateId, options = {}) {
+    const expectedCandidateId = String(candidateId || '').trim();
+    if (!expectedCandidateId) {
+      throw new Error('A stable remote cover candidate identity is required.');
+    }
+    const card = this.coverLookup.remoteCoverCardById(expectedCandidateId);
+    const image = this.coverLookup.remoteCoverImageWithin(card);
+    await expect(
+      image,
+      `Expected remote cover candidate ${expectedCandidateId} image to be visible.`,
+    ).toBeVisible({ timeout: options.timeout || 30000 });
+    // parity-check: allow-read-only-measurement-evaluate -- wait for the rendered candidate image to decode
+    return image.evaluate(waitForDisplayedImageDecode);
   }
 
   async readRemoteCandidateEvidence(candidateId, options = {}) {
@@ -1131,18 +1185,11 @@ export class CoverLookupActions {
   }
 
   async readDisplayedImageEvidence(image, label, options = {}) {
-    if (!(await image.count())) return { src: '', coverPath: '', sha256: '' };
     const timeout = options.timeout || 30000;
-    await expect(image, `Expected the displayed ${label} image to be visible.`).toBeVisible();
-    await expect.poll(async () => {
-      // parity-check: allow-read-only-measurement-evaluate -- displayed cover decode readiness only
-      return image.evaluate((element) => (
-        element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0
-      ));
-    }, {
-      message: `Expected the displayed ${label} image to decode.`,
-      timeout,
-    }).toBe(true);
+    await expect(image, `Expected one displayed ${label} image.`).toHaveCount(1, { timeout });
+    await expect(image, `Expected the displayed ${label} image to be visible.`).toBeVisible({ timeout });
+    // parity-check: allow-read-only-measurement-evaluate -- await native displayed-image load/decode readiness only
+    await image.evaluate(waitForDisplayedImageDecode);
     let resolvedEvidence = null;
     let displayedState = null;
     await expect.poll(async () => {

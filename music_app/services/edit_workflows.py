@@ -4,8 +4,10 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 import uuid
 
+from music_app.services.edit_tag_timings import EditTagTimingRecorder
 from music_app.services.scan_cache_persistence import (
     StructuralTagEditDestinationConflict,
 )
@@ -492,6 +494,7 @@ def _handle_edit_tags_request_after_reservation(
     prepare_tag_edit_intent: TagEditIntentPreparer | None = None,
     mark_tag_edit_files_verified: TagEditIntentCheckpoint | None = None,
     validate_proposals: Callable | None = None,
+    reservation_wait_ms: float = 0.0,
 ) -> JsonDict | tuple[JsonDict, int]:
     st = get_state()
     if validate_proposals is not None:
@@ -616,6 +619,7 @@ def _handle_edit_tags_request_after_reservation(
         for path, _entry, repairs in repair_jobs
     }
     tag_edit_intent_id = ""
+    intent_prepare_ms = 0.0
     if prepare_tag_edit_intent is not None:
         intent_changes: list[dict[str, object]] = []
         for raw_path in updates:
@@ -644,6 +648,7 @@ def _handle_edit_tags_request_after_reservation(
                 }
             )
         if intent_changes:
+            intent_prepare_started = perf_counter()
             try:
                 tag_edit_intent_id = str(
                     prepare_tag_edit_intent(changes=intent_changes) or ""
@@ -661,7 +666,12 @@ def _handle_edit_tags_request_after_reservation(
                     log_app_event=log_app_event,
                 )
                 return failure_payload, 500
+            finally:
+                intent_prepare_ms = (
+                    perf_counter() - intent_prepare_started
+                ) * 1000.0
 
+    media_writes_started = perf_counter()
     changed_files, job_skipped_files, job_error = _run_edit_jobs(
         album=album,
         repair_jobs=repair_jobs,
@@ -676,11 +686,14 @@ def _handle_edit_tags_request_after_reservation(
         failure_prefix="Failed to edit tags for",
         edit_write_workers=edit_write_workers,
     )
+    media_writes_ms = (perf_counter() - media_writes_started) * 1000.0
     if job_error is not None:
         return job_error, 500
     skipped_files.extend(job_skipped_files)
 
+    files_verified_checkpoint_ms = 0.0
     if tag_edit_intent_id and mark_tag_edit_files_verified is not None:
+        checkpoint_started = perf_counter()
         try:
             mark_tag_edit_files_verified(tag_edit_intent_id)
         except Exception as exc:
@@ -713,6 +726,10 @@ def _handle_edit_tags_request_after_reservation(
                         )
                     except Exception:
                         pass
+        finally:
+            files_verified_checkpoint_ms = (
+                perf_counter() - checkpoint_started
+            ) * 1000.0
 
     changed_file_map = {
         str(item.get("path") or ""): {
@@ -853,6 +870,13 @@ def _handle_edit_tags_request_after_reservation(
     task_id = ""
     if changed_files:
         task_id = create_save_task("edit-tags")
+        timing_recorder = EditTagTimingRecorder(task_id)
+        timing_recorder.record("reservation_wait", reservation_wait_ms)
+        timing_recorder.record("intent_prepare", intent_prepare_ms)
+        timing_recorder.record("media_writes", media_writes_ms)
+        timing_recorder.record(
+            "files_verified_checkpoint", files_verified_checkpoint_ms
+        )
         finalizer_options: dict[str, object] = {}
         if structural_tag_edit_reservation is not None:
             finalizer_options["structural_tag_edit_reservation"] = (
@@ -868,6 +892,7 @@ def _handle_edit_tags_request_after_reservation(
             requested_track_paths=set(requested_track_paths),
             separate_release_keys=set(separate_release_keys),
             changed_field_names=set(changed_field_names),
+            timing_recorder=timing_recorder,
             tag_edit_intent_id=tag_edit_intent_id,
             exception_updates=dict(normalized_exception_updates),
             log_entry={

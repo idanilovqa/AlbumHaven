@@ -126,6 +126,10 @@
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+.cover-lookup-task-spacer {
+  flex: 0 0 auto;
+  width: 1px;
+}
 .cover-lookup-drawer-empty {
   padding: 14px;
   border-radius: 14px;

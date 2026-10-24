@@ -8,6 +8,15 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(repoRoot, 'scripts', 'ci', 'run-performance-shard.ps1');
 const targetRunnerPath = path.join(repoRoot, 'scripts', 'run-performance-playwright.cjs');
 
+test('performance shard exports its runner temp root to managed child processes', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(
+    source,
+    /Set-Item\s+-LiteralPath\s+['"]Env:RUNNER_TEMP['"]\s+-Value\s+\$RunnerTemp/i,
+  );
+});
+
 test('performance shard stops on process cleanup failure even when target ports are clear', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   const tailStart = source.indexOf('$statePath = Join-Path $stateRoot');
@@ -136,12 +145,12 @@ test('performance profile runner prepares one isolated fixture before compatible
   assert.match(source, /Set-Item\s+-LiteralPath\s+["']Env:\$key["']/i);
 });
 
-test('performance profile runner accepts the twelve-target synthetic profile', () => {
+test('performance profile runner accepts the seventeen-target synthetic profile', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   assert.match(
     source,
-    /\$targetNames\.Count\s+-gt\s+12\b/,
-    'the synthetic profile runner must accept its complete twelve-target registry',
+    /\$targetNames\.Count\s+-gt\s+17\b/,
+    'the synthetic profile runner must accept its complete seventeen-target registry',
   );
 });
 
@@ -154,6 +163,35 @@ test('performance profile runner prepares its fixture exactly once before the ta
 
   assert.equal(preparationCalls.length, 1, 'profile preparation must be invoked exactly once');
   assert.ok(prepareIndex > provisionIndex && prepareIndex < targetLoopIndex, 'prepare after provisioning and before targets');
+});
+
+test('Edit Tags performance target receives only a private writable DDT media copy', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(
+    source,
+    /if\s*\(\$target\s+-eq\s+['"]edit-tags-post-edit['"]\)[\s\S]*Prepare-EditTagsWritableMedia/i,
+  );
+  assert.match(
+    source,
+    /\$ddtArtist\s*=\s*\[string\]::Concat\(\[char\]0x0414,\s*\[char\]0x0414,\s*\[char\]0x0422\)/i,
+  );
+  assert.match(
+    source,
+    /Join-Path\s+\(Join-Path\s+\$env:ALBUM_HAVEN_MEDIA_ROOT\s+['"]writable['"]\)\s+\$ddtArtist/i,
+  );
+  assert.doesNotMatch(source, /ДДТ/);
+  assert.match(source, /Copy-Item\s+-LiteralPath\s+\$sourceArtistRoot[\s\S]*ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT/i);
+  assert.match(
+    source,
+    /ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT[^\r\n]*\$null[\s\S]*foreach\s*\(\$target\s+in\s+\$targetNames\)/i,
+    'the writable override must be cleared before sequential targets',
+  );
+  assert.doesNotMatch(
+    source,
+    /Copy-Item[^\r\n]*\$verifiedBaseFixtureRoot[^\r\n]*-Recurse/i,
+    'the runner must not copy or mutate the complete retained release fixture',
+  );
 });
 
 test('performance shard prepares and owns the preloaded artwork derivative before fixture loading', () => {

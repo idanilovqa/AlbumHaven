@@ -311,17 +311,16 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       expect(powellSummary.albumCount).toBeGreaterThan(0);
     });
 
-    const searchAutoSelectionMs = await stepLogger.step('Search for Neal Morse and wait for auto-selection in the filtered tree', async () => (
-      measureActionTime(
-        async () => {
-          await searchToolbarActions.search(SEARCH_QUERY);
+    let searchSubmittedAt = 0;
+    const searchAutoSelectionMs = await stepLogger.step('Search for Neal Morse and wait for auto-selection in the filtered tree', async () => {
+      await searchToolbarActions.search(SEARCH_QUERY, {
+        recordSubmissionBoundary: () => {
+          searchSubmittedAt = Date.now();
         },
-        async () => {
-          await searchToolbarActions.waitForQuery(SEARCH_QUERY, { timeout: 120000 });
-          await navigationPanelActions.waitForSidebarSelection(EXPECTED_FAMILY.primary, { timeout: 120000 });
-        },
-      )
-    ));
+      });
+      await navigationPanelActions.waitForSidebarSelection(EXPECTED_FAMILY.primary, { timeout: 120000 });
+      return Date.now() - searchSubmittedAt;
+    });
     await artistFamilyLocalReport.recordTimingCheckpoint({
       key: 'search-auto-selection',
       label: 'Search auto-selected Neal Morse in the filtered tree',
@@ -329,22 +328,21 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
     });
 
     const searchGalleryReadyMs = await stepLogger.step(
-      'Wait for the complete Neal Morse family gallery after auto-selection',
-      async () => measureActionTime(
-        async () => {},
-        async () => {
-          await artistFamilyActions.waitForViewReady(EXPECTED_FAMILY.primary, {
-            timeout: 120000,
-            queryValue: SEARCH_QUERY,
-          });
-          await artistFamilyActions.waitForVisible({ timeout: 120000 });
-          await galleryActions.waitForAlbumVisibleUnderHeading(
-            EXPECTED_FAMILY.resonance,
-            RESONANCE_ALBUM,
-            { timeout: 120000 },
-          );
-        },
-      ),
+      'Wait for the complete Neal Morse family gallery from search submission',
+      async () => {
+        await searchToolbarActions.waitForQuery(SEARCH_QUERY, { timeout: 120000 });
+        await artistFamilyActions.waitForViewReady(EXPECTED_FAMILY.primary, {
+          timeout: 120000,
+          queryValue: SEARCH_QUERY,
+        });
+        await artistFamilyActions.waitForVisible({ timeout: 120000 });
+        await galleryActions.waitForAlbumVisibleUnderHeading(
+          EXPECTED_FAMILY.resonance,
+          RESONANCE_ALBUM,
+          { timeout: 120000 },
+        );
+        return Date.now() - searchSubmittedAt;
+      },
     );
 
     await stepLogger.step('Capture the Neal Morse runtime snapshot after timed search readiness', async () => {

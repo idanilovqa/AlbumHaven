@@ -200,11 +200,23 @@ export class UtilityProblematicFilesActions {
   }
 
   async revealListItemByIdentity({ key, title, meta }, options = {}) {
-    for await (const items of this.walkListWindows(options)) {
-      const matches = items.filter(item => key ? item.key === key : item.title === title && item.meta === meta);
-      assert.ok(matches.length <= 1, `Ambiguous Problematic Files identity: ${key || `${title} / ${meta}`}`);
-      if (matches.length) return matches[0];
-    }
+    const reveal = async () => {
+      for await (const items of this.walkListWindows(options)) {
+        const matches = items.filter(item => key ? item.key === key : item.title === title && item.meta === meta);
+        assert.ok(matches.length <= 1, `Ambiguous Problematic Files identity: ${key || `${title} / ${meta}`}`);
+        if (matches.length) return matches[0];
+      }
+      return null;
+    };
+    const initialMatch = await reveal();
+    if (initialMatch) return initialMatch;
+    await this.utilityProblematicFilesTab.waitForPageCondition(
+      () => state.utility?.problematicFilesComplete === true,
+      { timeout: options.timeout || 30000 },
+      { completeInventory: true },
+    );
+    const completeMatch = await reveal();
+    if (completeMatch) return completeMatch;
     throw new Error(`Exact Problematic Files identity was not found: ${key || `${title} / ${meta}`}`);
   }
 

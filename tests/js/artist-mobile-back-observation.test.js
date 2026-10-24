@@ -1,16 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-test('return observation excludes hidden gallery frames but catches the first visible displacement', async () => {
+test('return observation excludes hidden gallery frames but rejects a one-pixel visible displacement', async () => {
   const { GalleryRegressions } = await import('../e2e/poms/galleryRegressions.js');
   const callbacks = new Map();
   let sequence = 0;
   let visible = false;
-  let top = 40;
+  let cardTop = 21;
+  let rowTop = 21;
   let disposed = 0;
   const previous = Object.fromEntries(['window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame'].map(key => [key, global[key]]));
   const gallery = { scrollTop: 200, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 0, width: visible ? 390 : 0, height: visible ? 600 : 0 }) };
-  const card = { isConnected: true, getBoundingClientRect: () => ({ top, height: 90 }), closest: () => null,
+  const row = { getBoundingClientRect: () => ({ top: rowTop, height: 90 }) };
+  const card = { isConnected: true, parentElement: row, getBoundingClientRect: () => ({ top: cardTop, height: 90 }),
+    closest: selector => selector === '.album-row' ? row : null,
     querySelector: () => ({ getAttribute: () => 'album-b' }), querySelectorAll: () => [] };
   const section = { getBoundingClientRect: () => ({ top: 0, height: 900 }),
     querySelector: () => ({ getAttribute: () => 'Artist B' }), querySelectorAll: () => [card] };
@@ -29,15 +32,21 @@ test('return observation excludes hidden gallery frames but catches the first vi
       const value = callback(args);
       return { evaluate: fn => fn(value), dispose: async () => { disposed += 1; } };
     } };
-    const observation = await ui.startVisibleCardAnchorObservation({ artist: 'Artist B', albumKey: 'album-b', top: 20 }, { waitUntilGalleryVisible: true });
+    const observation = await ui.startVisibleCardAnchorObservation(
+      { artist: 'Artist B', albumKey: 'album-b', top: 20, layoutTop: 20 },
+      { waitUntilGalleryVisible: true },
+    );
     tick();
     visible = true;
     tick();
-    top = 20;
+    rowTop = 20;
+    tick();
+    cardTop = 20;
     tick();
     const samples = await observation.finish();
-    assert.deepEqual(samples.map(sample => sample.delta), [20, 0]);
-    assert.deepEqual(samples.map(sample => sample.stable), [false, true]);
+    assert.deepEqual(samples.map(sample => sample.delta), [1, 0, 0]);
+    assert.deepEqual(samples.map(sample => sample.cardDelta), [1, 1, 0]);
+    assert.deepEqual(samples.map(sample => sample.stable), [false, false, true]);
     assert.equal(callbacks.size, 0);
     assert.equal(disposed, 1);
   } finally {
@@ -143,7 +152,7 @@ test('artist placement observation retains every frame and cancels its owned fra
   const rect = top => ({ getBoundingClientRect: () => ({ top }) });
   const section = { querySelector: selector => rect(selector === '.artist-rows' && !aligned ? 20 : 0) };
   global.document = {
-    getElementById: () => rect(0),
+    getElementById: () => ({ ...rect(0), clientTop: 0 }),
     querySelectorAll: () => [{ getAttribute: () => 'Target', closest: () => section }],
     querySelector: () => ({ textContent: 'Target' }),
   };

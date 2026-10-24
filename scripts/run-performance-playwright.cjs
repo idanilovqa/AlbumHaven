@@ -107,6 +107,10 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'edit-tags-post-edit',
+    'cover-lookup',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'root-album-browse',
     'artist-tree-scroll-navigation',
@@ -122,6 +126,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-health',
     'paired-search-calibration',
     'scan-error',
+    'notification-history',
   ],
   'library-browse': [
     'all-artists',
@@ -129,12 +134,15 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'search-all-artists',
     'utility-rules',
     'selected-artist',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'root-album-browse',
     'artist-tree-scroll-navigation',
     'app-open-all-artists',
     'rules-focused',
     'paired-search-calibration',
+    'notification-history',
   ],
   'idle-memory': [
     'idle-memory',
@@ -152,6 +160,8 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'root-album-browse',
     'artist-tree-scroll-navigation',
@@ -309,10 +319,74 @@ const PERFORMANCE_TARGETS = {
     reportId: 'selectedArtistFocusedLocal',
     casePattern: 'FTC-GALLERY-STARTUP-005Q',
     casePatterns: [
+      'Stale projection keeps selected startup and superseding Home responsive',
       'Selected artist UI reports library_browse telemetry and timing',
       'FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family',
     ],
     metricCasePattern: 'Selected artist UI reports library_browse telemetry and timing',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
+  'edit-tags-post-edit': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'Real local app repeated Edit Tags saves, success-notification cleanup, and same-session post-edit search, tree, gallery, cover, and Album Details responsiveness.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js',
+    grep: 'FTC-TAGS-026P',
+    aliasNames: ['edit-tags-post-edit', 'edit-tags-performance', 'post-edit-navigation'],
+    reportId: 'editTagsPostEditLocal',
+    casePattern: 'FTC-TAGS-026P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
+  'cover-lookup': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'Real local app Cover Lookup open, candidate rendering, selection, and Save acceptance through Postgres-backed production routes.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js',
+    grep: 'FTC-COVERS-019P',
+    aliasNames: ['cover-lookup', 'covers', 'cover-lookup-interactions'],
+    reportId: 'coverLookupLocal',
+    casePattern: 'FTC-COVERS-019P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
+  'album-title-search': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'True-cold full-fixture album-title search to the correct visible album card.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/albumTitleSearchPerformance.spec.js',
+    grep: 'FTC-SEARCH-NAV-029P',
+    aliasNames: ['album-title-search', 'album-search-performance'],
+    reportId: 'albumTitleSearchLocal',
+    casePattern: 'FTC-SEARCH-NAV-029P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    },
+  },
+  'track-title-search': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'True-cold full-fixture track-title search to the correct album and rendered matching-track accent.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/trackTitleSearchPerformance.spec.js',
+    grep: 'FTC-SEARCH-NAV-030P',
+    aliasNames: ['track-title-search', 'track-search-performance'],
+    reportId: 'trackTitleSearchLocal',
+    casePattern: 'FTC-SEARCH-NAV-030P',
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     },
@@ -352,35 +426,40 @@ const PERFORMANCE_TARGETS = {
     fixtureProfile: 'synthetic-large-library',
     fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
     coverageClass: 'real-app-library-browse-load',
-    coverageDescription: 'Real local large-library Artist Tree jump alignment, reverse paging stability, complete groups, and early root continuation coverage.',
+    coverageDescription: 'Real local large-library Artist Tree jump alignment, restoration, search/Home anchoring, and root continuation coverage.',
     specPath: 'tests/e2e/syntheticLargeLibrary',
-    grep: 'FTC-GALLERY-NAV-03(?:2|3|4|5)',
+    grep: 'FTC-GALLERY-NAV-03(?:2|3|4|5|7)',
     aliasNames: ['artist-tree-scroll-navigation', 'artist-tree-scroll', 'gallery-scroll-navigation'],
-    casePattern: 'FTC-GALLERY-NAV-03(?:2|3|4|5)',
+    casePattern: 'FTC-GALLERY-NAV-03(?:2|3|4|5|7)',
     casePatterns: [
+      'search and Home destinations do not rebound after settling',
       'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
       'root continuation starts eight viewports early and never reaches a hard stop during its real request',
-      'mobile Cards > long-press Scroll, album, Back restores an artist beyond the first root page',
-      'mobile Cards > long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
-      'mobile Covers > long-press Scroll, album, Back restores an artist beyond the first root page',
-      'mobile Covers > long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
-      'mobile Rows > long-press Scroll, album, Back restores an artist beyond the first root page',
-      'mobile Rows > long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
-      'desktop Cards > desktop Scroll, album, Close retains the jumped-to position',
-      'desktop Cards > desktop Scroll, ordinary scroll, album, Close retains the departure position',
-      'desktop Covers > desktop Scroll, album, Close retains the jumped-to position',
-      'desktop Covers > desktop Scroll, ordinary scroll, album, Close retains the departure position',
+      'mobile Cards › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Cards › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'mobile Covers › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Covers › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'mobile Rows › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Rows › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'desktop Cards › desktop Scroll, album, Close retains the jumped-to position',
+      'desktop Cards › desktop Scroll, ordinary scroll, album, Close retains the departure position',
+      'desktop Covers › desktop Scroll, album, Close retains the jumped-to position',
+      'desktop Covers › desktop Scroll, ordinary scroll, album, Close retains the departure position',
       'Mobile Cards, covers and rows retain the jumped-to release',
       'Desktop Cards and covers retain the jumped-to release',
-      'mobile Cards > native touch swipes track the commanded gesture without reverse movement or layout jitter',
-      'mobile Covers > native touch swipes track the commanded gesture without reverse movement or layout jitter',
-      'mobile Rows > native touch swipes track the commanded gesture without reverse movement or layout jitter',
-      'desktop Cards > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
-      'desktop Covers > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'mobile Cards › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'mobile Covers › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'mobile Rows › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'desktop Cards › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'desktop Covers › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'real continuation response during held touch keeps gallery coordinates stable',
+      'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
+      'real continuation response during wheel sequence keeps gallery coordinates stable',
     ],
     measurementExpected: false,
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'gallery-artwork-diversity': {
@@ -568,6 +647,23 @@ PERFORMANCE_TARGETS['scan-error'] = {
   env: {
     ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO: 'cached',
     ALBUM_HAVEN_COVER_PROVIDER_GROUPS: 'offline',
+  },
+};
+
+PERFORMANCE_TARGETS['notification-history'] = {
+  kind: 'synthetic',
+  fixtureProfile: 'synthetic-large-library',
+  fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+  coverageClass: 'real-app-library-browse-load',
+  coverageDescription: 'PostgreSQL-backed 528-row notification pagination, virtualization, retained-memory, and post-history navigation coverage.',
+  specPath: 'tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js',
+  grep: 'FTC-NOTIFICATIONS-001P',
+  aliasNames: ['notification-history', 'notifications-performance'],
+  reportId: 'notificationHistoryLocal',
+  casePattern: 'FTC-NOTIFICATIONS-001P',
+  env: {
+    ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
   },
 };
 
@@ -1361,15 +1457,23 @@ function listTargetCasePatterns(target) {
     .filter(Boolean);
 }
 
+function normalizeTestHierarchy(value) {
+  return String(value || '').replaceAll('›', '>');
+}
+
+function parsedTestSearchText(entry) {
+  return [entry?.fullName, entry?.testName, entry?.suiteName]
+    .map(normalizeTestHierarchy)
+    .join('\n');
+}
+
 function parsedTestMatchesTarget(target, entry) {
   const casePatterns = listTargetCasePatterns(target);
   if (casePatterns.length === 0) {
     return true;
   }
-  const searchableText = [entry?.fullName, entry?.testName, entry?.suiteName]
-    .map((value) => String(value || ''))
-    .join('\n');
-  return casePatterns.some((casePattern) => searchableText.includes(casePattern));
+  const searchableText = parsedTestSearchText(entry);
+  return casePatterns.some((casePattern) => searchableText.includes(normalizeTestHierarchy(casePattern)));
 }
 
 function filterParsedTestsForTarget(target, parsedTestResults = []) {
@@ -1398,6 +1502,18 @@ function resolveDisplaySuiteName(target) {
   }
   if (targetName === 'selected-artist') {
     return 'Selected Artist Browse';
+  }
+  if (targetName === 'edit-tags-post-edit') {
+    return 'Edit Tags Post-Edit Navigation';
+  }
+  if (targetName === 'cover-lookup') {
+    return 'Cover Lookup';
+  }
+  if (targetName === 'album-title-search') {
+    return 'Album Title Search';
+  }
+  if (targetName === 'track-title-search') {
+    return 'Track Title Search';
   }
   if (targetName === 'search-browse') {
     return 'Search Browse';
@@ -1505,27 +1621,19 @@ function classifyPerformanceAttempt(attemptRecord = {}, selectedContract = 'loca
     &&
     parsedCases.filter((entry) => entry?.status === 'failed').length === 1
     && parsedCases.filter((entry) => entry?.status === 'failed').every((entry) => (
-      [entry?.fullName, entry?.testName, entry?.suiteName]
-        .map((value) => String(value || ''))
-        .join('\n')
-        .includes(String(attemptRecord.metricCasePattern || attemptRecord.metricCaseId || ''))
+        parsedTestSearchText(entry)
+          .includes(normalizeTestHierarchy(attemptRecord.metricCasePattern || attemptRecord.metricCaseId))
     ))
-    && expectedCasePatterns.every((pattern) => parsedCases.some((entry) => (
-      [entry?.fullName, entry?.testName, entry?.suiteName]
-        .map((value) => String(value || ''))
-        .join('\n')
-        .includes(pattern)
-    )))
+      && expectedCasePatterns.every((pattern) => parsedCases.some((entry) => (
+        parsedTestSearchText(entry).includes(normalizeTestHierarchy(pattern))
+      )))
   );
   const processAndStructurePassed = attemptRecord.processStatus === 0
     && attemptRecord.structuredStatus === 'passed';
   if (attemptRecord.status === 0 || processAndStructurePassed) {
     if (attemptRecord.measurementExpected === false) {
       const caseMatches = expectedCasePatterns.map((pattern) => parsedCases.filter((entry) => (
-        [entry?.fullName, entry?.testName, entry?.suiteName]
-          .map((value) => String(value || ''))
-          .join('\n')
-          .includes(pattern)
+        parsedTestSearchText(entry).includes(normalizeTestHierarchy(pattern))
       )));
       const casesComplete = expectedCasePatterns.length > 0
         && parsedCases.every((entry) => entry?.status === 'passed')
@@ -2160,6 +2268,7 @@ function runSinglePerformanceAttempt(target, options, verificationGroup, attempt
       applyTargetEnvOverrides({
         ...process.env,
         PLAYWRIGHT_HEADLESS: options.headless ? 'true' : 'false',
+        ...(target.kind === 'synthetic' ? { PLAYWRIGHT_PROVIDER_PORT: String(attemptPorts.realAppPort + 2) } : {}),
         ...(target.kind === 'scan' ? { PLAYWRIGHT_PORT: String(attemptPorts.scanAppPort) } : {}),
         ...managedScanStatusEnv,
       }, target.env || {}),
@@ -2240,6 +2349,7 @@ function runBatchPerformanceAttempt(targets, options, verificationGroup, attempt
       applyTargetEnvOverrides({
         ...process.env,
         PLAYWRIGHT_HEADLESS: options.headless ? 'true' : 'false',
+        ...(firstTarget.kind === 'synthetic' ? { PLAYWRIGHT_PROVIDER_PORT: String(targetPorts.realAppPort + 2) } : {}),
         ...(firstTarget.kind === 'scan' ? { PLAYWRIGHT_PORT: String(targetPorts.scanAppPort) } : {}),
         ...managedScanStatusEnv,
       }, firstTarget.env || {}),
@@ -2587,7 +2697,7 @@ function runSequentialPerformanceSuite(options) {
 
 function printUsage() {
   console.log('Usage: npm run test:e2e:performance -- [--group library-browse|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, edit-tags-post-edit, cover-lookup, album-title-search, track-title-search, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
   console.log('Known groups: library-browse, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');

@@ -222,7 +222,7 @@
 .settings-host .settings-nav { padding: 25px 14px; }
 .settings-host .settings-nav h2 { margin: 0 12px 20px; font-size: 18px; }
 .settings-host .settings-nav-item.is-active { background: var(--app-active); }
-.settings-host .settings-main { min-width: 0; padding: var(--app-page-header-top) var(--app-page-inline) 60px; }
+.settings-host .settings-main { min-width: 0; padding: 6px 24px 60px; }
 .artists-drawer-button { display: none; }
 
 .shell-navigation-rail,

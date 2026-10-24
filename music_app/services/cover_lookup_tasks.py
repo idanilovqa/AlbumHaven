@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 from threading import Event, Lock
+from time import monotonic
 import uuid
 
 from music_app.services.cover_provider_candidates import (
@@ -14,8 +15,11 @@ from music_app.services.cover_provider_candidates import (
     normalize_remote_image_url,
 )
 from music_app.services.cover_lookup_notifications import (
+    count_cover_lookup_notifications,
     delete_cover_lookup_notifications,
+    interrupt_stale_cover_lookup_notifications,
     load_cover_lookup_notification_summaries,
+    load_cover_lookup_notification_summary_page,
     load_cover_lookup_notifications,
     save_cover_lookup_notifications,
     upsert_cover_lookup_notification,
@@ -30,10 +34,59 @@ _COVER_LOOKUP_FUTURES: dict[str, set[Future]] = {}
 _COVER_LOOKUP_TASK_REVISIONS: dict[str, int] = {}
 _COVER_LOOKUP_PERSISTENCE_LOCKS: dict[str, Lock] = {}
 _TERMINAL_COVER_LOOKUP_STATUSES = {"completed", "failed", "canceled"}
+_STALE_COVER_LOOKUP_TIMEOUT = timedelta(minutes=15)
+_STALE_COVER_LOOKUP_RECONCILIATION_SECONDS = 30.0
+_STALE_COVER_LOOKUP_RECONCILIATION_LOCK = Lock()
+_NEXT_STALE_COVER_LOOKUP_RECONCILIATION = 0.0
 MAX_ACTIVE_COVER_LOOKUP_MATCHES = 64
 ACTIVE_COVER_LOOKUP_MATCH_FIELDS = frozenset(CURRENT_USE_LOOKUP_MATCH_FIELDS - {"debug"})
 MAX_ACTIVE_COVER_LOOKUP_STRING_CHARS = 2_048
 MAX_ACTIVE_COVER_LOOKUP_MATCHES_JSON_BYTES = 256 * 1_024
+
+_COVER_LOOKUP_LIST_ALBUM_FIELDS = (
+    "album_id",
+    "key",
+    "name",
+    "album",
+    "album_artist",
+    "artist",
+    "year",
+    "cover_path",
+    "cover_preview_url",
+    "cover_revision",
+    "remote_cover_url",
+    "remote_cover_thumbnail_url",
+    "remote_cover_source",
+    "remote_cover_source_label",
+    "remote_cover_album_url",
+    "remote_cover_width",
+    "remote_cover_height",
+)
+_COVER_LOOKUP_LIST_TASK_FIELDS = (
+    "id",
+    "status",
+    "type",
+    "artist",
+    "album",
+    "year",
+    "progress",
+    "progress_label",
+    "message",
+    "result_kind",
+    "notification_action_taken",
+    "notification_completed_at",
+    "notification_expires_at",
+    "created_at",
+    "started_at",
+    "updated_at",
+    "finished_at",
+    "cancel_requested",
+    "caa_empty_notice",
+    "selected_candidate_id",
+    "best_candidate_id",
+    "candidate_revision",
+    "candidate_updated_at",
+)
 
 
 def cover_lookup_result(task_id: str) -> dict[str, object]:
@@ -122,6 +175,81 @@ def serialize_cover_lookup_task_payload(task_payload: dict[str, object] | None) 
 def is_terminal_cover_lookup_task(task_payload: dict[str, object] | None) -> bool:
     status = str((task_payload or {}).get("status") or "").strip().casefold()
     return status in _TERMINAL_COVER_LOOKUP_STATUSES
+
+
+def _interrupt_stale_cover_lookup_task(
+    task_payload: dict[str, object],
+    *,
+    now: datetime,
+) -> dict[str, object]:
+    status = str(task_payload.get("status") or "").strip().casefold()
+    if status not in {"pending", "running"}:
+        return task_payload
+    activity_times = []
+    for field in ("candidate_updated_at", "updated_at", "started_at", "created_at"):
+        raw_timestamp = str(task_payload.get(field) or "").strip()
+        if not raw_timestamp:
+            continue
+        try:
+            activity_time = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if activity_time.tzinfo is None:
+            activity_time = activity_time.replace(tzinfo=timezone.utc)
+        activity_times.append(activity_time.astimezone(timezone.utc))
+    if not activity_times:
+        return task_payload
+    if now - max(activity_times) < _STALE_COVER_LOOKUP_TIMEOUT:
+        return task_payload
+    interrupted_at = now.isoformat()
+    return {
+        **task_payload,
+        "status": "failed",
+        "result_kind": "interrupted",
+        "progress_label": "Interrupted",
+        "message": "Cover lookup stopped before it could finish. Retry when ready.",
+        "finished_at": interrupted_at,
+        "updated_at": interrupted_at,
+        "notification_action_taken": False,
+        "notification_completed_at": interrupted_at,
+    }
+
+
+def summarize_cover_lookup_task_for_list(
+    task_payload: dict[str, object] | None,
+) -> dict[str, object]:
+    serialized = serialize_cover_lookup_task_payload(task_payload) or {}
+    if not serialized:
+        return {}
+    summary = {
+        field: serialized[field]
+        for field in _COVER_LOOKUP_LIST_TASK_FIELDS
+        if field in serialized
+    }
+    matches = serialized.get("possible_matches")
+    if is_terminal_cover_lookup_task(serialized):
+        if not isinstance(matches, list) and "possible_match_count" in serialized:
+            summary["possible_match_count"] = max(
+                0, int(serialized.get("possible_match_count") or 0)
+            )
+        else:
+            summary["possible_match_count"] = sum(
+                1
+                for match in (matches or [])
+                if isinstance(match, Mapping)
+                and str(match.get("art_kind") or "cover") == "cover"
+            )
+    elif isinstance(matches, list):
+        summary["possible_matches"] = matches
+    album_payload = serialized.get("album_payload")
+    if isinstance(album_payload, Mapping):
+        compact_album = {
+            field: album_payload[field]
+            for field in _COVER_LOOKUP_LIST_ALBUM_FIELDS
+            if field in album_payload
+        }
+        summary["album_payload"] = compact_album
+    return summary
 
 
 def normalize_cover_lookup_notification_task(task_payload: dict[str, object] | None) -> dict[str, object] | None:
@@ -317,52 +445,139 @@ def list_cover_lookup_tasks(*, config: Mapping[str, object] | None = None) -> li
     return merged_items
 
 
-def get_cover_lookup_task_summary(*, config: Mapping[str, object] | None = None) -> dict[str, int]:
+def list_cover_lookup_task_summaries(
+    *, config: Mapping[str, object] | None = None
+) -> list[dict[str, object]]:
     with _COVER_LOOKUP_TASKS_LOCK:
         live_items = [
             {
-                "id": str(task.get("id") or "").strip(),
-                "status": str(task.get("status") or "").strip().casefold(),
-                "notification_action_taken": bool(task.get("notification_action_taken")),
+                key: value
+                for key, value in task.items()
+                if key
+                not in {
+                    "cancel_event",
+                    "updated_albums",
+                    "updated_problematic_album",
+                    "service_job_result",
+                }
             }
             for task in _COVER_LOOKUP_TASKS.values()
-            if str(task.get("id") or "").strip() and not bool(task.get("internal"))
         ]
+    live_items = [
+        serialized
+        for serialized in (
+            serialize_cover_lookup_task_payload(item) for item in live_items
+        )
+        if serialized is not None and not bool(serialized.get("internal"))
+    ]
     persisted_items = (
-        load_cover_lookup_notification_summaries(config)
+        load_cover_lookup_notification_summaries(dict(config))
         if config is not None
         else []
     )
-    merged_by_id = {
+    if config is not None:
+        now = datetime.now(timezone.utc)
+        recovered_items = []
+        for item in persisted_items:
+            recovered = _interrupt_stale_cover_lookup_task(item, now=now)
+            if recovered is not item:
+                upsert_cover_lookup_notification(
+                    dict(config), recovered, persistence_revision=1
+                )
+            recovered_items.append(recovered)
+        persisted_items = recovered_items
+    persisted_by_id = {
         str(item.get("id") or "").strip(): item
         for item in persisted_items
         if str(item.get("id") or "").strip()
     }
+    summaries: list[dict[str, object]] = []
     for item in live_items:
-        task_id = str(item["id"])
-        persisted = merged_by_id.get(task_id, {})
-        merged_by_id[task_id] = {
-            **persisted,
-            **item,
-            "notification_action_taken": bool(
-                item.get("notification_action_taken")
-                or persisted.get("notification_action_taken")
-            ),
-        }
-    active_count = sum(
-        str(item.get("status") or "").casefold() in {"pending", "running"}
-        for item in merged_by_id.values()
+        task_id = str(item.get("id") or "").strip()
+        merged = _merge_cover_lookup_task_with_notification(
+            item, persisted_by_id.pop(task_id, None)
+        )
+        if merged is not None:
+            summaries.append(summarize_cover_lookup_task_for_list(merged))
+    summaries.extend(
+        summarize_cover_lookup_task_for_list(item)
+        for item in persisted_by_id.values()
     )
-    pending_notification_count = sum(
-        str(item.get("status") or "").casefold() in _TERMINAL_COVER_LOOKUP_STATUSES
-        and not bool(item.get("notification_action_taken"))
-        for item in merged_by_id.values()
+    summaries.sort(key=_sort_cover_lookup_task_key, reverse=True)
+    return summaries
+
+
+def count_cover_lookup_task_notifications(
+    *, config: Mapping[str, object]
+) -> dict[str, int]:
+    _reconcile_stale_cover_lookup_tasks(config=config)
+    return count_cover_lookup_notifications(dict(config))
+
+
+def load_cover_lookup_task_summary_page(
+    *,
+    config: Mapping[str, object],
+    limit: int,
+    cursor: str | None,
+    active_only: bool,
+) -> dict[str, object]:
+    _reconcile_stale_cover_lookup_tasks(config=config)
+    return load_cover_lookup_notification_summary_page(
+        dict(config),
+        limit=limit,
+        cursor=cursor,
+        active_only=active_only,
     )
-    return {
-        "active_count": active_count,
-        "pending_notification_count": pending_notification_count,
-        "badge_count": active_count + pending_notification_count,
-    }
+
+
+def _reconcile_stale_cover_lookup_tasks(
+    *,
+    config: Mapping[str, object],
+    now: datetime | None = None,
+) -> None:
+    global _NEXT_STALE_COVER_LOOKUP_RECONCILIATION
+
+    claimed_at = monotonic()
+    with _STALE_COVER_LOOKUP_RECONCILIATION_LOCK:
+        if claimed_at < _NEXT_STALE_COVER_LOOKUP_RECONCILIATION:
+            return
+        _NEXT_STALE_COVER_LOOKUP_RECONCILIATION = (
+            claimed_at + _STALE_COVER_LOOKUP_RECONCILIATION_SECONDS
+        )
+
+    current_time = now or datetime.now(timezone.utc)
+    interrupted_snapshots: list[tuple[dict[str, object], int]] = []
+    try:
+        with _COVER_LOOKUP_TASKS_LOCK:
+            for task_id, task in _COVER_LOOKUP_TASKS.items():
+                interrupted = _interrupt_stale_cover_lookup_task(task, now=current_time)
+                if interrupted is task:
+                    continue
+                cancel_event = _COVER_LOOKUP_CANCEL_EVENTS.get(task_id)
+                if cancel_event is not None:
+                    cancel_event.set()
+                task.clear()
+                task.update(interrupted)
+                task_revision = _COVER_LOOKUP_TASK_REVISIONS.get(task_id, 0) + 1
+                _COVER_LOOKUP_TASK_REVISIONS[task_id] = task_revision
+                interrupted_snapshots.append((dict(task), task_revision))
+
+        for task_snapshot, task_revision in interrupted_snapshots:
+            _save_cover_lookup_notification_task(
+                task_snapshot,
+                config=config,
+                expected_revision=task_revision,
+            )
+
+        interrupt_stale_cover_lookup_notifications(
+            dict(config),
+            stale_before=current_time - _STALE_COVER_LOOKUP_TIMEOUT,
+            completed_at=current_time,
+        )
+    except Exception:
+        with _STALE_COVER_LOOKUP_RECONCILIATION_LOCK:
+            _NEXT_STALE_COVER_LOOKUP_RECONCILIATION = 0.0
+        raise
 
 
 def update_cover_lookup_task(
@@ -389,17 +604,40 @@ def update_cover_lookup_task(
             if isinstance(requested_job_contract, Mapping)
             else ""
         ).strip()
+        current_status = str(task.get("status") or "").strip().casefold()
+        requested_status = str(changes.get("status") or "").strip().casefold()
         if current_job_kind == "save_remote_selection" and requested_job_kind == "candidate_lookup":
             return
-        if str(task.get("status") or "").strip().casefold() == "canceled":
-            requested_status = str(changes.get("status") or "").strip().casefold()
+        if current_status == "canceled":
             if requested_status != "canceled":
                 return
+        if current_status == "failed":
+            if requested_status not in {"", "failed"}:
+                return
+            if requested_job_kind == "candidate_lookup" and requested_status != "failed":
+                return
+        if current_status == "completed" and not (
+            requested_status in {"", "completed"}
+            or (
+                requested_status == "running"
+                and requested_job_kind == "save_remote_selection"
+            )
+        ):
+            return
+        if requested_status in {"pending", "running"}:
+            changes.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
         task.update(changes)
         task_snapshot = dict(task)
         task_revision = _COVER_LOOKUP_TASK_REVISIONS.get(task_id, 0) + 1
         _COVER_LOOKUP_TASK_REVISIONS[task_id] = task_revision
-    if is_terminal_cover_lookup_task(task_snapshot) or "possible_matches" in changes:
+    if (
+        is_terminal_cover_lookup_task(task_snapshot)
+        or "possible_matches" in changes
+        or (
+            requested_status == "running"
+            and requested_job_kind == "save_remote_selection"
+        )
+    ):
         _save_cover_lookup_notification_task(
             task_snapshot,
             config=config,
@@ -531,12 +769,45 @@ def _reclaim_cleared_cover_lookup_task_state(task_id: str) -> None:
             _COVER_LOOKUP_PERSISTENCE_LOCKS.pop(task_id, None)
 
 
-def register_cover_lookup_future(task_id: str, future: Future) -> None:
+def register_cover_lookup_future(
+    task_id: str,
+    future: Future,
+    *,
+    config: Mapping[str, object] | None = None,
+) -> None:
     with _COVER_LOOKUP_TASKS_LOCK:
         _COVER_LOOKUP_FUTURES.setdefault(task_id, set()).add(future)
     future.add_done_callback(
-        lambda completed_future: discard_cover_lookup_future(task_id, completed_future)
+        lambda completed_future: _finish_cover_lookup_future(
+            task_id, completed_future, config=config
+        )
     )
+
+
+def _finish_cover_lookup_future(
+    task_id: str,
+    future: Future,
+    *,
+    config: Mapping[str, object] | None,
+) -> None:
+    worker_failed = not future.cancelled() and future.exception() is not None
+    try:
+        current_task = cover_lookup_result(task_id)
+        if not worker_failed or not current_task or is_terminal_cover_lookup_task(current_task):
+            return
+        request_cover_lookup_task_stop(task_id)
+        update_cover_lookup_task(
+            task_id,
+            config=config,
+            status="failed",
+            progress=100,
+            progress_label="Interrupted",
+            result_kind="interrupted",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            message="Cover art lookup worker stopped before it could finish.",
+        )
+    finally:
+        discard_cover_lookup_future(task_id, future)
 
 
 def discard_cover_lookup_future(task_id: str, future: Future | None = None) -> None:
@@ -738,9 +1009,12 @@ def finalize_cover_lookup_task_canceled(
 
 
 def reset_cover_lookup_runtime_state() -> None:
+    global _NEXT_STALE_COVER_LOOKUP_RECONCILIATION
     with _COVER_LOOKUP_TASKS_LOCK:
         _COVER_LOOKUP_TASKS.clear()
         _COVER_LOOKUP_TASK_REVISIONS.clear()
         _COVER_LOOKUP_PERSISTENCE_LOCKS.clear()
+    with _STALE_COVER_LOOKUP_RECONCILIATION_LOCK:
+        _NEXT_STALE_COVER_LOOKUP_RECONCILIATION = 0.0
     _COVER_LOOKUP_CANCEL_EVENTS.clear()
     _COVER_LOOKUP_FUTURES.clear()

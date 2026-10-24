@@ -25,8 +25,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $targetNames = @($Targets.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 12) {
-    throw 'Performance profile runner must own between one and twelve targets.'
+if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 17) {
+    throw 'Performance profile runner must own between one and seventeen targets.'
 }
 if ((@($targetNames | Select-Object -Unique)).Count -ne $targetNames.Count) {
     throw 'Performance shard target list contains a duplicate.'
@@ -158,6 +158,23 @@ function Get-SafeTargetPort([int]$SequenceIndex) {
     throw "Performance target port allocation exceeds the available browser-safe range from base port $BasePort."
 }
 
+function Prepare-EditTagsWritableMedia {
+    $ddtArtist = [string]::Concat([char]0x0414, [char]0x0414, [char]0x0422)
+    $sourceArtistRoot = Join-Path (Join-Path $env:ALBUM_HAVEN_MEDIA_ROOT 'writable') $ddtArtist
+    if (-not (Test-Path -LiteralPath $sourceArtistRoot -PathType Container)) {
+        throw "Edit Tags performance source media is missing: $sourceArtistRoot"
+    }
+    $writableMediaRoot = Join-Path $profileSessionRoot 'media\writable'
+    if (Test-Path -LiteralPath $writableMediaRoot) {
+        throw "Edit Tags writable media already exists: $writableMediaRoot"
+    }
+    New-Item -ItemType Directory -Path $writableMediaRoot -Force | Out-Null
+    Copy-Item -LiteralPath $sourceArtistRoot -Destination $writableMediaRoot -Recurse
+    Set-Item `
+        -LiteralPath 'Env:ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT' `
+        -Value $writableMediaRoot
+}
+
 function Prepare-PerformanceFixture {
     New-Item -ItemType Directory -Path $profileSessionRoot -Force | Out-Null
     $env:ALBUM_HAVEN_PERFORMANCE_PROFILE_SESSION = '1'
@@ -249,6 +266,7 @@ try {
 
     $env:PGPASSWORD = $null
     $env:PLAYWRIGHT_PYTHON = $PythonPath
+    Set-Item -LiteralPath 'Env:RUNNER_TEMP' -Value $RunnerTemp
     $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
     $env:ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = $null
     Set-ClearedRuntimeSelectors
@@ -266,6 +284,7 @@ try {
 
     Prepare-PerformanceFixture
 
+    $env:ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT = $null
     foreach ($target in $targetNames) {
         $targetIndex += 1
         $targetPort = Get-SafeTargetPort -SequenceIndex ($targetIndex - 1)
@@ -273,6 +292,10 @@ try {
         $targetPortFailure = $null
         $targetExitCode = 1
         try {
+            $env:ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT = $null
+            if ($target -eq 'edit-tags-post-edit') {
+                Prepare-EditTagsWritableMedia
+            }
             $env:PLAYWRIGHT_PORT = [string]$targetPort
             $env:PLAYWRIGHT_REAL_APP_PORT = [string]$targetPort
             $env:PLAYWRIGHT_PROVIDER_PORT = [string]($targetPort + 2)

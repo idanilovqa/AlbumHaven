@@ -99,6 +99,21 @@ from music_app.services.library_watch_health import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def compact_selected_artist_wire_payload(payload: dict[str, object]) -> dict[str, object]:
+    primary_groups = payload.get("primary_artist_groups")
+    family_groups = payload.get("family_artist_groups")
+    if (
+        str(payload.get("selected_artist") or "").strip()
+        and isinstance(payload.get("artist_groups"), list)
+        and isinstance(primary_groups, list)
+        and isinstance(family_groups, list)
+        and payload["artist_groups"] == [*primary_groups, *family_groups]
+    ):
+        payload.pop("artist_groups")
+        payload["artist_groups_from_selected_sections"] = True
+    return payload
+
+
 def project_missing_album_actions(
     album: dict[str, object],
     allowed_actions: AllowedActions,

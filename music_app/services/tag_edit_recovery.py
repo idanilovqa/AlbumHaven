@@ -185,7 +185,9 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
     root_identity = library_root_cache_identity(config)
     summary = {"completed": 0, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
     file_cache = None
-    for candidate in repository.load_unfinished_intents(library_root_identity=root_identity):
+    for candidate in repository.load_unfinished_intents(
+        library_root_identity=root_identity
+    ):
         with repository.claim_unfinished_intent(
             str(candidate["id"]), library_root_identity=root_identity,
         ) as claimed:
@@ -242,6 +244,14 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
             continue
         recoverable_intents.append(intent)
 
+    def mark_recovery_failed(intent_id: str, error: object) -> None:
+        logger.error(
+            "Tag edit recovery failed intent_id=%s",
+            intent_id,
+            exc_info=(type(error), error, getattr(error, "__traceback__", None)),
+        )
+        repository.mark_recovery_failed(intent_id, error)
+
     def persist_resolution(
         *,
         intent: dict[str, object],
@@ -258,7 +268,8 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
             baseline_entry = file_cache.get(path)
             if not isinstance(baseline_entry, dict):
                 raise RuntimeError(
-                    f"Postgres inventory has no track for recovery path {path}"
+                    "Postgres inventory has no track for recovery path "
+                    f"{path}; loaded_entries={len(file_cache)}"
                 )
             physical_values = resolved_values.get(path, {})
             if physical_values:
@@ -335,7 +346,7 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
             values,
         ),
         persist_resolution=persist_resolution,
-        mark_recovery_failed=repository.mark_recovery_failed,
+        mark_recovery_failed=mark_recovery_failed,
     )
     summary["failed"] += preflight_failures
     logger.info(

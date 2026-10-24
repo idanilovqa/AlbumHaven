@@ -292,6 +292,11 @@ function handleGalleryBootstrapClick(event) {
   if (allArtistsLink) {
     event.preventDefault();
     const isLibraryHome = allArtistsLink.getAttribute?.('data-library-home') === '1';
+    const opensMobileHome = Boolean(
+      isLibraryHome
+      && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout()
+    );
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -304,6 +309,7 @@ function handleGalleryBootstrapClick(event) {
     ).trim().toLowerCase();
     const alreadyAtLibraryHome = Boolean(
       isLibraryHome
+      && !opensMobileHome
       && currentSurface === 'albums'
       && !String(state.view?.query || '').trim()
       && !String(state.view?.selected_artist || '').trim()
@@ -363,9 +369,16 @@ function handleGalleryBootstrapClick(event) {
     closeArtistsDrawer({ restoreFocus: false });
     const nextView = {
       ...state.view,
+      ...(opensMobileHome ? {
+        surface: {
+          ...(state.view?.surface || {}),
+          active: 'home',
+        },
+        surface_request: 'home',
+      } : {}),
       query: activeSearchQuery,
       selected_artist: '',
-      all_artists_active: true,
+      all_artists_active: !opensMobileHome,
       related_filter_artists: [],
       primary_filter_active: false,
       ...(isLibraryHome ? { search_context: null } : {}),
@@ -373,8 +386,8 @@ function handleGalleryBootstrapClick(event) {
     state.gallery.sidebarArtistsOverride = null;
     state.gallery.sidebarShowAllArtistsOverride = null;
     state.ui.pendingSidebarSelectedArtist = '';
-    state.ui.pendingSidebarAllArtistsActive = true;
-    const reusableRootBrowseView = typeof getReusableRootBrowseView === 'function'
+    state.ui.pendingSidebarAllArtistsActive = !opensMobileHome;
+    const reusableRootBrowseView = !opensMobileHome && typeof getReusableRootBrowseView === 'function'
       ? getReusableRootBrowseView(nextView)
       : null;
     if (reusableRootBrowseView) {
@@ -386,17 +399,17 @@ function handleGalleryBootstrapClick(event) {
       scheduleBrowserAnimationFrame(() => {
         renderArtistGroups({ preserveScroll: true });
       });
-      Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
-        omitSidebar: true,
-      }), false, {
+      Promise.resolve(fetchAndRender(buildApiUrl(
+        nextView,
+        isLibraryHome ? {} : { omitSidebar: true },
+      ), false, {
         preserveScroll: true,
       })).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
       return;
     }
     renderSidebar();
-    Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
-      omitSidebar: true,
-    }), true)).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
+    Promise.resolve(fetchAndRender(buildApiUrl(nextView), true))
+      .then(resumeCoverLoads, () => resumeCoverLoads(true, true));
     return;
   }
 
@@ -565,7 +578,10 @@ function scrollRootGalleryToArtist(artist) {
     related_filter_artists: [],
     primary_filter_active: false,
   };
-  const url = buildApiUrl(nextView, { galleryAnchorArtist: targetArtist });
+  const url = buildApiUrl(nextView, {
+    galleryAnchorArtist: targetArtist,
+    omitSidebar: true,
+  });
   renderLibraryLoader(state.status);
   return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
     if (result === false || rootGalleryArtistAlignmentGeneration !== navigationGeneration) return false;
@@ -762,6 +778,37 @@ function applyImmediateSidebarArtistSelection(sidebarArtistLink, artist) {
   sidebarList.albumHavenActiveSidebarLink = sidebarArtistLink;
   state.ui.pendingSidebarSelectedArtist = artist;
   state.ui.pendingSidebarAllArtistsActive = false;
+  return true;
+}
+
+function applyImmediateExactSearchArtistSelection(query) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  if (!normalizedQuery) return false;
+  const mountedMatches = Array.from(
+    document.querySelectorAll('#sidebar-list [data-sidebar-artist]'),
+  ).filter((link) => (
+    String(link.getAttribute?.('data-sidebar-artist') || '')
+      .trim()
+      .toLocaleLowerCase() === normalizedQuery
+  ));
+  const sidebarList = document.getElementById?.('sidebar-list')
+    || mountedMatches[0]?.closest?.('#sidebar-list');
+  const sidebarArtists = Array.isArray(sidebarList?.albumHavenSidebarArtistsSource)
+    ? sidebarList.albumHavenSidebarArtistsSource
+    : [];
+  const sourceMatches = sidebarArtists.filter((entry) => (
+    String(entry?.artist || '').trim().toLocaleLowerCase() === normalizedQuery
+  ));
+  if (sourceMatches.length !== 1) return false;
+  const artist = String(sourceMatches[0]?.artist || '').trim();
+  if (!artist) return false;
+  if (mountedMatches.length === 1) {
+    if (applyImmediateSidebarArtistSelection(mountedMatches[0], artist)) return true;
+  }
+  state.ui.pendingSidebarSelectedArtist = artist;
+  state.ui.pendingSidebarAllArtistsActive = false;
+  state.ui.pendingSidebarRevealArtist = artist;
+  renderSidebar();
   return true;
 }
 
@@ -1389,6 +1436,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  applyImmediateExactSearchArtistSelection(nextQuery);
   const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else {
@@ -1598,6 +1646,18 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     return;
   }
   const previousView = state.view;
+  const mountedSelectedArtist = String(previousView?.selected_artist || '').trim();
+  const pendingExactSearchArtist = String(
+    state.ui?.pendingSidebarSelectedArtist || '',
+  ).trim();
+  const retainsMountedExactArtist = Boolean(
+    mountedSelectedArtist
+    && pendingExactSearchArtist
+    && pendingExactSearchArtist.toLocaleLowerCase() === mountedSelectedArtist.toLocaleLowerCase()
+    && String(normalizedQuery || '').trim().toLocaleLowerCase()
+      === pendingExactSearchArtist.toLocaleLowerCase()
+    && isMountedSelectedGalleryComplete(mountedSelectedArtist, null)
+  );
   const next = {
     ...withActiveGallerySources(state.view, state.gallery.mainState),
     query: normalizedQuery,
@@ -1606,6 +1666,13 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     related_filter_artists: [],
     primary_filter_active: false,
   };
+  if (retainsMountedExactArtist) {
+    applyViewPayload({
+      ...previousView,
+      query: normalizedQuery,
+      all_artists_active: false,
+    }, { trackSidebarReveal: false });
+  }
   state.gallery.sidebarArtistsOverride = null;
   state.gallery.sidebarShowAllArtistsOverride = null;
   state.ui.pendingSearchClearOnBlur = false;
@@ -1647,7 +1714,8 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     }
   };
   const request = fetchAndRender(hydrationUrl, true, {
-    preserveScroll: String(previousView.query || '') === normalizedQuery,
+    preserveScroll: retainsMountedExactArtist
+      || String(previousView.query || '') === normalizedQuery,
     restartIfSameUrl: true,
     skipPendingViewTransition: true,
     showSearchProgress: true,
@@ -1984,7 +2052,17 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
 
 function tryRenderOptimisticSidebarArtistSelection(nextView, options = {}) {
   const query = String(state.view?.query || '').trim();
+  const selectedArtist = String(nextView.selected_artist || '').trim();
   const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
+  const selectedAlbums = optimisticGroups?.primaryGroups?.[0]?.albums;
+  const expectedAlbumCount = readSidebarAlbumCount(state.view?.artists_sidebar, selectedArtist);
+  if (
+    query
+    && String(state.view?.selected_artist || '').trim() === selectedArtist
+    && state.view?.search_context?.artist_name_match_artists?.includes(selectedArtist)
+    && Array.isArray(selectedAlbums)
+    && selectedAlbums.length === expectedAlbumCount
+  ) return true;
   const reusableSelectedArtistBrowseView = query
     && (!optimisticGroups || optimisticGroups.skipFetch)
     && typeof getReusableSelectedArtistBrowseView === 'function'

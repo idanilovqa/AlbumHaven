@@ -727,6 +727,10 @@ test('log-linked repair alert is compact, top-centered, and targets one Log Hist
   assert.match(markup, /data-dismiss-repair-alert="1"/u);
   assert.match(
     baseLayoutSource,
+    /#repair-alert\.floating-notification-positioned\.has-log-history-link\s*,\s*\.repair-alert\.has-log-history-link\s*\{/u,
+  );
+  assert.match(
+    baseLayoutSource,
     /\.repair-alert\.has-log-history-link\s*\{[^}]*top:\s*\d+px;[^}]*left:\s*50%;[^}]*right:\s*auto;[^}]*bottom:\s*auto;[^}]*transform:\s*translate\(-50%,\s*-\d+px\);[^}]*transition:\s*opacity\s+220ms\s+ease;/u,
   );
   assert.match(

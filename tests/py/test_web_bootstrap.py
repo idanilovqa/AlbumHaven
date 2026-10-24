@@ -512,8 +512,16 @@ def test_postgres_root_startup_embedded_patch_preserves_preview_gallery(monkeypa
         def __init__(self, _config):
             pass
 
-        def build_root_startup_preview_payload(self, *, query_params, library_state):
+        def build_root_startup_preview_payload(
+            self,
+            *,
+            query_params,
+            library_state,
+            queue_projection_refresh=True,
+        ):
             assert library_state is ready_library_state
+            assert query_params.get("gallery_page_size") == "8"
+            assert queue_projection_refresh is False
             return preview_payload
 
         def build_root_sidebar_payload(self, *, query_params):
@@ -676,23 +684,7 @@ def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypat
             pass
 
         def build_root_sidebar_payload(self, *, query_params):
-            assert query_params.get("artist") == "Broadcast"
-            return {
-                "artists_sidebar": [
-                    {
-                        "artist": "Broadcast",
-                        "artist_display": "Broadcast",
-                        "count": 1,
-                    },
-                    {
-                        "artist": "Stereolab",
-                        "artist_display": "Stereolab",
-                        "count": 1,
-                    },
-                ],
-                "artist_count": 2,
-                "show_all_artists_sidebar_link": True,
-            }
+            raise AssertionError("selected startup must defer the complete root sidebar")
 
         def build_selected_artist_payload(self, *, query_params=None, library_state=None):
             assert query_params.get("artist") == "Broadcast"
@@ -752,10 +744,12 @@ def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypat
 
     assert status == 200
     payload = _extract_bootstrap_payload_from_shell(body)
-    assert payload["bootstrap"]["startupPreview"]["mode"] == "full_view"
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
     assert payload["initial_view"]["selected_artist"] == "Broadcast"
     assert [group["artist"] for group in payload["initial_view"]["family_artist_groups"]] == ["Stereolab"]
-    assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&artist=Broadcast"
+    assert payload["bootstrap"]["startupHydration"]["endpoint"] == (
+        "/view-data?surface=albums&root_sidebar=1&artist=Broadcast"
+    )
 def test_index_surface_albums_uses_postgres_root_sidebar_startup_patch(asgi_app, monkeypatch):
     from music_app.routes import web_asgi
 
@@ -1639,6 +1633,47 @@ def test_asgi_cover_route_maps_missing_priority_header_to_foreground(app, asgi_a
     assert observed_priorities == ["foreground"]
 
 
+def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, tmp_path):
+    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (640, 640), color=(64, 96, 128)).save(
+        cover_path, format="JPEG"
+    )
+    bounded_variant = tmp_path / "bounded-preview.jpg"
+    Image.new("RGB", (480, 480), color=(64, 96, 128)).save(
+        bounded_variant, format="JPEG"
+    )
+    recorder = object()
+    observed_recorders = []
+    asgi_app.state.generated_preview_inventory_recorder = recorder
+
+    def fake_resolve(
+        source_path,
+        *,
+        cache_root,
+        max_size,
+        priority,
+        on_published=None,
+    ):
+        observed_recorders.append(on_published)
+        return bounded_variant
+
+    monkeypatch.setattr(
+        "music_app.routes.web_asgi.resolve_cover_display_variant", fake_resolve
+    )
+
+    status, _headers, body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={"path": str(cover_path), "size": "480"},
+    )
+
+    assert status == 200
+    assert body == bounded_variant.read_bytes()
+    assert observed_recorders == [recorder]
+
+
 def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi_app, monkeypatch):
     persisted_loops: list[dict[str, object]] = []
 
@@ -1736,6 +1771,7 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "password-recovery.js",
         "account.js",
         "admin-members.js",
+        "admin-server.js",
         "appearance-backgrounds.js",
         "appearance-palettes.js",
         "appearance-device-profiles.js",
@@ -1812,3 +1848,63 @@ def test_asgi_revisioned_cover_route_serves_local_variant_without_source_file(ap
     assert status == 200
     assert "max-age=31536000" in headers.get("cache-control", "")
     assert body == b"local-revision-preview"
+
+
+def test_asgi_revisioned_cover_route_prefers_centralized_variant_without_source_read(
+    app, asgi_app, tmp_path
+):
+    from music_app.services.covers import build_cover_variant_base_path
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+
+    source_path = (
+        app.config["MUSIC_DIR"] / "Offline Artist" / "Offline Album" / "cover.jpg"
+    )
+    revision = "c" * 64
+    custom_root = tmp_path / "Generated Previews"
+    policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(
+            mode="album_folders",
+            requested_mode="custom",
+            requested_root=custom_root,
+            operation_state="running",
+        )
+    )
+    asgi_app.state.generated_preview_storage_policy = policy
+    asgi_app.state.generated_preview_inventory_recorder = lambda *_args: pytest.fail(
+        "a centralized cache hit must not perform inventory write work"
+    )
+    target_variant = build_cover_variant_base_path(
+        source_path,
+        cache_root=custom_root / "v1",
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    fallback_variant = build_cover_variant_base_path(
+        source_path,
+        cache_root=source_path.parent / ".album-haven",
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    target_variant.parent.mkdir(parents=True)
+    fallback_variant.parent.mkdir(parents=True)
+    Image.new("RGB", (480, 480), color="red").save(target_variant, format="JPEG")
+    Image.new("RGB", (480, 480), color="blue").save(fallback_variant, format="JPEG")
+
+    status, _headers, body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={
+            "path": str(source_path),
+            "size": "480",
+            "v": revision,
+        },
+    )
+
+    assert not source_path.exists()
+    assert status == 200
+    assert body == target_variant.read_bytes()
+    assert body != fallback_variant.read_bytes()

@@ -1660,6 +1660,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
       eventSequence.push('render');
     },
     buildApiUrl() { return '/api/library?selected_artist=DDT'; },
+    virtualGrid: { getUserScrollIntentGeneration: () => 7 },
     showRepairAlert() {},
     watchSaveTask(taskId, options) {
       watchedTasks.push({ taskId, options });
@@ -1721,6 +1722,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
   assert.deepEqual(eventSequence, ['render', 'watch']);
   assert.equal(watchedTasks[0].options.originatingViewRequestUrl, '/api/library?selected_artist=DDT');
   assert.equal(watchedTasks[0].options.originatingSearchContext.selected_artist_source, 'auto_top_match');
+  assert.equal(watchedTasks[0].options.absoluteScrollOwnerGeneration, 7);
 });
 
 test('pending problematic navigation ownership includes only directly edited track paths', () => {
@@ -1957,14 +1959,14 @@ test('completed save-task response reconciles immediately without starting a wat
     [
       'Updating 1 track in “Album”.',
       'info',
-      null,
+      2000,
       { title: 'Saving tags', dismissible: false },
     ],
     [
       'Saved changes to 1 track in “Album”.',
       'success',
       2000,
-      { title: 'Tags updated', dismissible: false },
+      { title: 'Tags updated' },
     ],
   ]);
 });
@@ -2028,7 +2030,7 @@ test('completed refresh-required response gives its terminal payload to canonica
   await context.confirmManualTagEdit();
 
   assert.deepEqual(
-    events.slice(-2).map((event) => JSON.parse(JSON.stringify(event))),
+    events.slice(-1).map((event) => JSON.parse(JSON.stringify(event))),
     [
       [
         'watch',
@@ -2036,10 +2038,83 @@ test('completed refresh-required response gives its terminal payload to canonica
         { [trackPath]: { title: 'Committed' } },
         terminalPayload,
       ],
-      ['alert', 'Saved changes to 1 track in “Album”.'],
     ],
   );
   assert.deepEqual(settledClaims, [mutationClaim]);
+});
+
+test('completed tag edit with reconciliation warning confirms save without a frozen or failure alert', async () => {
+  const trackPath = 'C:\\Music\\Ovderhead\\Telepathic Minds\\01.flac';
+  const album = {
+    key: 'album:telepathic-minds-old',
+    name: 'Telepathic Minds',
+    album_artist: 'Ovderhead',
+    tracks: [{ path: trackPath, artist: 'Ovderhead', album_artist: 'Ovderhead' }],
+  };
+  const tagEditorOverlay = { hidden: false };
+  const confirmOverlay = { hidden: false };
+  const alerts = [];
+  const terminalPayload = {
+    ok: true,
+    save_task_id: 'completed-warning-task',
+    save_task_status: 'completed',
+    requires_view_refresh: true,
+    reconciliation_pending: true,
+    warnings: ['Canonical album reconciliation unavailable after persistence committed.'],
+    destination_artist: 'Overhead',
+    destination_album_key: 'album:telepathic-minds',
+    orphaned_source_artists: ['Ovderhead'],
+    updated_albums: [],
+  };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return null; },
+    },
+    getTagEditConfirmElements() { return { overlay: confirmOverlay }; },
+    getTagEditorElements() { return { overlay: tagEditorOverlay }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { artist: 'Overhead', album_artist: 'Overhead' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    claimTagEditViewMutation() { return {}; },
+    tagEditViewMutationStillOwnsResources() { return true; },
+    settleTagEditViewMutation() {},
+    releaseFailedTagEditViewMutation() {},
+    async watchSaveTask() {
+      alerts.push([
+        'Saved changes to 1 track in “Telepathic Minds”. Canonical album reconciliation unavailable after persistence committed.',
+        'warning',
+        8000,
+        { title: 'Tags saved with warning', dismissible: true },
+      ]);
+    },
+    async fetch() {
+      return {
+        ok: true,
+        async json() { return terminalPayload; },
+      };
+    },
+  });
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(tagEditorOverlay.hidden, true);
+  assert.equal(confirmOverlay.hidden, true);
+  assert.equal(alerts.some((alert) => alert[1] === 'error'), false);
+  assert.equal(alerts.filter((alert) => alert[1] === 'warning').length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1))), [
+    'Saved changes to 1 track in “Telepathic Minds”. Canonical album reconciliation unavailable after persistence committed.',
+    'warning',
+    8000,
+    { title: 'Tags saved with warning', dismissible: true },
+  ]);
 });
 
 test('completed loose-track membership edit refreshes canonically even when finalized albums are returned', async () => {
@@ -2117,8 +2192,8 @@ test('completed loose-track membership edit refreshes canonically even when fina
     'Album Details edits must omit the Problematic Files origin flag entirely.',
   );
   assert.deepEqual(events.slice(-2), [
+    ['alert', 'Updating 1 track in “Non-album tracks”.'],
     ['watch', 'completed-loose-membership-task'],
-    ['alert', 'Saved changes to 1 track in “Non-album tracks”.'],
   ]);
 
   closedModal.hidden = false;
@@ -2558,7 +2633,7 @@ test('manual tag edit does not apply successful origin albums after navigation d
   assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1))), [
     'Updating 1 track in “Album”.',
     'info',
-    null,
+    2000,
     { title: 'Saving tags', dismissible: false },
   ]);
 });
@@ -2650,7 +2725,7 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   assert.deepEqual(restoredDrafts, [], 'navigation must not reopen a stale editor draft');
 });
 
-test('manual tag edit preserves the editor draft for retry after a failed POST', async () => {
+test('manual tag edit preserves the editor draft for retry after an immediate failed POST', async () => {
   const trackPath = 'C:\\Music\\Axxis\\Black Edition\\01 - Kingdom.mp3';
   const album = {
     key: 'axxis::kingdom::black',
@@ -2687,7 +2762,12 @@ test('manual tag edit preserves the editor draft for retry after a failed POST',
       return {
         ok: false,
         async json() {
-          return { ok: false, error: 'Source changed during the tag edit. Retry with the preserved values.' };
+          return {
+            ok: false,
+            error: 'Source changed during the tag edit. Retry with the preserved values.',
+            save_task_id: 'failed-tag-save',
+            save_task_status: 'failed',
+          };
         },
       };
     },

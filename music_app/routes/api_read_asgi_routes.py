@@ -56,6 +56,7 @@ from music_app.services.scan_state import resolve_active_scan_browse_state
 from music_app.services.view_payloads import (
     build_home_payload,
     build_view_payload,
+    compact_selected_artist_wire_payload,
     project_library_watch_health,
     project_missing_album_actions,
 )
@@ -556,6 +557,7 @@ def _transient_scan_view_response(
         payload = build_transient_root_gallery_page(
             payload, page_params, scan_generation=int(browse_state.get("scan_generation") or 0)
         )
+    payload["view_data_source"] = "transient_scan_state"
     _apply_transient_scan_album_rating_overlays(
         request,
         _transient_view_album_payloads(payload),
@@ -568,8 +570,20 @@ def _transient_scan_view_response(
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
+    request_inventory_mutation_revision = int(
+        library_state.get("inventory_mutation_revision") or 0
+    )
     browse_state = resolve_active_scan_browse_state(library_state)
-    if "gallery_page_size" in request.query_params or "gallery_cursor" in request.query_params:
+    default_root_gallery_page = (
+        not _should_use_transient_scan_browse_state(library_state, browse_state)
+        and _is_postgres_root_album_browse_request(request)
+        and not str(request.query_params.get("payload_tier") or "").strip()
+    )
+    if (
+        "gallery_page_size" in request.query_params
+        or "gallery_cursor" in request.query_params
+        or default_root_gallery_page
+    ):
         params = dict(request.query_params)
         params.pop("gallery_page_size", None)
         params.pop("gallery_cursor", None)
@@ -581,7 +595,7 @@ def view_data(request: Request) -> JSONResponse:
         # Existing route selection still validates the remaining browse parameters.
         allowed = {"surface", "payload_tier", "gallery_scope", "gallery_display", "gallery_display_mode",
                    "gallery_scale_percent", "gallery_anchor_artist", "gallery_page_direction", "category", "omit_sidebar",
-                   "all_artists", "q", "artist"}
+                   "all_artists", "q", "artist", "include_non_album", "include_library_wide_non_album"}
         if set(params) - allowed:
             return JSONResponse({"ok": False, "error": "Invalid gallery paging parameters."}, status_code=400)
         from starlette.datastructures import QueryParams
@@ -601,6 +615,7 @@ def view_data(request: Request) -> JSONResponse:
             restart = "restart required" in str(error)
             return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
                                 status_code=409 if restart else 400)
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
 
@@ -611,6 +626,7 @@ def view_data(request: Request) -> JSONResponse:
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
             query_params=request.query_params,
         )
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
     if _is_postgres_selected_artist_request(request):
@@ -620,9 +636,20 @@ def view_data(request: Request) -> JSONResponse:
             library_state=_postgres_browse_library_state(request),
         )
         if _request_flag_value(request.query_params.get("root_sidebar")):
-            root_sidebar_payload = repository.build_root_sidebar_payload(
-                query_params=request.query_params,
-            )
+            try:
+                root_sidebar_payload = repository.build_projected_root_sidebar_payload(
+                    query_params=request.query_params,
+                )
+            except GalleryProjectionPending:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "gallery_projection_pending",
+                        "error": "Gallery is being prepared.",
+                    },
+                    status_code=503,
+                    headers={"Retry-After": "1", "Cache-Control": "no-store"},
+                )
             payload.update(
                 {
                     field: root_sidebar_payload[field]
@@ -634,8 +661,9 @@ def view_data(request: Request) -> JSONResponse:
                     if field in root_sidebar_payload
                 }
             )
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -659,13 +687,15 @@ def view_data(request: Request) -> JSONResponse:
                  "error": "Artist relationships are being prepared."},
                 status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
             )
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _log_view_data_request_from_asgi(request, payload, request_started_at)
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_root_album_browse_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
             query_params=request.query_params,
         )
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
     unsupported_selected_artist_response = _unsupported_postgres_selected_artist_browse_response(request)
@@ -688,6 +718,7 @@ def view_data(request: Request) -> JSONResponse:
         library_state=_library_state(request),
         client_surface_class=_client_surface_class_from_asgi(request),
     )
+    payload["inventory_mutation_revision"] = request_inventory_mutation_revision
     _log_view_data_request_from_asgi(request, payload, request_started_at)
     _project_missing_album_actions_for_request(request, payload)
     return JSONResponse(payload)

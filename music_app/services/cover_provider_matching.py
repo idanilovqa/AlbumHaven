@@ -48,6 +48,10 @@ _FEATURE_VARIANT_KEYWORDS = {"feat", "feature", "featured", "featuring", "ft"}
 _MIX_VARIANT_KEYWORDS = {"mix", "mixed", "mixes", "mixing"}
 _REMASTER_VARIANT_KEYWORDS = {"remaster", "remastered"}
 _REMIX_VARIANT_KEYWORDS = {"remix", "remixed", "remixes", "remixing"}
+_COLLABORATION_SEPARATOR_RE = re.compile(
+    r"\s+(?:with|feat(?:uring)?\.?|ft\.?)\s+|\s+&\s+",
+    re.IGNORECASE,
+)
 _SIMPLE_NUMBER_WORDS = {
     "one": 1,
     "two": 2,
@@ -394,6 +398,35 @@ def prefer_release_year_matches(
     return matches
 
 
+def _cover_artist_match_target(target_artist: str, candidate_artist: str) -> str | None:
+    if identity_matching.automatic_artist_identity_match_allowed(
+        target_artist,
+        candidate_artist,
+    ):
+        return target_artist
+    components = [
+        component.strip()
+        for component in _COLLABORATION_SEPARATOR_RE.split(str(target_artist or ""))
+        if component.strip()
+    ]
+    if len(components) < 2:
+        return None
+    matching_components = [
+        component
+        for component in components
+        if identity_matching.automatic_artist_identity_match_allowed(
+            component,
+            candidate_artist,
+        )
+    ]
+    if not matching_components:
+        return None
+    return max(
+        matching_components,
+        key=lambda component: similarity(component, candidate_artist),
+    )
+
+
 def match_score(
     target_artist: str,
     target_album: str,
@@ -405,13 +438,13 @@ def match_score(
     *,
     enforce_year: bool = True,
 ) -> float:
-    artist_score = similarity(target_artist, candidate_artist)
-    album_score = similarity(target_album, candidate_album)
-    if not identity_matching.automatic_artist_identity_match_allowed(
-        target_artist,
-        candidate_artist,
-    ):
+    artist_match_target = _cover_artist_match_target(target_artist, candidate_artist)
+    if artist_match_target is None:
         return 0.0
+    artist_score = similarity(artist_match_target, candidate_artist)
+    if artist_match_target != target_artist:
+        artist_score *= 0.98
+    album_score = similarity(target_album, candidate_album)
     if incompatible_album_variant_markers(target_album) != incompatible_album_variant_markers(
         candidate_album
     ):

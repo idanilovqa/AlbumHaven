@@ -17,16 +17,22 @@ const validatorTest = validatorExists ? test : test.skip;
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual', 57],
-  ['cover-providers', 28],
+  ['gallery-search-visual', 53],
+  ['cover-providers-1', 12],
+  ['cover-providers-2', 12],
   ['metadata-mutations', 14],
-  ['playback-utilities', 51],
+  ['playback-utilities-1', 14],
+  ['playback-utilities-2', 14],
+  ['playback-utilities-3', 14],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
-  ['cover-providers', 'Cover Providers'],
+  ['cover-providers-1', 'Cover Providers 1'],
+  ['cover-providers-2', 'Cover Providers 2'],
   ['metadata-mutations', 'Metadata Mutations'],
-  ['playback-utilities', 'Playback & Utilities'],
+  ['playback-utilities-1', 'Playback & Utilities 1'],
+  ['playback-utilities-2', 'Playback & Utilities 2'],
+  ['playback-utilities-3', 'Playback & Utilities 3'],
 ]);
 const EXPECTED_FUNCTIONAL_CONFIGS = [
   'playwright.config.js',
@@ -35,8 +41,8 @@ const EXPECTED_FUNCTIONAL_CONFIGS = [
   'playwright.lastfm-auto-timezone.config.js',
   'playwright.non-album-rescan.config.js',
 ];
-const FIXTURE_RELEASE = 'fixtures-v1.0.25';
-const FIXTURE_MANIFEST_SHA256 = 'e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60';
+const FIXTURE_RELEASE = 'fixtures-v1.0.27';
+const FIXTURE_MANIFEST_SHA256 = '1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -110,7 +116,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 150-case assignment', () => {
+test('functional shard contract pins the approved seven-way 133-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +130,7 @@ test('functional shard contract pins the approved four-way 150-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 150);
+  assert.equal(total, 133);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -136,7 +142,8 @@ test('functional shard contract pins the approved four-way 150-case assignment',
   const autoplayOwners = contract.shards.filter((shard) => shard.invocations.some(
     (invocation) => invocation.config === 'playwright.autoplay-allowed.config.js',
   ));
-  assert.deepEqual(autoplayOwners.map((shard) => shard.name), ['playback-utilities']);
+  assert.equal(autoplayOwners.length, 1);
+  assert.match(autoplayOwners[0].name, /^playback-utilities-[123]$/);
   const autoplayInvocation = autoplayOwners[0].invocations.find(
     (invocation) => invocation.config === 'playwright.autoplay-allowed.config.js',
   );
@@ -700,10 +707,9 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
-  const shard = contract.shards.find((candidate) => candidate.name === 'cover-providers');
-  const waves = validator.executionWavesForShard(shard, matrix);
-  const firstWave = waves[0];
-  const secondWave = waves[1];
+  const waves = contract.shards
+    .filter((candidate) => candidate.name.startsWith('cover-providers-'))
+    .flatMap((shard) => validator.executionWavesForShard(shard, matrix));
   const expectedCases = new Set([
     'FTC-COVERS-019 automatic improvement preserves a user-owned cover and clears after gallery open',
     'FTC-COVERS-019 later automatic improvement restores the unseen indicator',
@@ -728,33 +734,27 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     isolatedInvocations.map((invocation) => invocation.cases.length),
     [1, 1, 1, 1, 1, 1, 1, 1, 1],
   );
-  const sharedIndexes = firstWave.invocations
-    .map((invocation, index) => invocation.baselineMode === 'owned-mutation' ? index : -1)
-    .filter((index) => index >= 0);
-  const isolatedIndexes = firstWave.invocations
-    .map((invocation, index) => invocation.baselineMode === 'isolated-app-process' ? index : -1)
-    .filter((index) => index >= 0);
-  const globalIndexes = firstWave.invocations
-    .map((invocation, index) => invocation.baselineMode === 'global-mutation' ? index : -1)
-    .filter((index) => index >= 0);
-  assert.ok(Math.max(...sharedIndexes) < Math.min(...isolatedIndexes));
-  assert.ok(Math.max(...isolatedIndexes) < Math.min(...globalIndexes));
-  assert.equal(secondWave.invocations[0].baselineMode, 'isolated-app-process');
+  const secondWaveInvocations = waves
+    .filter((wave) => wave.wave === 2)
+    .flatMap((wave) => wave.invocations);
   assert.deepEqual(
-    secondWave.invocations
+    secondWaveInvocations
       .filter((invocation) => invocation.baselineMode === 'isolated-app-process')
-      .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case)),
+      .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case))
+      .sort(),
     [
       'FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save',
       'FTC-COVERS-016 lookup matching rejects larger false Metallica releases before provider autoselection',
       "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
       "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
       "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
-      "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
-      "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
-    ],
+      "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+    ].sort(),
   );
-  assert.equal(secondWave.invocations.at(-1).baselineMode, 'global-mutation');
+  assert.equal(
+    secondWaveInvocations.filter((invocation) => invocation.baselineMode === 'global-mutation').length,
+    1,
+  );
 });
 
 validatorTest('gallery startup projections share one early app process before isolated Appearance and DDT mutations', () => {
@@ -832,95 +832,62 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
-  const shard = contract.shards.find((candidate) => candidate.name === 'playback-utilities');
-  const waves = validator.executionWavesForShard(shard, matrix);
+  const shards = contract.shards.filter((candidate) => candidate.name.startsWith('playback-utilities-'));
+  const waves = shards.flatMap((shard) => validator.executionWavesForShard(shard, matrix));
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
-  const groupInvocations = (setupGroup) => waves[1].invocations.filter((invocation) => (
+  const waveInvocations = (waveNumber) => waves
+    .filter((wave) => wave.wave === waveNumber)
+    .flatMap((wave) => wave.invocations);
+  const groupInvocations = (setupGroup) => waveInvocations(2).filter((invocation) => (
     invocation.cases.some((ownedCase) => matrixByCase.get(ownedCase.case).setupGroup === setupGroup)
   ));
 
-  assert.deepEqual(waves.map((wave) => wave.wave), [1, 2, 3, 4]);
+  assert.deepEqual([...new Set(waves.map((wave) => wave.wave))].sort(), [1, 2, 3, 4, 5]);
   assert.deepEqual(
-    waves[0].invocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
+    waveInvocations(1).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)).sort(),
     [
       'FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import',
-    'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
-    'FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors',
-    'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover',
+      'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
+      'FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors',
+      'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover',
       'FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album',
       'FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details',
       'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
       'FTC-TAGS-024 completes a verified Album and Exception intent during app restart',
-    ],
+    ].sort(),
   );
   assert.deepEqual(
-    waves[2].invocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
+    waveInvocations(3).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)).sort(),
     [
       'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
-      'FTC-LIBROOTS-019 reconciles offline legacy deletions without stale active tracks',
-    ],
+    ].sort(),
   );
-  const ordinaryInvocationIndex = waves[1].invocations.findIndex(
-    (invocation) => invocation.config === 'playwright.config.js'
-      && invocation.baselineMode === 'owned-mutation',
-  );
-  assert.equal(waves[3].invocations.length, 10);
-  const globalMutation = waves[3].invocations.find(
-    (invocation) => invocation.baselineMode === 'global-mutation',
-  );
-  assert.deepEqual(globalMutation.cases.map(({ case: name }) => name), [
+  assert.deepEqual(waveInvocations(4).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
     'FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership',
   ]);
-  const watcherMutations = waves[3].invocations.filter(
-    (invocation) => invocation.baselineMode === 'owned-mutation',
-  );
-  assert.deepEqual(watcherMutations.flatMap((invocation) => (
-    invocation.cases.map(({ case: name }) => name)
-  )), [
-    'FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity',
-    'FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist',
-    'FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On',
-    "FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing display names",
-    'FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both constituent artists',
-    'FTC-SEARCH-NAV-034 keeps empty artist-scoped Non-album tracks disabled after hydration',
-    'FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan',
-    'FTC-COVERS-034 watcher prefers front-named local art over a larger booklet image',
+  assert.deepEqual(waveInvocations(5).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
+    'FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access',
   ]);
-  const subtitleWatcher = waves[3].invocations.find((invocation) => (
-    invocation.baselineMode === 'isolated-app-process'
-      && invocation.cases.some(({ case: name }) => name.startsWith('FTC-LIBROOTS-020 '))
-  ));
-  assert.deepEqual(subtitleWatcher.cases.map(({ case: name }) => name), [
-    'FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan',
-  ]);
-  const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 5 } : row);
-  assert.throws(() => validator.executionWavesForShard(shard, overflow), /executionWave 1 through 4/);
-  const expiryInvocationIndex = waves[1].invocations.findIndex(
-    (invocation) => invocation.config === 'playwright.config.js'
-      && invocation.baselineMode === 'isolated-app-process'
-      && invocation.cases.some(({ case: name }) => name.includes('loop creation expires')),
-  );
-  assert.ok(ordinaryInvocationIndex >= 0);
-  assert.ok(expiryInvocationIndex > ordinaryInvocationIndex);
-  assert.equal(waves[1].invocations[expiryInvocationIndex].appProcessOrder, 'after-shared');
-  assert.ok(waves[1].invocations.every((invocation, index) => (
-    invocation.baselineMode !== 'shared-setup' || index < expiryInvocationIndex
+  const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 6 } : row);
+  const overflowShard = shards.find((shard) => shard.invocations.some((invocation) => invocation.cases.some(
+    ({ case: name }) => name.startsWith('FTC-SETTINGS-I01 '),
   )));
+  assert.throws(() => validator.executionWavesForShard(overflowShard, overflow), /executionWave 1 through 5/);
   const expiryInvocations = groupInvocations('loop-edit-expiry');
   assert.deepEqual(expiryInvocations.map((invocation) => invocation.cases.length), [1, 1, 1]);
   assert.deepEqual(
-    expiryInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
+    expiryInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)).sort(),
     [
       'FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 loop creation expires through the shared production session controller',
       'FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 page reload exits bottom-player loop edit mode',
       'FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 returning to a suspended tab reconciles an overdue loop edit lease',
-    ],
+    ].sort(),
   );
   const lateNonAlbumInvocations = groupInvocations('late-non-album-mutations');
   assert.deepEqual(lateNonAlbumInvocations.map((invocation) => invocation.cases.length), [1, 1, 1, 1, 1, 1]);
   assert.deepEqual(
-    lateNonAlbumInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
+    lateNonAlbumInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)).sort(),
     [
       'FTC-NON-ALBUM-012 renders exception groups as the approved compact track table',
       'FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks',
@@ -928,9 +895,9 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
       'FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files',
       'FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions',
       'FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-007 / FTC-NON-ALBUM-006 / FTC-TAGS-007 / FTC-NON-ALBUM-005 keeps rarity modal transitions and sibling album state canonical',
-    ],
+    ].sort(),
   );
-  const failedSaveRetryInvocation = waves[1].invocations.find(
+  const failedSaveRetryInvocation = waveInvocations(2).find(
     (invocation) => invocation.baselineMode === 'isolated-app-process'
       && invocation.cases.some(({ case: name }) => name.includes('failed tag saves preserve')),
   );
@@ -938,25 +905,27 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     failedSaveRetryInvocation?.cases.map(({ case: name }) => name),
     ['FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry'],
   );
-  const rescanInvocationIndex = waves[1].invocations.findIndex(
+  const rescanInvocation = waveInvocations(2).find(
     (invocation) => invocation.config === 'playwright.non-album-rescan.config.js',
   );
-  assert.ok(rescanInvocationIndex > ordinaryInvocationIndex);
   assert.deepEqual(
-    waves[1].invocations[rescanInvocationIndex].cases.map(({ case: name }) => name),
+    rescanInvocation.cases.map(({ case: name }) => name),
     ['FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details'],
   );
 });
 
-validatorTest('all four shards use explicit effect-compatible wave budgets', () => {
+validatorTest('all seven shards use explicit effect-compatible wave budgets', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual', { cases: 57, waves: [1, 2] }],
-    ['cover-providers', { cases: 28, waves: [1, 2] }],
+    ['gallery-search-visual', { cases: 53, waves: [1, 2] }],
+    ['cover-providers-1', { cases: 12, waves: [1, 2] }],
+    ['cover-providers-2', { cases: 12, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 51, waves: [1, 2, 3, 4] }],
+    ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
+    ['playback-utilities-2', { cases: 14, waves: [1, 2, 5] }],
+    ['playback-utilities-3', { cases: 14, waves: [1, 2] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 
@@ -969,6 +938,13 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
       budget.cases,
     );
     for (const wave of waves) {
+      const rank = (invocation) => ({
+        'isolated-app-process': invocation.appProcessOrder === 'after-shared' ? 3 : 0,
+        'shared-setup': 1,
+        'owned-mutation': 2,
+        'global-mutation': 4,
+      }[invocation.baselineMode]);
+      assert.deepEqual(wave.invocations.map(rank), wave.invocations.map(rank).sort());
       for (const invocation of wave.invocations) {
         const invocationRows = invocation.cases.map((ownedCase) => matrixByCase.get(ownedCase.case));
         if (invocationRows.some((row) => row.stateMode !== 'read-only')) {
@@ -1104,13 +1080,13 @@ validatorTest('shard runner rejects missing or root-level output ownership', () 
   );
 });
 
-test('functional workflow uses the approved selectable four-shard Windows matrix with isolated names and ports', () => {
+test('functional workflow uses the approved selectable seven-shard Windows matrix with isolated names and ports', () => {
   const { workflow, job } = functionalJobSource();
   assert.match(job, /name:\s*["']E2E:\s*\$\{\{\s*matrix\.shard\s*\}\}["']/);
   assert.match(workflow, /e2e_production_parity:\s*\r?\n\s+name:\s*["']E2E:\s*Production Parity["']/);
   assert.match(job, /runs-on:\s*windows-2025/);
   assert.match(job, /fail-fast:\s*false/);
-  assert.match(job, /max-parallel:\s*([1-4])\b/);
+  assert.match(job, /max-parallel:\s*7\b/);
   assert.doesNotMatch(job, /--browser(?:=|\s+)edge\b/i);
   assert.doesNotMatch(job, /if:\s*\$\{\{\s*false\s*\}\}|if:\s*false/);
 
@@ -1125,14 +1101,14 @@ test('functional workflow uses the approved selectable four-shard Windows matrix
   for (const field of ['portBase']) {
     const values = matrix.map((entry) => entry[field]);
     assert.ok(values.every(Boolean), `every functional matrix row must define ${field}`);
-    assert.equal(new Set(values).size, 4, `${field} must be unique per functional shard`);
+    assert.equal(new Set(values).size, 7, `${field} must be unique per functional shard`);
   }
   assert.ok(matrix.every((entry) => Number(entry.portBase) > 1024));
   assert.match(job, /\$arguments = @\("--run-shard=\$\{\{\s*matrix\.shard\s*\}\}"\)/);
   assert.match(job, /validate-functional-shards\.cjs @arguments/);
   assert.match(job, /ALBUM_HAVEN_FUNCTIONAL_FIXTURE_WORK_ROOT/);
   assert.match(job, /album-haven-e2e-functional-fixtures-/);
-  assert.ok(Object.hasOwn(FUNCTIONAL_SHARDS, 'playback-utilities'));
+  assert.ok(Object.hasOwn(FUNCTIONAL_SHARDS, 'playback-utilities-3'));
 });
 
 test('PR gates remain pull-request-only and never expose heavy jobs to forked code', () => {
@@ -1275,8 +1251,8 @@ test('functional workflow retains blobs always and debug evidence only for faile
   assert.match(byKind.debug, /retention-days:\s*7\b/);
 });
 
-const coverCaseId = readJson(shardContractPath).shards.find((shard) => shard.name === 'cover-providers')
-  .invocations[0].cases[0].case.split(' ')[0];
+const coverShard = readJson(shardContractPath).shards.find((shard) => shard.name.startsWith('cover-providers-'));
+const coverCaseId = coverShard.invocations[0].cases[0].case.split(' ')[0];
 for (const selector of [
   ['--run-case=FTC-UTIL-PROBLEMS-007'],
   ['--run-area=problematic-files'],
@@ -1324,7 +1300,7 @@ for (const selector of [
       assert.throws(() => vm.runInNewContext(fs.readFileSync(validatorPath, 'utf8'), {
         require: localRequire, module: moduleObject, __dirname: path.dirname(validatorPath),
         process: {
-          argv: [process.execPath, validatorPath, '--run-shard=cover-providers', ...selector],
+          argv: [process.execPath, validatorPath, `--run-shard=${coverShard.name}`, ...selector],
           execPath: process.execPath, env, stdout: output, stderr: output,
         },
       }, { filename: validatorPath }), /focused.*(?:not owned|does not belong|no cases|did not match).*cover-providers/i);

@@ -1,7 +1,7 @@
 /* Settings owns its outlet, never the library document or audio runtime. */
 (() => {
   'use strict';
-  const isSettingsPath = (path) => path === '/account' || path === '/admin/members'
+  const isSettingsPath = (path) => path === '/account' || path === '/admin/members' || path === '/admin/server'
     || /^\/admin\/accounts\/(?:new|[0-9]+)$/.test(path);
   const isAccountPost = (path) => path === '/account/password'
     || path === '/account/password-suggestion/dismiss';
@@ -101,7 +101,9 @@
       // mutation response must never navigate over a more recent user choice.
       let active = true;
       const navigateFromContent = (url) => active && !navigationPending ? navigate(url) : Promise.resolve(false);
-      if (outlet.querySelector('[data-password-form]')) {
+      if (outlet.querySelector('[data-admin-server]')) {
+        cleanups.push(window.AlbumHavenMountAdminServer?.(outlet));
+      } else if (outlet.querySelector('[data-password-form]')) {
         cleanups.push(window.AlbumHavenMountAccount?.(outlet));
       } else {
         cleanups.push(window.AlbumHavenMountAdmin?.(outlet, { navigate: navigateFromContent }));
@@ -114,17 +116,22 @@
     };
     const reconcileNav = (incoming, url) => {
       closeDrawer(false);
-      const incomingUser = incoming.querySelector('[data-settings-section="users"]');
-      const currentUser = nav.querySelector('[data-settings-section="users"]');
-      if (currentUser && !incomingUser) currentUser.remove();
-      else if (!currentUser && incomingUser) {
-        const account = nav.querySelector('[data-settings-section="account"]');
-        account?.before(incomingUser.cloneNode(true));
+      for (const section of ['users', 'server']) {
+        const incomingItem = incoming.querySelector(`[data-settings-section="${section}"]`);
+        const currentItem = nav.querySelector(`[data-settings-section="${section}"]`);
+        if (currentItem && !incomingItem) currentItem.remove();
+        else if (!currentItem && incomingItem) {
+          const account = nav.querySelector('[data-settings-section="account"]');
+          account?.before(incomingItem.cloneNode(true));
+        }
       }
       const token = incoming.querySelector('[name="csrf_token"]');
       const currentToken = nav.querySelector('[name="csrf_token"]');
       if (token && currentToken) currentToken.value = token.value;
-      window.NavigationTree.setSelection(nav, url.pathname === '/account' ? 'account' : 'users');
+      const section = url.pathname === '/account'
+        ? 'account'
+        : url.pathname === '/admin/server' ? 'server' : 'users';
+      window.NavigationTree.setSelection(nav, section);
     };
 
     async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false, hierarchy = false } = {}) {

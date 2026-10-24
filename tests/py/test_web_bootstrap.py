@@ -1058,6 +1058,24 @@ def test_build_initial_view_preview_preserves_compact_album_track_count():
     assert "16 tracks" in markup
 
 
+def test_build_initial_view_preview_preserves_featured_artist_relationship():
+    preview = startup_bootstrap.build_initial_view_preview(
+        {
+            "artist_groups": [{
+                "artist": "10cc",
+                "albums": [{
+                    "key": "various::guardians",
+                    "name": "Guardians of the Galaxy: Awesome Mix Vol.1",
+                    "album_artist": "Various Artists",
+                    "artist_relationship": "featured",
+                }],
+            }],
+        }
+    )
+
+    assert preview["artist_groups"][0]["albums"][0]["artist_relationship"] == "featured"
+
+
 def test_build_initial_view_preview_omits_album_detail_resource_contracts():
     preview = startup_bootstrap.build_initial_view_preview(
         {

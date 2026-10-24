@@ -115,6 +115,7 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
         "display_name": source_album.get("display_name") or album_display_title(source_album.get("name")),
         "album_artist": source_album.get("album_artist"),
         "artists": list(source_album.get("artists") or []),
+        "artist_relationship": source_album.get("artist_relationship"),
         "is_compilation": bool(source_album.get("is_compilation")),
         "cover_path": source_album.get("cover_path"),
         "cover_revision": source_album.get("cover_revision"),

@@ -99,7 +99,7 @@ test('Gallery content cannot overpaint shared app-bar dropdowns', () => {
 
 test('Gallery reserves no layout space for scan errors and starts close to the app bar', () => {
   assert.doesNotMatch(appTemplate, /id="last-error"/);
-  assert.match(appChromeCss, /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{\s*padding-top: 6px;/);
+  assert.match(appChromeCss, /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{\s*padding-top: var\(--app-page-header-top\);/);
 });
 
 test('compound fields share input and embedded-action focus ownership', () => {

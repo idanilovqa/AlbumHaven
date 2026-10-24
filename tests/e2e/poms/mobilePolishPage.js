@@ -63,26 +63,39 @@ export class MobilePolishPage extends MobileLayoutPage {
 
   async readSharedHeaderGeometry(bar, surfaceSelector, leadingSelector) {
     await expect(bar).toBeVisible();
-    await expect(bar.locator(leadingSelector)).toBeVisible();
+    if (leadingSelector) await expect(bar.locator(leadingSelector)).toBeVisible();
     // parity-check: allow-read-only-measurement-evaluate -- compare the same rendered GalleryBar slots across routes.
     return bar.evaluate((node, selectors) => {
       const box = element => element.getBoundingClientRect();
       const surfaceNode = node.closest(selectors.surface);
+      const shellNode = node.closest('.shell-layout, .settings-host');
+      const brand = shellNode.querySelector('.app-bar-brand');
       const title = node.querySelector('.gallery-bar__title');
       const summary = node.querySelector('.gallery-bar__summary');
-      const leading = node.querySelector(selectors.leading);
+      const leading = selectors.leading ? node.querySelector(selectors.leading) : null;
       const actions = node.querySelector(':scope > .gallery-bar__actions');
-      const [barBox, surfaceBox, titleBox, summaryBox, leadingBox, actionsBox] =
-        [node, surfaceNode, title, summary, leading, actions].map(box);
+      const [barBox, surfaceBox, brandBox, titleBox, summaryBox, actionsBox] =
+        [node, surfaceNode, brand, title, summary, actions].map(box);
+      const leadingBox = leading ? box(leading) : null;
       const titleStyle = getComputedStyle(title), summaryStyle = getComputedStyle(summary);
       return {
+        barTop: barBox.top,
+        barLeft: barBox.left,
+        brandTop: brandBox.top,
+        brandLeft: brandBox.left,
+        brandWidth: brandBox.width,
+        brandHeight: brandBox.height,
+        titleX: titleBox.left,
+        titleY: titleBox.top,
+        summaryX: summaryBox.left,
+        summaryY: summaryBox.top,
         surfaceTop: barBox.top - surfaceBox.top,
         titleTop: titleBox.top - barBox.top,
         titleLeft: titleBox.left - barBox.left,
         summaryTop: summaryBox.top - barBox.top,
         summaryLeft: summaryBox.left - barBox.left,
-        leadingTop: leadingBox.top - barBox.top,
-        leadingLeft: leadingBox.left - barBox.left,
+        leadingTop: leadingBox ? leadingBox.top - barBox.top : null,
+        leadingLeft: leadingBox ? leadingBox.left - barBox.left : null,
         actionsTop: actionsBox.top - barBox.top,
         titleFontSize: titleStyle.fontSize,
         titleLineHeight: titleStyle.lineHeight,
@@ -93,13 +106,15 @@ export class MobilePolishPage extends MobileLayoutPage {
     }, { surface: surfaceSelector, leading: leadingSelector });
   }
 
-  async readGalleryHeaderGeometry() {
-    return this.readSharedHeaderGeometry(this.mainGalleryBar, '.shell-main-surface', '#mobile-library-button');
+  async readGalleryHeaderGeometry(leadingSelector = '#mobile-library-button') {
+    return this.readSharedHeaderGeometry(this.mainGalleryBar, '.shell-main-surface', leadingSelector);
   }
 
   async expectSharedHeaderGeometry(reference, bar, surfaceSelector, leadingSelector) {
     const actual = await this.readSharedHeaderGeometry(bar, surfaceSelector, leadingSelector);
-    for (const key of ['surfaceTop', 'titleTop', 'titleLeft', 'summaryTop', 'summaryLeft', 'leadingTop', 'leadingLeft', 'actionsTop']) {
+    const geometryKeys = ['barTop', 'barLeft', 'brandTop', 'brandLeft', 'brandWidth', 'brandHeight', 'titleX', 'titleY', 'summaryX', 'summaryY', 'surfaceTop', 'titleTop', 'titleLeft', 'summaryTop', 'summaryLeft', 'actionsTop'];
+    if (leadingSelector) geometryKeys.push('leadingTop', 'leadingLeft');
+    for (const key of geometryKeys) {
       expect(actual[key], key).toBeCloseTo(reference[key], 0);
     }
     for (const key of ['titleFontSize', 'titleLineHeight', 'titleWeight', 'summaryFontSize', 'summaryLineHeight']) {
@@ -107,8 +122,8 @@ export class MobilePolishPage extends MobileLayoutPage {
     }
   }
 
-  async expectAdminHeaderMatches(reference) {
-    await this.expectSharedHeaderGeometry(reference, this.accountBar, '.settings-outlet', '.page-gallery-bar__back');
+  async expectAdminHeaderMatches(reference, leadingSelector = '.page-gallery-bar__back') {
+    await this.expectSharedHeaderGeometry(reference, this.accountBar, '.settings-outlet', leadingSelector);
   }
 
   async expectGalleryHeaderMatches(reference) {

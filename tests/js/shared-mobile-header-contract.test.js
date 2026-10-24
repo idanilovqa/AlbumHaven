@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '../..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
 test('Gallery, Album Details, and Settings use one header component; primary bars share geometry', () => {
+  const appChromeCss = read('music_app/static/css/app-chrome.css');
   const pageHeader = read('music_app/templates/partials/page-gallery-bar.html');
   const galleryHeader = read('music_app/templates/partials/gallery-bar.html');
   const index = read('music_app/templates/index.html');
@@ -24,5 +25,17 @@ test('Gallery, Album Details, and Settings use one header component; primary bar
     mobileCss,
     /\.settings-outlet \.page-gallery-bar\s*\{[^}]*(?:padding|margin|top):/s,
     'Settings must not override shared mobile-header position or spacing',
+  );
+  assert.match(appChromeCss, /--app-page-header-top:\s*6px;/);
+  assert.match(appChromeCss, /--app-page-inline:\s*24px;/);
+  assert.match(appChromeCss, /\.app-bar-brand\s*\{[^}]*margin-left:\s*4px;/s);
+  assert.doesNotMatch(appChromeCss, /\.shell-layout\s+\.app-bar-brand\s*\{/);
+  assert.match(
+    appChromeCss,
+    /\.settings-host \.settings-main\s*\{[^}]*padding:\s*var\(--app-page-header-top\) var\(--app-page-inline\) 60px;/s,
+  );
+  assert.match(
+    appChromeCss,
+    /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{[^}]*padding-top:\s*var\(--app-page-header-top\);/s,
   );
 });

@@ -30,6 +30,8 @@
   --app-bar-height: 56px;
   --app-sidebar-width: 240px;
   --app-surface-radius: 14px;
+  --app-page-header-top: 6px;
+  --app-page-inline: 24px;
 }
 
 .shell-layout,
@@ -42,9 +44,6 @@
 }
 .shell-layout { height: calc(100dvh - var(--player-height)); }
 .shell-layout { --app-sidebar-width: var(--compact-rail-width, 240px); }
-@media (min-width: 901px) {
-  .shell-layout .app-bar-brand { margin-left: 4px; }
-}
 .shell-layout.is-artist-tree-folded .app-bar-brand { margin-left: 0; justify-self: center; }
 .settings-host.settings-shell { height: 100dvh; }
 #app-shell ~ .settings-host.settings-shell { height: calc(100dvh - var(--player-height)); }
@@ -71,7 +70,7 @@
   justify-content: center;
   width: 56px;
   height: 48px;
-  margin-left: 12px;
+  margin-left: 4px;
   border-radius: 8px;
 }
 .app-bar-brand-mark {
@@ -218,12 +217,12 @@
   border-radius: var(--app-surface-radius) var(--app-surface-radius) 0 0;
   box-shadow: inset 1px 1px 0 #ffffff03;
 }
-.shell-main-surface { display: flex; flex-direction: column; padding: 24px; }
+.shell-main-surface { display: flex; flex-direction: column; padding: 24px var(--app-page-inline); }
 .settings-host .settings-outlet { overflow: auto; }
 .settings-host .settings-nav { padding: 25px 14px; }
 .settings-host .settings-nav h2 { margin: 0 12px 20px; font-size: 18px; }
 .settings-host .settings-nav-item.is-active { background: var(--app-active); }
-.settings-host .settings-main { min-width: 0; padding: 31px 42px 60px; }
+.settings-host .settings-main { min-width: 0; padding: var(--app-page-header-top) var(--app-page-inline) 60px; }
 .artists-drawer-button { display: none; }
 
 .shell-navigation-rail,
@@ -317,7 +316,7 @@
 }
 
 .shell-main-surface:has(> .gallery-bar) {
-  padding-top: 6px;
+  padding-top: var(--app-page-header-top);
   padding-bottom: 0;
 }
 

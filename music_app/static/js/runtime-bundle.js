@@ -9922,6 +9922,12 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.lockStatus = 'locked';
   ownership.blockedReason = 'playback_unavailable';
+  const offset = typeof getPlayerPlaybackSnapshot === 'function'
+    ? getPlayerPlaybackSnapshot().currentTime : 0;
+  if (typeof closeListenSegment === 'function') closeListenSegment(offset);
+  if (!state.player.listenSession?.paused_at_unix_ms && typeof markListenSessionPaused === 'function') {
+    markListenSessionPaused(offset);
+  }
   if (typeof stopStreamingPlayback === 'function') {
     void Promise.resolve(stopStreamingPlayback(reason, { preserveSnapshot: true })).catch(() => {});
   }
@@ -35811,15 +35817,22 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   if (identity === pendingStreamingFirstFrameIdentity) {
     return pendingStreamingFirstFrameSchedule;
   }
+  const selectionToken = playerTrackSelectionToken;
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (!nextTrack || typeof scheduleStreamingContinuity !== 'function') {
+  if ((!nextTrack && !state.player.loopActive) || typeof scheduleStreamingContinuity !== 'function') {
     handledStreamingFirstFrameIdentity = identity;
     return;
   }
   pendingStreamingFirstFrameIdentity = identity;
-  const scheduling = Promise.resolve().then(() => scheduleStreamingContinuity(nextTrack));
+  const scheduling = Promise.resolve().then(() => {
+    if (selectionToken !== playerTrackSelectionToken
+      || selectedTrackPath !== String(state.player.current?.path || '')) return;
+    return state.player.loopActive
+      ? dispatchActiveStreamingLoop()
+      : nextTrack ? scheduleStreamingContinuity(nextTrack) : null;
+  });
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
     await scheduling;

@@ -54,6 +54,12 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.lockStatus = 'locked';
   ownership.blockedReason = 'playback_unavailable';
+  const offset = typeof getPlayerPlaybackSnapshot === 'function'
+    ? getPlayerPlaybackSnapshot().currentTime : 0;
+  if (typeof closeListenSegment === 'function') closeListenSegment(offset);
+  if (!state.player.listenSession?.paused_at_unix_ms && typeof markListenSessionPaused === 'function') {
+    markListenSessionPaused(offset);
+  }
   if (typeof stopStreamingPlayback === 'function') {
     void Promise.resolve(stopStreamingPlayback(reason, { preserveSnapshot: true })).catch(() => {});
   }

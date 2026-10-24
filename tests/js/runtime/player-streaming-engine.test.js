@@ -3008,10 +3008,8 @@ for (const pauseAt of ['before-prepare', 'before-boundary', 'queued-boundary']) 
   });
 }
 
-test('explicit Play after lease loss reopens the real current stream at its retained audible offset', async () => {
-  const harness = createEngineHarness({ realProcessor: true });
+function loadLeaseRecoveryRuntime(harness) {
   const { context } = harness;
-  const track = makeTrack('lease-recovery.flac');
   Object.assign(context, {
     AbortController,
     getPlayerPlaybackSnapshot: harness.api.snapshot,
@@ -3019,15 +3017,120 @@ test('explicit Play after lease loss reopens the real current stream at its reta
     clearInterval: () => {},
     fetch: async (url) => ({ ok: true, json: async () => url === '/playback/refs'
       ? { protocol: 1, expiresAt: '2099-10-24T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] }
-      : { protocol: 1, claimToken: 'fresh-claim', expiresAt: new Date(harness.dateNow() + 30_000).toISOString(),
+      : { ok: true, protocol: 1, claimToken: 'fresh-claim', expiresAt: new Date(context.Date.now() + 30_000).toISOString(),
         is_playing_elsewhere: false, is_playing_here: false } }),
   });
   for (const filename of ['playback-ownership-helpers.js', 'player-loop-playback.js']) {
     vm.runInContext(fs.readFileSync(path.join(path.dirname(enginePath), filename), 'utf8'), context);
   }
   context.updatePlayerUi = () => {};
-  context.state.player.current = track;
   context.state.player.ownership = { tabId: 'lease-client', requestVersion: 0, activeClaim: null };
+}
+
+for (const interruptionMs of [1_000, 3_600_001]) {
+  test(`lease interruption of ${interruptionMs}ms resets contiguous listening and honors long-pause splitting`, async () => {
+    const harness = createEngineHarness({ measuredListening: true });
+    loadLeaseRecoveryRuntime(harness);
+    const { context } = harness;
+    const track = makeTrack('interrupted-listen.flac');
+    context.state.player.current = track;
+    const requests = [];
+    const fetch = context.fetch;
+    context.fetch = (url, options) => { requests.push(url); return fetch(url, options); };
+    let now = harness.dateNow();
+    context.Date.now = () => now;
+    context.isoNow = () => new Date(now).toISOString();
+    context.unixNowSeconds = () => Math.floor(now / 1000);
+    const consumeTwentySeconds = () => {
+      const role = harness.engine.roles.current;
+      harness.nodes.at(-1).port.dispatch({ type: 'consumed', generation: role.generation,
+        streamId: role.streamId, role: 'current', frames: 20 * 48_000, bufferedFrames: 0, audible: true });
+    };
+    try {
+      assert.equal(await context.claimPlaybackOwnership(track), true);
+      await context.resumeListenSessionPlayback(track, 0);
+      await harness.api.start(track);
+      const original = context.state.player.listenSession;
+      consumeTwentySeconds();
+      assert.equal(original.measurement.total, 20);
+      assert.equal(original.measurement.longest, 20);
+      const requestsBeforeLoss = requests.length;
+      context.losePlaybackOwnership();
+      await harness.settle();
+      assert.equal(requests.length, requestsBeforeLoss,
+        'lease-loss bookkeeping must not send unauthorized listen effects');
+      now += interruptionMs;
+      await context.handlePlaybackOwnershipEvent();
+      context.togglePlayerPlayback({ focusTimelineOnResume: false });
+      await harness.settle();
+      await harness.settle();
+      consumeTwentySeconds();
+      const resumed = context.state.player.listenSession;
+      if (interruptionMs > 3_600_000) {
+        assert.notEqual(resumed.measurement.sessionId, original.measurement.sessionId,
+          'an ownership interruption exceeding one hour must start a new measured session');
+        assert.equal(original.measurement.total, 20);
+        assert.equal(resumed.measurement.total, 20);
+      } else {
+        assert.strictEqual(resumed, original);
+        assert.equal(resumed.measurement.total, 40, 'interrupted silence adds no measured time');
+      }
+      assert.equal(resumed.measurement.longest, 20,
+        'separate audible intervals must not merge across ownership loss');
+    } finally {
+      clearTimeout(context.getPlaybackOwnershipState().expiryTimer);
+      await harness.api.stop();
+    }
+  });
+}
+
+test('lease recovery reinstalls the active loop before first-frame queued-next scheduling', async () => {
+  const harness = createEngineHarness();
+  loadLeaseRecoveryRuntime(harness);
+  const { context } = harness;
+  const track = makeTrack('looping.flac');
+  const next = makeTrack('queued-next.flac');
+  Object.assign(context.state.player, { current: track, loopActive: true, loopStart: 20, loopEnd: 40 });
+  const firstFrame = () => {
+    const role = harness.engine.roles.current;
+    harness.nodes.at(-1).port.dispatch({ type: 'first-frame', generation: role.generation,
+      streamId: role.streamId, renderedFrame: 0, contextTime: 1 });
+  };
+  try {
+    assert.equal(await context.claimPlaybackOwnership(track), true);
+    await harness.api.start(track, { startSeconds: 25 });
+    firstFrame();
+    await context.scheduleActiveStreamingLoop();
+    assert.equal(harness.engine.loopContinuity?.kind, 'long-loop');
+    context.peekNextQueuedTrack = () => next;
+    context.losePlaybackOwnership();
+    await harness.settle();
+    const opensBeforeRecovery = harness.sent('open').length;
+    await context.handlePlaybackOwnershipEvent();
+    context.togglePlayerPlayback({ focusTimelineOnResume: false });
+    await harness.settle();
+    firstFrame();
+    await harness.settle();
+    assert.equal(context.state.player.loopActive, true);
+    assert.equal(harness.engine.loopContinuity?.kind, 'long-loop',
+      'the still-active loop must be installed in the restarted engine');
+    assert.equal(harness.engine.loopContinuity.startSeconds, 20);
+    assert.equal(harness.engine.loopContinuity.endSeconds, 40);
+    assert.equal(harness.engine.roles.continuity?.track.path, track.path);
+    assert.equal(harness.sent('open').slice(opensBeforeRecovery).some(open => open.path === next.path), false,
+      'first-frame recovery must not open the queued next track while looping');
+  } finally {
+    clearTimeout(context.getPlaybackOwnershipState().expiryTimer);
+    await harness.api.stop();
+  }
+});
+
+test('explicit Play after lease loss reopens the real current stream at its retained audible offset', async () => {
+  const harness = createEngineHarness({ realProcessor: true });
+  loadLeaseRecoveryRuntime(harness);
+  const { context } = harness;
+  const track = makeTrack('lease-recovery.flac');
+  context.state.player.current = track;
   try {
     assert.equal(await context.claimPlaybackOwnership(track), true);
     await harness.api.start(track, { startSeconds: 12 });

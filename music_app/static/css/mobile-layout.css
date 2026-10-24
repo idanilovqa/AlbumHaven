@@ -54,7 +54,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
     --app-bar-height: calc(56px + env(safe-area-inset-top, 0px));
     --mobile-navigation-height: 0px;
     --player-height: calc(104px + env(safe-area-inset-bottom, 0px));
-    --app-page-header-top: 14px;
+    --app-page-header-top: 8px;
     --app-page-inline: 12px;
   }
   html, body { width: 100%; overflow-x: hidden; }

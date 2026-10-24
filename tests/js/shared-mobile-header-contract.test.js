@@ -28,6 +28,7 @@ test('Gallery, Album Details, and Settings use one header component; primary bar
   );
   assert.match(appChromeCss, /--app-page-header-top:\s*6px;/);
   assert.match(appChromeCss, /--app-page-inline:\s*24px;/);
+  assert.match(mobileCss, /--app-page-header-top:\s*8px;/);
   assert.match(appChromeCss, /\.app-bar-brand\s*\{[^}]*margin-left:\s*4px;/s);
   assert.doesNotMatch(appChromeCss, /\.shell-layout\s+\.app-bar-brand\s*\{/);
   assert.match(

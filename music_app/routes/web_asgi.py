@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from music_app.services.private_ui_context import private_ui_context_ref
+from music_app.services.foobar_account_ui_context import (
+    FOOBAR_ACCOUNT_CONTEXT_SCOPE, FoobarAccountUIContextError,
+    foobar_account_ui_context_ref,
+)
 
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.loops import get_loop
@@ -206,6 +210,28 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
     actor = getattr(request.state, "current_actor", None)
+    account_foobar_context = None
+    account_foobar_allowed = False
+    account_foobar_history_allowed = False
+    account_foobar_matching_library_id = None
+    if actor and actor.is_authenticated:
+        account_foobar_actions = allowed_actions_for_request(
+            request, ("account.self.foobar.write", "account.self.foobar.read", "library.browse.read"),
+            target_account_id=actor.account_id,
+        )
+        account_foobar_allowed = account_foobar_actions.allows("account.self.foobar.write")
+        account_foobar_history_allowed = account_foobar_actions.allows("account.self.foobar.read")
+        if account_foobar_allowed or account_foobar_history_allowed:
+            if (type(actor.current_library_id) is int
+                    and 1 <= actor.current_library_id <= 9007199254740991
+                    and account_foobar_actions.allows("library.browse.read")):
+                account_foobar_matching_library_id = actor.current_library_id
+            try:
+                account_foobar_context = foobar_account_ui_context_ref(request)
+            except FoobarAccountUIContextError:
+                # Missing Foobar continuity disables only this surface, not the
+                # existing library shell or its independent authorization.
+                account_foobar_context = None
     private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
     bootstrap = context.get("bootstrap_payload")
     if isinstance(bootstrap, dict) and isinstance(bootstrap.get("initial_view"), dict):
@@ -227,6 +253,11 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             ),
             **context,
             "private_ui_context": private_context,
+            "account_foobar_allowed": account_foobar_allowed,
+            "account_foobar_history_allowed": account_foobar_history_allowed,
+            "account_foobar_context": account_foobar_context,
+            "account_foobar_scope": FOOBAR_ACCOUNT_CONTEXT_SCOPE,
+            "account_foobar_matching_library_id": account_foobar_matching_library_id,
             "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
             "utility_allowed_actions": allowed_actions_for_request(request, (
                 "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",

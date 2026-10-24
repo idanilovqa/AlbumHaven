@@ -36,6 +36,10 @@ def _expired():
     return HomeActivityError("Activity changed or expired. Refresh the activity.", 410, "activity_snapshot_expired")
 
 
+def _external_coverage(coverage):
+    # Provider connection evidence is never a public coverage fact.
+    return {key: value for key, value in coverage.items() if key != '_lastfm_history_stamp'}
+
 @contextmanager
 def _capture_lock(connection, scope, *, enabled):
     if not enabled:
@@ -69,7 +73,7 @@ def _capture_lock(connection, scope, *, enabled):
 _LEDGER_READ = """
 select h.id, h.account_id, h.library_id, h.track_id, h.track_key,
        h.played_at, h.source_family, h.measurement_version, h.finalized,
-       h.measured_listened_seconds, h.metadata,
+       h.measured_listened_seconds, h.metadata, h.scrobble_status,
        t.id as resolved_track_id, t.track_key as resolved_track_key,
        t.title as resolved_track_title,
        ar.id as resolved_track_artist_id, ar.name as resolved_track_artist_name,
@@ -174,6 +178,25 @@ class HomeActivityPostgresRepository:
         result = (values[scope.source_account_id], values[0])
         return (*result, values[scope.account_id]) if scope.audience == "comparison" else result
 
+    def _lastfm_stamp(self, connection, scope, query, project):
+        from music_app.services.lastfm_home_snapshot import enabled_for, connection_stamp
+        if not enabled_for(self.config,scope,query):
+            return None
+        # Optional remote data has its own fixed account-read contract. Missing
+        # or explicitly denied authority leaves genuine native Home unchanged.
+        account_read = getattr(project.policy, "lastfm_history_read", None)
+        if not callable(account_read):
+            return None
+        permitted = account_read()
+        if type(permitted) is not bool:
+            raise HomeActivityError("Activity unavailable.",503,"activity_unavailable")
+        if not permitted:
+            return None
+        # Same account-first lock order as import/reconnect; no provider I/O.
+        # This remains own-library Home admission, not a new social grant.
+        self._lock_authority(connection,scope)
+        return connection_stamp(connection,scope)
+
     @staticmethod
     @contextmanager
     def _friend_authority(connection, scope):
@@ -207,6 +230,7 @@ class HomeActivityPostgresRepository:
     def _validated_snapshot(self, connection, scope, query, now, project):
         with self._friend_authority(connection, scope) as friend:
             authority = self._authority(connection, scope, now)
+            lastfm_stamp = self._lastfm_stamp(connection,scope,query,project)
             if query.snapshot_ref:
                 snapshot = connection.execute("""select * from app.activity_snapshots
                     where token_digest=%s and account_id=%s and session_id=%s and library_id=%s
@@ -220,7 +244,12 @@ class HomeActivityPostgresRepository:
                     raise _expired()
                 token = query.snapshot_ref
             else:
-                token, snapshot = self._create(connection, scope, query, now, authority, project, friend)
+                token, snapshot = self._create(connection, scope, query, now, authority, project, friend, lastfm_stamp=lastfm_stamp)
+            if scope.audience == "own" and query.kind == "listens":
+                stored_coverage = snapshot["coverage"]
+                if (not isinstance(stored_coverage,dict)
+                        or stored_coverage.get("_lastfm_history_stamp") != lastfm_stamp):
+                    raise _expired()
             revisions = self._revisions(connection, scope, lock=True)
             expected_revisions = (snapshot["ledger_revision"], snapshot["inventory_revision"])
             if scope.audience == "comparison":
@@ -240,6 +269,9 @@ class HomeActivityPostgresRepository:
             if snapshot["expires_at"] <= checked_at:
                 raise _expired()
             yield snapshot, token, friend
+            if scope.audience == "own" and query.kind == "listens":
+                if self._lastfm_stamp(connection,scope,query,project) != lastfm_stamp:
+                    raise _expired()
 
     def read(self, *, scope, query, now, build_projection):
         if (not isinstance(scope, ActivityScope) or not isinstance(query, ActivityQuery)
@@ -345,7 +377,7 @@ class HomeActivityPostgresRepository:
                         "row_key": stored_row["row_key"], "relationship_revision": snapshot["relationship_revision"]}})
             return result
 
-    def _create(self, connection, scope, query, now, authority, build_projection, friend=None):
+    def _create(self, connection, scope, query, now, authority, build_projection, friend=None, *, lastfm_stamp=None):
         from psycopg.types.json import Jsonb
         # Cleanup never visits another account and is bounded by receipt count.
         connection.execute("""delete from app.activity_snapshots where id in (
@@ -400,6 +432,18 @@ class HomeActivityPostgresRepository:
             total_listens += side_total
             if side:
                 coverage.setdefault("side_total_listens", {})[side] = side_total
+        if lastfm_stamp is not None:
+            if scope.audience != "own" or query.kind != "listens" or scope.source_account_id != scope.account_id:
+                raise _expired()
+            from music_app.services.lastfm_home_snapshot import append_observations
+            added, observed = append_observations(connection,snapshot_id=snapshot_id,
+                scope=scope,window=window,secret=secret,stamp=lastfm_stamp)
+            total_listens += added
+            coverage["_lastfm_history_stamp"] = lastfm_stamp
+            coverage["lastfm_observations"] = observed
+            coverage["label"] = observed["label"]
+            if observed["imported_rows"] or observed["matched_rows"]:
+                families.add("lastfm_history_observations_v1")
         coverage["source_families"] = sorted(families)
         if scope.audience == "comparison":
             from music_app.services.home_activity_comparison_postgres import finalize_comparison
@@ -543,7 +587,7 @@ class HomeActivityPostgresRepository:
             "rows": [dict(row["payload"]) for row in rows], "total_listens": snapshot["total_listens"],
             "period_label": snapshot["period_label"], "range_label": snapshot["range_label"],
             "snapshot_ref": token, "expires_at": snapshot["expires_at"].isoformat(),
-            "coverage": dict(snapshot["coverage"]), "next_cursor": None,
+            "coverage": _external_coverage(snapshot["coverage"]), "next_cursor": None,
         }
         if numbered:
             payload["pagination"] = {"mode": "numbered", "page": page, "page_size": PAGE_SIZE, "total_rows": total_rows}
@@ -552,3 +596,4 @@ class HomeActivityPostgresRepository:
             signature = hmac.new(secret, f"{token}.{position}".encode(), hashlib.sha256).hexdigest()
             payload["next_cursor"] = f"{token}.{position}.{signature}"
         return {"status": "ready" if rows else "empty", "data": payload}
+

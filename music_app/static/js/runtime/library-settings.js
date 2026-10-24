@@ -251,6 +251,14 @@ function handleLibrarySettingsClick(event) {
   }
   const browse = event.target.closest('[data-browse-library-root]');
   if (browse) { event.preventDefault(); browseLibraryRootDraft(browse.getAttribute('data-browse-library-root'), Number(browse.getAttribute('data-library-root-index'))); return true; }
+  const foobarAccount = event.target.closest('[data-account-foobar-open]');
+  if (foobarAccount) {
+    event.preventDefault();
+    if (!foobarAccount.disabled && window.AlbumHavenCapabilities?.allows('account.self.foobar.write') === true) {
+      window.location.assign('/account/integrations/foobar');
+    }
+    return true;
+  }
   const foobarHelp = event.target.closest('[data-foobar-help]');
   if (foobarHelp) { event.preventDefault(); openUtilityFoobarGuide(); return true; }
   const foobarFormat = event.target.closest('[data-foobar-format-trigger]');

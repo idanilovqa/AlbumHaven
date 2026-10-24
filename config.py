@@ -245,6 +245,14 @@ class Config:
         kind="library roots",
     )
     CACHE_MAX_AGE_SECONDS = int(os.environ.get("MUSIC_CACHE_MAX_AGE_SECONDS", "0"))
+    # Deployment opt-in only. Capacity remains mandatory and is validated by
+    # the service; missing or malformed values must not allocate a worker.
+    ALBUM_HAVEN_FOOBAR_ACCOUNT_IMPORT_ENABLED = os.environ.get(
+        'ALBUM_HAVEN_FOOBAR_ACCOUNT_IMPORT_ENABLED', '').strip().casefold() == 'true'
+    ALBUM_HAVEN_FOOBAR_IMPORT_INTAKE_BYTES = os.environ.get(
+        'ALBUM_HAVEN_FOOBAR_IMPORT_INTAKE_BYTES')
+    ALBUM_HAVEN_FOOBAR_IMPORT_TOTAL_LOGICAL_BYTES = os.environ.get(
+        'ALBUM_HAVEN_FOOBAR_IMPORT_TOTAL_LOGICAL_BYTES')
     ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED = os.environ.get(
         'ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED', '').strip().casefold() == 'true'
     ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED = os.environ.get(

@@ -1,5 +1,7 @@
-"""Unexecuted full composed existing-source transitions at modeled DB boundary."""
+"""Composed existing-source transitions at modeled DB boundary."""
+from copy import deepcopy
 from dataclasses import replace
+from types import SimpleNamespace
 import hashlib
 import json
 
@@ -165,3 +167,92 @@ def test_existing_raw_change_lost_ack_exact_replay_does_not_append_twice(monkeyp
     assert db.calls.count(p.source._insert_revisions_sql())==appends
     assert db.calls.count(f._COMMIT_SQL)==commits
     assert db.observation_inserts==1 and db.revision==2
+
+
+@pytest.mark.parametrize('state', ['absent', 'empty'])
+def test_missing_or_empty_count_retains_prior_effective_and_raw_provenance(monkeypatch, state):
+    db = install_existing(monkeypatch)
+    seed(db)
+    before = deepcopy(db.revisions[1])
+    upload = payload('')
+    if state == 'absent':
+        header, row = upload.rstrip(b'\n').split(b'\n')
+        upload = header.rsplit(b'\t', 1)[0] + b'\n' + row.rsplit(b'\t', 1)[0] + b'\n'
+    _, receipt, original, acmd = prepare(db, upload, 2)
+    incoming = bytes.fromhex(original[2][0][6])
+    effective = bytes.fromhex(original[2][0][7])
+    assert field(incoming, 'play_count')[0] == state
+    assert field(incoming, 'play_count')[2] is None
+    assert field(effective, 'play_count') == field(raw(before, 6), 'play_count')
+    assert effective == raw(before, 6)
+    result = apply(acmd)
+    assert_terminal(result, old=1, new=2, counts=(0, 1, 0, 0, 0, 0))
+    assert db.revisions[1] == before
+    assert raw(db.source_row, 8) == incoming
+    assert raw(db.source_row, 6) == effective
+    assert db.observation_inserts == 1 and len(db.revisions) == 2
+    appends = db.calls.count(p.source._insert_revisions_sql())
+    assert apply(acmd) == result
+    assert db.calls.count(p.source._insert_revisions_sql()) == appends
+    assert db.revision == db.observation_revision == 2
+    for sql in (p.prior_merge._PRIOR_SQL, p.original_sources._RAW_SQL,
+                p.source._current_incoming_sql(), f._COMMIT_SQL):
+        assert sql in db.calls
+    assert all(cursor.closed for cursor in db.cursors)
+
+
+def test_injected_equal_identity_hash_cannot_merge_different_identity(monkeypatch):
+    # Hypothetical collision at the immutable-prior repository result boundary,
+    # NOT a real SHA collision or proof that PostgreSQL executed its predicates.
+    db = install_existing(monkeypatch)
+    seed(db)
+    _, receipt, original, acmd = prepare(db, payload(5), 2)
+    expected = bytes.fromhex(original[2][0][1])
+    other = expected.replace(b'synthetic', b'different')
+    assert other != expected and len(other) == len(expected)
+    assert p.evidence.decode_identity(other)[0] == 'path'
+    real_sha256 = hashlib.sha256
+    assert real_sha256(expected).digest() != real_sha256(other).digest()
+
+    def collision_sha256(value):
+        return real_sha256(expected if value == other else value)
+
+    assert collision_sha256(expected).digest() == collision_sha256(other).digest()
+    dispatch = db.dispatch
+    collision_reads = []
+
+    def collided_prior(sql, params):
+        rows = dispatch(sql, params)
+        if sql == p.original_sources._RAW_SQL:
+            # First execute the existing scoped account/source/observation and
+            # immutable revision/evidence/display checks. Alter only identity.
+            assert len(rows) == 1 and rows[0]['identity_bytes'] == expected
+            collision_reads.append(json.loads(params[0]))
+            return [dict(rows[0], identity_bytes=other)]
+        return rows
+
+    state_names = ('revision', 'observation_revision', 'observation_inserts',
+                   'source_row', 'revisions', 'receipts', 'keys', 'history_projections')
+    before = deepcopy(tuple(getattr(db, name) for name in state_names))
+    start = len(db.calls)
+    with monkeypatch.context() as fault:
+        # Module-local digest provider: no global hashlib mutation, no gate,
+        # authority, merger, envelope or decision-owner substitution.
+        fault.setattr(p.original_sources, 'hashlib', SimpleNamespace(sha256=collision_sha256))
+        fault.setattr(db, 'dispatch', collided_prior)
+        with pytest.raises(p.SourceUnavailable) as failure:
+            apply(acmd)
+    assert failure.value.status_code == 503
+    assert collision_reads and collision_reads[0][:3] == [1, None, SOURCE]
+    assert tuple(getattr(db, name) for name in state_names) == before
+    for sql in (p.source._insert_observations_sql(), p.source._insert_revisions_sql(),
+                p.source._advance_pointers_sql(), f._ADVANCE_SQL, f._COMMIT_SQL):
+        assert sql not in db.calls[start:]
+    assert acmd.request_key not in db.keys
+    assert db.receipts[receipt.receipt_ref]['state'] == 'ready'
+    assert all(cursor.closed for cursor in db.cursors)
+    # The unchanged genuine input succeeds once the injected fault is removed.
+    result = apply(acmd)
+    assert_terminal(result, old=1, new=2, counts=(0, 1, 0, 0, 0, 0))
+    assert db.observation_inserts == 1 and len(db.revisions) == 2
+    assert field(raw(db.source_row, 6), 'play_count')[2] == 5

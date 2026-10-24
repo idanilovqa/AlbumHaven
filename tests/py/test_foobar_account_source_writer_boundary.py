@@ -1,4 +1,4 @@
-"""Independent synthetic/pure and source-shape contracts, authored NOT EXECUTED.
+"""Independent synthetic/pure and source-shape contracts.
 
 No successful connection/authority doubles. SQL strings are inspected, never sent.
 These contracts do not establish native PostgreSQL or coordinated Apply behavior.
@@ -244,3 +244,47 @@ def test_candidate_revision_join_uses_available_scope_not_unprojected_lateral_co
     assert '(r.account_id,r.source_ref,r.observation_ref,r.source_revision)' in tail
     assert '=(f.account_id,f.source_ref,o.observation_ref,o.current_revision)' in tail
     assert 'o.account_id' not in tail and 'o.source_ref' not in tail
+
+
+@pytest.mark.parametrize('name,old_value,state', [
+    (name, value, state)
+    for name, value in (('title', 'Synthetic'), ('play_count', '19'), ('rating', '4'), ('favorite', '1'))
+    for state in ('absent', 'empty', 'unavailable')
+    if name != 'title' or state != 'unavailable'
+])
+def test_parser_backed_merge_retains_nonempty_field_and_its_origin(name, old_value, state):
+    old, _ = fields(('path\t%s\n/a\t%s\n' % (name, old_value)).encode())
+    payload = (b'path\n/a\n' if state == 'absent' else
+               ('path\t%s\n/a\t%s\n' % (name, 'N/A' if state == 'unavailable' else '')).encode())
+    incoming, parsed = fields(payload)
+    index = parser.FIELD_NAMES.index(name)
+    assert old[index][0] == 'valid' and incoming[index][0] == state
+    prior_bytes = evidence.encode_evidence(old)
+    raw_bytes = evidence.encode_evidence(incoming)
+    merged = evidence.merge_fields(old, incoming)
+    assert merged[index] == old[index]  # Includes exact original provenance.
+    assert incoming[index][2] is None and incoming[index] != old[index]
+    if state == 'absent':
+        assert incoming[index][4] is None
+    else:
+        assert incoming[index][4][0] == parsed.source_sha256
+    assert evidence.encode_evidence(merged) == prior_bytes
+    assert evidence.encode_evidence(incoming) == raw_bytes
+    assert raw_bytes != prior_bytes
+    assert evidence.merge_fields(None, incoming) == incoming
+
+
+def test_valid_zero_count_and_false_favorite_are_evidence_not_missing_or_manual_clear():
+    old, _ = fields(b'path\tplay_count\tfavorite\trating\n/a\t19\t1\t4\n')
+    incoming, parsed = fields(b'path\tplay_count\tfavorite\trating\n/a\t0\t0\t\n')
+    merged = evidence.merge_fields(old, incoming)
+    for name, value in (('play_count', 0), ('favorite', False)):
+        index = parser.FIELD_NAMES.index(name)
+        assert incoming[index][0] == 'valid'
+        assert type(incoming[index][2]) is type(value) and incoming[index][2] == value
+        assert merged[index] == incoming[index]
+        assert merged[index][4][0] == parsed.source_sha256
+    rating = parser.FIELD_NAMES.index('rating')
+    assert incoming[rating][0] == 'empty' and merged[rating] == old[rating]
+    # Source evidence is not authorization to clear a local rating or unlove.
+    # The genuine optional-taste protected clear/unlove cases run separately.

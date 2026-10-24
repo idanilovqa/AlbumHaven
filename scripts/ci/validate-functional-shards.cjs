@@ -11,8 +11,8 @@ const EXPECTED_CONFIGS = Object.freeze([
   'playwright.non-album-rescan.config.js',
 ]);
 const EXPECTED_SHARDS = Object.freeze([
-  ['gallery-search-visual', 53],
-  ['cover-providers-1', 12],
+  ['gallery-search-visual', 65],
+  ['cover-providers-1', 19],
   ['cover-providers-2', 12],
   ['metadata-mutations', 14],
   ['playback-utilities-1', 14],
@@ -209,7 +209,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 133) errors.push(`functional contract owns ${owned.length} cases; expected 133`);
+  if (owned.length !== 152) errors.push(`functional contract owns ${owned.length} cases; expected 152`);
   return errors;
 }
 

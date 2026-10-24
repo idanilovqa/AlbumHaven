@@ -215,6 +215,8 @@ export class CoverLookupActions {
       entrance = await observation.evaluate((measurement) => measurement.result);
       if (entrance.error) throw new Error(entrance.error);
       expect(entrance.baselineUnsettled).toBe(true);
+      expect(entrance.busyButtonSeen).toBe(true);
+      expect(entrance.startingStatusSeen).toBe(true);
       expect(entrance.sampledFrames).toBeGreaterThanOrEqual(3);
     } finally {
       try {
@@ -838,6 +840,21 @@ export class CoverLookupActions {
     if (await this.coverLookup.isDrawerOpen()) return;
     await this.coverLookup.drawerButton.click();
     await this.coverLookup.waitForDrawerState(true, { timeout: options.timeout || 30000 });
+  }
+
+  async openDrawerAndObserveInitialLoading(options = {}) {
+    const observation = await this.coverLookup.observeDrawerInitialLoad(options);
+    try {
+      await this.openDrawer(options);
+      // parity-check: allow-read-only-measurement-evaluate -- read the prearmed notification loading observation
+      const result = await observation.evaluate((measurement) => measurement.result);
+      if (result.error) throw new Error(result.error);
+      return result;
+    } finally {
+      // parity-check: allow-read-only-measurement-evaluate -- cancel only this observation's MutationObserver and timer
+      await observation.evaluate((measurement) => measurement.cancel());
+      await observation.dispose();
+    }
   }
 
   async pressSpaceOnFocusedDrawerOpener(options = {}) {

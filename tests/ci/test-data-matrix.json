@@ -2875,6 +2875,30 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.cover-rescan.config.js",
+    "project": "cover-rescan",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-035 persisted notification candidates remain visible and save after app restart",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:persisted-candidates-restart"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:persisted-candidates-restart"
+    ],
+    "expectedContracts": [
+      "persisted-candidates-visible-after-restart",
+      "persisted-candidate-saves-through-production-route",
+      "notification-drawer-remains-open-behind-cover-lookup"
+    ],
+    "globalMutationReason": "Requires a managed application restart after persisting provider candidates.",
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.lastfm-auto-timezone.config.js",
     "project": "lastfm-auto-timezone",
     "test": "tests/e2e/specs/lastfmAutoTimezone.spec.js",
@@ -7631,6 +7655,26 @@
     ],
     "expectedContracts": [
       "Admin is a readable phone table and header Back exits the hierarchy after Loops, Users and Password"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobilePolish.spec.js",
+    "case": "Gallery and Admin keep the same desktop shell and page-header geometry",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Gallery and Admin keep the same desktop shell and page-header geometry"
     ],
     "ownerApproval": "approved",
     "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."

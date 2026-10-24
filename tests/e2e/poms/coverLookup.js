@@ -221,11 +221,19 @@ export class CoverLookup extends BasePage {
 
   async observeStartedToastEntrance(options = {}) {
     // parity-check: allow-read-only-measurement-evaluate -- observe running-layout geometry through native toast entrance; no application state or DOM mutations
-    return this.page.evaluateHandle(({ modalSelector, toastSelector, timeout }) => {
+    return this.page.evaluateHandle(({
+      findBetterButtonSelector,
+      modalSelector,
+      modalStatusSelector,
+      toastSelector,
+      timeout,
+    }) => {
       let frame;
       let timer;
       let finish;
       let baseline;
+      let busyButtonSeen = false;
+      let startingStatusSeen = false;
       let settledFrames = 0;
       let sampledFrames = 0;
       const delta = { height: 0, width: 0, x: 0, y: 0 };
@@ -238,6 +246,14 @@ export class CoverLookup extends BasePage {
         const sample = () => {
           const modal = document.querySelector(modalSelector);
           const progress = modal?.querySelector('.cover-lookup-search-progress');
+          const findBetterButton = document.querySelector(findBetterButtonSelector);
+          const modalStatus = document.querySelector(modalStatusSelector);
+          busyButtonSeen = busyButtonSeen || (
+            findBetterButton instanceof HTMLButtonElement
+            && findBetterButton.disabled
+          );
+          startingStatusSeen = startingStatusSeen
+            || String(modalStatus?.textContent || '').includes('Starting cover search…');
           const toast = Array.from(document.querySelectorAll(toastSelector)).findLast(
             (candidate) => candidate.querySelector('.on-page-alert__message')
               ?.textContent?.trim() === 'Cover art lookup started.',
@@ -261,7 +277,13 @@ export class CoverLookup extends BasePage {
             sampledFrames += 1;
             settledFrames = settled ? settledFrames + 1 : 0;
             if (settledFrames >= 2) {
-              finish({ delta, sampledFrames, baselineUnsettled: true });
+              finish({
+                busyButtonSeen,
+                delta,
+                sampledFrames,
+                startingStatusSeen,
+                baselineUnsettled: true,
+              });
               return;
             }
           } else if (baseline) {
@@ -276,7 +298,52 @@ export class CoverLookup extends BasePage {
       return { result, cancel: () => finish({ error: 'Toast entrance observation cancelled.' }) };
     }, {
       modalSelector: this.modalDialogSelector,
+      modalStatusSelector: this.modalStatusSelector,
+      findBetterButtonSelector: this.findBetterButtonSelector,
       toastSelector: this.toastSelector,
+      timeout: options.timeout || 30000,
+    });
+  }
+
+  async observeDrawerInitialLoad(options = {}) {
+    // parity-check: allow-read-only-measurement-evaluate -- observe transient notification loading markup without changing app state
+    return this.page.evaluateHandle(({ bodySelector, timeout }) => {
+      const body = document.querySelector(bodySelector);
+      if (!(body instanceof HTMLElement)) throw new Error('Notification drawer body is unavailable.');
+      let loadingSeen = false;
+      let falseEmptySeen = false;
+      let observer;
+      let timer;
+      let finish;
+      const result = new Promise((resolve) => {
+        finish = (value) => {
+          observer?.disconnect();
+          clearTimeout(timer);
+          resolve(value);
+        };
+        const sample = () => {
+          const loading = Boolean(body.querySelector('.cover-lookup-task-card.is-loading'));
+          loadingSeen = loadingSeen || loading;
+          falseEmptySeen = falseEmptySeen || (
+            !loadingSeen
+            && /not looking for anything at the moment/i.test(body.textContent || '')
+          );
+          const settled = loadingSeen
+            && !loading
+            && Boolean(body.querySelector('.cover-lookup-task-card:not(.is-loading), .cover-lookup-drawer-empty'));
+          if (settled) finish({ loadingSeen, falseEmptySeen });
+        };
+        observer = new MutationObserver(sample);
+        observer.observe(body, { childList: true, subtree: true, characterData: true });
+        sample();
+        timer = setTimeout(
+          () => finish({ error: 'Timed out observing notification history loading.', loadingSeen, falseEmptySeen }),
+          timeout,
+        );
+      });
+      return { result, cancel: () => finish({ error: 'Notification loading observation cancelled.' }) };
+    }, {
+      bodySelector: this.drawerBodySelector,
       timeout: options.timeout || 30000,
     });
   }
@@ -462,6 +529,12 @@ export class CoverLookup extends BasePage {
 
   taskClearButtonByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).getByRole('button', { name: 'Delete notification', exact: true });
+  }
+
+  taskRetryIconByTitle(taskTitle) {
+    return this.taskCardByTitle(taskTitle)
+      .getByRole('button', { name: 'Retry lookup', exact: true })
+      .locator('.ui-icon');
   }
 
   taskStatusByTitle(taskTitle) {

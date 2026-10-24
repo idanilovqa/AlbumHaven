@@ -598,6 +598,9 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await coverLookupActions.waitForDrawerOpen();
     await coverLookupActions.waitForTaskStatus(failedTaskTitle, 'Lookup failed');
     await coverLookupActions.waitForTerminalTaskElapsed(failedTaskTitle);
+    const retryIcon = coverLookupActions.coverLookup.taskRetryIconByTitle(failedTaskTitle);
+    await expect(retryIcon).toBeVisible();
+    await expect(retryIcon).toHaveClass(/\bui-icon--refresh\b/);
     await coverLookupActions.setProviderFixtureMode('normal');
     await coverLookupActions.closeDrawer();
   });
@@ -783,6 +786,67 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect((await coverLookupActions.readLocalCoverNames())
       .some((name) => /^cover-existing-/i.test(name))).toBe(false);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
+  });
+});
+
+test('FTC-COVERS-035 persisted notification candidates remain visible and save after app restart', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  freshBrowserSession,
+  galleryActions,
+  managedAppLifecycle,
+  page,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.setTimeout(180_000);
+  let candidateId = '';
+  let taskId = '';
+
+  await stepLogger.step('Complete and persist a provider lookup before restart', async () => {
+    await coverLookupActions.setProviderFixtureMode('selection-concurrency-a');
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET))
+      .toEqual(PROGRESSIVE_CANDIDATE_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    const started = await coverLookupActions.startSearch();
+    taskId = String(started.task?.id || '').trim();
+    expect(taskId).not.toBe('');
+    await coverLookupActions.waitForModalSearchCompleted();
+    const candidates = await coverLookupActions.readRemoteCandidateSummaries();
+    candidateId = String(candidates[0]?.id || '').trim();
+    expect(candidateId).not.toBe('');
+    await coverLookupActions.closeModal();
+    await trackModalActions.close();
+  });
+
+  await stepLogger.step('Restart, show honest drawer loading, and reopen cached candidates', async () => {
+    await page.goto('about:blank');
+    await managedAppLifecycle.restart();
+    const restarted = await freshBrowserSession.create();
+    await restarted.galleryActions.goto();
+    await restarted.galleryActions.waitForGalleryReady();
+    await restarted.coverLookupActions.waitForDrawerBadgeCountAtLeast(1);
+    const loading = await restarted.coverLookupActions.openDrawerAndObserveInitialLoading();
+    expect(loading).toMatchObject({ loadingSeen: true, falseEmptySeen: false });
+    await restarted.coverLookupActions.waitForTaskStatusById(taskId, /^[1-9]\d* covers? found$/);
+
+    await restarted.coverLookupActions.openTask(PROGRESSIVE_CANDIDATE_TARGET.album);
+    await restarted.coverLookupActions.waitForModalReady();
+    await restarted.coverLookupActions.coverLookup.waitForDrawerState(true);
+    await restarted.coverLookupActions.waitForRemoteCandidateId(candidateId);
+    await expect(
+      restarted.coverLookupActions.coverLookup.remoteCoverCardById(candidateId),
+    ).toBeVisible();
+
+    const saved = await restarted.coverLookupActions.selectRemoteCandidateByIdAndSave(candidateId);
+    expect(saved.requestPayload.candidate_id).toBe(candidateId);
+    await restarted.coverLookupActions.waitForTaskStatusById(taskId, 'Art chosen', {
+      timeout: 120_000,
+    });
+    await restarted.coverLookupActions.closeDrawer();
   });
 });
 

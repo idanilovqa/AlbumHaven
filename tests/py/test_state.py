@@ -1419,6 +1419,57 @@ def test_postgres_relation_refresh_publishes_terminal_status_from_committed_arti
     assert library_state["relations_in_progress"] is False
 
 
+def test_postgres_scan_publication_waits_for_gallery_projection(config, monkeypatch):
+    from music_app.services import gallery_projection_postgres
+
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/album_haven_test"
+    )
+    library_state = {"scan_generation": 7}
+    publication_state = {
+        "file_cache": {"track-1": {"path": "track-1", "album": "Album"}},
+        "last_scan": 789.5,
+        "separate_release_keys": set(),
+    }
+    canonical_views = {
+        "artists": ["Canonical Artist"],
+        "artists_sidebar": [{"artist": "Canonical Artist", "count": 1}],
+    }
+    events = []
+
+    def save_snapshot(*_args, **_kwargs):
+        events.append("snapshot")
+        return {
+            "relation_views": canonical_views,
+            "relations_last_built": 456.75,
+        }
+
+    monkeypatch.setattr(
+        state_module,
+        "library_root_cache_identity",
+        lambda _config: "root",
+    )
+    monkeypatch.setattr(
+        state_module,
+        "save_cache_to_disk_for_config",
+        save_snapshot,
+    )
+    monkeypatch.setattr(
+        gallery_projection_postgres,
+        "ensure_gallery_projection_ready",
+        lambda selected_config: events.append(("gallery", selected_config)),
+    )
+
+    state_module.refresh_relation_views_for_state(
+        library_state,
+        config,
+        expected_scan_generation=7,
+        publication_state=publication_state,
+    )
+
+    assert events == ["snapshot", ("gallery", config)]
+
+
 @pytest.mark.parametrize("guarded", [False, True])
 def test_postgres_cover_repair_publishes_committed_cache_and_rebuilds_albums(
     config, monkeypatch, guarded,

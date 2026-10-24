@@ -699,6 +699,12 @@ def refresh_relation_views_for_state(
         return
 
     save_relation_snapshot()
+    if publication_state is not None and postgres_relation_projection:
+        from music_app.services.gallery_projection_postgres import (
+            ensure_gallery_projection_ready,
+        )
+
+        ensure_gallery_projection_ready(config)
 
 
 def _run_snapshot_commit_for_current_generation(

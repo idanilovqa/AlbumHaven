@@ -1538,6 +1538,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
 
   const requestPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_REQUEST_FILE);
   const ackPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_ACK_FILE);
+  fs.rmSync(requestPath, { force: true });
+  fs.rmSync(ackPath, { force: true });
   const startManagedIsolatedAppFn = options.startManagedIsolatedAppFn || startManagedIsolatedApp;
   const stopManagedIsolatedAppFn = options.stopManagedIsolatedAppFn || stopManagedIsolatedApp;
   const cleanupWatchedInventoryFn = options.cleanupWatchedInventoryFn || cleanupManagedWatcherFixture;

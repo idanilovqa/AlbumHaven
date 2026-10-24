@@ -3700,6 +3700,32 @@ test('managed isolated restart controller keeps control files under the runner-o
   }
 });
 
+test('managed isolated restart controller discards stale control messages at startup', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-stale-'));
+  const controlDirectory = path.join(ownedRoot, 'restart-control');
+  const requestPath = path.join(controlDirectory, 'restart-request.json');
+  const ackPath = path.join(controlDirectory, 'restart-ack.json');
+  fs.mkdirSync(controlDirectory, { recursive: true });
+  fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'stale-request' }));
+  fs.writeFileSync(ackPath, JSON.stringify({ nonce: 'stale-request', status: 'ready' }));
+
+  try {
+    const controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: {},
+      ownedIsolatedTempRoot: ownedRoot,
+      initialChild: createFakeChildProcess(5660),
+      ports: [4320, 4322],
+      autoStart: false,
+    });
+
+    assert.equal(fs.existsSync(requestPath), false);
+    assert.equal(fs.existsSync(ackPath), false);
+    await controller.close();
+  } finally {
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
 test('managed restart control accepts only the shard-owned prepared profile root', () => {
   const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-profile-control-'));
   const profileRoot = path.join(

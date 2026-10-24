@@ -340,6 +340,49 @@ test('paired unload events preserve the first rendered snapshot exactly once', (
   assert.equal(storedSnapshots.at(-1).paused, false);
 });
 
+test('delayed pageshow cannot autoplay with an expired restore claim', async () => {
+  const starts = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  let now = Date.now();
+  let initialPageshow;
+  const restoredTrack = { src: '/track?path=expired-restore.flac', path: 'C:/Music/expired-restore.flac',
+    title: 'Restored', durationSeconds: 120 };
+  const context = loadHelper({
+    AbortController,
+    Date: class extends Date { static now() { return now; } },
+    setTimeout: callback => { const id = ++nextTimer; timers.set(id, callback); return id; },
+    clearTimeout: id => timers.delete(id),
+    setInterval: () => 0,
+    clearInterval: () => {},
+    getLocalStorageItem: () => JSON.stringify({ track: restoredTrack, currentTime: 18, paused: false }),
+    startStreamingTrack: async (track, options) => { starts.push({ track, options }); },
+    setCurrentPlayerTrack: track => { context.state.player.current = track; },
+    fetch: async url => ({ ok: true, json: async () => url === '/playback/refs'
+      ? { protocol: 1, expiresAt: new Date(now + 86_400_000).toISOString(), tracks: [{ playbackRef: 'restore-ref' }] }
+      : { protocol: 1, claimToken: 'restore-claim', expiresAt: new Date(now + 30_000).toISOString() } }),
+    window: { crypto: { randomUUID: () => 'restore-client' }, addEventListener(type, listener) {
+      if (type === 'pageshow') initialPageshow = listener;
+    } },
+  });
+  const ownershipPath = path.join(path.dirname(helperPath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), context, { filename: ownershipPath });
+  context.restorePlayerState();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(typeof initialPageshow, 'function');
+  assert.equal(context.isActivePlaybackOwner(), true);
+  assert.deepEqual(starts, []);
+  const expiry = timers.get(context.getPlaybackOwnershipState().expiryTimer);
+  assert.equal(typeof expiry, 'function');
+  now += 31_000;
+  expiry();
+  assert.equal(context.isActivePlaybackOwner(), false);
+  initialPageshow();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(starts.some(start => start.options.autoplay), false,
+    'an earlier successful acquisition cannot authorize autoplay after its lease expired');
+});
+
 test('active restore awaits server ownership before requesting autoplay', async () => {
   let resolveClaim;
   const claim = new Promise((resolve) => { resolveClaim = resolve; });

@@ -288,7 +288,8 @@ function restorePlayerState() {
     const startWithOwnership = (allowed) => {
       if ((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
         || (state.player.current && state.player.current.path !== track.path)) return null;
-      canResumePlayback = Boolean(allowed);
+      canResumePlayback = Boolean(allowed)
+        && (typeof isActivePlaybackOwner !== 'function' || isActivePlaybackOwner());
       return startStreamingTrack(track, {
       startSeconds: boundedTime,
       autoplay: canResumePlayback,

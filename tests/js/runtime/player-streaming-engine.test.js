@@ -1334,6 +1334,49 @@ test('pause and explicit resume keep context, processor, and snapshot state alig
   assert.equal(harness.api.snapshot().paused, false);
 });
 
+test('pause invalidates a pending AudioContext resume before it can command audible playback', async () => {
+  let finishResume;
+  let delayResume = false;
+  const harness = createEngineHarness({
+    resumeContext: () => delayResume ? new Promise((resolve) => { finishResume = resolve; }) : undefined,
+  });
+  await harness.api.start(makeTrack());
+  await harness.api.pause();
+  const playsBefore = harness.portMessages('play').length;
+  delayResume = true;
+  const resume = harness.api.resume();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof finishResume, 'function');
+  await harness.api.pause();
+  assert.equal(harness.api.snapshot().paused, true);
+  finishResume();
+  await resume;
+  assert.equal(harness.portMessages('play').length, playsBefore,
+    'a late AudioContext resume cannot send a play command after Pause');
+  assert.equal(harness.api.snapshot().paused, true);
+  assert.equal(harness.nodes[0].port.messages.at(-1).message.type, 'pause');
+});
+
+test('late pause completion cannot overwrite the mode of a newer explicit resume', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  let finishSuspend;
+  harness.contexts[0].suspend = () => {
+    harness.contexts[0].state = 'suspended';
+    return new Promise((resolve) => { finishSuspend = resolve; });
+  };
+  const pause = harness.api.pause();
+  assert.equal(harness.api.snapshot().paused, true);
+  await harness.api.resume();
+  assert.equal(harness.api.snapshot().paused, false);
+  const resumedMode = harness.engine.mode;
+  finishSuspend();
+  await pause;
+  assert.equal(harness.engine.mode, resumedMode);
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.nodes[0].port.messages.at(-1).message.type, 'play');
+});
+
 test('resolved resume keeps playback paused while the AudioContext remains suspended', async () => {
   const harness = createEngineHarness({ resumeLeavesSuspended: true });
   await harness.api.prepare();

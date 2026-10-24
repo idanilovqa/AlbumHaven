@@ -1635,11 +1635,12 @@ async function startStreamingTrack(track, {
 
 async function pauseStreamingPlayback() {
   const engine = streamingEngineState();
+  const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
   engine.snapshot.paused = true;
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
   await engine.context.suspend();
-  if (engine.mode !== 'error') engine.mode = 'paused';
+  if (engine.startRequestId === startRequestId && engine.mode !== 'error') engine.mode = 'paused';
 }
 
 async function resumeStreamingPlayback(
@@ -1648,7 +1649,10 @@ async function resumeStreamingPlayback(
   expectedCurrentRole = null,
 ) {
   const engine = streamingEngineState();
+  const startRequestId = expectedStartRequestId
+    ?? (Number(engine.startRequestId) || 0);
   if (!engine.context || !engine.node) await prepareStreamingPlaybackEngine();
+  if ((Number(engine.startRequestId) || 0) !== startRequestId) return false;
   const context = engine.context;
   const node = engine.node;
   const lifecycleEpoch = engine.lifecycleEpoch;
@@ -1657,8 +1661,7 @@ async function resumeStreamingPlayback(
   if (engine.context !== context || engine.node !== node
       || engine.lifecycleEpoch !== lifecycleEpoch || engine.generation !== generation
       || context.state !== 'running'
-      || (expectedStartRequestId !== null
-        && engine.startRequestId !== expectedStartRequestId)
+    || (Number(engine.startRequestId) || 0) !== startRequestId
       || (expectedCurrentRole !== null
         && (engine.roles.current !== expectedCurrentRole || engine.mode === 'error'))) {
     return false;

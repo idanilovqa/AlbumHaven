@@ -647,6 +647,62 @@ test('an old pause completion cannot release a newer playback claim', async () =
   assert.deepEqual(releases, [], 'stale pause completion must retain the newer claim');
 });
 
+for (const pendingStage of ['claim', 'stream']) {
+test(`pause supersedes an earlier pending selection before its ${pendingStage} completes`, async () => {
+  let finishClaim;
+  let finishEffects;
+  const pendingClaim = new Promise((resolve) => { finishClaim = resolve; });
+  const pendingEffects = new Promise((resolve) => { finishEffects = resolve; });
+  const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old' };
+  const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New' };
+  const ownership = { requestVersion: 1, activeClaim: { claimToken: 'shared-token' } };
+  const snapshot = { currentTime: 12, duration: 60, paused: false, ended: false, src: oldTrack.src };
+  const starts = [];
+  const releases = [];
+  let pauses = 0;
+  const { context } = loadHelper({
+    state: { player: { current: oldTrack, listenSession: { id: 'old-session' }, loopActive: false,
+      loopStart: 0, loopEnd: 30, saveBusy: false, waveform: { renderToken: 0 } },
+    utility: { loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+      selectedLoopDetailMode: '', activeTab: '' } },
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    getPlaybackOwnershipState: () => ownership,
+    canStartPlaybackInThisTab: async () => {
+      ownership.requestVersion += 1;
+      return pendingStage === 'claim' ? pendingClaim : true;
+    },
+    pauseStreamingPlayback: () => { pauses += 1; snapshot.paused = true; },
+    maybeScrobbleListenSession: async () => false,
+    persistPausedListenSession: () => pendingEffects,
+    releasePlaybackOwnership: async (status, track) => {
+      releases.push({ status, path: track.path }); ownership.activeClaim = null; return true;
+    },
+    startStreamingTrack: async (track) => {
+      starts.push(track.path); snapshot.paused = false; snapshot.src = track.src;
+      if (pendingStage === 'stream') await pendingClaim;
+      return { generation: 2, streamId: 2 };
+    },
+  });
+  const selection = context.playTrackFromPayload(newTrack);
+  assert.equal(ownership.requestVersion, 2);
+  if (pendingStage === 'stream') await new Promise((resolve) => setImmediate(resolve));
+  const pause = context.pausePlayerPlaybackForHandoff();
+  assert.equal(pauses, 1);
+  assert.equal(snapshot.paused, true, 'Pause must silence the currently audible track immediately');
+  await new Promise((resolve) => setImmediate(resolve));
+  finishClaim(true);
+  const selected = await selection;
+  finishEffects();
+  await pause;
+  assert.equal(selected, false, 'an earlier selection cannot override a later Pause');
+  assert.deepEqual(starts, pendingStage === 'claim' ? [] : [newTrack.path]);
+  assert.equal(snapshot.paused, true, 'no audio may remain after the claim is released');
+  assert.equal(context.state.player.current.path, oldTrack.path);
+  assert.equal(ownership.activeClaim, null);
+  assert.deepEqual(releases, [{ status: 'paused', path: oldTrack.path }]);
+});
+}
+
 test('streaming terminal ended finalizes and releases ownership exactly once', async () => {
   const track = {
     src: '/track?path=song.flac',

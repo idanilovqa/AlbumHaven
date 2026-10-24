@@ -8322,11 +8322,12 @@ async function startStreamingTrack(track, {
 
 async function pauseStreamingPlayback() {
   const engine = streamingEngineState();
+  const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
   engine.snapshot.paused = true;
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
   await engine.context.suspend();
-  if (engine.mode !== 'error') engine.mode = 'paused';
+  if (engine.startRequestId === startRequestId && engine.mode !== 'error') engine.mode = 'paused';
 }
 
 async function resumeStreamingPlayback(
@@ -8335,7 +8336,10 @@ async function resumeStreamingPlayback(
   expectedCurrentRole = null,
 ) {
   const engine = streamingEngineState();
+  const startRequestId = expectedStartRequestId
+    ?? (Number(engine.startRequestId) || 0);
   if (!engine.context || !engine.node) await prepareStreamingPlaybackEngine();
+  if ((Number(engine.startRequestId) || 0) !== startRequestId) return false;
   const context = engine.context;
   const node = engine.node;
   const lifecycleEpoch = engine.lifecycleEpoch;
@@ -8344,8 +8348,7 @@ async function resumeStreamingPlayback(
   if (engine.context !== context || engine.node !== node
       || engine.lifecycleEpoch !== lifecycleEpoch || engine.generation !== generation
       || context.state !== 'running'
-      || (expectedStartRequestId !== null
-        && engine.startRequestId !== expectedStartRequestId)
+    || (Number(engine.startRequestId) || 0) !== startRequestId
       || (expectedCurrentRole !== null
         && (engine.roles.current !== expectedCurrentRole || engine.mode === 'error'))) {
     return false;
@@ -35961,6 +35964,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
 
 let streamingLoopScheduleToken = 0;
 let pendingPlayerPlaybackHandoff = null;
+let pendingPlayerPlaybackHandoffSelectionToken = null;
 
 function renewPlayerLoopExpiryAfterBoundaryEdit(range) {
   const nextStart = Number(range?.startSeconds);
@@ -36238,14 +36242,17 @@ function togglePlayerPlayback(options = {}) {
       || typeof pauseStreamingPlayback !== 'function') return false;
   if (playback.paused) {
     const track = state.player.current;
+    const selectionToken = ++playerTrackSelectionToken;
     Promise.resolve().then(async () => {
+      if (selectionToken !== playerTrackSelectionToken) return false;
       if (typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) return false;
-      if (track !== state.player.current) return false;
+      if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
       pendingPlayerPlaybackHandoff = null;
       if (playback.ended && typeof seekStreamingPlayback === 'function') await seekStreamingPlayback(0);
+      if (selectionToken !== playerTrackSelectionToken) return false;
       return resumeStreamingPlayback();
     }).then((resumed) => {
-      if (resumed === false) return;
+      if (resumed === false || selectionToken !== playerTrackSelectionToken) return;
       beginStreamingPlayerListenSession(
         state.player.current,
         playback.ended ? 0 : (Number(playback.currentTime) || 0),
@@ -36260,10 +36267,13 @@ function togglePlayerPlayback(options = {}) {
 }
 
 function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
-  if (pendingPlayerPlaybackHandoff) return pendingPlayerPlaybackHandoff;
+  if (pendingPlayerPlaybackHandoff && pendingPlayerPlaybackHandoffSelectionToken === playerTrackSelectionToken) {
+    return pendingPlayerPlaybackHandoff;
+  }
   if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
-  const ownershipVersion = typeof getPlaybackOwnershipState === 'function'
-    ? (getPlaybackOwnershipState().requestVersion || 0) : null;
+  pendingPlayerPlaybackHandoffSelectionToken = ++playerTrackSelectionToken;
+  const ownership = typeof getPlaybackOwnershipState === 'function' ? getPlaybackOwnershipState() : null;
+  const ownershipVersion = ownership ? (ownership.requestVersion = (ownership.requestVersion || 0) + 1) : null;
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (ownershipVersion !== null && ownershipVersion !== (getPlaybackOwnershipState().requestVersion || 0)) return false;
     closeListenSegment();

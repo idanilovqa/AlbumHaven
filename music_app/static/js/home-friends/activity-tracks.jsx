@@ -1,3 +1,4 @@
+import {recentScrobbleDeliveryHtml, recentScrobbleRetryHtml, canOfferRecentScrobbleRetry} from './recent-scrobble-delivery.mjs';
 import {safeServerArtworkUrl} from './model.mjs';
 import {trackLoveHtml, paintTrackLoveCell} from './track-preference.mjs';
 
@@ -17,13 +18,28 @@ export function activityTrackRow(runtime, row, index, context, cells) {
   const url = readable ? safeServerArtworkUrl(row.artwork_url) : null;
   const artwork = runtime.artboxHtml({state: url ? 'ready' : 'empty', label: `${title} artwork`,
     coverHtml: url ? `<img src="${escape(url)}" alt="" loading="lazy" decoding="async">` : ''});
+  const observation = context?.account_ref === null && context.kind === 'listens' ? row.lastfm_observation : null;
+  const observationLabel = observation?.source === 'remote_only' ? 'Last.fm history · metadata only'
+    : observation?.correlation === 'exact_observed_tuple' ? 'In-app + Last.fm · exact observed-tuple match' : '';
+  const assessment = context?.account_ref === null && context.kind === 'listens'
+    && row.scrobble_delivery?.show_status === true
+    && ['delivery_unconfirmed', 'unknown'].includes(row.scrobble_delivery?.state)
+    && row.lastfm_assessment?.accepted === false && row.lastfm_assessment?.proves_not_sent === false
+    && row.lastfm_assessment?.can_resend === false ? row.lastfm_assessment : null;
+  const assessmentLabel = ({
+    unbound_attempt: 'Delivery remains uncertain: no exact account-bound attempt is available to compare.',
+    incomplete_observation: 'Delivery remains uncertain: this timestamp has incomplete or changed history observations.',
+    possible_observation: 'Possible request-tuple observation in Last.fm history, not a confirmed acknowledgement. Do not resend.',
+    ambiguous_observation: 'Ambiguous request-tuple observations; repeated plays remain separate. Do not resend.',
+    not_observed: 'Not observed in this imported timestamp bucket. This does not prove it was unsent; do not resend.',
+  })[assessment?.state] || '';
   const availability = readable ? {local: 'Local', missing: 'Missing', unresolved: 'Needs review'}[row.availability] || 'Unavailable' : 'Unavailable';
   return {key: row.id, className: native?.className || 'album-track-table__row', tabIndex: readable ? 0 : -1,
     ariaDisabled: !readable, dataAttributes: {'home-activity-row': row.id}, cells: {...cells,
       number: {content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escape(index + 1)}</span>`
         + runtime.actionHtml({icon: 'play', className: 'album-track-table__play', ariaLabel: `Play ${title}`, title: 'Play track',
           presentation: 'bare', hidden: row.availability === 'missing', disabled: !playableActivityTrack(runtime, row, context), attributes: {'data-home-activity-play': '1'}}) + '</span>'},
-      title: {content: `<div class="home-detail__release">${artwork}${native?.cells?.title?.content || `<span class="album-track-table__title">${escape(title)}</span>`}</div>`
+      title: {content: `<div class="home-detail__release">${artwork}${native?.cells?.title?.content || `<span class="album-track-table__title">${escape(title)}</span>`}${recentScrobbleDeliveryHtml(runtime, row, context)}${recentScrobbleRetryHtml(runtime, row, context)}${readable && assessmentLabel ? `<span class="home-friends__muted">${escape(assessmentLabel)}</span>` : ''}${readable && observationLabel ? `<span class="home-friends__muted">${escape(observationLabel + (observation.uncertain ? ' · uncertain observation' : ''))}</span>` : ''}</div>`
         + runtime.actionHtml({icon: 'more', ariaLabel: `Select ${title}`, title: 'Show track information', presentation: 'bare',
           disabled: !readable, attributes: {'data-home-activity-select': row.id}})},
       availability: {content: escape(availability)},
@@ -53,6 +69,8 @@ export function paintActivityTracks(host, runtime, rows, context, love) {
       play.setAttribute('aria-disabled', String(play.disabled));
     }
     const cell = node.querySelector('[data-track-love-cell]');
+    const retry = node.querySelector('[data-recent-scrobble-retry]');
+    if (retry) {retry.disabled = !canOfferRecentScrobbleRetry(runtime, row, context); retry.setAttribute('aria-disabled', String(retry.disabled));}
     if (cell) paintTrackLoveCell(cell, runtime, row, love.get(row));
   }
 }

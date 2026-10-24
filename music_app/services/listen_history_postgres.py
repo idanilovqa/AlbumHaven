@@ -240,7 +240,8 @@ class PostgresListenHistoryAdapter:
                     break
         return result
 
-    def update_scoped_entry(self, *, account_id, library_id, row_id, entry_id, updates):
+    def update_scoped_entry(self, *, account_id, library_id, row_id, entry_id, updates,
+                            expected_receipt=None, expected_row=None):
         with self._connect_to_database() as connection:
             if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
                 raise ValueError("Exact listen update scope is required")
@@ -257,16 +258,43 @@ class PostgresListenHistoryAdapter:
             item = _listen_history_item_from_row(row)
             if str(item.get('id') or '') != str(entry_id):
                 return None
-            item.update(dict(updates))
+            # An internal targeted claim compares the complete freshly read
+            # receipt and trusted row identity under this existing row lock.
+            # A conflict is not permission to send using the caller's copy.
+            if expected_receipt is not None and json.dumps(item, sort_keys=True) != json.dumps(expected_receipt, sort_keys=True):
+                return None
+            if expected_row is not None and any(row.get(key) != value for key, value in expected_row.items()):
+                return None
+            item = _merge_scrobble_receipt(item, updates, column_status=row['scrobble_status'])
             metadata = dict(row['metadata'] or {})
             metadata['source_payload'] = item
-            connection.execute('update integration.listen_history set metadata=%s,scrobble_status=%s where id=%s and account_id=%s and library_id=%s', (_jsonb(metadata), _scrobble_status(item), row['id'], account_id, library_id))
+            status = 'scrobbled' if item.get('scrobbled') is True or item.get('scrobble_submission_state') == 'accepted' else _scrobble_status(item)
+            connection.execute('update integration.listen_history set metadata=%s,scrobble_status=%s where id=%s and account_id=%s and library_id=%s', (_jsonb(metadata), status, row['id'], account_id, library_id))
             return item
 
     def _connect_to_database(self) -> Any:
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres listen history.")
         return self._connect(self._database_url)
+
+
+def _merge_scrobble_receipt(item, updates, *, column_status):
+    """Keep positive receipts and spent attempts safe from stale retry writers."""
+    current = dict(item)
+    if (column_status == 'scrobbled' or current.get('scrobbled') is True
+            or current.get('scrobble_submission_state') == 'accepted'):
+        # The existing outer retry bookkeeping may finish after another guarded
+        # attempt. It must not erase success, reset its state or reopen retry.
+        current.update(scrobbled=True, scrobble_submission_state='accepted')
+        return current
+    result = {**current, **dict(updates)}
+    old_count, new_count = current.get('scrobble_retry_count'), result.get('scrobble_retry_count')
+    if type(old_count) is int and old_count >= 0 and (
+            type(new_count) is not int or new_count < old_count):
+        result['scrobble_retry_count'] = old_count
+    if current.get('scrobble_retry_exhausted') is True:
+        result['scrobble_retry_exhausted'] = True
+    return result
 
 
 class _NoopTransaction:

@@ -18,8 +18,8 @@ function bindProviders(runtime) {
   // The native resolver can inspect private media authority. Only its sanitized
   // activity reader crosses into the React controller.
   if (requestedProviders === null && window.AlbumHavenPrivateUITransport) requestedProviders = ownedHomeProviders = createHomeBackendProviders(window.AlbumHavenPrivateUITransport, {runtime});
-  const {readActivity, resolveActivityTrack, resolveActivityNativeTarget, ...publicProviders} = requestedProviders || {};
-  return {...publicProviders, readActivity: runtime?.configureActivityProvider?.({readActivity, resolveActivityTrack, resolveActivityNativeTarget}) ?? null};
+  const {readActivity, resolveActivityTrack, resolveActivityNativeTarget, retryActivityScrobble, canRetryActivityScrobble, lastfmHistoryCommand, ...publicProviders} = requestedProviders || {};
+  return {...publicProviders, readActivity: runtime?.configureActivityProvider?.({readActivity, resolveActivityTrack, resolveActivityNativeTarget, retryActivityScrobble, canRetryActivityScrobble, lastfmHistoryCommand}) ?? null};
 }
 function Session({runtime, shell, notifications}) {
   const [controller] = useState(() => {
@@ -39,6 +39,11 @@ function Session({runtime, shell, notifications}) {
     controller.loadFriends();
     return () => {if (activeController === controller) activeController = null; controller.dispose();};
   }, [controller]);
+  useEffect(() => runtime.subscribeRecentScrobbleRefresh?.(scopeKey => {
+    const current=runtime.snapshot();
+    if(current.visible&&current.scopeKey===scopeKey&&controller.getSnapshot().scopeKey===scopeKey)
+      void controller.refreshOwnListenActivity();
+  }), [runtime, controller]);
   useEffect(() => notifications?.useHome(controller), [controller, notifications]);
   return <HomeFriendsView key={shell.entryKey ?? 'initial'} {...{runtime, controller, state, shell}} readDetail={providers.readDetail} readNowPlaying={providers.readNowPlaying}/>;
 }

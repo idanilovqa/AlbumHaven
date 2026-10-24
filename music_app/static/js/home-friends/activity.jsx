@@ -1,3 +1,5 @@
+import {LastfmHistoryControls} from './lastfm-history-controls.jsx';
+import {canOfferRecentScrobbleRetry} from './recent-scrobble-delivery.mjs';
 import {trackLoveHtml} from './track-preference.mjs';
 import React, {useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Button, NativeHtml} from './components.jsx';
@@ -161,6 +163,18 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
     if (tracks) {
       const row = rowFor(event);
       if (!row) return;
+      const retry = event.target.closest('[data-recent-scrobble-retry]');
+      if (retry) {
+        event.preventDefault(); event.stopPropagation();
+        if (retry.disabled || event.detail > 1 || !canOfferRecentScrobbleRetry(runtime, row, context)) return;
+        const submit = runtime.retryRecentScrobble;
+        const owns = () => current(row) && runtime.retryRecentScrobble === submit;
+        retry.disabled = true; retry.setAttribute('aria-disabled', 'true'); setActionError(null);
+        const failed = failure => {if (owns() && failure?.name !== 'AbortError') setActionError({value, context,
+          message: 'Delivery needs a fresh history check. Do not resend until history refreshes.'});};
+        try {Promise.resolve(submit.call(runtime, row, context)).catch(failed);} catch (failure) {failed(failure);}
+        paintActivityTracks(root.current, runtime, rows, context, love); return;
+      }
       const action = event.target.closest('[data-home-activity-play],[data-track-love]');
       if (action) {
         event.preventDefault(); event.stopPropagation();
@@ -224,6 +238,7 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
   return <section ref={root} className="home-activity" aria-label="Listening results" onKeyDownCapture={event => {
     if (tracks && (event.repeat || event.isComposing) && ['Enter', ' '].includes(event.key)) {event.preventDefault(); event.stopPropagation();}
   }}>
+    <LastfmHistoryControls runtime={runtime} context={context} coverage={value?.data?.lastfm_observations}/>
     <div className="home-activity__controls"><NativeChoice runtime={runtime} label="Activity order" value={order} onChange={changeOrder}
       options={ [['server', 'Server order'], ['last_listened_at', 'Last listened'], ['listen_count', 'Listens'], ['title', 'Name'],
         ...(['tracks', 'listens'].includes(kind) ? [['duration_seconds', 'Length']] : [])] }/>

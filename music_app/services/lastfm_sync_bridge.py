@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from music_app.services.lastfm import LastfmError
+from music_app.services.lastfm import (LastfmError, LastfmSubmissionOutcome,
+    build_scrobble_submission_identity, validate_scrobble_reply_identity)
 from music_app.services.measured_listen_history import measured_provider_guard
 from music_app.services.lastfm_listen_sync import (
     build_playback_complete_entry,
@@ -55,6 +56,8 @@ def record_playback_session_complete(
     account_id: int | None = None,
     library_id: int | None = None,
     lastfm_session=None,
+    reauthenticated: bool = False,
+    bypass_backoff: bool = False,
     normalize_playback_track_payload: PlaybackTrackNormalizer,
     is_meaningful_listen_session: ListenHistoryMeaningChecker,
     append_listen_history_entry: ListenHistoryAppender,
@@ -89,52 +92,16 @@ def record_playback_session_complete(
             elif stored.get("scrobble_submission_state") in ("attempting", "sent", "uncertain"):
                 error = str(stored.get("scrobble_error") or "Previous Last.fm submission outcome is uncertain")
             elif entry["scrobble_eligible"] and lastfm_session is not None:
-                retryable = False
-                reauthentication_required = False
-                submission_state = "uncertain"
-                stored = update_listen_history_entry(config, stored["id"], {
-                    "scrobble_submission_state": "attempting", "scrobble_retryable": False,
-                    "scrobble_error": "Last.fm submission outcome is uncertain",
-                }, account_id=account_id, library_id=library_id) or stored
-                try:
-                    normalized_payload = normalize_playback_track_payload(payload)
-                    provider_attempted = True
-                    submission = scrobble_track(config, normalized_payload, session=lastfm_session)
-                    scrobbled = submission is None or bool(getattr(submission, "succeeded", False))
-                    error = "" if scrobbled else str(getattr(submission, "message", "Last.fm did not accept this listen"))
-                    sent = submission is None or bool(getattr(submission, "sent", False))
-                    submission_state = "accepted" if scrobbled else "sent" if sent else "not_sent"
-                    retryable = not sent
-                except LastfmError as exc:
-                    error = str(exc)
-                    reauthentication_required = exc.reauthentication_required
-                    retryable = bool(exc.reauthentication_required or (
-                        exc.retryable and exc.error_kind == "provider_error"
-                        and exc.code is not None
-                    ))
-                    submission_state = "not_sent" if retryable else "uncertain"
-                stored = update_listen_history_entry(config, stored["id"], {
-                    "scrobbled": scrobbled, "scrobble_error": error, "scrobble_retryable": retryable,
-                    "scrobble_reauthentication_required": reauthentication_required,
-                    "scrobble_submission_state": submission_state,
-                    "sync_problem": None if scrobbled else {
-                        "provider": "lastfm",
-                        "kind": "scrobble",
-                        "status": (
-                            "reauthentication_required"
-                            if reauthentication_required
-                            else "pending_retry"
-                            if retryable
-                            else "permanent_failure"
-                        ),
-                        "message": error,
-                    },
-                }, account_id=account_id, library_id=library_id) or stored
+                stored, scrobbled, error, provider_attempted = _submit_guarded_measured_scrobble(
+                    config, stored, normalize_playback_track_payload(payload),
+                    account_id=account_id, library_id=library_id, lastfm_session=lastfm_session,
+                    update_listen_history_entry=update_listen_history_entry, scrobble_track=scrobble_track,
+                    reauthenticated=reauthenticated, bypass_backoff=bypass_backoff)
                 log_lastfm_scrobble_event(
                     "Last.fm scrobble succeeded" if scrobbled else "Last.fm scrobble failed",
                     level="info" if scrobbled else "warning", payload=payload, error=error,
                 )
-            public = {key: value for key, value in stored.items() if key not in ("path", "track_ref")}
+            public = {key: value for key, value in stored.items() if key not in ("path", "track_ref", "scrobble_submission_identity")}
             return {
                 "ok": True,
                 "entry": public,
@@ -241,6 +208,121 @@ def record_playback_session_complete(
     }, 200)
 
 
+def _submit_guarded_measured_scrobble(config, stored, normalized_payload, *,
+        account_id, library_id, lastfm_session, update_listen_history_entry,
+        scrobble_track, claim_updates=None, before_provider=None,
+        reauthenticated=False, bypass_backoff=False):
+    """One provider attempt shared by first completion and targeted retry.
+
+    Caller already owns measured_provider_guard. This is not an authorization
+    seam. The targeted caller additionally owns live authority and a CAS writer.
+    The updater must commit attempting before returning; a failed claim never
+    falls back to the stale stored receipt and never calls the provider.
+    """
+    if (stored.get('scrobbled') is True or stored.get('scrobble_submission_state')
+            in {'accepted', 'attempting', 'sent', 'uncertain'}):
+        return stored, stored.get('scrobbled') is True or stored.get('scrobble_submission_state') == 'accepted', '', False
+    count = stored.get('scrobble_retry_count', 0)
+    if (type(count) is not int or not 0 <= count < _MAX_SCROBBLE_ATTEMPTS
+            or stored.get('scrobble_retry_exhausted', False) is not False
+            or stored.get('scrobble_reauthentication_required', False) is not False and reauthenticated is not True
+            or stored.get('scrobble_submission_state') == 'not_sent' and stored.get('scrobble_retryable') is not True):
+        return stored, False, 'Listen retry is blocked', False
+    # Outer batch facts may be stale by the time this guard is acquired.
+    # Recheck current backoff/reauth here, with only the existing explicit
+    # trusted batch flags allowed to bypass those respective checks.
+    if count and reauthenticated is not True and bypass_backoff is not True:
+        try:
+            previous = datetime.fromisoformat(str(stored['last_scrobble_attempt_at']).replace('Z', '+00:00'))
+            if previous.tzinfo is None or previous.utcoffset() is None:
+                raise ValueError()
+            if datetime.now(timezone.utc) < previous + timedelta(seconds=min(
+                    _MAX_RETRY_DELAY_SECONDS, _BASE_RETRY_DELAY_SECONDS * 2 ** (count - 1))):
+                return stored, False, 'Listen retry is blocked', False
+        except (KeyError, ValueError, TypeError, OverflowError):
+            return stored, False, 'Listen retry is blocked', False
+    # Freeze the exact attempt's request/session lineage before the durable
+    # claim. Later reconnects cannot relabel this occurrence's provider account.
+    provider_payload = dict(normalized_payload)
+    identity = build_scrobble_submission_identity(session=lastfm_session,
+        payload=provider_payload, account_id=account_id, library_id=library_id,
+        occurrence_id=stored['id'], attempt=count + 1)
+    if identity is not None:
+        provider_payload.update(identity['request'])
+    retryable = False
+    reauthentication_required = False
+    submission_state = 'uncertain'
+    updates = {'last_scrobble_attempt_at': datetime.now(timezone.utc).isoformat(),
+        **dict(claim_updates or {}), 'scrobble_retry_count': count + 1,
+        'scrobble_submission_identity': identity,
+        'scrobble_submission_state': 'attempting', 'scrobble_retryable': False,
+        'scrobble_error': 'Last.fm submission outcome is uncertain'}
+    claimed = update_listen_history_entry(config, stored['id'], updates,
+        account_id=account_id, library_id=library_id)
+    if not isinstance(claimed, dict) or claimed.get('scrobble_submission_state') != 'attempting' or claimed.get('scrobbled') is True:
+        current = claimed if isinstance(claimed, dict) else stored
+        accepted = current.get('scrobbled') is True or current.get('scrobble_submission_state') == 'accepted'
+        return current, accepted, 'Listen changed before submission', False
+    if claimed.get('scrobble_submission_identity') != identity:
+        return claimed, False, 'Listen identity changed before submission', False
+    stored = claimed
+    # Durable claim waits can outlive actor-session expiry. The targeted owner
+    # rechecks actual live authority here, not only before entering its writer.
+    # A denial proves no provider call occurred; do not refund the spent claim.
+    if before_provider is not None and before_provider() is not True:
+        error = 'Current authority expired before submission'
+        final = update_listen_history_entry(config, stored['id'], {
+            'scrobbled': False, 'scrobble_submission_state': 'not_sent',
+            'scrobble_retryable': count + 1 < _MAX_SCROBBLE_ATTEMPTS,
+            'scrobble_retry_exhausted': count + 1 >= _MAX_SCROBBLE_ATTEMPTS,
+            'scrobble_error': error,
+            'sync_problem': {'provider': 'lastfm', 'kind': 'scrobble',
+                'status': 'pending_retry', 'message': error},
+        }, account_id=account_id, library_id=library_id)
+        return final if isinstance(final, dict) else stored, False, error, False
+    submission = None
+    try:
+        submission = scrobble_track(config, provider_payload, session=lastfm_session)
+        scrobbled = submission is None or bool(getattr(submission, 'succeeded', False))
+        error = '' if scrobbled else str(getattr(submission, 'message', 'Last.fm did not accept this listen'))
+        sent = submission is None or bool(getattr(submission, 'sent', False))
+        submission_state = 'accepted' if scrobbled else 'sent' if sent else 'not_sent'
+        retryable = not sent
+    except LastfmError as exc:
+        scrobbled = False
+        error = str(exc)
+        reauthentication_required = exc.reauthentication_required
+        retryable = bool(exc.reauthentication_required or (
+            exc.retryable and exc.error_kind == 'provider_error' and exc.code is not None))
+        submission_state = 'not_sent' if retryable else 'uncertain'
+    # The actual adapter alone supplies the bounded accepted echo. Missing or
+    # malformed provider identity does not become an inferred correlation key.
+    if (identity is not None and isinstance(submission, LastfmSubmissionOutcome)
+            and submission.succeeded and type(submission.accepted) is int
+            and submission.accepted == 1 and type(submission.ignored) is int
+            and submission.ignored == 0):
+        identity = {**identity, 'reply': validate_scrobble_reply_identity(
+            submission.receipt_identity, request=identity['request'])}
+    final = update_listen_history_entry(config, stored['id'], {
+        'scrobble_submission_identity': identity,
+        'scrobbled': scrobbled, 'scrobble_error': error,
+        'scrobble_retryable': retryable and count + 1 < _MAX_SCROBBLE_ATTEMPTS,
+        'scrobble_retry_exhausted': count + 1 >= _MAX_SCROBBLE_ATTEMPTS,
+        'scrobbled_at': stored.get('last_scrobble_attempt_at', '') if scrobbled else '',
+        'scrobble_reauthentication_required': reauthentication_required,
+        'scrobble_submission_state': submission_state,
+        'sync_problem': None if scrobbled else {'provider': 'lastfm', 'kind': 'scrobble',
+            'status': 'reauthentication_required' if reauthentication_required else 'pending_retry' if retryable else 'permanent_failure',
+            'message': error},
+    }, account_id=account_id, library_id=library_id)
+    if isinstance(final, dict):
+        stored = final
+    # Provider acceptance is not a durable receipt if its write was refused.
+    # Keep attempting and never report durable success from a local boolean.
+    persisted_acceptance = stored.get('scrobbled') is True or stored.get('scrobble_submission_state') == 'accepted'
+    return stored, persisted_acceptance, error, True
+
+
 def build_pending_scrobble_payload(entry: JsonDict) -> JsonDict:
     return {
         "artist": str(entry.get("artist") or "").strip(),
@@ -277,6 +359,14 @@ def process_pending_scrobble_attempt(
     if not entry_id:
         return {"attempted": False, "succeeded": False, "failed": False}
     tracks_legacy_sync_state = entry.get("measurement_version") != "rendered-pcm-v1"
+    if not tracks_legacy_sync_state:
+        # The measured submit callback enters record_playback_session_complete,
+        # whose provider guard owns both claim and final receipt. This outer
+        # coordinator must NEVER persist its stale pre-guard receipt, including
+        # preflight failures or delayed failure/success bookkeeping. Keeping all
+        # measured writes inside that existing owner is the generation fence.
+        # Legacy submissions retain the existing outer bookkeeping contract.
+        update_listen_history_entry = lambda *_args, **_kwargs: None
 
     if (
         bool(entry.get("scrobbled"))

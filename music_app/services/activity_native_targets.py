@@ -67,6 +67,11 @@ class ActivityNativeTargets:
             actions=(scope.read_action,'library.social.taste.read') if scope.audience=='comparison' else (scope.read_action,)
             granted=all(allows(target,action,ResourceScope(kind,str(identity)),constraints) for action in actions)
             return AllowedActions(actions if granted else ())
+        def lastfm_history_read():
+            from music_app.services.lastfm_home_snapshot import account_read_allowed
+            return account_read_allowed(context, constraints,
+                account_id=scope.account_id, session_id=scope.session_id)
+        allowed.lastfm_history_read = lastfm_history_read
         allowed.scope_wide=not callable(constraints)
         return HomeActivityPostgresRepository(self.config).read_native_selection(connection,scope=scope,
             query=query,row_refs=row_refs,allowed_actions_for_resource=allowed)
@@ -113,6 +118,8 @@ class ActivityNativeTargets:
                     target['subject_taste']=subject_album_overlay(con,live,origin,album['id'],constraints=constraints)
             lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
                 clock=self.clock or (lambda:datetime.now(timezone.utc)))
+            if self._export(con,live,origin,query,[row_ref],constraints)!=rows:
+                raise NativeTargetError('source_unavailable',403)
             return {'origin':origin,'row_ref':row_ref,'intent':intent,'native_target':target}
 
     def project(self,context,*,origin,rows,constraints=None):
@@ -141,7 +148,9 @@ class ActivityNativeTargets:
                 actions={**row.get('allowed_actions',{}),'can_resolve_native_play':False,
                     'can_resolve_native_details':False,'can_select_for_playlist':False}
                 if resource is None:
-                    actions['can_select_for_playlist']=create and origin['audience']!='comparison' and query.kind in {'tracks','listens'}
+                    remote_only=(row.get('lastfm_observation') or {}).get('source')=='remote_only'
+                    actions['can_select_for_playlist']=(not remote_only and create
+                        and origin['audience']!='comparison' and query.kind in {'tracks','listens'})
                 else:
                     kind,identity=resource['kind'],resource['id']
                     readable=allows(live,'library.browse.read',ResourceScope(kind,str(identity)),constraints)
@@ -173,4 +182,6 @@ class ActivityNativeTargets:
                 output.append(projected)
             lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
                 clock=self.clock or (lambda:datetime.now(timezone.utc)))
+            if self._export(con,live,origin,query,refs,constraints)!=exported:
+                raise NativeTargetError('source_unavailable',403)
             return output

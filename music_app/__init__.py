@@ -10,6 +10,43 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 
 
+async def _start_foobar_account_import(app, configuration):
+    """Explicit deployment opt-in is necessary, never a security attestation.
+
+    Deployment must first establish installed schema/privileges, account
+    isolation and the documented QA/cutover prerequisites. The worker also
+    checks its actual schema and every operation revalidates native authority.
+    No migration, grant, credential or default capacity is installed here.
+    """
+    if (type(configuration) is not dict
+            or configuration.get('ALBUM_HAVEN_FOOBAR_ACCOUNT_IMPORT_ENABLED') is not True):
+        return
+    from music_app.services.foobar_account_import_service import create_foobar_import_service
+    handle=None
+    try:
+        handle=create_foobar_import_service(configuration,
+            database_url=configuration.get('ALBUM_HAVEN_APP_DATABASE_URL'))
+        # Publish actual ownership before startup, so any partial/late startup
+        # remains reachable for drain even when acknowledgement times out.
+        app.state.foobar_account_import_service=handle
+        await asyncio.to_thread(handle.start,5.0)
+    except Exception:
+        # Unavailable imports must not break unrelated app startup. No retry,
+        # replacement worker, raw exception logging or invented readiness.
+        if handle is not None:
+            handle.close()
+
+
+async def _stop_foobar_account_import(app):
+    handle=getattr(app.state,'foobar_account_import_service',None)
+    if handle is None:
+        return
+    handle.close()
+    if not await asyncio.to_thread(handle.join,30.0):
+        # Keep the original owner reachable; a timeout is not termination.
+        raise RuntimeError('Foobar account import worker has not finished draining.')
+
+
 class _BoundedExecutorAdmission:
     """Bound queued and running work submitted to an owned executor."""
 
@@ -246,6 +283,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.routes.owned_playlists_asgi import router as owned_playlists_asgi_router
     from music_app.routes.playlist_complete_sources_asgi import router as playlist_complete_sources_router
     from music_app.routes.home_activity_asgi_routes import router as home_activity_asgi_router
+    from music_app.routes.lastfm_history_asgi import router as lastfm_history_router
     from music_app.routes.private_album_artwork_asgi import router as private_album_artwork_router
     from music_app.routes.activity_native_targets_asgi import router as activity_native_targets_router
     from music_app.routes.playlist_native_targets_asgi import router as playlist_native_targets_router
@@ -280,6 +318,10 @@ def _configure_asgi_app(app, runtime) -> None:
         router as web_asgi_router,
     )
 
+    from music_app.routes.foobar_account_import_asgi import router as foobar_account_import_router
+    from music_app.routes.foobar_account_ui_asgi import router as foobar_account_ui_router
+
+    app.state.foobar_account_import_service = None
     package_root = Path(__file__).resolve().parent
     static_dir = package_root / "static"
     template_dir = package_root / "templates"
@@ -367,6 +409,8 @@ def _configure_asgi_app(app, runtime) -> None:
 
     app.include_router(friends_asgi_router)
     app.include_router(account_asgi_router)
+    app.include_router(foobar_account_import_router)
+    app.include_router(foobar_account_ui_router)
     app.include_router(appearance_asgi_router)
     app.include_router(client_layout_asgi_router)
     app.include_router(selection_accent_asgi_router)
@@ -376,6 +420,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(owned_playlists_asgi_router)
     app.include_router(playlist_complete_sources_router)
     app.include_router(home_activity_asgi_router)
+    app.include_router(lastfm_history_router)
     app.include_router(private_album_artwork_router)
     app.include_router(activity_native_targets_router)
     app.include_router(playlist_native_targets_router)
@@ -482,6 +527,7 @@ def create_asgi_app():
                     if lastfm_started
                     else None,
                 ),
+                ("Foobar account import", lambda: _stop_foobar_account_import(_app)),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
                 ("runtime", lambda: request_runtime_shutdown(runtime)),
@@ -655,6 +701,7 @@ def create_asgi_app():
             await shutdown_resources()
             raise
         try:
+            await _start_foobar_account_import(_app, runtime.config)
             yield
         finally:
             await shutdown_resources()

@@ -5386,6 +5386,9 @@ const state = {
   coverLookup: {
     drawerOpen: false,
     tasks: [],
+    tasksHydrated: false,
+    tasksLoadFailed: false,
+    taskSummary: null,
     pollingTimer: 0,
     selectionTimer: 0,
     taskOpenSelectionGesture: null,
@@ -29174,11 +29177,21 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const activeCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
   const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
   const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
-  const badgeCount = activeCount + pendingNotificationCount;
+  const summaryBadgeCount = Number(state.coverLookup.taskSummary?.badge_count);
+  const historyPending = !state.coverLookup.tasksHydrated && Number.isFinite(summaryBadgeCount);
+  const badgeCount = historyPending
+    ? Math.max(0, summaryBadgeCount)
+    : activeCount + pendingNotificationCount;
+  const displayedActiveCount = historyPending
+    ? Math.max(0, Number(state.coverLookup.taskSummary?.active_count) || 0)
+    : activeCount;
+  const displayedTerminalCount = historyPending
+    ? Math.max(0, Number(state.coverLookup.taskSummary?.pending_notification_count) || 0)
+    : terminalCount;
   if (summary) {
     summary.textContent = [
-      activeCount ? `${activeCount} active` : '',
-      terminalCount ? `${terminalCount} finished` : '',
+      displayedActiveCount ? `${displayedActiveCount} active` : '',
+      displayedTerminalCount ? `${displayedTerminalCount} finished` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
   }
   renderCoverLookupTaskBadgeCount(badgeCount);
@@ -29206,7 +29219,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const preserveSelectedNotificationText = preserveTextSelection || preserveActiveAction;
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
-      body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
+      body.innerHTML = historyPending && badgeCount > 0
+        ? `<div class="cover-lookup-drawer-empty">${state.coverLookup.tasksLoadFailed ? 'Notifications could not be loaded. Close and reopen this panel to retry.' : 'Loading notifications…'}</div>`
+        : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
       state.coverLookup.drawerRenderedTerminalSignatures = {};
     }
     syncCoverLookupElapsedTimer();
@@ -29726,6 +29741,9 @@ async function loadCoverLookupTaskSummary() {
     if (tasksRequestSequence !== coverLookupTasksRequestSequence
         || badgeRevision !== coverLookupTaskBadgeRevision) return false;
     if (!response.ok || !data.ok) return false;
+    state.coverLookup.taskSummary = data.summary && typeof data.summary === 'object'
+      ? data.summary
+      : null;
     renderCoverLookupTaskBadgeCount(data.summary?.badge_count);
     return true;
   } catch (_error) {
@@ -29735,6 +29753,7 @@ async function loadCoverLookupTaskSummary() {
 
 async function loadCoverLookupTasks(options = {}) {
   const requestSequence = ++coverLookupTasksRequestSequence;
+  state.coverLookup.tasksLoadFailed = false;
   try {
     const response = await fetch('/utilities/cover-lookup/tasks', { headers: { Accept: 'application/json' } });
     const data = await response.json().catch(() => ({}));
@@ -29743,6 +29762,7 @@ async function loadCoverLookupTasks(options = {}) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    state.coverLookup.tasksHydrated = true;
     renderCoverLookupDrawer();
     (state.coverLookup.tasks || []).forEach((task) => {
       applyCoverLookupTaskUpdates(task);
@@ -29789,7 +29809,9 @@ async function loadCoverLookupTasks(options = {}) {
     stopCoverLookupPollingIfIdle();
   } catch (error) {
     if (requestSequence !== coverLookupTasksRequestSequence) return;
+    state.coverLookup.tasksLoadFailed = true;
     console.warn('[AlbumHaven][CoverLookup] Failed to load lookup tasks.', error);
+    renderCoverLookupDrawer({ preserveInteraction: false });
     if (options.toast !== false) {
       showToast(error.message || 'Failed to load cover lookups.', 'error', 2800);
     }

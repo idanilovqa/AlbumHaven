@@ -44,6 +44,59 @@ test('cold startup hydrates only the notification badge without opening the draw
   assert.match(bootstrapSource, /void loadCoverLookupTaskSummary\(\);/);
 });
 
+test('opening the drawer keeps the startup count while notification history loads', async () => {
+  const body = {
+    innerHTML: 'not loaded',
+    contains: () => false,
+    querySelector: () => null,
+  };
+  const badge = { hidden: true, textContent: '' };
+  const buttonClasses = new Set();
+  const nodes = {
+    'cover-lookup-drawer': { hidden: true, classList: { contains: () => false, toggle() {} } },
+    'cover-lookup-drawer-body': body,
+    'cover-lookup-drawer-badge': badge,
+    'cover-lookup-drawer-button': {
+      classList: { toggle(name, enabled) { enabled ? buttonClasses.add(name) : buttonClasses.delete(name); } },
+    },
+    'cover-lookup-drawer-clear': { hidden: false, disabled: false, setAttribute() {} },
+    'cover-lookup-drawer-summary': { textContent: '' },
+  };
+  const context = {
+    console,
+    ButtonComponent: { renderActionButton: () => '' },
+    state: { coverLookup: { tasks: [], modal: {}, drawerOpen: false } },
+    window: {
+      AlbumHavenCapabilities: { allows: () => true },
+      getSelection: () => null,
+      clearInterval() {},
+    },
+    document: {
+      activeElement: null,
+      getElementById: id => nodes[id] || null,
+    },
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        summary: { active_count: 0, pending_notification_count: 549, badge_count: 549 },
+      }),
+    }),
+  };
+  vm.createContext(context);
+  vm.runInContext(drawerSource, context, { filename: 'cover-lookup-modal-and-drawer.js' });
+
+  await context.loadCoverLookupTaskSummary();
+  context.state.coverLookup.drawerOpen = true;
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+
+  assert.equal(badge.hidden, false);
+  assert.equal(badge.textContent, '549');
+  assert.match(body.innerHTML, /Loading notifications/);
+  assert.equal(nodes['cover-lookup-drawer-summary'].textContent, '549 finished');
+  assert.equal(buttonClasses.has('has-active-lookups'), true);
+});
+
 test('unauthorized startup does not request notification counts', async () => {
   let requests = 0;
   const context = {

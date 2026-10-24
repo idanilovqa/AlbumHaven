@@ -345,6 +345,17 @@ def _task_matches_album_context(
     return True
 
 
+def _same_cover_lookup_generation(left: object, right: object) -> bool:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if left_text == right_text:
+        return bool(left_text)
+    try:
+        return UUID(left_text) == UUID(right_text)
+    except ValueError:
+        return False
+
+
 @router.get("/utilities/cover-lookup/tasks/counts")
 async def utilities_cover_lookup_task_counts(request: Request) -> JSONResponse:
     counts = count_cover_lookup_task_notifications(config=_app_config(request))
@@ -1147,8 +1158,10 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             )
         if (
             not isinstance(candidate_snapshot, Mapping)
-            or str(candidate_snapshot.get("search_generation") or "").strip()
-            != snapshot_generation
+            or not _same_cover_lookup_generation(
+                candidate_snapshot.get("search_generation"),
+                snapshot_generation,
+            )
         ):
             return _json_response(
                 ({"ok": False, "error": "Saved cover candidate generation was not found"}, 404)

@@ -2724,6 +2724,71 @@ def test_asgi_cover_lookup_save_remote_rejects_obsolete_snapshot_generation_befo
     assert list_cover_lookup_tasks(config=app.config) == []
 
 
+def test_asgi_cover_lookup_save_remote_accepts_equivalent_snapshot_uuid_after_restart(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
+    generation = UUID(int=42)
+    queued_calls: list[dict[str, object]] = []
+    reset_cover_lookup_runtime_state()
+
+    class PersistedSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            assert album_id == 41
+            return {
+                "album_id": album_id,
+                "search_generation": str(generation),
+                "status": "completed",
+                "candidates": [{
+                    "id": "youtube-candidate",
+                    "art_kind": "cover",
+                    "url": "https://images.example/youtube.jpg",
+                    "source": "youtube",
+                }],
+            }
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        PersistedSnapshotRepository,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *args, **kwargs: queued_calls.append({"args": args, "kwargs": kwargs}),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": {**_album_payload(track_path), "album_id": 41},
+            "task_id": generation.hex,
+            "snapshot_generation": generation.hex,
+            "candidate_id": "youtube-candidate",
+        },
+    )
+
+    assert status == 200
+    assert _decode_json(body)["ok"] is True
+    assert len(queued_calls) == 1
+    assert queued_calls[0]["args"][4]["url"] == "https://images.example/youtube.jpg"
+
+
 def test_asgi_cover_lookup_save_remote_accepts_canonical_snapshot_uuid_for_live_task(
     app,
     monkeypatch,

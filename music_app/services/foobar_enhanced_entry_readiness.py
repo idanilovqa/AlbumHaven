@@ -24,9 +24,9 @@ with rels as materialized (
  ('foobar_import_local_entries_v1',false,'octet_lengthraw_filetime_le=8'),
  ('foobar_import_local_entries_v1',false,'octet_lengthprojection_bytes>=1andoctet_lengthprojection_bytes<=512'),
  ('foobar_import_local_entries_v1',true,
- '((resolved AND (sort_key >= ''-116444736000000000''::bigint) AND (sort_key <= ''2534023007999999999''::bigint)) OR ((NOT resolved) AND (sort_key = ''-9223372036854775808''::bigint)))'),
+ '((resolved AND ((sort_key >= ''-116444736000000000''::bigint) AND (sort_key <= ''2534023007999999999''::bigint))) OR ((NOT resolved) AND (sort_key = ''-9223372036854775808''::bigint)))'),
  ('foobar_import_history_projection_v1',true,
- '(((evidence_kind = ''tsv_snapshot''::text) AND (local_entry_count IS NULL) AND (local_vector_sha256 IS NULL)) OR ((evidence_kind = ''enhanced_store''::text) AND (standard_first IS NULL) AND (enhanced_first IS NULL) AND (standard_last = ''-9223372036854775808''::bigint) AND (enhanced_last = ''-9223372036854775808''::bigint) AND (NOT standard_last_present) AND (NOT enhanced_last_present) AND (((local_entry_count IS NULL) AND (local_vector_sha256 IS NULL)) OR ((local_entry_count >= 0) AND (local_entry_count <= 32766) AND (local_entry_count IS NOT NULL) AND (local_vector_sha256 IS NOT NULL) AND (octet_length(local_vector_sha256) = 32)))))')
+ '(((evidence_kind = ''tsv_snapshot''::text) AND (local_entry_count IS NULL) AND (local_vector_sha256 IS NULL)) OR ((evidence_kind = ''enhanced_store''::text) AND (standard_first IS NULL) AND (enhanced_first IS NULL) AND (standard_last = ''-9223372036854775808''::bigint) AND (enhanced_last = ''-9223372036854775808''::bigint) AND (NOT standard_last_present) AND (NOT enhanced_last_present) AND (((local_entry_count IS NULL) AND (local_vector_sha256 IS NULL)) OR (((local_entry_count >= 0) AND (local_entry_count <= 32766)) AND (local_entry_count IS NOT NULL) AND (local_vector_sha256 IS NOT NULL) AND (octet_length(local_vector_sha256) = 32)))))')
 ), indexes(name,is_primary,cols,options,ops) as (values
  ('',true,'account_id,source_ref,observation_ref,source_revision,source_ordinal',
  '0,0,0,0,0','int8_ops,uuid_ops,uuid_ops,int8_ops,int4_ops'),

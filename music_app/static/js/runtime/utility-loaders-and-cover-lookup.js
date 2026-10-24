@@ -1804,6 +1804,7 @@ function applyTagEditsToNonAlbumView(album, updates) {
     });
   });
   view.non_album_tracks = Array.from(nextByPath.values());
+  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
   return view.non_album_tracks;
 }
 
@@ -2040,6 +2041,44 @@ function parseOptionalInteger(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function inferOptimisticBlankAlbumMembership(target, tracks) {
+  if (String(target?.album || '').trim()) return '';
+  const targetNumber = parseOptionalInteger(String(target?.track_number ?? '').split('/', 1)[0]);
+  const containerParts = (track) => {
+    const parts = String(track?.path || '').replaceAll('\\', '/').split('/').filter(Boolean);
+    parts.pop();
+    if (/(?:^|[^a-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*\d{1,2}(?:$|[^a-z0-9])/i.test(parts.at(-1) || '')) {
+      parts.pop();
+    }
+    return parts.map((part) => part.toLocaleLowerCase());
+  };
+  const targetContainer = containerParts(target);
+  if (targetNumber == null || targetNumber <= 0 || !targetContainer.length) return '';
+  const targetPath = String(target?.path || '').replaceAll('/', '\\').toLocaleLowerCase();
+  const siblings = tracks.flatMap((candidate) => {
+    const candidatePath = String(candidate?.path || '').replaceAll('/', '\\').toLocaleLowerCase();
+    const candidateAlbum = String(candidate?.album || '').trim();
+    const candidateNumber = parseOptionalInteger(String(candidate?.track_number ?? '').split('/', 1)[0]);
+    const sameContainer = JSON.stringify(containerParts(candidate)) === JSON.stringify(targetContainer);
+    const meaningfulAlbum = candidateAlbum
+      && !['unknown', 'unknown artist', 'unknown album', 'none', 'null'].includes(candidateAlbum.toLocaleLowerCase())
+      && !/^[!\-\s[(]*non[\s_-]*album(?:\b.*)?$/i.test(candidateAlbum);
+    return candidatePath && candidatePath !== targetPath && sameContainer
+      && candidateNumber != null && candidateNumber > 0 && meaningfulAlbum
+      ? [[candidateAlbum, candidateNumber]]
+      : [];
+  });
+  const albumNames = new Map(siblings.map(([name]) => [name.toLocaleLowerCase(), name]));
+  if (siblings.length < 2 || albumNames.size !== 1) return '';
+  if (!siblings.some(([, number]) => Math.abs(number - targetNumber) === 1)) return '';
+  const inferredAlbum = albumNames.values().next().value;
+  const folderKey = (value) => String(value || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}_]+/gu, '');
+  const albumKey = folderKey(inferredAlbum);
+  return albumKey && targetContainer.some((part) => folderKey(part).includes(albumKey))
+    ? inferredAlbum
+    : '';
+}
+
 function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   const sourceTracks = deepCloneJson(Array.isArray(album?.tracks) ? album.tracks : []) || [];
   if (!sourceTracks.length) return [];
@@ -2093,7 +2132,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   updatedTracks.forEach((track) => {
     if (String(track?.exception_type || '').trim()) return;
     const albumArtist = String(track?.album_artist || album?.album_artist || '').trim();
-    const albumName = String(track?.album ?? album?.name ?? '').trim();
+    const inferredAlbumName = inferOptimisticBlankAlbumMembership(track, updatedTracks);
+    if (inferredAlbumName) track.is_problematic = true;
+    const albumName = String(track?.album || inferredAlbumName).trim();
     if (!albumName) return;
     const edits = updates?.[String(track?.path || '')];
     const hasEditionEdit = Boolean(

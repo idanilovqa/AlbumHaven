@@ -154,6 +154,24 @@ test('blank Album edit immediately adds the track to the Other projection', () =
   assert.equal(tracks[0].exception_type, '');
 });
 
+test('blank Album edit immediately refreshes the Non-album tracks control', () => {
+  const context = loadHelpers();
+  const path = 'C:\\Music\\Artist\\Album\\02 - Track.mp3';
+  let controlSyncs = 0;
+  context.state = { view: { non_album_tracks: [] } };
+  context.updateGalleryMainControls = () => { controlSyncs += 1; };
+
+  context.applyTagEditsToNonAlbumView({
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path, title: 'Track', artist: 'Artist', track_number: 2 }],
+  }, {
+    [path]: { album: '' },
+  });
+
+  assert.equal(controlSyncs, 1);
+});
+
 test('exception-only rarity edit immediately adds the track to the non-album projection', () => {
   const context = loadHelpers();
   const path = 'C:\\Music\\Artist\\Album\\01 - Track.mp3';
@@ -916,6 +934,39 @@ test('blanking Album on the only track produces no optimistic gallery album', ()
   });
 
   assert.deepEqual(JSON.parse(JSON.stringify(updatedAlbums)), []);
+});
+
+test('blanking Album retains a strongly inferred numbered track in its source album', () => {
+  const context = loadHelpers();
+  const album = {
+    key: 'artist::numbered album::2009',
+    name: 'Numbered Album',
+    album_artist: 'Artist',
+    year: 2009,
+    tracks: [1, 2, 3].map((number) => ({
+      path: `C:\\Music\\Artist\\Numbered Album\\${String(number).padStart(2, '0')} Track.flac`,
+      album: 'Numbered Album',
+      album_artist: 'Artist',
+      title: `Track ${number}`,
+      track_number: number,
+    })),
+  };
+
+  const updatedAlbums = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
+    [album.tracks[1].path]: { album: '' },
+  });
+
+  assert.equal(updatedAlbums.length, 1);
+  assert.equal(updatedAlbums[0].name, 'Numbered Album');
+  assert.equal(updatedAlbums[0].tracks[1].is_problematic, true);
+  assert.deepEqual(
+    Array.from(updatedAlbums[0].tracks, (track) => [track.title, track.album]),
+    [
+      ['Track 1', 'Numbered Album'],
+      ['Track 2', ''],
+      ['Track 3', 'Numbered Album'],
+    ],
+  );
 });
 
 test('album edit still updates every track when every track is selected', () => {

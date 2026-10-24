@@ -442,15 +442,19 @@ test('failure alert Log History link passes its exact entry to the authoritative
   const { context } = createContext({
     selectedLogHistoryId: 'older-entry',
   });
-  let hidden = false;
+  const transitions = [];
   let opened = false;
-  context.hideRepairAlert = () => { hidden = true; };
-  context.openUtilityLogHistoryTab = entryId => { opened = entryId; };
+  context.closeTagEditor = () => { transitions.push('close-editor'); };
+  context.hideRepairAlert = () => { transitions.push('hide-alert'); };
+  context.openUtilityLogHistoryTab = entryId => {
+    transitions.push('open-history');
+    opened = entryId;
+  };
 
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
-  assert.equal(hidden, true);
+  assert.deepEqual(transitions, ['close-editor', 'hide-alert', 'open-history']);
   assert.equal(opened, 'tag-edit-failure-42');
   assert.equal(context.state.utility.selectedLogHistoryId, 'older-entry', 'the controller accepts selection after its scoped request');
 });

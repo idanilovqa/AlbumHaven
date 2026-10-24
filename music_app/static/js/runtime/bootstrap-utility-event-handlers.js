@@ -43,6 +43,7 @@ async function handleUtilityBootstrapClick(event) {
   if (openLogHistoryAlertButton) {
     event.preventDefault();
     const selectedLogHistoryId = openLogHistoryAlertButton.getAttribute('data-log-history-entry-id') || '';
+    closeTagEditor();
     hideRepairAlert();
     openUtilityLogHistoryTab(selectedLogHistoryId);
     return;

@@ -7391,3 +7391,90 @@ test('Problem exclusions distinguish empty rules from a search with no matches',
   const filtered = context.buildUtilityRuleDetail({ key: 'problem-ignores', album_items: [{ album: 'Elsewhere' }], file_items: [] });
   assert.match(filtered, /No problem exclusions match your search\./);
 });
+
+test('watchSaveTask hydrates an open merged destination from canonical visible state after a superseded refresh', async () => {
+  const context = loadHelpers();
+  const movedPath = 'D:\\Synthetic Music\\Merge Artist\\Temporary\\01 Move.mp3';
+  const siblingPaths = Array.from(
+    { length: 16 },
+    (_value, index) => `D:\\Synthetic Music\\Merge Artist\\Source\\${String(index + 2).padStart(2, '0')} Stay.mp3`,
+  );
+  const originalAlbum = {
+    key: 'temporary-destination',
+    name: 'Temporary',
+    album_artist: 'Merge Artist',
+    preview_only: false,
+    tracks: [{ path: movedPath, title: 'Move' }],
+  };
+  const optimisticMergedAlbum = {
+    ...originalAlbum,
+    key: 'canonical-source',
+    request_key: 'canonical-source',
+    identity_key: 'canonical-source',
+    name: 'Source',
+  };
+  const canonicalCompactAlbum = {
+    key: 'canonical-source',
+    request_key: 'canonical-source',
+    identity_key: 'canonical-source',
+    name: 'Source',
+    album_artist: 'Merge Artist',
+    edition: 'Canonical edition',
+    preview_only: true,
+    track_count_preview: 17,
+    tracks: [],
+  };
+  const hydratedCanonicalAlbum = {
+    ...canonicalCompactAlbum,
+    preview_only: false,
+    tracks: [
+      { path: movedPath, title: 'Move' },
+      ...siblingPaths.map((path, index) => ({ path, title: `Stay ${index + 2}` })),
+    ],
+  };
+  const loadedKeys = [];
+
+  context.state.view.artist_groups = [{ artist: 'Merge Artist', albums: [originalAlbum] }];
+  context.state.view.primary_artist_groups = context.state.view.artist_groups;
+  context.state.view.family_artist_groups = [];
+  context.state.modalReleases = [optimisticMergedAlbum];
+  context.state.modalReleaseIndex = 0;
+  context.document.getElementById = (id) => (id === 'track-modal' ? { hidden: false } : null);
+  context.buildApiUrl = () => '/api/library';
+  context.fetchAndRender = async () => {
+    const group = { artist: 'Merge Artist', albums: [canonicalCompactAlbum] };
+    context.state.view.artist_groups = [group];
+    context.state.view.primary_artist_groups = [group];
+    context.state.view.family_artist_groups = [];
+    return false;
+  };
+  context.getAlbumRequestKey = (album) => String(album?.request_key || album?.key || '');
+  context.getAlbumIdentity = (album) => String(album?.identity_key || album?.key || '');
+  context.invalidateHydratedTrackModalAlbumDetails = () => {};
+  context.loadTrackModalAlbumDetails = async (albumKey) => {
+    loadedKeys.push(albumKey);
+    return hydratedCanonicalAlbum;
+  };
+  context.cacheHydratedTrackModalAlbum = () => {};
+  context.getAlbumReleaseSet = (album) => ({ releases: [album], selectedIndex: 0 });
+  context.renderTrackModalRelease = () => {};
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('merge-back-task', {
+    originalAlbum,
+    problematicMutationOriginKey: '',
+    optimisticAlbums: [optimisticMergedAlbum],
+    tagEdits: { [movedPath]: { album: 'Source' } },
+    terminalPayload: {
+      ok: true,
+      save_task_id: 'merge-back-task',
+      save_task_status: 'completed',
+      requires_view_refresh: true,
+      updated_albums: [],
+    },
+  });
+
+  assert.deepEqual(loadedKeys, ['canonical-source']);
+  assert.equal(context.state.modalReleases[0].tracks.length, 17);
+  assert.equal(context.state.modalReleases[0].preview_only, false);
+});

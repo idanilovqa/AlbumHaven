@@ -2430,6 +2430,48 @@ async function watchSaveTask(taskId, context = {}) {
               ...modalUpdatedAlbums,
             ]);
           }
+          if (
+            structuralTagEditRequiresMountedGalleryChildReplacement
+            && data.requires_view_refresh
+            && !finalizedAlbums.length
+            && trackModalOpen
+            && typeof loadTrackModalAlbumDetails === 'function'
+          ) {
+            const currentModalAlbum = state.modalReleases[state.modalReleaseIndex] || originalAlbum;
+            const currentModalPaths = getAlbumTrackPaths(currentModalAlbum);
+            const canonicalModalCandidates = modalUpdatedAlbums.length
+              ? modalUpdatedAlbums
+              : collectVisibleAlbumsUnique();
+            const canonicalModalAlbum = canonicalModalCandidates.find((album) => (
+              albumsShareTrackPath(album, currentModalPaths)
+              || albumsShareRuntimeIdentityAlias(album, currentModalAlbum)
+              || albumsShareLogicalReleaseIdentity(album, currentModalAlbum)
+            ));
+            const canonicalModalKey = getAlbumRequestKey(canonicalModalAlbum);
+            if (canonicalModalKey) {
+              try {
+                const hydratedModalAlbum = await loadTrackModalAlbumDetails(canonicalModalKey);
+                if (hydratedModalAlbum) {
+                  modalUpdatedAlbums = canonicalModalCandidates.map((album) => (
+                    album === canonicalModalAlbum ? hydratedModalAlbum : album
+                  ));
+                  updateOpenTrackModalAfterTagEdit(
+                    originalAlbum,
+                    modalUpdatedAlbums,
+                    {
+                      patchVisibleState: !viewRefreshed,
+                      preserveHydratedModalAfterCanonicalSave: true,
+                    },
+                  );
+                }
+              } catch (hydrationError) {
+                console.warn(
+                  '[AlbumHaven][SaveTask] Saved tags, but failed to refresh open album details.',
+                  hydrationError,
+                );
+              }
+            }
+          }
         }
         if (data.log_entry) {
           await prependUtilityLogHistoryEntry(data.log_entry);

@@ -113,7 +113,11 @@ test('ordinary creation delegates native search, tabs, form controls and support
   assert.equal(button(host, 'Create playlist').disabled, false);
   assert.equal(host.querySelector('[data-in-page-tab="selected"]').textContent, 'Selected (0)');
   assert.equal(host.querySelector('[aria-label="Select visible tracks"]').disabled, true);
-  assert.match(html, /No tracks are available in this source/);
+  assert.match(html, /Search for tracks to add to this playlist/);
+  controller.setQuery('absent');
+  const noResults = render(controller);
+  assert.match(noResults, /No matching tracks/);
+  assert.equal(hostFor(noResults).querySelectorAll('[data-creation-pick]').length, 0);
   assert.equal(search.label, 'Search tracks, albums or artists'); assert.equal(search.disabled, false);
   assert.notEqual(search.id, 'search-input'); assert.match(search.id, /^playlist-creation-/);
   controller.dispose();
@@ -165,17 +169,28 @@ test('missing mode requires a selection and does not treat uncertain parent labe
 test('unreadable and identity-free rows cannot enter selection or disclose source facts', async () => {
   const controller = await session({entries: [entry('hidden', {title: 'Restricted title', artwork_url: '/art/restricted', availability: 'missing',
     allowed_actions: {can_read: false, can_select: true}}), entry(null, {title: 'Display only'})]});
+  controller.setQuery('Display only');
   const html = render(controller), host = hostFor(html);
-  assert.doesNotMatch(html, /Restricted title|art\/restricted/); assert.match(html, /Unavailable track|Display only/);
+  assert.doesNotMatch(html, /Restricted title|art\/restricted/); assert.match(html, /Display only/);
+  const state = controller.getSnapshot(), {projectCreationState} = await model;
+  const deniedHtml = creationResultsHtml(runtime, {id: 'denied-projection',
+    projection: {...projectCreationState(state), entries: state.sourceResource.data.entries},
+    selectedKeys: [], disabled: false});
+  assert.match(deniedHtml, /Unavailable track/);
+  assert.doesNotMatch(deniedHtml, /Restricted title|art\/restricted/);
   assert.equal([...host.querySelectorAll('[data-creation-pick]')].every(input => input.disabled), true);
   assert.equal(host.querySelector('[aria-label="Select visible tracks"]').disabled, true);
   assert.equal(host.querySelectorAll('[data-creation-review]').length, 1);
-  assert.equal(host.querySelector('[data-creation-row-key="projection:0"]').classList.contains('album-track-table__row--missing'), false);
+  const denied = hostFor(deniedHtml).querySelector('[data-creation-row-key="projection:0"]');
+  assert.equal(denied.classList.contains('album-track-table__row--missing'), false);
+  assert.equal(denied.querySelector('[data-creation-pick]').disabled, true);
+  assert.equal(denied.querySelector('[data-creation-review]'), null);
   controller.dispose();
 });
 
 test('native read-only cells preserve zero duration without inventing absent numbers, durations or playback', async () => {
   const controller = await session({entries: [entry('zero', {track_number: 7, disc_number: 2, duration_seconds: 0}), entry('unknown')]});
+  controller.setQuery('Artist');
   const state = controller.getSnapshot(), {projectCreationState} = await model;
   const html = creationResultsHtml(runtime, {id: 'facts', projection: projectCreationState(state), selectedKeys: [], disabled: false});
   const host = hostFor(html);
@@ -202,7 +217,7 @@ test('writes disable edits and dismissal, then confirmed creation remains termin
   let accept;
   const controller = await session({entries: [entry('one')], writer: request => new Promise(resolve => {accept = () => resolve({status: 'ready',
     data: {scopeKey: request.scopeKey, request_key: request.request_key, playlist_id: 'created-playlist', revision: 'created-revision'}});})});
-  controller.edit({title: 'Create once'});
+  controller.edit({title: 'Create once'}); controller.setQuery('Artist');
   const pending = controller.submit(); await Promise.resolve();
   let host = hostFor(render(controller));
   assert.equal(host.querySelector('form').getAttribute('aria-busy'), 'true');
@@ -217,6 +232,7 @@ test('writes disable edits and dismissal, then confirmed creation remains termin
 
 test('Review uses the existing read-only panel and independently gated album identity without item or media references', async () => {
   const controller = await session({entries: [entry('review', {title: '<Original>', parent_album: parent({allowed_actions: {can_view_details: false}})})]});
+  controller.setQuery('Original');
   const value = controller.getSnapshot().sourceResource.data.entries[0]; controller.review(value.row_key);
   const row = creationReviewRow(value, controller.getSnapshot().source), html = render(controller);
   assert.equal(row.album_ref, 'album-one'); assert.equal(row.allowed_actions.can_view_details, false);
@@ -256,6 +272,7 @@ test('controlled native Search keeps its field and clears disabled semantics whe
 test('picker highlight, checkbox authoring and Review remain separate across source groups', async () => {
   const controller = await session({entries: [entry('first'), entry('second', {parent_album: parent({album_ref: 'other-album'})}),
     entry('third', {parent_album: parent({album_ref: 'last-album'})})]});
+  controller.setQuery('Artist');
   const {projectCreationState} = await model;
   const host = native.document.createElement('div'); native.document.body.appendChild(host);
   const fixture = lifecycle('CreationResults', host), props = () => ({runtime, id: 'actions', controller,
@@ -294,6 +311,7 @@ test('picker highlight, checkbox authoring and Review remain separate across sou
 test('picker highlight obeys source grants, prunes filtered rows and retires on source reload', async () => {
   const controller = await session({entries: [entry('keep', {title: 'Keep'}), entry('filter', {title: 'Filtered'}),
     entry('denied', {allowed_actions: {can_read: true, can_select: false}})]});
+  controller.setQuery('Artist');
   const {projectCreationState} = await model, host = native.document.createElement('div'); native.document.body.appendChild(host);
   const fixture = lifecycle('CreationResults', host), props = () => ({runtime, id: 'access', controller,
     state: controller.getSnapshot(), projection: projectCreationState(controller.getSnapshot()), disabled: false});
@@ -312,6 +330,7 @@ test('picker highlight obeys source grants, prunes filtered rows and retires on 
   assert.deepEqual(controller.getSnapshot().selectedKeys, []); assert.equal(actions.props.available, false);
   const pending = controller.load(); assert.equal(host.querySelectorAll('[aria-selected="true"]').length, 0);
   await pending; fixture.render(props()); assert.equal(host.querySelectorAll('[aria-selected="true"]').length, 0);
+  controller.setQuery('keep'); // Reload retires both selection and the previous query.
   fixture.render({...props(), disabled: true}); emit('keep'); assert.equal(host.querySelectorAll('[aria-selected="true"]').length, 0);
   const html = render(controller); assert.equal(hostFor(html).querySelectorAll('form').length, 1);
   assert.equal(button(hostFor(html), 'Add to playlist').disabled, true);

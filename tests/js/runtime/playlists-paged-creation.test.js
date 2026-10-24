@@ -23,7 +23,9 @@ const setup = async read => {
 };
 
 test('paged library remains incomplete and retains server ordering rather than client sorting', async () => {
-  const {controller} = await setup(async () => page([row('z'), row('a')]));
+  const {controller} = await setup(async request => page([row('z'), row('a')], {query: request.q || ''}));
+  assert.deepEqual(model.projectCreationState(controller.getSnapshot()).entries, []);
+  controller.setQuery('songs'); await waitForPage(controller);
   const state = controller.getSnapshot();
   assert.equal(state.sourceResource.data.entries_complete, false);
   assert.deepEqual(model.projectCreationState(state).entries.map(value => value.title), ['z', 'a']);

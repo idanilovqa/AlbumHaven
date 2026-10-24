@@ -82,7 +82,7 @@ class PostgresPlaybackClaims:
 
     def acquire(self, actor, *, client_id, client_surface, track, claim_token=None):
         client_id = _client(client_id)
-        if client_surface not in {"private_web", "mobile"}:
+        if not isinstance(client_surface, str) or client_surface not in {"private_web", "mobile"}:
             raise PlaybackContractError()
         track = self._track(actor, track)
         now = self._clock()

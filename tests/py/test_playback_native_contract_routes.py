@@ -64,6 +64,16 @@ def test_reference_batch_rejects_unsupported_protocol(playback_app, protocol):
     assert status == 400
 
 
+@pytest.mark.parametrize("client_surface", [[], {}], ids=["array", "object"])
+def test_claim_rejects_unhashable_client_surface(playback_app, client_surface):
+    status, _, _ = run_asgi_request(
+        playback_app, "PUT", "/playback/state",
+        json_body={"protocol": 1, "clientId": "11111111-1111-4111-8111-111111111111", "clientSurface": client_surface,
+                   "state": "playing", "track": {"playbackRef": "invalid-reference"}},
+    )
+    assert status == 400
+
+
 @pytest.mark.parametrize("endpoint", ["now-playing", "scrobble", "complete"])
 def test_playback_effect_requires_claim_before_provider_or_ledger_write(playback_app, monkeypatch, endpoint):
     from music_app.routes import api_wave_b_asgi_routes as routes

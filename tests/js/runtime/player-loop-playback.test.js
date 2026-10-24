@@ -357,6 +357,29 @@ test('visible play control and global Space dispatch pause and resume through th
   assert.equal(audio.playCalls, 0);
 });
 
+test('pause silences streaming before pending listen effects finish', async () => {
+  let finishEffects;
+  const effects = new Promise((resolve) => { finishEffects = resolve; });
+  const calls = [];
+  const snapshot = { currentTime: 12, duration: 60, paused: false, ended: false,
+    src: '/track?path=song.flac' };
+  const { context, playButton } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: () => { calls.push('pause'); snapshot.paused = true; },
+    maybeScrobbleListenSession: () => { calls.push('effects'); return effects; },
+    releasePlaybackOwnership: async () => { calls.push('release'); },
+  });
+  context.attachPlayerEvents();
+  playButton.dispatch('click');
+  assert.equal(snapshot.paused, true);
+  assert.deepEqual(calls, ['pause']);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ['pause', 'effects']);
+  finishEffects();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ['pause', 'effects', 'release']);
+});
+
 test('streaming position updates the facade at the bounded callback cadence', async () => {
   const track = {
     src: '/track?path=song.flac',

@@ -229,6 +229,7 @@ function restorePlayerState() {
   }
   const track = parsed?.track;
   if (!track || !track.src) return;
+  const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
   const savedPaused = typeof parsed.paused === 'boolean'
     ? parsed.paused
     : !Boolean(parsed.wasPlaying);
@@ -285,6 +286,8 @@ function restorePlayerState() {
       persistPlayerState(true);
     };
     const startWithOwnership = (allowed) => {
+      if ((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
+        || (state.player.current && state.player.current.path !== track.path)) return null;
       canResumePlayback = Boolean(allowed);
       return startStreamingTrack(track, {
       startSeconds: boundedTime,

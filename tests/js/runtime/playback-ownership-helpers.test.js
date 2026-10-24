@@ -39,6 +39,7 @@ function loadHelper(overrides = {}) {
       },
     },
     window: {},
+    AbortController,
     getLocalStorageItem: () => '',
     setLocalStorageItem: () => true,
     updatePlayerUi: () => {},
@@ -182,6 +183,14 @@ test('late acquisition releases its stale token without replacing the newer clai
   await new Promise((resolve) => setImmediate(resolve));
   const newerClaim = context.claimPlaybackOwnership(newerTrack);
   await new Promise((resolve) => setImmediate(resolve));
+  if (acquisitions.length === 1) {
+    acquisitions[0].pending.resolve(jsonResponse({
+      protocol: 1, claimToken: 'older-token', expiresAt: '2099-10-23T23:00:30Z',
+      playbackState: { is_playing_here: true },
+    }));
+    assert.equal(await olderClaim, false);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   acquisitions[1].pending.resolve(jsonResponse({
     protocol: 1,
     claimToken: 'newer-token',
@@ -202,9 +211,11 @@ test('late acquisition releases its stale token without replacing the newer clai
   assert.equal(releases.some((body) => body.claimToken === 'older-token'), true);
 });
 
-test('late release completion cannot clear a replacement claim', async () => {
+test('resume waits for server release before acquiring a replacement claim', async () => {
   const pendingRelease = deferred();
   let claimNumber = 0;
+  let serverToken = null;
+  let prematureAcquisitions = 0;
   const { context } = loadHelper({
     fetch: async (url, options = {}) => {
       const body = options.body ? JSON.parse(options.body) : null;
@@ -214,8 +225,18 @@ test('late release completion cannot clear a replacement claim', async () => {
           tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: `ref-${claimNumber + 1}` }],
         });
       }
-      if (options.method === 'DELETE') return pendingRelease.promise;
+      if (options.method === 'DELETE') {
+        await pendingRelease.promise;
+        if (serverToken === body.claimToken) serverToken = null;
+        return jsonResponse({ protocol: 1 });
+      }
+      if (options.method === 'GET') return jsonResponse({ is_playing_elsewhere: true });
+      if (serverToken && body.claimToken !== serverToken) {
+        prematureAcquisitions += 1;
+        return jsonResponse({ error: 'Playback is already claimed.' }, { ok: false });
+      }
       claimNumber += 1;
+      serverToken = `claim-token-${claimNumber}`;
       return jsonResponse({
         protocol: 1,
         claimToken: `claim-token-${claimNumber}`,
@@ -228,11 +249,75 @@ test('late release completion cannot clear a replacement claim', async () => {
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
   const release = context.releasePlaybackOwnership('paused', localTrack);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  const resume = context.claimPlaybackOwnership(localTrack);
+  await new Promise((resolve) => setImmediate(resolve));
   pendingRelease.resolve(jsonResponse({ protocol: 1 }));
   await release;
-
+  assert.equal(await resume, true);
+  assert.equal(prematureAcquisitions, 0);
   assert.equal(context.state.player.ownership.activeClaim.claimToken, 'claim-token-2');
+  assert.equal(serverToken, 'claim-token-2');
+});
+
+test('overlapping selections sharing a claim token never delete the newer selection claim', async () => {
+  const acquisitions = [];
+  const releases = [];
+  const { context } = loadHelper({
+    fetch: async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (url === '/playback/refs') return jsonResponse({ protocol: 1, tracks: [{
+        clientKey: body.tracks[0].clientKey, playbackRef: `ref:${body.tracks[0].path}`,
+      }] });
+      if (options.method === 'DELETE') {
+        releases.push(body.claimToken);
+        return jsonResponse({ protocol: 1 });
+      }
+      if (!body.claimToken) return jsonResponse({ protocol: 1, claimToken: 'shared-token',
+        expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+      const pending = deferred();
+      acquisitions.push({ body, pending });
+      return pending.promise;
+    },
+  });
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  const older = context.claimPlaybackOwnership({ ...localTrack, path: 'older.flac' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const newer = context.claimPlaybackOwnership({ ...localTrack, path: 'newer.flac' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const response = () => jsonResponse({ protocol: 1, claimToken: 'shared-token',
+    expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+  if (acquisitions.length === 1) {
+    acquisitions[0].pending.resolve(response());
+    assert.equal(await older, false);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(acquisitions.map(({ body }) => body.claimToken), ['shared-token', 'shared-token']);
+  acquisitions[1].pending.resolve(response());
+  assert.equal(await newer, true);
+  acquisitions[0].pending.resolve(response());
+  assert.equal(await older, false);
+  assert.deepEqual(releases, []);
+  assert.equal(context.state.player.ownership.activeClaim.claimToken, 'shared-token');
+  assert.equal(context.state.player.ownership.activeClaim.track.playbackRef, 'ref:newer.flac');
+});
+
+test('ownership requests abort stalled transport within a bounded deadline', async () => {
+  const timers = [];
+  let requestSignal;
+  const { context } = loadHelper({
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    fetch: (_url, options) => new Promise((_resolve, reject) => {
+      requestSignal = options.signal;
+      options.signal?.addEventListener('abort', () => reject(new Error('request aborted')), { once: true });
+    }),
+  });
+  const request = context.playbackOwnershipRequest('GET', '/playback/state');
+  const rejected = assert.rejects(request, /abort|timeout/i);
+  assert.equal(timers.length, 1);
+  assert.ok(timers[0].delay > 0 && timers[0].delay <= 10000);
+  timers[0].callback();
+  await rejected;
+  assert.equal(requestSignal.aborted, true);
 });
 
 test('release drains claim-scoped listen requests before clearing and deleting the claim', async () => {
@@ -324,6 +409,44 @@ test('heartbeat does not renew a paused claim while its listen requests are drai
   await release;
 });
 
+test('new selection renews while old listen drain is pending and obsolete release cannot delete it', async () => {
+  const pendingDrain = deferred();
+  const writes = [];
+  const releases = [];
+  const { context } = loadHelper({
+    drainPlaybackSessionRequests: () => pendingDrain.promise,
+    fetch: async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (url === '/playback/refs') return jsonResponse({ protocol: 1, tracks: [{
+        clientKey: body.tracks[0].clientKey, playbackRef: `ref:${body.tracks[0].path}`,
+      }] });
+      if (options.method === 'DELETE') {
+        releases.push(body.claimToken);
+        return jsonResponse({ protocol: 1 });
+      }
+      writes.push(body);
+      return jsonResponse({ protocol: 1, claimToken: 'shared-token',
+        expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+    },
+  });
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  const release = context.releasePlaybackOwnership();
+  await new Promise((resolve) => setImmediate(resolve));
+  let acquired = false;
+  const resume = context.claimPlaybackOwnership({ ...localTrack, path: 'new-selection.flac' })
+    .then((result) => { acquired = result; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(acquired, true, 'old listen drain must not block a new selection');
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].claimToken, 'shared-token');
+  assert.equal(writes[1].track.playbackRef, 'ref:new-selection.flac');
+  pendingDrain.resolve();
+  assert.equal(await release, false);
+  assert.equal(await resume, true);
+  assert.deepEqual(releases, []);
+  assert.equal(context.state.player.ownership.activeClaim.track.playbackRef, 'ref:new-selection.flac');
+});
+
 test('renewal failure stops audible output and clears local ownership', async () => {
   let heartbeat = null;
   let stateRequests = 0;
@@ -389,13 +512,13 @@ for (const replacement of [false, true]) {
     const renewal = context.refreshPlaybackOwnershipClaim();
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(renewals, 1);
-    await context.releasePlaybackOwnership();
-    if (replacement) assert.equal(await context.claimPlaybackOwnership(localTrack), true);
-    const expectedClaim = context.state.player.ownership.activeClaim;
-
+    const release = context.releasePlaybackOwnership();
     pendingRenewal.resolve(jsonResponse({ protocol: 1, claimToken: 'claim-1',
       expiresAt: '2099-10-24T00:00:30Z', playbackState: { is_playing_here: true } }));
     assert.equal(await renewal, false);
+    await release;
+    if (replacement) assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+    const expectedClaim = context.state.player.ownership.activeClaim;
     assert.equal(context.state.player.ownership.activeClaim, expectedClaim);
     assert.equal(expectedClaim?.claimToken || null, replacement ? 'claim-2' : null);
     assert.deepEqual(stopStreamingPlaybackCalls, []);
@@ -407,7 +530,7 @@ test('lease expiry silences output while a renewal request remains pending', asy
   let expire;
   let renewals = 0;
   const { context, stopStreamingPlaybackCalls } = loadHelper({
-    setTimeout: (callback) => { expire = callback; return 18; },
+    setTimeout: (callback, delay) => { if (delay > 10000) expire = callback; return 18; },
     fetch: async (url, options = {}) => {
       const body = options.body ? JSON.parse(options.body) : null;
       if (url === '/playback/refs') return jsonResponse({ protocol: 1, tracks: [{

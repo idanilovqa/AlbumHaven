@@ -1457,6 +1457,29 @@ function loadCapabilityPlayerRestore(actions, paused) {
   return { context, effects, events, track };
 }
 
+test('stale saved-track acquisition cannot open a paused stream over a newer explicit selection', async () => {
+  const f = loadCapabilityPlayerRestore({ 'library.media.read': true }, false);
+  let finishOwnership;
+  f.context.canRestoreActivePlayback = () => new Promise((resolve) => { finishOwnership = resolve; });
+  const opened = [];
+  f.context.startStreamingTrack = async (track, options) => {
+    opened.push({ path: track.path, autoplay: options.autoplay });
+    return { generation: opened.length, streamId: opened.length };
+  };
+  f.context.restorePlayerState();
+  f.events.get('pageshow')();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof finishOwnership, 'function');
+  const selected = { ...f.track, path: 'selected.flac', title: 'Selected' };
+  await f.context.startStreamingTrack(selected, { autoplay: true });
+  f.context.state.player.current = selected;
+  f.context.state.player.ownership = { requestVersion: 2, activeClaim: { claimToken: 'selected-token' } };
+  finishOwnership(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(opened, [{ path: 'selected.flac', autoplay: true }]);
+  assert.equal(f.context.state.player.current.path, 'selected.flac');
+});
+
 for (const paused of [true, false]) for (const actions of [{ 'library.media.read': false }, {}]) {
   test(`denied saved ${paused ? 'paused' : 'playing'} track cannot restore state or claim ownership (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async () => {
     const f = loadCapabilityPlayerRestore(actions, paused);

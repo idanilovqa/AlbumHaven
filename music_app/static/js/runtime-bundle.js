@@ -9879,10 +9879,15 @@ function normalizePlaybackOwnershipTrack(track) {
 }
 
 async function playbackOwnershipRequest(method, url, payload) {
-  const response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
-    ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
-  if (!response.ok) throw new Error('Playback ownership is unavailable.');
-  return response.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+  try {
+    const response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
+      signal: controller.signal,
+      ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
+    if (!response.ok) throw new Error('Playback ownership is unavailable.');
+    return await response.json();
+  } finally { clearTimeout(timeout); }
 }
 
 function clearBlockedPlaybackState() {
@@ -9994,28 +9999,39 @@ function acceptPlaybackClaim(result, prepared) {
 
 async function refreshPlaybackOwnershipClaim(track = null) {
   const ownership = getPlaybackOwnershipState();
-  const claim = ownership.activeClaim;
-  if (!claim || ownership.renewing) return false;
+  if (!ownership.activeClaim || ownership.renewing) return false;
   const version = ownership.requestVersion || 0;
+  const previousOperation = ownership.pendingOperation;
   ownership.renewing = true;
-  try {
-    const prepared = await playbackOwnershipTrack(track || state.player.current, claim);
-    const result = await playbackOwnershipRequest('PUT', '/playback/state', { protocol: 1,
-      clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-      state: 'playing', track: prepared.track });
-    if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
-    acceptPlaybackClaim(result, prepared);
-    return true;
-  } catch (_error) {
-    if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
-    return false;
-  } finally { ownership.renewing = false; }
+  const operation = (async () => {
+    await previousOperation;
+    if (version !== (ownership.requestVersion || 0)) return false;
+    const claim = ownership.activeClaim;
+    if (!claim) return false;
+    try {
+      const prepared = await playbackOwnershipTrack(track || state.player.current, claim);
+      if (version !== (ownership.requestVersion || 0)) return false;
+      const result = await playbackOwnershipRequest('PUT', '/playback/state', { protocol: 1,
+        clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
+        state: 'playing', track: prepared.track });
+      if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
+      acceptPlaybackClaim(result, prepared);
+      return true;
+    } catch (_error) {
+      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
+      return false;
+    }
+  })().finally(() => { ownership.renewing = false; });
+  ownership.pendingOperation = operation;
+  return operation;
 }
 
 async function claimPlaybackOwnership(track, options = {}) {
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  const previousOperation = ownership.pendingOperation;
   const operation = (async () => {
+    await previousOperation;
     if (version !== ownership.requestVersion) return false;
     const claim = ownership.activeClaim;
     try {
@@ -10025,7 +10041,7 @@ async function claimPlaybackOwnership(track, options = {}) {
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
         claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
       if (version !== ownership.requestVersion) {
-        await deletePlaybackClaim(result).catch(() => {});
+        if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
       }
       acceptPlaybackClaim(result, prepared);
@@ -10039,6 +10055,7 @@ async function claimPlaybackOwnership(track, options = {}) {
       return false;
     }
   })();
+  ownership.pendingOperation = operation;
   return operation;
 }
 
@@ -10050,12 +10067,19 @@ async function releasePlaybackOwnership() {
     await drainPlaybackSessionRequests(claim.claimToken);
   }
   if (version !== ownership.requestVersion) return false;
-  ownership.activeClaim = null;
-  if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
-  clearBlockedPlaybackState();
-  await deletePlaybackClaim(claim).catch(() => {});
-  announcePlaybackOwnership();
-  return Boolean(claim);
+  const previousOperation = ownership.pendingOperation;
+  const operation = (async () => {
+    await previousOperation;
+    if (version !== ownership.requestVersion) return false;
+    ownership.activeClaim = null;
+    if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
+    clearBlockedPlaybackState();
+    await deletePlaybackClaim(claim).catch(() => {});
+    announcePlaybackOwnership();
+    return Boolean(claim);
+  })();
+  ownership.pendingOperation = operation;
+  return operation;
 }
 
 function notifyBlockedPlaybackStart() {
@@ -31229,6 +31253,7 @@ function restorePlayerState() {
   }
   const track = parsed?.track;
   if (!track || !track.src) return;
+  const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
   const savedPaused = typeof parsed.paused === 'boolean'
     ? parsed.paused
     : !Boolean(parsed.wasPlaying);
@@ -31285,6 +31310,8 @@ function restorePlayerState() {
       persistPlayerState(true);
     };
     const startWithOwnership = (allowed) => {
+      if ((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
+        || (state.player.current && state.player.current.path !== track.path)) return null;
       canResumePlayback = Boolean(allowed);
       return startStreamingTrack(track, {
       startSeconds: boundedTime,

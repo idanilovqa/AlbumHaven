@@ -421,6 +421,11 @@ def _build_alias_views(
     artist_counts: Counter[str] = Counter()
     normalized_buckets: dict[str, list[str]] = defaultdict(list)
     container_to_artists: dict[tuple[str, tuple[str, ...]], set[str]] = defaultdict(set)
+    structured_collaboration_names = {
+        album.album_artist
+        for album in albums
+        if len(set(album.artists) - {album.album_artist}) >= 2
+    }
     for album_index, album in enumerate(albums):
         _yield_periodically(cooperate, album_index)
         candidates = list(dict.fromkeys((album.album_artist, *album.artists)))

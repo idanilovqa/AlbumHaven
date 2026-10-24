@@ -496,6 +496,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
     await coverLookupActions.waitForTaskVisible(actionedTaskTitle);
+    await coverLookupActions.waitForTaskCoverDecoded(actionedTaskTitle);
     await coverLookupActions.waitForRunningTaskElapsedToAdvance(actionedTaskTitle);
   });
 

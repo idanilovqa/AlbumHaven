@@ -899,6 +899,13 @@ export class CoverLookupActions {
     );
   }
 
+  async waitForTaskCoverDecoded(taskTitle, options = {}) {
+    const image = this.coverLookup.taskCoverByTitle(taskTitle);
+    await expect(image).toBeVisible({ timeout: options.timeout || 30000 });
+    // parity-check: allow-read-only-measurement-evaluate -- verify the notification's rendered image decoded
+    await image.evaluate(waitForDisplayedImageDecode);
+  }
+
   async readTaskStatus(taskTitle) {
     return (await this.coverLookup.taskStatusByTitle(taskTitle).textContent() || '').trim();
   }

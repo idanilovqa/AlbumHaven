@@ -441,6 +441,10 @@ export class CoverLookup extends BasePage {
     return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-open');
   }
 
+  taskCoverByTitle(taskTitle) {
+    return this.taskCardByTitle(taskTitle).locator('img.cover-lookup-task-cover').first();
+  }
+
   async readTaskClearHoverStyle(taskTitle) {
     // parity-check: allow-read-only-measurement-evaluate -- wait for the control's finite hover transitions before comparing its computed styles
     return this.taskClearButtonByTitle(taskTitle).evaluate(async (element) => {

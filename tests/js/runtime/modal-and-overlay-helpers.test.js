@@ -1183,6 +1183,21 @@ test('album display cover rejects an older preview revision for the current loca
   assert.equal(parsed.searchParams.get('v'), 'selected-front-revision');
 });
 
+test('album display cover uses a server preview when a compact payload omits the private path', () => {
+  const { context } = loadHelper();
+  const canonicalPreviewUrl = '/cover?path=opaque-preview&size=480&v=preview-revision';
+
+  assert.equal(
+    context.buildAlbumDisplayCoverUrl({
+      key: 'notification-summary',
+      name: 'Notification summary',
+      album_artist: 'Artist',
+      cover_preview_url: canonicalPreviewUrl,
+    }),
+    canonicalPreviewUrl,
+  );
+});
+
 test('markAlbumCoverPathsFresh preserves authoritative album and track cover revisions', () => {
   const { context } = loadHelper();
   const album = {

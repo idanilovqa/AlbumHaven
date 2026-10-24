@@ -12068,9 +12068,10 @@ function buildAlbumDisplayCoverUrl(album) {
     return optimistic.src;
   }
   const localCoverPath = String(album?.cover_path || '').trim();
+  const canonicalPreviewUrl = String(album?.cover_preview_url || '').trim();
+  if (!localCoverPath && canonicalPreviewUrl) return canonicalPreviewUrl;
   if (localCoverPath && !isKnownFailedLocalDisplayCoverPath(localCoverPath)) {
     const coverRevision = String(album?.cover_revision || '').trim();
-    const canonicalPreviewUrl = String(album?.cover_preview_url || '').trim();
     const rememberedStartupUrls = globalThis.__ALBUM_HAVEN_STARTUP_COVER_URLS__ instanceof Map
       ? globalThis.__ALBUM_HAVEN_STARTUP_COVER_URLS__
       : new Map();

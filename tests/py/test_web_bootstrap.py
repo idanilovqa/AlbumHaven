@@ -686,6 +686,17 @@ def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypat
         def build_root_sidebar_payload(self, *, query_params):
             raise AssertionError("selected startup must defer the complete root sidebar")
 
+        def build_projected_root_sidebar_payload(self, *, query_params):
+            assert query_params.get("artist") == "Broadcast"
+            return {
+                "artists_sidebar": [
+                    {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+                    {"artist": "Stereolab", "artist_display": "Stereolab", "count": 1},
+                ],
+                "artist_count": 2,
+                "show_all_artists_sidebar_link": True,
+            }
+
         def build_selected_artist_payload(self, *, query_params=None, library_state=None):
             assert query_params.get("artist") == "Broadcast"
             return {

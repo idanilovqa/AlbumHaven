@@ -16488,6 +16488,17 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
+      const observedInventoryMutationRevision = Number(
+        state.status?.inventory_mutation_revision,
+      );
+      if (
+        state.ui.pendingInventoryMutationViewRefresh
+        && isCanonicalFullViewPayload(data, requestOptions)
+        && Number.isSafeInteger(observedInventoryMutationRevision)
+        && appliedInventoryMutationRevision >= observedInventoryMutationRevision
+      ) {
+        state.ui.pendingInventoryMutationViewRefresh = false;
+      }
     }
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {

@@ -96,6 +96,51 @@ test('same-query preserve-scroll response retains mounted children for scroll de
   assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 13);
 });
 
+test('foreground view consumes a deferred inventory refresh at the revision it applies', async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 12,
+  };
+  context.state.ui.pendingInventoryMutationViewRefresh = true;
+
+  const foreground = context.fetchAndRender('/view-data?artist=Neal%20Morse&omit_sidebar=1', false);
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'neal::testimony' }] }],
+    payload_tier: 'full',
+    inventory_mutation_revision: 13,
+  });
+  await foreground;
+
+  const status = context.pollStatus();
+  pendingRequests[1].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 3; attempt += 1) {
+    await flushMicrotasks();
+  }
+  if (pendingRequests[2]) {
+    pendingRequests[2].resolveWith({
+      artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'neal::testimony' }] }],
+      payload_tier: 'full',
+      inventory_mutation_revision: 13,
+    });
+  }
+  await status;
+
+  assert.deepEqual(calls.fetchRequests.map(request => request.url), [
+    '/view-data?artist=Neal%20Morse&omit_sidebar=1',
+    '/status',
+  ]);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
+});
+
 test('post-scan search refresh rejects a transient active-scan snapshot', async () => {
   const { context, calls, pendingRequests } = createSearchOwnerContext();
   const scheduledRetries = [];

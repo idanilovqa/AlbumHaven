@@ -1381,6 +1381,29 @@ function applyViewPayload(payload, options = {}) {
       ? nextView.loaded_library_categories
       : previousView.non_album_library_categories || nextView.loaded_library_categories)
   )];
+  const previousNonAlbumCategories = previousView.non_album_library_categories
+    || previousView.loaded_library_categories || previousView.visible_library_categories || [];
+  const nextNonAlbumCategories = nextView.non_album_library_categories
+    || nextView.loaded_library_categories || nextView.visible_library_categories || [];
+  const sameNonAlbumScope = (
+    String(previousView.selected_artist || '').trim() === String(nextView.selected_artist || '').trim()
+    && String(previousView.query || '').trim() === String(nextView.query || '').trim()
+    && previousNonAlbumCategories.length === nextNonAlbumCategories.length
+    && previousNonAlbumCategories.every((category) => nextNonAlbumCategories.includes(category))
+  );
+  if (
+    nextView.non_album_tracks_deferred
+    && !previousView.non_album_tracks_deferred
+    && (
+      previousView.non_album_tracks?.length
+      || previousView.library_non_album_tracks?.length
+    )
+    && sameNonAlbumScope
+  ) {
+    nextView.non_album_tracks = previousView.non_album_tracks;
+    nextView.library_non_album_tracks = previousView.library_non_album_tracks;
+    nextView.non_album_tracks_deferred = false;
+  }
   if (nextView.gallery_page && !options.rootGalleryContinuation && !nextPayload?.gallery_page_scope) {
     // Source hydration may retain the navigation URL. Continuations must follow
     // the actual loaded page scope, not those retained browser parameters.

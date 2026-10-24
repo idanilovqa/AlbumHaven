@@ -2594,6 +2594,48 @@ test('root page cursors survive compact state but never leak into a replacement 
   assert.equal(c.normalizeViewPayload({ query: '', selected_artist: '', artist_groups: [] }, root).gallery_page, undefined);
 });
 
+test('deferred same-scope payload retains already hydrated non-album tracks', () => {
+  const context = loadHelpers();
+  const categories = ['main_library', 'hoard', 'new_arrivals'];
+  const tracks = [{ path: '/fixture/main/loose.mp3', title: 'Loose' }];
+  context.applyViewPayload({
+    surface: { active: 'albums' }, selected_artist: 'Broadcast', query: '',
+    visible_library_categories: categories, artist_groups: [],
+    non_album_tracks: tracks, library_non_album_tracks: tracks,
+    non_album_tracks_deferred: false,
+  });
+
+  const refreshed = context.applyViewPayload({
+    surface: { active: 'albums' }, selected_artist: 'Broadcast', query: '',
+    visible_library_categories: categories, artist_groups: [],
+    non_album_tracks: [], library_non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  });
+
+  assert.deepEqual(Array.from(refreshed.non_album_tracks, (track) => track.path), [tracks[0].path]);
+  assert.deepEqual(Array.from(refreshed.library_non_album_tracks, (track) => track.path), [tracks[0].path]);
+  assert.equal(refreshed.non_album_tracks_deferred, false);
+});
+
+test('deferred payload stays deferred when no hydrated non-album collection exists', () => {
+  const context = loadHelpers();
+  const categories = ['main_library', 'hoard', 'new_arrivals'];
+  context.state.view = {
+    surface: { active: 'albums' }, selected_artist: '', query: '',
+    visible_library_categories: categories, non_album_tracks: [],
+    non_album_tracks_deferred: false,
+  };
+
+  const refreshed = context.applyViewPayload({
+    surface: { active: 'albums' }, selected_artist: '', query: '',
+    visible_library_categories: categories, artist_groups: [],
+    non_album_tracks: [], library_non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  });
+
+  assert.equal(refreshed.non_album_tracks_deferred, true);
+});
+
 test('paged source hydration retains navigation location but captures continuation scope', () => {
   const c = loadHelpers();
   c.applyViewPayload({ surface_request: 'albums', query: '', selected_artist: '', gallery_scope: 'main', visible_library_categories: ['main_library'], artist_groups: [] });

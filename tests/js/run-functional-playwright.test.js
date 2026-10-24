@@ -4,7 +4,7 @@ const test = require('node:test');
 
 const { _private } = require('../../scripts/run-functional-playwright.cjs');
 
-test('functional orchestrator runs the three isolated scenarios before one shared general suite', () => {
+test('functional orchestrator runs the three isolated scenarios, one shared general suite and Home feedback', () => {
   const calls = [];
   const result = _private.runFunctionalSuites(['test', '--headed'], {
     spawnSyncFn(command, args, options) {
@@ -14,7 +14,7 @@ test('functional orchestrator runs the three isolated scenarios before one share
   });
 
   assert.deepEqual(result, { exitCode: 1, signal: null });
-  assert.equal(calls.length, 4, 'the unfiltered full run must launch each suite directly');
+  assert.equal(calls.length, 5, 'the unfiltered full run must launch each suite directly');
   assert.deepEqual(
     calls.map((call) => call.args.slice(1)),
     [
@@ -22,6 +22,7 @@ test('functional orchestrator runs the three isolated scenarios before one share
       ['test', '--headed', '--config=playwright.cover-rescan.config.js'],
       ['test', '--headed', '--config=playwright.non-album-rescan.config.js'],
       ['test', '--headed', '--config=playwright.config.js'],
+      ['test', '--headed', '--config=playwright.home-feedback.config.js'],
     ],
   );
   for (const call of calls) {
@@ -37,9 +38,10 @@ test('functional orchestrator runs the three isolated scenarios before one share
   assert.equal(calls[1].options.env.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE, undefined);
   assert.equal(calls[2].options.env.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE, undefined);
   assert.equal(calls[3].options.env.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE, undefined);
+  assert.equal(calls[4].options.env.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE, undefined);
 });
 
-test('functional orchestrator succeeds only when all four suites pass', () => {
+test('functional orchestrator succeeds only when all five suites pass', () => {
   assert.deepEqual(_private.runFunctionalSuites(['test'], {
     spawnSyncFn: () => ({
       status: 0,
@@ -60,7 +62,7 @@ test('functional orchestrator treats spawn errors as failure and still runs the 
   });
 
   assert.deepEqual(result, { exitCode: 1, signal: null });
-  assert.equal(callCount, 4);
+  assert.equal(callCount, 5);
 });
 
 test('focused filters skip no-tests discovery without a terminal period and run a later match', () => {
@@ -72,6 +74,7 @@ test('focused filters skip no-tests discovery without a terminal period and run 
         arg.includes('lastfm-auto-timezone')
         || arg.includes('cover-rescan')
         || arg.includes('non-album-rescan')
+        || arg.includes('home-feedback')
       ));
       if (args.includes('--list')) {
         return isDedicated
@@ -89,6 +92,7 @@ test('focused filters skip no-tests discovery without a terminal period and run 
     ['test', 'coverLookup.spec.js', '--grep', 'FTC-COVERS-007', '--list', '--config=playwright.non-album-rescan.config.js'],
     ['test', 'coverLookup.spec.js', '--grep', 'FTC-COVERS-007', '--list', '--config=playwright.config.js'],
     ['test', 'coverLookup.spec.js', '--grep', 'FTC-COVERS-007', '--config=playwright.config.js'],
+    ['test', 'coverLookup.spec.js', '--grep', 'FTC-COVERS-007', '--list', '--config=playwright.home-feedback.config.js'],
   ]);
 });
 
@@ -102,7 +106,7 @@ test('focused filters fail when neither config discovers a test', () => {
   });
 
   assert.deepEqual(result, { exitCode: 1, signal: null });
-  assert.equal(callCount, 4);
+  assert.equal(callCount, 5);
 });
 
 test('short positive grep alias discovers and runs only the matching config', () => {
@@ -115,6 +119,7 @@ test('short positive grep alias discovers and runs only the matching config', ()
           arg.includes('lastfm-auto-timezone')
           || arg.includes('cover-rescan')
           || arg.includes('non-album-rescan')
+        || arg.includes('home-feedback')
         ));
         if (args.includes('--list')) {
           return isDedicated
@@ -132,6 +137,7 @@ test('short positive grep alias discovers and runs only the matching config', ()
       ['test', alias, 'FTC-COVERS-007', '--list', '--config=playwright.non-album-rescan.config.js'],
       ['test', alias, 'FTC-COVERS-007', '--list', '--config=playwright.config.js'],
       ['test', alias, 'FTC-COVERS-007', '--config=playwright.config.js'],
+      ['test', alias, 'FTC-COVERS-007', '--list', '--config=playwright.home-feedback.config.js'],
     ], alias);
   }
 });
@@ -146,7 +152,7 @@ test('short inverted grep alias is treated as a focused selection', () => {
   });
 
   assert.deepEqual(result, { exitCode: 1, signal: null });
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
   assert.ok(calls.every((args) => args.includes('--list')));
 });
 
@@ -195,7 +201,7 @@ test('unexpected focused discovery errors are surfaced and fail the run', () => 
   });
 
   assert.deepEqual(result, { exitCode: 1, signal: null });
-  assert.equal(callCount, 4);
+  assert.equal(callCount, 5);
   assert.deepEqual(stderrWrites, ['configuration exploded\n']);
 });
 

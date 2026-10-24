@@ -32,6 +32,9 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
+  if (config.contextKind === 'recent') {
+    return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span>${escapeHtml(config.title || 'Recent')}</span></div></div><div class="gallery-bar__actions">${String(config.actionsHtml || '')}</div>`;
+  }
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
@@ -62,6 +65,11 @@ function buildGalleryEmptySelectionHtml() {
 }
 
 function buildArtistInfoOverlayHtml(config = {}) {
+  if (config.presentation === 'embedded') {
+    const image = config.imageUrl ? buildAlbumArtboxHtml({state: 'ready', label: `${String(config.artist || 'Artist')} artwork`,
+      coverHtml: `<img src="${escapeHtml(config.imageUrl)}" alt="" loading="lazy" decoding="async">`}) : '';
+    return `<section class="artist-info-overlay artist-info-overlay--embedded" role="region" aria-label="Information about ${escapeHtml(config.artist || 'Artist')}"><header>${image}<div class="artist-info-overlay__identity"><span>Artist</span><h2>${escapeHtml(config.artist || 'Unknown artist')}</h2>${config.metadata ? `<p>${escapeHtml(config.metadata)}</p>` : ''}</div></header><div class="artist-info-overlay__body"><p>${escapeHtml(config.summary || 'No information was supplied.')}</p>${config.sourceLabel ? `<p>${escapeHtml(`Source: ${config.sourceLabel}`)}</p>` : ''}</div></section>`;
+  }
   const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
   const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
   const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';
@@ -91,5 +99,8 @@ function buildGalleryCardInfoHtml(config = {}) {
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  const summary = config.listeningSummaryHtml === undefined
+    ? `<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div>`
+    : String(config.listeningSummaryHtml || '');
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}${summary}</div>`;
 }

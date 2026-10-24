@@ -676,7 +676,8 @@
       "suitePrerequisites": [
         "functional-core and playback media prepared before application startup",
         "each owned mutation receives its declared database identity and writable media copy",
-        "special autoplay, timezone, and non-album rescan configs run as independent invocations"
+        "special autoplay, timezone, and non-album rescan configs run as independent invocations",
+        "Home feedback generated media and normal PostgreSQL accounts/catalog are prepared before each isolated application launch"
       ],
       "invocations": [
         {
@@ -977,6 +978,90 @@
               "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
               "case": "FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details",
               "area": "album-details"
+            }
+          ]
+        },
+        {
+          "config": "playwright.home-feedback.config.js",
+          "project": "home-feedback-chromium",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-001 keeps explicit Queue on own signed-in Home",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-002 preserves explicit occurrence order and native queue timing",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-003 guards queue activation reorder and confirmed Clear",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-004 retains native Album and Artist inspection across Queue changes",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-005 preserves canonical selection and subject-owned taste",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-006 hides playback for readable missing occurrences",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-007 admits existing Playlist Inspect only for confirmed missing sources",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-008 preserves compact native responsive Playlist and Inspect composition",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-009 preserves native Period Choice anchoring keyboard and focus",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-010 creates selected Playlists only after explicit commit and current authority",
+              "area": "home-friends-playlists"
+            },
+            {
+              "config": "playwright.home-feedback.config.js",
+              "project": "home-feedback-chromium",
+              "test": "tests/e2e/homeFeedback/homeFeedback.spec.js",
+              "case": "FTC-HFP-FB-013 pins only fresh authorized friend playback without listen credit",
+              "area": "home-friends-playlists"
             }
           ]
         }

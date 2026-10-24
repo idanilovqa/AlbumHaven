@@ -113,6 +113,7 @@ def retry_pending_lastfm_scrobbles(
                             config, payload,
                             account_id=owner.account_id, library_id=owner.library_id,
                             lastfm_session=session, user_timezone=str(entry.get("user_timezone") or "UTC"),
+                            reauthenticated=reauthenticated, bypass_backoff=bypass_backoff,
                             normalize_playback_track_payload=normalize_playback_track_payload,
                             is_meaningful_listen_session=is_meaningful_listen_session,
                             # Refresh the trusted receipt inside the provider guard. A retry

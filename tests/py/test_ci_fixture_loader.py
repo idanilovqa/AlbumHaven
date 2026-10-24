@@ -1883,7 +1883,13 @@ def test_bootstrap_validates_nontransactional_index_before_ledger_write() -> Non
 
     assert "get-migrationindexstate" in migration_loop
     assert "-cne 'ready'" in migration_loop
-    assert migration_loop.index("-cne 'ready'") < migration_loop.index("$ledgersql")
+    assert migration_loop.index("-cne 'ready'") < migration_loop.index(
+        "invoke-psqltext $psql $names.roles.migrator $names.database $ledgersql"
+    )
+    assert "if (-not $migration.transactional)" in migration_loop
+    assert "if ($migration.transactional)" in migration_loop
+    assert "$migrationarguments += @('-c', $ledgersql)" in migration_loop
+    assert "on conflict (migration_name) do update" not in migration_loop
 
 
 def test_bootstrap_cleans_only_named_invalid_concurrent_indexes_before_rethrow() -> None:

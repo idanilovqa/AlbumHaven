@@ -621,6 +621,9 @@ def apply_migrations(setup_database_url: str, migration_paths: list[Path]) -> No
                 "select migration_name, checksum from ops.schema_migrations"
             ).fetchall()
         }
+        from scripts.postgres_migration_compatibility import validate_applied_migrations
+
+        validate_applied_migrations(connection, ROOT / "migrations" / "postgres", applied)
         for migration_path in migration_paths:
             checksum = hashlib.sha256(migration_path.read_bytes()).hexdigest()
             if migration_path.name in applied:

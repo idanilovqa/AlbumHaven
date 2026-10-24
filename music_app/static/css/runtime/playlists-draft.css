@@ -1,0 +1,8 @@
+/* An unsaved playlist composes the same GalleryBar, table, Artbox and selection
+   panel as persisted playlists. Shared control appearance stays with its owner. */
+.playlists-draft { flex: 1 1 auto; }
+.playlists-draft__identity, .playlists-draft__identity > div { min-width: 0; }
+.playlists-draft__tracks [data-cdt-column="selection"] { display: flex; align-items: center; justify-content: center; }
+.playlists-draft__tracks [data-cdt-column="order"] { display: flex; flex-wrap: wrap; gap: 4px; }
+.playlists-draft__tracks [data-cdt-column="availability"] { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.playlists-draft__select-visible { display: flex; align-items: center; gap: 6px; white-space: nowrap; }

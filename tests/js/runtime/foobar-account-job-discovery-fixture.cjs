@@ -1,0 +1,13 @@
+'use strict';
+const F = require('./foobar-account-import-fixture.cjs');
+const VERSION = 'foobar_account_job_list_v1';
+const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const item = (n = 2, patch = {}) => ({source_ref: F.SOURCE, job_ref: id(n), created_at: '2026-10-22T00:00:00.000001Z', updated_at: '2026-10-23T12:00:00.123456Z', confirmed_rows: 2, total_rows: 4, cancel_requested: true, ...patch});
+const cursor = row => ({updated_at: row.updated_at, source_ref: row.source_ref, job_ref: row.job_ref});
+const list = (items = [], patch = {}) => F.envelope(VERSION, 'list', {unfinished: true, snapshot_kind: 'durable_page', busy: false, items, next_cursor: null, ...patch});
+const page = () => {const items = Array.from({length: 20}, (_, n) => item(40 - n)); return list(items, {next_cursor: cursor(items.at(-1))});};
+const busy = (items = []) => list(items, {snapshot_kind: 'in_process', busy: true});
+const wire = value => F.wire({initialList: false}).enqueue('/job/list', value);
+const body = call => JSON.parse(call.init.body);
+const writes = f => f.wire.calls.filter(x => /^\/job\/(start|resume|cancel)$/.test(x.route));
+module.exports = {VERSION, id, item, cursor, list, page, busy, wire, body, writes};

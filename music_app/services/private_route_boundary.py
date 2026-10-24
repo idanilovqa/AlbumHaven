@@ -25,7 +25,95 @@ _READ_METHODS = frozenset({"GET", "HEAD"})
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
+def _foobar_response_protocol(path):
+    if path=='/integrations/foobar/account/maintenance':
+        return 'foobar_account_maintenance_v1'
+    if path=='/integrations/foobar/account/history/native/evidence':
+        return 'foobar_account_track_evidence_v1'
+    if path=='/integrations/foobar/account/enhanced/review':
+        return 'foobar_enhanced_review_v1'
+    if path=='/integrations/foobar/account/history/enhanced':
+        return 'foobar_account_enhanced_history_v1'
+    if path.startswith('/integrations/foobar/account/history/native/'):
+        return 'foobar_account_history_native_v1'
+    if path.startswith('/integrations/foobar/account/history/'):
+        return 'foobar_account_history_v1'
+    if path=='/integrations/foobar/account/job/list':
+        return 'foobar_account_job_list_v1'
+    if path.startswith('/integrations/foobar/account/review/'):
+        return 'foobar_account_review_v4'
+    if path.startswith('/integrations/foobar/account/job/'):
+        return 'foobar_account_job_v3'
+    return 'foobar_account_import_v4'
+
+
+_FOOBAR_ACCOUNT_PATHS = frozenset({
+    "/integrations/foobar/account/enhanced/review",
+    "/integrations/foobar/account/history/enhanced",
+    "/integrations/foobar/account/history/sources",
+    "/integrations/foobar/account/history/list",
+    "/integrations/foobar/account/job/list",
+    "/integrations/foobar/account/ui/source",
+    "/integrations/foobar/account/review/start", "/integrations/foobar/account/review/status",
+    "/integrations/foobar/account/review/cancel",
+    "/integrations/foobar/account/review/personal-changes",
+    "/integrations/foobar/account/source", "/integrations/foobar/account/prepare",
+    "/integrations/foobar/account/apply", "/integrations/foobar/account/status",
+    "/integrations/foobar/account/job/start", "/integrations/foobar/account/job/resume",
+    "/integrations/foobar/account/job/status", "/integrations/foobar/account/job/cancel",
+    "/integrations/foobar/account/match-preview", "/integrations/foobar/account/match-apply",
+})
+_FOOBAR_NATIVE_PATHS = frozenset({
+    "/integrations/foobar/account/maintenance",
+    "/integrations/foobar/account/history/native/evidence",
+    "/integrations/foobar/account/history/native/eligibility",
+    "/integrations/foobar/account/history/native/play",
+})
+_FOOBAR_ERROR_PATHS = _FOOBAR_ACCOUNT_PATHS | _FOOBAR_NATIVE_PATHS
+_LASTFM_HISTORY_PATHS = frozenset({"/home/activity/lastfm/import", "/home/activity/lastfm/combined"})
 _PRIVATE_ROUTE_ACTIONS = {
+    ("POST", "/integrations/foobar/account/maintenance"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/history/native/evidence"): "library.browse.read",
+    ("POST", "/integrations/foobar/account/enhanced/review"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/history/native/eligibility"): "library.browse.read",
+    ("POST", "/integrations/foobar/account/history/native/play"): "library.browse.read",
+    ("GET", "/account/foobar-history"): "account.self.foobar.read",
+    ("POST", "/integrations/foobar/account/history/sources"): "account.self.foobar.read",
+    ("POST", "/integrations/foobar/account/history/list"): "account.self.foobar.read",
+    ("POST", "/integrations/foobar/account/history/enhanced"): "account.self.foobar.read",
+    ("GET", "/account/integrations/foobar"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/ui/source"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/review/start"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/review/status"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/review/cancel"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/review/personal-changes"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/job/start"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/job/list"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/job/resume"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/job/status"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/job/cancel"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/source"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/prepare"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/apply"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/status"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/match-preview"): "account.self.foobar.write",
+    ("POST", "/integrations/foobar/account/match-apply"): "account.self.foobar.write",
+    ("POST", "/home/activity/lastfm/import"): "account.self.lastfm.history.write",
+    ("POST", "/home/activity/lastfm/combined"): "account.self.lastfm.history.read",
+    ("POST", "/home/activity/scrobbles/retry"): "integration.lastfm.scrobbles.submit",
+    ("GET", "/home/activity/now-playing"): "library.browse.read",
+    ("POST", "/playback/session/presence-source"): "library.media.read",
+    ("POST", "/playback/session/presence"): "library.browse.read",
+    ("GET", "/friends"): "library.social.read",
+    ("GET", "/friends/discover"): "library.social.read",
+    ("GET", "/friends/notifications"): "library.social.read",
+    ("POST", "/friends/notifications/{notification_id}/read"): "library.social.manage",
+    ("GET", "/friends/{account_ref}"): "library.social.read",
+    ("POST", "/friends/requests"): "library.social.manage",
+    ("POST", "/friends/{account_ref}/{action}"): "library.social.manage",
+    ("GET", "/friends/{account_ref}/taste"): "library.social.taste.read",
+    ("GET", "/admin/friends-policy"): "accounts.read",
+    ("PUT", "/admin/friends-policy"): "accounts.capabilities.manage",
     ("WEBSOCKET", "/playback/pcm"): "library.media.read",
     ("POST", "/logout"): "auth.session.logout",
     ("POST", "/admin/accounts"): "accounts.create",
@@ -40,6 +128,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/admin/accounts/{account_id}/invitation/send"): "accounts.invitation.send",
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
     ("GET", "/account"): "account.self.read",
+    ("GET", "/account/playlist-preferences"): "account.self.playlist_preferences.read",
+    ("PUT", "/account/playlist-preferences"): "account.self.playlist_preferences.write",
+    ("GET", "/account/playlist-preferences/operations/{request_key}"): "account.self.playlist_preferences.read",
     ("GET", "/account/appearance"): "account.self.appearance.read",
     ("GET", "/account/layout-preferences"): "account.self.appearance.read",
     ("PUT", "/account/layout-preferences"): "account.self.appearance.write",
@@ -55,6 +146,13 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
     ("GET", "/home-data"): "library.browse.read",
+    ("GET", "/home/activity"): "library.browse.read",
+    ("POST", "/playlists/{playlist_ref}/native-queue"): "library.browse.read",
+    ("GET", "/library/album-artwork/{album_ref}"): "library.artwork.read",
+    ("POST", "/home/activity/native-target"): "library.browse.read",
+    ("GET", "/playlists/{playlist_ref}/items/{item_ref}/native-target"): "library.browse.read",
+    ("GET", "/friends/{account_ref}/activity"): "library.social.history.read",
+    ("GET", "/friends/{account_ref}/comparison"): "library.social.history.read",
     ("GET", "/home/recent-albums"): "library.browse.read",
     ("GET", "/album-details"): "library.browse.read",
     ("GET", "/utilities/problematic-files"): "library.problems.read",
@@ -147,6 +245,18 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/news-center/preferences"): "library.discovery.preferences.manage",
     ("POST", "/discovery-lookups"): "library.discovery.lookup",
     ("POST", "/virtual-artists"): "library.virtual_discography.create",
+    ("GET", "/playlists/destinations"): "library.browse.read",
+    ("GET", "/playlists/creation-source/current"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/queue"): "library.browse.read",
+    ("POST", "/playlists/creation-source/selection"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/match-candidates"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/accept-match"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/activity"): "library.playlists.create",
+    ("GET", "/playlists/{playlist_ref}/missing-source"): "library.playlists.create",
+    ("GET", "/playlists/creation-source/complete"): "library.playlists.create",
+    ("GET", "/playlists/creation-source/entries"): "library.playlists.create",
+    ("GET", "/playlists/operations/{request_key}"): "library.browse.read",
+    ("POST", "/playlists/{playlist_ref}/items/remove"): "library.playlists.items.manage",
     ("POST", "/playlists"): "library.playlists.create",
     ("POST", "/playlists/derived-popular-tracks"): "library.playlists.create",
     ("PATCH", "/playlists/{playlist_ref}"): "library.playlists.manage",
@@ -157,6 +267,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/playlists/{playlist_ref}/items/reorder"): "library.playlists.items.manage",
     ("PUT", "/playlists/{playlist_ref}/cover"): "library.playlists.cover.manage",
     ("DELETE", "/playlists/{playlist_ref}/cover"): "library.playlists.cover.manage",
+    ("GET", "/playlists/{playlist_ref}/access-grants"): "library.playlists.access.manage",
+    ("GET", "/playlists/{playlist_ref}/access-candidates"): "library.playlists.access.manage",
+    ("PATCH", "/playlists/{playlist_ref}/visibility"): "library.playlists.access.manage",
     ("POST", "/playlists/{playlist_ref}/access-grants"): "library.playlists.access.manage",
     ("PATCH", "/playlists/{playlist_ref}/access-grants/{grant_ref}"): "library.playlists.access.manage",
     ("DELETE", "/playlists/{playlist_ref}/access-grants/{grant_ref}"): "library.playlists.access.manage",
@@ -176,6 +289,21 @@ def install_private_route_boundary(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def require_private_authentication(request: Request, call_next):
+        try:
+            return await _require_private_authentication(request, call_next)
+        except Exception:
+            if request.method == "POST" and request.url.path in _FOOBAR_ERROR_PATHS:
+                return JSONResponse({"protocol": _foobar_response_protocol(request.url.path), "error": "unavailable"},
+                    status_code=503, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+            if request.method == "POST" and request.url.path in _LASTFM_HISTORY_PATHS:
+                return JSONResponse({"error": "lastfm_history_unavailable", "refresh_required": True},
+                    status_code=503, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+            if request.method == "POST" and request.url.path == "/home/activity/scrobbles/retry":
+                return JSONResponse({"error": "scrobble_outcome_unconfirmed", "refresh_required": True},
+                    status_code=503, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+            raise
+
+    async def _require_private_authentication(request: Request, call_next):
         _redact_lifecycle_link_query(request)
         if _is_public(request.method, request.url.path):
             return await call_next(request)
@@ -186,6 +314,12 @@ def install_private_route_boundary(app: FastAPI) -> None:
             # The route resolves this resource through the actor's owned loops.
             action = "library.loops.media.read"
         preference_headers = (
+            {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+            if route_path in _FOOBAR_ERROR_PATHS else
+            {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+            if route_path == "/home/activity/scrobbles/retry" or route_path in _LASTFM_HISTORY_PATHS else
+            {"Cache-Control": "private, no-store"}
+            if route_path in {"/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith("/friends") else
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
@@ -205,6 +339,10 @@ def install_private_route_boundary(app: FastAPI) -> None:
                     _refresh_session_csrf_cookie(request, artwork)
                     return artwork
         except HTTPException as exc:
+            if request.method == "POST" and route_path in _FOOBAR_ERROR_PATHS:
+                return JSONResponse({"protocol": _foobar_response_protocol(request.url.path),
+                    "error": "authentication_required" if exc.status_code == 401 else "forbidden"},
+                    status_code=exc.status_code, headers=preference_headers)
             if (
                 exc.status_code == 401
                 and request.method.upper() in _READ_METHODS
@@ -230,12 +368,21 @@ def install_private_route_boundary(app: FastAPI) -> None:
             )
         csrf_mode = csrf_mode_for_route(request.method, route_path)
         if csrf_mode == "session_header" and not _valid_session_csrf(request):
+            if request.method == "POST" and route_path in _FOOBAR_ERROR_PATHS:
+                return JSONResponse({"protocol": _foobar_response_protocol(request.url.path), "error": "forbidden"},
+                    status_code=403, headers=preference_headers)
             return JSONResponse(
                 {"detail": "CSRF validation failed."},
                 status_code=403,
                 headers=preference_headers,
             )
         response = await call_next(request)
+        if route_path in _FOOBAR_ERROR_PATHS:
+            response.headers.update(preference_headers)
+        if route_path == "/home/activity/scrobbles/retry" or route_path in _LASTFM_HISTORY_PATHS:
+            response.headers.update(preference_headers)
+        if route_path in {"/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith("/friends"):
+            response.headers.update(preference_headers)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)
         return response

@@ -208,6 +208,7 @@ export function observePlaybackPcmTraffic(page) {
       return {
         eventIndex: events.length,
         ...renderer,
+        streamId: Number(renderer.currentStreamId || 0),
         pcmFrames: Number(renderer.pcmEvidence?.frames || 0),
         finiteSamples: Number(renderer.pcmEvidence?.finiteSamples || 0),
         nonZeroSamples: Number(renderer.pcmEvidence?.nonZeroSamples || 0),

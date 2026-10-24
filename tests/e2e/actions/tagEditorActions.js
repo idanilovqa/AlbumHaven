@@ -441,9 +441,10 @@ export class TagEditorActions {
       'Year',
       'Track Number',
       'Disc Number',
-      'Exception',
       'Edition',
       'Album Rating',
+      'Exception',
+      'Custom Collection name',
     ]);
     await expect(this.tagEditor.footer).toContainText(
       /^\s*Start at\s*Auto-number\s*Cancel\s*Apply\s*$/u,

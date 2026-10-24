@@ -1594,6 +1594,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
       eventSequence.push('render');
     },
     buildApiUrl() { return '/api/library?selected_artist=DDT'; },
+    virtualGrid: { getUserScrollIntentGeneration: () => 7 },
     showRepairAlert() {},
     watchSaveTask(taskId, options) {
       watchedTasks.push({ taskId, options });
@@ -1655,6 +1656,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
   assert.deepEqual(eventSequence, ['render', 'watch']);
   assert.equal(watchedTasks[0].options.originatingViewRequestUrl, '/api/library?selected_artist=DDT');
   assert.equal(watchedTasks[0].options.originatingSearchContext.selected_artist_source, 'auto_top_match');
+  assert.equal(watchedTasks[0].options.absoluteScrollOwnerGeneration, 7);
 });
 
 test('pending problematic navigation ownership includes only directly edited track paths', () => {

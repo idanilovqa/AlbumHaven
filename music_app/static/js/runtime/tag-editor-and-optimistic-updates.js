@@ -851,6 +851,12 @@ async function confirmManualTagEdit() {
       scrollTop: Number(state.tagEditor.originGalleryScrollPosition.scrollTop),
     }
     : null;
+  const absoluteScrollOwnerGeneration = (
+    typeof virtualGrid !== 'undefined'
+    && typeof virtualGrid?.getUserScrollIntentGeneration === 'function'
+  )
+    ? virtualGrid.getUserScrollIntentGeneration()
+    : null;
   const renderOptions = {
     preserveScroll: true,
     preserveAbsoluteScroll: true,
@@ -956,6 +962,9 @@ async function confirmManualTagEdit() {
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
       absoluteScrollPosition,
+      ...(Number.isSafeInteger(absoluteScrollOwnerGeneration)
+        ? { absoluteScrollOwnerGeneration }
+        : {}),
       problematicMutationOriginKey,
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,

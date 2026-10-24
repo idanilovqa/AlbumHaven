@@ -2074,7 +2074,7 @@ async function watchSaveTask(taskId, context = {}) {
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
   const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
-  const absoluteScrollPosition = context.absoluteScrollPosition
+  let absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
     ? {
@@ -2082,19 +2082,58 @@ async function watchSaveTask(taskId, context = {}) {
       scrollTop: Number(context.absoluteScrollPosition.scrollTop),
     }
     : null;
-  const renderOptions = context.preserveAbsoluteScroll === true
+  let absoluteScrollOwnerGeneration = Number.isSafeInteger(
+    context.absoluteScrollOwnerGeneration,
+  )
+    ? context.absoluteScrollOwnerGeneration
+    : null;
+  let renderOptions = context.preserveAbsoluteScroll === true
     ? {
       preserveScroll: true,
       preserveAbsoluteScroll: true,
       ...(absoluteScrollPosition ? { absoluteScrollPosition } : {}),
     }
     : { preserveScroll: true };
+  const refreshAbsoluteScrollForUserIntent = () => {
+    if (
+      !Number.isSafeInteger(absoluteScrollOwnerGeneration)
+      || context.preserveAbsoluteScroll !== true
+      || (!originStillOwnsView() && !currentViewMatchesOriginRequest())
+      || typeof virtualGrid === 'undefined'
+      || typeof virtualGrid?.getUserScrollIntentGeneration !== 'function'
+      || typeof document === 'undefined'
+      || typeof document.getElementById !== 'function'
+    ) return false;
+    const currentGeneration = virtualGrid.getUserScrollIntentGeneration();
+    if (
+      !Number.isSafeInteger(currentGeneration)
+      || currentGeneration === absoluteScrollOwnerGeneration
+    ) return false;
+    const galleryScroll = document.getElementById('albums-scroll');
+    if (
+      !galleryScroll
+      || !Number.isFinite(Number(galleryScroll.scrollTop))
+      || !Number.isFinite(Number(galleryScroll.scrollLeft))
+    ) return false;
+    absoluteScrollPosition = {
+      scrollLeft: Number(galleryScroll.scrollLeft),
+      scrollTop: Number(galleryScroll.scrollTop),
+    };
+    absoluteScrollOwnerGeneration = currentGeneration;
+    renderOptions = { ...renderOptions, absoluteScrollPosition };
+    return true;
+  };
+  const currentRenderOptions = () => {
+    refreshAbsoluteScrollForUserIntent();
+    return renderOptions;
+  };
   const currentViewRenderOptions = () => (
     originStillOwnsView() || currentViewMatchesOriginRequest()
-      ? { ...renderOptions, preserveGalleryOptionsMenu: true }
+      ? { ...currentRenderOptions(), preserveGalleryOptionsMenu: true }
       : { preserveScroll: true, preserveGalleryOptionsMenu: true }
   );
   const restoreOwnedAbsoluteScroll = () => {
+    refreshAbsoluteScrollForUserIntent();
     if (
       !absoluteScrollPosition
       || (!originStillOwnsView() && !currentViewMatchesOriginRequest())
@@ -2246,7 +2285,7 @@ async function watchSaveTask(taskId, context = {}) {
               );
               if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
               renderView({
-                ...renderOptions,
+                ...currentRenderOptions(),
                 preserveMountedGalleryChildren: true,
               });
               viewReconciledLocally = true;
@@ -2363,7 +2402,7 @@ async function watchSaveTask(taskId, context = {}) {
             );
             if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
             renderView({
-              ...renderOptions,
+              ...currentRenderOptions(),
               preserveMountedGalleryChildren: true,
             });
             viewReconciledLocally = true;
@@ -2379,7 +2418,7 @@ async function watchSaveTask(taskId, context = {}) {
             },
           );
           if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
-          renderView(renderOptions);
+          renderView(currentRenderOptions());
         } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
             await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
@@ -2527,7 +2566,7 @@ async function watchSaveTask(taskId, context = {}) {
               preserveScroll: true,
             },
           );
-          renderView(renderOptions);
+          renderView(currentRenderOptions());
         }
         if (originalAlbum && canReconcileOriginView()) {
           const reconciledAlbums = viewRefreshed

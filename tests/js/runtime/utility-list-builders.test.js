@@ -6245,6 +6245,57 @@ test('watchSaveTask completes an owned terminal reconciliation at the captured g
   assert.deepEqual(ownedRestores, [{ scrollLeft: 0, scrollTop: 1147 }]);
 });
 
+test('watchSaveTask preserves user scrolling that occurs while tag changes finalize', async () => {
+  const context = loadHelpers();
+  const galleryScroll = { scrollLeft: 23, scrollTop: 17546 };
+  const refreshes = [];
+  const ownedRestores = [];
+  let userScrollGeneration = 6;
+  context.state.ui = { viewStateRevision: 21 };
+  context.buildApiUrl = () => '/api/library?selected_artist=DDT';
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? galleryScroll : null
+  );
+  context.virtualGrid = {
+    getUserScrollIntentGeneration: () => userScrollGeneration,
+    restoreOwnedAbsoluteScrollPosition(position) {
+      ownedRestores.push({ ...position });
+      return true;
+    },
+  };
+  context.fetchAndRender = async (...args) => {
+    refreshes.push(args);
+    return true;
+  };
+  context.fetch = async () => ({
+    ok: true,
+    async json() {
+      userScrollGeneration = 7;
+      return {
+        ok: true,
+        status: 'completed',
+        requires_view_refresh: true,
+        updated_albums: [],
+      };
+    },
+  });
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('user-scrolled-refresh-task', {
+    originatingViewStateRevision: 21,
+    originatingViewRequestUrl: '/api/library?selected_artist=DDT',
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollLeft: 0, scrollTop: 7144 },
+    absoluteScrollOwnerGeneration: 6,
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(refreshes[0][2].absoluteScrollPosition)),
+    { scrollLeft: 23, scrollTop: 17546 },
+  );
+  assert.deepEqual(ownedRestores, [{ scrollLeft: 23, scrollTop: 17546 }]);
+});
+
 test('watchSaveTask drops origin absolute scroll after navigation before a failed-task refresh', async () => {
   const context = loadHelpers();
   const requestedViews = [];

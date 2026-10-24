@@ -939,16 +939,42 @@ export class GalleryPage extends BasePage {
         })
         : this.readAppliedGalleryProjection()
     );
-    const projection = canReadAppliedProjection
-      ? await readAppliedProjection()
-      : {
+    const readDomState = async () => {
+      const [attachedMatch, loaderVisible, attachedArtists] = await Promise.all([
+        this.albumCard.detailsButtonByArtistAndAlbum(expectedArtist, expectedAlbum).count().then(count => count > 0),
+        this.libraryLoader.isVisible(),
+        this.artistHeadings.allTextContents(),
+      ]);
+      let spinnerVisible = false;
+      let loaderTitle = '';
+      let loaderStatus = '';
+      if (loaderVisible) {
+        [spinnerVisible, loaderTitle, loaderStatus] = await Promise.all([
+          this.libraryLoaderSpinner.isVisible(),
+          this.libraryLoaderTitle.textContent().then(value => String(value || '').trim()),
+          this.libraryLoaderStatus.textContent().then(value => String(value || '').trim()),
+        ]);
+      }
+      return {
+        attachedArtists: attachedArtists.map(artist => String(artist || '').trim()).filter(Boolean),
+        attachedMatch,
+        loaderStatus,
+        loaderTitle,
+        loaderVisible,
+        spinnerVisible,
+      };
+    };
+    const [projection, initialDom] = await Promise.all([
+      canReadAppliedProjection ? readAppliedProjection() : Promise.resolve({
         ...(payload || {}),
         busy: false,
         pendingViewTransition: false,
         surface: 'albums',
         locationQuery: new URL(this.page.url()).searchParams.get('q') || '',
         locationArtist: new URL(this.page.url()).searchParams.get('artist') || '',
-      };
+      }),
+      readDomState(),
+    ]);
     const targetLocation = new URL(this.page.url());
     const rootLocation = !['q', 'artist', 'playlist'].some(key => targetLocation.searchParams.get(key));
     const rootBootstrap = projection.gallery_page && rootLocation && !matchesAccumulatedRootProjection(payload, projection)
@@ -961,45 +987,30 @@ export class GalleryPage extends BasePage {
       artist: expectedArtist,
     });
     const canonicalQuery = canonicalEvidence.canonicalQuery;
-    const initialAttachedMatch = await this.albumCard
-      .detailsButtonByArtistAndAlbum(expectedArtist, expectedAlbum)
-      .count() > 0;
+    const initialAttachedMatch = initialDom.attachedMatch;
     const locationQuery = new URL(this.page.url()).searchParams.get('q') || '';
-    const loaderVisible = await this.libraryLoader.isVisible();
-    const spinnerVisible = loaderVisible
-      && await this.libraryLoaderSpinner.isVisible();
-    const loaderTitle = loaderVisible
-      ? String(await this.libraryLoaderTitle.textContent() || '').trim()
-      : '';
-    const loaderStatus = loaderVisible
-      ? String(await this.libraryLoaderStatus.textContent() || '').trim()
-      : '';
+    const { loaderStatus, loaderTitle, loaderVisible, spinnerVisible } = initialDom;
     const settledEmpty = loaderVisible
       && !spinnerVisible
       && loaderTitle === 'Nothing found'
       && loaderStatus === 'No artists, albums, or tracks matched your search.';
     const activeLoader = loaderVisible && !settledEmpty;
-    const attachedArtists = (await this.artistHeadings.allTextContents())
-      .map((artist) => String(artist || '').trim())
-      .filter(Boolean);
+    const attachedArtists = initialDom.attachedArtists;
     const payloadObserved = payload !== null || initialObservation.galleryPayloadObserved === true
       || Boolean(initialObservation.latestCompletedSaveTaskPayload);
     const startupHydrating = !payloadObserved || Boolean(
       bootstrapPayload?.bootstrap?.startupHydration?.required,
     );
-    const finalAttachedMatch = await this.albumCard
-      .detailsButtonByArtistAndAlbum(expectedArtist, expectedAlbum)
-      .count() > 0;
-    const finalAttachedArtists = (await this.artistHeadings.allTextContents())
-      .map((artist) => String(artist || '').trim())
-      .filter(Boolean);
+    const [finalProjection, finalDom] = await Promise.all([
+      canReadAppliedProjection ? readAppliedProjection() : Promise.resolve(projection),
+      readDomState(),
+    ]);
+    const finalAttachedMatch = finalDom.attachedMatch;
+    const finalAttachedArtists = finalDom.attachedArtists;
     const finalObservation = this.productionViewObserver.read();
     if (finalObservation.latestFullPayloadError || finalObservation.latestGalleryPageError) {
       throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError || finalObservation.latestGalleryPageError}`);
     }
-    const finalProjection = canReadAppliedProjection
-      ? await readAppliedProjection()
-      : projection;
     const observationChanged = finalObservation.stateRevision !== initialObservation.stateRevision
       || finalProjection.viewRevision !== projection.viewRevision
       || finalProjection.query !== projection.query
@@ -1008,14 +1019,39 @@ export class GalleryPage extends BasePage {
       { attachedArtists, attachedMatch: initialAttachedMatch },
       { attachedArtists: finalAttachedArtists, attachedMatch: finalAttachedMatch },
     );
-    const busy = initiallyBusy
+    const latestRequestLocation = URL.canParse(finalObservation.latestFullRequestUrl)
+      ? new URL(finalObservation.latestFullRequestUrl)
+      : null;
+    const liveProjectionReady = Boolean(
+      (initialObservation.pendingPayloadReadCount > 0 || finalObservation.pendingPayloadReadCount > 0)
+      && canonicalEvidence.canonicalMatch && initialAttachedMatch && finalAttachedMatch
+      && finalObservation.activeRequestCount === 0
+      && !projection.busy && !projection.pendingViewTransition
+      && !finalProjection.busy && !finalProjection.pendingViewTransition
+      && !domChanged
+      && String(finalProjection.query || '').trim() === expectedQuery
+      && String(finalProjection.locationQuery || '').trim() === expectedQuery
+      && String(finalProjection.locationArtist || '').trim()
+        === String(targetLocation.searchParams.get('artist') || '').trim()
+      && String(finalProjection.selected_artist || '').trim()
+        === String(targetLocation.searchParams.get('artist') || '').trim()
+      && latestRequestLocation
+      && String(latestRequestLocation.searchParams.get('q') || '').trim() === expectedQuery
+      && String(latestRequestLocation.searchParams.get('artist') || '').trim()
+        === String(targetLocation.searchParams.get('artist') || '').trim()
+      && String(latestRequestLocation.searchParams.get('surface') || 'albums')
+        === String(targetLocation.searchParams.get('surface') || 'albums')
+    );
+    const pendingPayloadRead = initialObservation.pendingPayloadReadCount > 0
+      || finalObservation.pendingPayloadReadCount > 0;
+    const busy = (initialObservation.activeRequestCount > 0 && !liveProjectionReady)
       || projection.busy || projection.pendingViewTransition
       || finalProjection.busy || finalProjection.pendingViewTransition
       || finalObservation.activeRequestCount > 0
-      || finalObservation.pendingPayloadReadCount > 0
-      || observationChanged
+      || (pendingPayloadRead && !liveProjectionReady)
+      || (observationChanged && !liveProjectionReady)
       || domChanged;
-    const canonicalApplied = canonicalEvidence.canonicalReadyMatch || hasAppliedCanonicalArtistSurface(
+    const canonicalApplied = canonicalEvidence.canonicalReadyMatch || liveProjectionReady || hasAppliedCanonicalArtistSurface(
       canonicalEvidence.observedArtists,
       finalAttachedArtists,
       {
@@ -1033,7 +1069,7 @@ export class GalleryPage extends BasePage {
       canonicalApplied,
       canonicalInventoryComplete: canonicalEvidence.canonicalInventoryComplete,
       canonicalMatch: canonicalEvidence.canonicalMatch,
-      canonicalReadyMatch: canonicalEvidence.canonicalReadyMatch,
+      canonicalReadyMatch: canonicalEvidence.canonicalReadyMatch || liveProjectionReady,
       canonicalSource: canonicalEvidence.canonicalSource,
       canonicalScopeComplete: initialObservation.canonicalScopeComplete === true
         && String(payload?.query || '').trim() === expectedQuery,

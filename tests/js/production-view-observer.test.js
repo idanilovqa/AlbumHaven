@@ -620,6 +620,86 @@ test('canonical album detached by virtualization is settled rather than a pendin
   assert.equal(state.pendingViewTransition, false);
 });
 
+test('exact attached live album is settled while its diagnostic response body is still copying', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
+  const events = new FakePage();
+  const observer = new ProductionViewObserver(events, events);
+  events.emit('documentcommitted');
+  const projection = {
+    payload_tier: 'full', query: '', selected_artist: 'Artist',
+    locationQuery: '', locationArtist: 'Artist', surface: 'albums',
+    visible_library_categories: ['main_library'], busy: false, pendingViewTransition: false,
+    artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'Album' }] }],
+  };
+  let applied = projection;
+  const initial = request('http://localhost/view-data?surface=albums&category=main_library&artist=Artist');
+  events.emit('request', initial);
+  events.emit('response', response(initial, projection));
+  events.emit('requestfinished', initial);
+  await flushPromises();
+  let finishBody;
+  const body = new Promise((resolve) => { finishBody = resolve; });
+  const current = request('http://localhost/view-data?surface=albums&category=main_library&artist=Artist');
+  events.emit('request', current);
+  assert.equal(observer.read().activeRequestCount, 1);
+
+  const gallery = Object.create(GalleryPage.prototype);
+  gallery.productionViewObserver = observer;
+  let requestSettled = false;
+  gallery.readAppliedGalleryProjection = async () => {
+    if (!requestSettled) {
+      requestSettled = true;
+      events.emit('response', response(current, null, { json: () => body }));
+      events.emit('requestfinished', current);
+    }
+    return applied;
+  };
+  gallery.page = {
+    locator: () => ({ count: async () => 0 }),
+    url: () => 'http://localhost/?category=main_library&artist=Artist',
+  };
+  gallery.albumCard = { detailsButtonByArtistAndAlbum: () => ({ count: async () => 1 }) };
+  gallery.libraryLoader = { isVisible: async () => false };
+  gallery.artistHeadings = { allTextContents: async () => ['Artist'] };
+
+  const state = await gallery.readAlbumTargetState({ artist: 'Artist', album: 'Album' });
+  assert.equal(state.canonicalMatch, true);
+  assert.equal(state.canonicalReadyMatch, true);
+  assert.equal(state.attachedMatch, true);
+  assert.equal(state.busy, false);
+  assert.equal(state.pendingViewTransition, false);
+  assert.equal(observer.read().activeRequestCount, 0);
+  assert.equal(observer.read().pendingPayloadReadCount, 1);
+
+  for (const changed of [
+    { busy: true },
+    { pendingViewTransition: true },
+    { query: 'Other' },
+    { locationQuery: 'Other' },
+    { locationArtist: 'Other' },
+    { selected_artist: 'Other' },
+    { artist_groups: [{ artist: 'Artist', albums: [] }] },
+    { artist_groups: [{ artist: 'Other', albums: [{ key: 'album', name: 'Album' }] }] },
+  ]) {
+    applied = { ...projection, ...changed };
+    const rejected = await gallery.readAlbumTargetState({ artist: 'Artist', album: 'Album' });
+    assert.equal(rejected.canonicalReadyMatch, false, JSON.stringify(changed));
+    assert.equal(rejected.pendingViewTransition, true, JSON.stringify(changed));
+  }
+
+  applied = projection;
+  const stillActive = request('http://localhost/view-data?surface=albums&category=main_library&artist=Artist');
+  events.emit('request', stillActive);
+  const activeState = await gallery.readAlbumTargetState({ artist: 'Artist', album: 'Album' });
+  assert.equal(activeState.canonicalReadyMatch, false);
+  assert.equal(activeState.busy, true);
+  events.emit('requestfailed', stillActive);
+
+  finishBody(projection);
+  await flushPromises();
+});
+
 async function committedFamilyGallery() {
   const { ProductionViewObserver } = await import(observerUrl);
   const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));

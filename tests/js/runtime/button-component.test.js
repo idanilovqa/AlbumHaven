@@ -8,7 +8,7 @@ const componentPath = path.join(repoRoot, 'music_app', 'static', 'js', 'button-c
 
 test('shared icon renderer emits normalized decorative SVGs from a fixed registry', () => {
   const button = require(componentPath);
-  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next', 'bolt']) {
+  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next', 'refresh', 'bolt']) {
     const html = button.renderIconSvg(name, { className: `ui-icon--${name}` });
     assert.match(html, /^<svg class="ui-icon ui-icon--/);
     assert.match(html, /viewBox="0 0 24 24"/);

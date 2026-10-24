@@ -256,6 +256,25 @@
 .cover-lookup-task-card:focus-within {
   background: var(--appearance-item-hover, color-mix(in srgb, var(--appearance-ink, var(--text)) 7%, var(--appearance-panel-background, var(--panel))));
 }
+.cover-lookup-task-card.is-loading {
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  pointer-events: none;
+}
+.cover-lookup-task-card.is-loading:hover { background: var(--appearance-card, color-mix(in srgb, var(--appearance-ink, var(--text)) 3%, var(--appearance-panel-background, var(--panel)))); }
+.cover-lookup-task-loading-line {
+  display: block;
+  width: 55%;
+  height: 9px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--appearance-control, var(--panel-2)) 25%, color-mix(in srgb, var(--appearance-ink, var(--text)) 14%, var(--appearance-control, var(--panel-2))) 50%, var(--appearance-control, var(--panel-2)) 75%);
+  background-size: 200% 100%;
+  animation: cover-lookup-notification-loading 1.2s ease-in-out infinite;
+}
+.cover-lookup-task-loading-line.is-title { width: 78%; margin-top: 5px; }
+@keyframes cover-lookup-notification-loading { to { background-position: -200% 0; } }
 .cover-lookup-task-open {
   min-width: 0;
   display: grid;
@@ -367,6 +386,9 @@
 }
 .cover-lookup-task-card.is-failed .cover-lookup-task-progress span {
   background: var(--appearance-error, #e77878);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cover-lookup-task-loading-line { animation: none; }
 }
 .related-box {
   flex: 1 1 auto;

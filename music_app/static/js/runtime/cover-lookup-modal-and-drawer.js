@@ -1387,7 +1387,17 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const preserveSelectedNotificationText = preserveTextSelection || preserveActiveAction;
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
-      body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
+      body.innerHTML = state.coverLookup.tasksLoadFailed
+        ? '<div class="cover-lookup-drawer-empty">Could not load notifications. Try again.</div>'
+        : !state.coverLookup.tasksHydrated
+          ? `<div class="cover-lookup-task-card is-loading" role="status" aria-live="polite" aria-label="Loading notifications">
+              <span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>
+              <span class="cover-lookup-task-copy" aria-hidden="true">
+                <span class="cover-lookup-task-loading-line is-title"></span>
+                <span class="cover-lookup-task-loading-line"></span>
+              </span>
+            </div>`
+          : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
       state.coverLookup.drawerRenderedTerminalSignatures = {};
     }
     syncCoverLookupElapsedTimer();
@@ -1455,7 +1465,13 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
         </div>
       <div class="cover-lookup-task-actions">
         ${status === 'failed' && task?.album_payload
-          ? `<button class="button ui-button ui-button--secondary ui-button--small ui-button--icon cover-lookup-task-retry" type="button" data-retry-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Retry lookup" title="Retry lookup"><svg class="ui-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 1 0 16 12M15.5 7V3.5M15.5 7H12"/></svg></button>`
+          ? ButtonComponent.renderActionButton({
+            icon: 'refresh',
+            ariaLabel: 'Retry lookup',
+            title: 'Retry lookup',
+            className: 'cover-lookup-task-retry',
+            attributes: { 'data-retry-cover-lookup-task': task.id || '' },
+          })
           : ''}
         ${['pending', 'running'].includes(status)
           ? ButtonComponent.renderActionButton({
@@ -1996,6 +2012,12 @@ async function loadCoverLookupTasks(options = {}) {
         ? 'refresh'
         : 'replace';
   const requestSequence = ++coverLookupTasksRequestSequences[requestMode];
+  if (!activeOnly && !append) {
+    state.coverLookup.tasksLoadFailed = false;
+    if (!state.coverLookup.tasksHydrated && !(state.coverLookup.tasks || []).length) {
+      renderCoverLookupDrawer({ preserveInteraction: false });
+    }
+  }
   const previousActiveTaskIds = activeOnly
     ? new Set(
       (state.coverLookup.tasks || [])
@@ -2026,6 +2048,10 @@ async function loadCoverLookupTasks(options = {}) {
     const missingActiveTask = activeOnly
       && Array.from(previousActiveTaskIds).some((taskId) => !incomingTaskIds.has(taskId));
     const nextTasks = mergeCoverLookupTaskSummaries(incomingTasks, requestMode);
+    if (!activeOnly) {
+      state.coverLookup.tasksHydrated = true;
+      state.coverLookup.tasksLoadFailed = false;
+    }
     if (requestMode !== 'active') {
       state.coverLookup.tasksNextCursor = String(data.next_cursor || '') || null;
     }
@@ -2101,6 +2127,7 @@ async function loadCoverLookupTasks(options = {}) {
     }
   } catch (error) {
     if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
+    if (!activeOnly) state.coverLookup.tasksLoadFailed = true;
     console.warn('[AlbumHaven][CoverLookup] Failed to load lookup tasks.', error);
     renderCoverLookupDrawer({ preserveInteraction: false });
     if (options.toast !== false) {

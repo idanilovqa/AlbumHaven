@@ -331,6 +331,8 @@ function createDrawerHarness(overrides = {}) {
   });
   context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.modal = { taskId: '' };
+  context.state.coverLookup.tasksHydrated = true;
+  context.state.coverLookup.tasksLoadFailed = false;
   context.state.coverLookup.pollingTimer = 0;
   context.state.coverLookup.elapsedTimer = 0;
   return {
@@ -393,6 +395,46 @@ require('node:test')('notification startup loads authoritative counts without lo
   assert.equal(context.state.coverLookup.notificationCounts.total_count, 528);
   assert.equal(badgeElement.textContent, '528');
   assert.deepEqual(context.state.coverLookup.tasks || [], []);
+});
+
+require('node:test')('open drawer shows a loading card until the first history response succeeds', async () => {
+  let resolveRequest;
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: () => new Promise((resolve) => {
+      resolveRequest = () => resolve({
+        ok: true,
+        json: async () => ({ ok: true, tasks: [], total_count: 0, active_count: 0, finished_count: 0 }),
+      });
+    }),
+  });
+  context.state.coverLookup.tasksHydrated = false;
+
+  const request = context.loadCoverLookupTasks({ toast: false });
+
+  assert.match(bodyElement.innerHTML, /cover-lookup-task-card is-loading/);
+  assert.match(bodyElement.innerHTML, /Loading notifications/);
+  assert.doesNotMatch(bodyElement.innerHTML, /not looking for anything/i);
+
+  resolveRequest();
+  await request;
+
+  assert.equal(context.state.coverLookup.tasksHydrated, true);
+  assert.equal(context.state.coverLookup.tasksLoadFailed, false);
+  assert.match(bodyElement.innerHTML, /not looking for anything/i);
+});
+
+require('node:test')('failed first history request replaces loading card with a readable error', async () => {
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: async () => { throw new Error('network unavailable'); },
+  });
+  context.state.coverLookup.tasksHydrated = false;
+
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(context.state.coverLookup.tasksHydrated, false);
+  assert.equal(context.state.coverLookup.tasksLoadFailed, true);
+  assert.match(bodyElement.innerHTML, /Could not load notifications/);
+  assert.doesNotMatch(bodyElement.innerHTML, /not looking for anything/i);
 });
 
 require('node:test')('stale notification counts cannot hide a locally accepted lookup', () => {
@@ -3737,6 +3779,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
   context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.modal = { taskId: 'completed-task' };
+  context.state.coverLookup.tasksHydrated = true;
   context.state.coverLookup.tasks = [
     {
       id: 'completed-task',

@@ -172,11 +172,16 @@ test('Find Better Art retains its theme-aware static halo and stronger hover wit
   assert.match(hover, /background:\s*var\(--appearance-item-action-hover-background\)/);
   assert.match(hover, /box-shadow:\s*0 0 18px[^;]*48%[^;]*inset 0 0 0 1px[^;]*30%/);
   assert.doesNotMatch(button + hover, /(?:^|;)\s*(?:width|height|padding|transform|animation)\s*:/);
-  assert.match(cssRule(':root #cover-lookup-modal #cover-lookup-find-better-button:is(:disabled, [aria-disabled="true"])'), /box-shadow:\s*none/);
+  const disabled = cssRule(':root #cover-lookup-modal #cover-lookup-find-better-button:is(:disabled, [aria-disabled="true"])');
+  assert.match(disabled, /background:\s*var\(--appearance-control/);
+  assert.match(disabled, /border-color:\s*var\(--appearance-line/);
+  assert.match(disabled, /color:\s*var\(--appearance-muted/);
+  assert.match(disabled, /box-shadow:\s*none/);
+  assert.match(disabled, /cursor:\s*not-allowed/);
 });
 
 test('failed lookup Retry uses the shared Button family', () => {
-  assert.match(source, /class="button ui-button ui-button--secondary ui-button--small ui-button--icon cover-lookup-task-retry"/);
+  assert.match(source, /ButtonComponent\.renderActionButton\(\{\s*icon: 'refresh',[^]*?ariaLabel: 'Retry lookup'[^]*?'data-retry-cover-lookup-task': task\.id/);
 });
 
 

@@ -274,6 +274,7 @@ function renderTrackModalLoadingState(album) {
 }
 
 function clearTrackModalRenderedState() {
+  if (typeof disposeTrackModalFoobarEvidence === 'function') disposeTrackModalFoobarEvidence();
   if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('album-tracks');
   const els = getTrackModalElements();
   if (!els.overlay) return;

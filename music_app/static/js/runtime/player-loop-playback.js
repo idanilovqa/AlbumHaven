@@ -1021,7 +1021,9 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     return;
   }
   const selectedAlbum = typeof getTrackModalSelectionAlbumFor === 'function' ? getTrackModalSelectionAlbumFor(btn) : null;
-  const currentAlbum = selectedAlbum || (!document.getElementById('track-modal')?.hidden
+  // A detached history Play button cannot borrow an unrelated open Album.
+  const trackModal = document.getElementById('track-modal');
+  const currentAlbum = selectedAlbum || (trackModal && !trackModal.hidden && trackModal.contains(btn)
     ? state.modalReleases[state.modalReleaseIndex] || null
     : null);
   const playbackStart = playTrackFromPayload({

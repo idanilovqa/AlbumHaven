@@ -424,6 +424,8 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(private_album_artwork_router)
     app.include_router(activity_native_targets_router)
     app.include_router(playlist_native_targets_router)
+    from music_app.routes.duplicate_folder_recovery_asgi import router as duplicate_folder_recovery_router
+    app.include_router(duplicate_folder_recovery_router)
     app.include_router(api_wave_a_asgi_router)
     app.include_router(api_wave_b_asgi_router)
     app.include_router(api_wave_c_asgi_router)

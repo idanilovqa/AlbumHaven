@@ -26,6 +26,8 @@ _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 def _foobar_response_protocol(path):
+    if path=='/integrations/foobar/account/temporary-source/status':
+        return 'foobar_temporary_source_v1'
     if path=='/integrations/foobar/account/maintenance':
         return 'foobar_account_maintenance_v1'
     if path=='/integrations/foobar/account/history/native/evidence':
@@ -48,6 +50,7 @@ def _foobar_response_protocol(path):
 
 
 _FOOBAR_ACCOUNT_PATHS = frozenset({
+    "/integrations/foobar/account/temporary-source/status",
     "/integrations/foobar/account/enhanced/review",
     "/integrations/foobar/account/history/enhanced",
     "/integrations/foobar/account/history/sources",
@@ -72,6 +75,13 @@ _FOOBAR_NATIVE_PATHS = frozenset({
 _FOOBAR_ERROR_PATHS = _FOOBAR_ACCOUNT_PATHS | _FOOBAR_NATIVE_PATHS
 _LASTFM_HISTORY_PATHS = frozenset({"/home/activity/lastfm/import", "/home/activity/lastfm/combined"})
 _PRIVATE_ROUTE_ACTIONS = {
+    ("POST", "/integrations/foobar/account/temporary-source/status"): "account.self.foobar.write",
+    ("POST", "/api/library/duplicate-folders/choices"): "library.inventory.manage",
+    ("POST", "/api/library/duplicate-folders/preview"): "library.inventory.manage",
+    ("POST", "/api/library/duplicate-folders/trash"): "library.inventory.manage",
+    ("POST", "/api/library/duplicate-folders/reconcile"): "library.inventory.manage",
+    ("POST", "/api/library/duplicate-folders/restore"): "library.inventory.manage",
+
     ("POST", "/integrations/foobar/account/maintenance"): "account.self.foobar.write",
     ("POST", "/integrations/foobar/account/history/native/evidence"): "library.browse.read",
     ("POST", "/integrations/foobar/account/enhanced/review"): "account.self.foobar.write",

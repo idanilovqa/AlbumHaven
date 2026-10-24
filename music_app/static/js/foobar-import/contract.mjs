@@ -208,3 +208,19 @@ export async function readBoundedJSON(response,signal,maximum=MAX_RESPONSE_BYTES
   try{while(true){if(signal?.aborted)throw new DOMException('Aborted','AbortError');const item=await reader.read();if(item.done)break;if(!(item.value instanceof Uint8Array))fail();bytes+=item.value.byteLength;if(bytes>maximum)fail();text+=decoder.decode(item.value,{stream:true});}text+=decoder.decode();return JSON.parse(text);}
   finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
 }
+
+
+export const TEMPORARY_SOURCE='foobar_temporary_source_v1';
+export function validateTemporarySource(v,expected,source,job){
+  contextEnvelope(v,expected,TEMPORARY_SOURCE);
+  if(!exact(v,['protocol','source','context_ref','context_scope']))fail();
+  if(v.source===null)return null;
+  const r=v.source;
+  if(!exact(r,['source_ref','job_ref','mapping_name','upload_sha256','byte_length','expires_at'])
+      ||r.source_ref!==source||r.job_ref!==job||!uuid(source)||!uuid(job)||!hex(r.upload_sha256)
+      ||![MAPPING,ENHANCED_MAPPING].includes(r.mapping_name)||!Number.isSafeInteger(r.byte_length)
+      ||r.byte_length<(r.mapping_name===ENHANCED_MAPPING?100:1)
+      ||r.byte_length>(r.mapping_name===ENHANCED_MAPPING?536870912:67108864)
+      ||typeof r.expires_at!=='string'||r.expires_at.length>40||!Number.isFinite(Date.parse(r.expires_at)))fail();
+  return Object.freeze({...r});
+}

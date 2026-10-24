@@ -324,6 +324,9 @@ def resolve_configured_media_path(
         unique_matches.append(match)
     if len(unique_matches) != 1:
         return None
+    from music_app.services.duplicate_folder_guard import duplicate_path_unavailable
+    if duplicate_path_unavailable(config, unique_matches[0]):
+        return None
     return unique_matches[0]
 
 

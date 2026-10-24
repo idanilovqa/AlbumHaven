@@ -245,6 +245,10 @@ class Config:
         kind="library roots",
     )
     CACHE_MAX_AGE_SECONDS = int(os.environ.get("MUSIC_CACHE_MAX_AGE_SECONDS", "0"))
+    ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED = os.environ.get(
+        'ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED', '').strip().casefold() == 'true'
+    ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED = os.environ.get(
+        'ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED', '').strip().casefold() == 'true'
     SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wav"}
     IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
     COVER_PROVIDER_GROUPS = normalize_cover_provider_groups(

@@ -78,6 +78,10 @@ class Result:
     def fetchall(self): return list(self.rows)
 
 
+    def close(self):
+        self.closed = True
+
+
 class Connection:
     def __init__(self, *, session_changes=None, authorized=True):
         self.keys = ['capability.view']

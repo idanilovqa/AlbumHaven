@@ -195,7 +195,7 @@ def _candidates_sql():
           order by o.observation_ref limit 100
         ) o left join integration.foobar_import_revisions r
           on (r.account_id,r.library_id,r.source_ref,r.observation_ref,r.source_revision)
-           =(o.account_id,o.library_id,o.source_ref,o.observation_ref,o.current_revision)
+           =(f.account_id,f.library_id,f.source_ref,o.observation_ref,o.current_revision)
       ) """
 
 

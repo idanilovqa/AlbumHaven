@@ -1,3 +1,4 @@
+import {TEMPORARY_SOURCE,validateTemporarySource} from './contract.mjs';
 import {OBSERVATION_RESPONSE_BYTES,validateRawFieldRequest} from './observation-contract.mjs';
 import {BASE,JOB,JOB_LIST,REVIEW,SCOPE,MAPPING,ENHANCED_MAPPING,ERRORS,MAX_REVIEW_RESPONSE_BYTES,MAX_RESPONSE_BYTES,uuid,hex,validateFile,readBoundedJSON,validateSource,validateAccepted,validateReview,validatePersonalChoices,validatePersonalChanges,validateJob,jobListRequest,validateJobList} from './contract.mjs';
 
@@ -5,14 +6,15 @@ import {BASE,JOB,JOB_LIST,REVIEW,SCOPE,MAPPING,ENHANCED_MAPPING,ERRORS,MAX_REVIE
 // key fallback is used to recover a possibly committed import.
 export function createImportController({fetch,contextRoot,allows,isCurrent,onChange}){
   let disposed=false,retired=false,expected=null,matchingHint='',sequence=0,abort=null,poll=null;
+  let temporarySource=null,temporaryFile=null;
   let file=null,reviewFile=null,submitted=false,submittedCommand=null,jobRef=null,sourceRef=null,resumeMode=false,sourcePending=false,reviewCancelled=false;
   let reviewAfter=0,problemAfter=0,reviewCandidate=null,continuationReview=null,discoveryPending=false,observationRequest=null;
-  let state=Object.freeze({phase:'checking',source:null,filename:'',mapping:MAPPING,countFamily:'standard',matching:false,matchingAvailable:false,review:null,job:null,error:'',notice:'',jobRef:null,submitted:false});
+  let state=Object.freeze({phase:'checking',source:null,filename:'',retainSource:false,usingTemporarySource:false,mapping:MAPPING,countFamily:'standard',matching:false,matchingAvailable:false,review:null,job:null,error:'',notice:'',jobRef:null,submitted:false});
   const discoverySafe=()=>!submitted&&!file&&!reviewFile&&!reviewCandidate&&!continuationReview&&!state.review&&!sourcePending&&!discoveryPending&&!abort&&!poll&&['idle','error'].includes(state.phase);
   const publish=patch=>{state=Object.freeze({...state,...patch,jobRef,submitted});state=Object.freeze({...state,canDiscover:discoverySafe()});if(!disposed)onChange(state);};
   const stop=()=>{sequence++;abort?.abort();abort=null;clearTimeout(poll);poll=null;};
   const same=()=>!disposed&&!retired&&contextRoot?.isConnected===true&&contextRoot.dataset.accountFoobarContext===expected&&contextRoot.dataset.accountFoobarScope===SCOPE&&(contextRoot.dataset.accountFoobarMatchingLibraryId||'')===matchingHint;
-  function retire(){if(disposed||retired)return;retired=true;stop();file=reviewFile=reviewCandidate=null;continuationReview=null;publish({phase:'retired',review:null,filename:'',error:'The account or selected library changed. Reopen Integrations and check the same import status.',notice:''});}
+  function retire(){if(disposed||retired)return;retired=true;stop();temporarySource=temporaryFile=null;file=reviewFile=reviewCandidate=null;continuationReview=null;publish({phase:'retired',review:null,filename:'',error:'The account or selected library changed. Reopen Integrations and check the same import status.',notice:''});}
   function current(){try{if(!same()||allows('account.self.foobar.write')!==true||isCurrent()!==true){retire();return false;}return true;}catch{retire();return false;}}
   const busy=()=>discoveryPending||['checking','reviewing','saving_personal','submitting','importing'].includes(state.phase);
   const durableComplete=result=>result.phase==='completed'&&result.snapshot_kind==='durable'&&result.uncertain===false&&result.disposition==='completed'&&result.confirmed_rows===result.command.total_rows&&result.remaining_rows===0;
@@ -33,7 +35,11 @@ export function createImportController({fetch,contextRoot,allows,isCurrent,onCha
       const headers={Accept:'application/json','X-AlbumHaven-Foobar-Context':expected};
       if(command){headers['Content-Type']=command.mapping_name===ENHANCED_MAPPING?'application/vnd.sqlite3':'text/tab-separated-values; charset=utf-8';headers['X-Album-Haven-Foobar-Bytes']=String(body.size);headers['X-AlbumHaven-Foobar-Command']=JSON.stringify(command);}
       else headers['Content-Type']='application/json';
-      const response=await fetch(BASE+path,{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal,headers,body:command?body:JSON.stringify(body)});
+      const retained=command&&temporarySource!==null&&body===temporaryFile;
+      if(command&&state.retainSource&&!retained)headers['X-AlbumHaven-Retain-Source']='1';
+      if(retained){headers['Content-Type']='application/octet-stream';headers['X-AlbumHaven-Retained-Source']=temporarySource.upload_sha256;}
+
+      const response=await fetch(BASE+path,{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal,headers,body:command?(retained?'':body):JSON.stringify(body)});
       if(response.status===401||response.status===403){if(same())retire();return null;}
       if(!live())return null;
       const value=await readBoundedJSON(response,controller.signal,protocol===REVIEW?(observationRequest!==null||state.review?.observations?OBSERVATION_RESPONSE_BYTES:MAX_REVIEW_RESPONSE_BYTES):MAX_RESPONSE_BYTES);
@@ -234,8 +240,26 @@ export function createImportController({fetch,contextRoot,allows,isCurrent,onCha
     discoverJobs,selectDiscoveredJob,
     async nextJobPage(){if(!state.discovery||state.discoveryError||state.discovery.unfinished!==state.discoveryUnfinished||!state.discovery.next_cursor)return;await discoverJobs(state.discovery.unfinished,state.discovery.next_cursor);},
     selectSource,
-    choose(candidate){if(!current()||busy())return;try{file=validateFile(candidate,state.mapping);reviewFile=null;publish({phase:'selected',filename:file.name,review:null,error:'',notice:submitted?'Reselect the identical original file. Review remaining work before confirming.':''});}catch{file=reviewFile=null;publish({phase:'error',filename:'',review:null,error:state.mapping===ENHANCED_MAPPING?'Choose a finalized self-contained SQLite artifact, at most 512 MiB.':'Choose a nonempty UTF-8 TSV file, at most 64 MiB.'});}},
-    setMapping(value){if(!current()||busy()||submitted||![MAPPING,ENHANCED_MAPPING].includes(value))return;file=reviewFile=reviewCandidate=null;continuationReview=null;publish({mapping:value,matching:false,filename:'',review:null,phase:'idle',notice:'Format changed. Select the original file and run a fresh review.'});},
+    setRetainSource(value){if(!current()||busy()||typeof value!=='boolean')return;publish({retainSource:value});},
+    async useTemporarySource(){
+      if(!current()||busy()||!sourceRef||!jobRef)return false;
+      const prior=state.phase;
+      publish({phase:'checking',notice:'Checking this account’s temporary copy. This does not resume or apply an import.'});
+      const result=await request('/temporary-source/status',{protocol:TEMPORARY_SOURCE,
+        body:{version:TEMPORARY_SOURCE,source_ref:sourceRef,job_ref:jobRef},
+        validate:v=>validateTemporarySource(v,expected,sourceRef,jobRef),
+        onFailure:()=>publish({phase:prior,notice:'A temporary copy is unavailable. Select the identical original file to continue.'})});
+      if(!current())return false;
+      if(!result){publish({phase:prior,notice:'No usable temporary copy is available. Select the identical original file to continue.'});return false;}
+      temporarySource=result;
+      temporaryFile=Object.freeze({name:'Private temporary Foobar source',size:result.byte_length});
+      file=temporaryFile;reviewFile=reviewCandidate=null;continuationReview=null;
+      publish({phase:'selected',usingTemporarySource:true,mapping:result.mapping_name,filename:file.name,
+        review:null,error:'',notice:'Using your private temporary copy. Run a fresh review before confirming. It expires at '+result.expires_at+'.'});
+      return true;
+    },
+    choose(candidate){if(!current()||busy())return;temporarySource=temporaryFile=null;try{file=validateFile(candidate,state.mapping);reviewFile=null;publish({phase:'selected',usingTemporarySource:false,filename:file.name,review:null,error:'',notice:submitted?'Reselect the identical original file. Review remaining work before confirming.':''});}catch{file=reviewFile=null;publish({phase:'error',filename:'',review:null,error:state.mapping===ENHANCED_MAPPING?'Choose a finalized self-contained SQLite artifact, at most 512 MiB.':'Choose a nonempty UTF-8 TSV file, at most 64 MiB.'});}},
+    setMapping(value){if(!current()||busy()||submitted||![MAPPING,ENHANCED_MAPPING].includes(value))return;temporarySource=temporaryFile=null;file=reviewFile=reviewCandidate=null;continuationReview=null;publish({mapping:value,matching:false,filename:'',review:null,phase:'idle',notice:'Format changed. Select the original file and run a fresh review.'});},
     setMatching(value){if(!current()||busy()||submitted||typeof value!=='boolean'||value&&!state.matchingAvailable)return;publish({matching:value,review:null,phase:file?'selected':'idle',notice:'Changing matching scope requires a fresh review.'});},
     setCountFamily(value){if(!current()||busy()||submitted||state.mapping!==MAPPING||!['standard','enhanced'].includes(value))return;
       publish({countFamily:value,review:state.review?Object.freeze({...state.review}):null,
@@ -244,7 +268,7 @@ export function createImportController({fetch,contextRoot,allows,isCurrent,onCha
     preview,confirm,refreshStatus,cancel,savePersonalChanges,nextConflictPage,firstConflictPage,nextProblemPage,firstProblemPage,
     async resume(){if(!current()||busy()||!submitted||!file||!state.job&&!submittedCommand)return;await preview();},
     recoverJob,
-    clear(){if(!current()||busy()||submitted&&state.phase!=='completed'){if(submitted)publish({notice:'Keep this import reference. Check or reconcile its status before starting another import.'});return;}stop();file=reviewFile=null;submittedCommand=null;submitted=resumeMode=false;jobRef=null;publish({phase:sourceRef?'idle':'error',filename:'',review:null,job:null,error:'',notice:''});},
-    dispose(){stop();disposed=true;file=reviewFile=reviewCandidate=null;continuationReview=null;state=Object.freeze({...state,phase:'retired',filename:'',review:null});},
+    clear(){if(!current()||busy()||submitted&&state.phase!=='completed'){if(submitted)publish({notice:'Keep this import reference. Check or reconcile its status before starting another import.'});return;}stop();temporarySource=temporaryFile=null;file=reviewFile=null;submittedCommand=null;submitted=resumeMode=false;jobRef=null;publish({phase:sourceRef?'idle':'error',filename:'',review:null,job:null,error:'',notice:''});},
+    dispose(){stop();disposed=true;temporarySource=temporaryFile=null;file=reviewFile=reviewCandidate=null;continuationReview=null;state=Object.freeze({...state,phase:'retired',filename:'',review:null});},
   });
 }

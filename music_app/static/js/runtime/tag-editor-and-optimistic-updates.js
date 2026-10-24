@@ -1759,7 +1759,76 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
   }
 }
 
+let homeTrackEvidenceRenderGeneration = 0;
+let trackModalFoobarEvidence = null;
+function disposeTrackModalFoobarEvidence() {
+  const lease=trackModalFoobarEvidence;trackModalFoobarEvidence=null;
+  if(!lease)return;
+  lease.sequence++;lease.panel?.dispose();lease.host?.remove();lease.unsubscribe?.();lease.observer?.disconnect();
+  for(const {button,click} of lease.controls){button.removeEventListener('click',click);button.remove();}
+  lease.controls.length=0;
+}
+function loadFoobarTrackEvidencePresenter() {
+  const version=encodeURIComponent(String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__||''));
+  return import(`/static/js/foobar-history/track-evidence.mjs?v=${version}`);
+}
+function mountTrackModalFoobarEvidence(album,receipt,generation) {
+  const shell=document.getElementById('app-shell'),overlay=document.getElementById('track-modal');
+  if(shell?.dataset.accountFoobarHistoryAllowed!=='true'||album.read_only_subject||album.source_readable===false
+    ||album.allowed_actions?.can_read===false||typeof PrivateUITransport==='undefined'
+    ||typeof MutationObserver!=='function'||receipt.rows.length!==receipt.nodes.length)return;
+  const accountId=shell.dataset.nativeAccountId,libraryId=shell.dataset.nativeLibraryId;
+  if(!/^[1-9]\d{0,18}$/.test(accountId||'')||!/^[1-9]\d{0,18}$/.test(libraryId||''))return;
+  let context,transportGeneration;
+  try{context=PrivateUITransport.context();transportGeneration=PrivateUITransport.generation();}catch{return;}
+  const lease={controls:[],panel:null,host:null,sequence:0,observer:null,unsubscribe:null};trackModalFoobarEvidence=lease;
+  const current=()=>{
+    try {
+      // Home generation() synchronizes context and may retire this lease.
+      const liveGeneration=PrivateUITransport.generation();
+      return trackModalFoobarEvidence===lease&&generation===homeTrackEvidenceRenderGeneration
+        &&getCurrentTrackModalAlbum()===album&&isTrackModalContentVisible()&&receipt.list.isConnected
+        &&isTrackModalSourceActionCurrent()
+        &&(!getTrackModalSelectionLease() || (getTrackModalSelectionLease().isCurrent() && getTrackModalSelectionLease().canOpen()))
+        &&shell.dataset.accountFoobarHistoryAllowed==='true'&&shell.dataset.nativeAccountId===accountId
+        &&shell.dataset.nativeLibraryId===libraryId&&shell.dataset.privateUiContext===context
+        &&liveGeneration===transportGeneration;
+    } catch {return false;}
+  };
+  receipt.rows.forEach(({source},index)=>{
+    const ref=source?.inventory_track_ref,match=typeof ref==='string'?/^inventory-track:([1-9]\d{0,18}):([1-9]\d{0,18})$/.exec(ref):null;
+    if(!match||match[1]!==libraryId||BigInt(match[2])>9223372036854775807n||source.allowed_actions?.can_read===false)return;
+    const cell=receipt.nodes[index]?.querySelector('.album-track-table__title')?.parentElement;
+    if(!cell)return;
+    const button=document.createElement('button');button.type='button';button.className='playlists__note';
+    button.textContent='Foobar evidence';button.setAttribute('aria-label','Read Foobar imported evidence for '+String(source.title||'this track'));
+    const click=()=>{
+      if(!current())return;
+      const focused=document.activeElement===button,token=++lease.sequence;
+      lease.panel?.dispose();lease.panel=null;lease.host?.remove();
+      const host=document.createElement('div');host.className='foobar-history';receipt.list.appendChild(host);lease.host=host;
+      host.textContent='Loading imported evidence controls…';
+      void loadFoobarTrackEvidencePresenter().then(module=>{
+        if(!current()||lease.sequence!==token||!host.isConnected)return;
+        host.replaceChildren();
+        lease.panel=module.mountFoobarTrackEvidence(host,{transport:PrivateUITransport,
+          isCurrent:()=>current()&&lease.sequence===token,trackId:match[2],libraryId,accountId});
+        if(focused&&document.activeElement===button)lease.panel.focus();
+        void lease.panel.load();
+      }).catch(()=>{if(current()&&lease.sequence===token)host.textContent='Imported evidence is unavailable. Try again after reopening this track list.';});
+    };
+    button.addEventListener('click',click);cell.appendChild(button);lease.controls.push({button,click});
+  });
+  const retire=()=>{if(trackModalFoobarEvidence===lease&&!current())disposeTrackModalFoobarEvidence();};
+  lease.unsubscribe=PrivateUITransport.subscribe(retire);lease.observer=new MutationObserver(retire);
+  if(overlay)lease.observer.observe(overlay,{attributes:true,attributeFilter:['hidden']});
+  lease.observer.observe(shell,{attributes:true,attributeFilter:['data-native-account-id','data-native-library-id','data-private-ui-context','data-account-foobar-history-allowed']});
+  lease.observer.observe(receipt.list,{childList:true});
+}
+
 function renderTrackModalRelease(album) {
+  const homeEvidenceGeneration = ++homeTrackEvidenceRenderGeneration;
+  disposeTrackModalFoobarEvidence();
   if (typeof reconcileTrackModalSelectionAlbum === 'function') reconcileTrackModalSelectionAlbum(album);
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -2009,7 +2078,11 @@ function renderTrackModalRelease(album) {
     }
   }
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
-  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
+  const evidenceRows = [];
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength, evidenceRows);
+  const evidenceReceipt = Object.freeze({album, list: els.list, rows: Object.freeze(evidenceRows),
+    nodes: Object.freeze([...els.list.querySelectorAll('.album-track-table__row')])});
+  if (!albumMissing) mountTrackModalFoobarEvidence(album, evidenceReceipt, homeEvidenceGeneration);
   if (typeof NativePlaytables !== 'undefined') {
     if (albumMissing) NativePlaytables.retire('album-tracks');
     else if (isTrackModalContentVisible()) NativePlaytables.mount('album-tracks', els.list);
@@ -2134,7 +2207,7 @@ function groupAlbumTracks(tracks) {
 }
 
 
-function buildTrackListHtml(tracks, album = null, totalLength = null) {
+function buildTrackListHtml(tracks, album = null, totalLength = null, evidenceRows = null) {
   const privateRows = [];
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
@@ -2173,6 +2246,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       const trackValue = getAlbumTrackDisplayNumber(track, index);
       const trackRow = trackRowByPath.get(trackPath) || null;
       const source = trackRow || track;
+      evidenceRows?.push(Object.freeze({track, source}));
       privateRows.push({...source, track_ref: Object.hasOwn(source, 'track_ref') ? source.track_ref : track.path});
       const displayTitle = String(trackRow?.title || track.title || '').trim();
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();

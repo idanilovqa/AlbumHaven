@@ -87,6 +87,159 @@ test('opening Cover Lookup starts one gallery request without loading notificati
   assert.equal(galleryRequestCount, 1);
 });
 
+test('opening a persisted notification renders its candidates while gallery refresh is pending', async () => {
+  class TestButton {
+    constructor() {
+      this.hidden = false;
+      this.disabled = false;
+    }
+  }
+  const album = {
+    album_artist: 'Altın Gün',
+    name: 'Garip',
+    year: 2026,
+  };
+  const candidate = {
+    id: 'youtube-candidate',
+    source: 'youtube',
+    url: 'https://images.example/youtube.jpg',
+  };
+  const task = {
+    id: 'persisted-generation',
+    status: 'completed',
+    album_payload: album,
+    possible_matches: [candidate],
+    best_candidate_id: candidate.id,
+  };
+  let resolveGallery;
+  const galleryResponse = new Promise((resolve) => { resolveGallery = resolve; });
+  const overlay = { hidden: true };
+  const renderSnapshots = [];
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [task],
+        tasksSnapshot: '',
+        appliedTaskUpdateSignatures: {},
+        modal: { pastedImages: [] },
+      },
+    },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async (url) => {
+      if (url === '/utilities/cover-lookup/gallery') return galleryResponse;
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    document: {
+      body: { classList: { add: () => {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': new TestButton(),
+      }[id] || null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.renderCoverLookupModal = () => {
+    renderSnapshots.push({
+      loading: context.state.coverLookup.modal.loading,
+      candidates: [...context.state.coverLookup.modal.possibleMatches],
+    });
+  };
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.stopCoverLookupPollingIfIdle = () => {};
+  context.applyCoverLookupTaskUpdates = () => {};
+  context.applyCoverLookupGalleryPayload = () => {};
+  context.markCoverLookupAutomaticImprovementSeen = async () => {};
+
+  const openPromise = context.openCoverLookupModal(album, { taskId: task.id });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(renderSnapshots.some((snapshot) => (
+    snapshot.loading === false
+    && snapshot.candidates.some((item) => item.id === candidate.id)
+  )));
+
+  resolveGallery({ ok: true, json: async () => ({ ok: true }) });
+  await openPromise;
+});
+
+test('starting lookup publishes visible feedback before the start request settles', async () => {
+  const album = {
+    album_artist: 'Neal Morse',
+    name: 'Sola Scriptura',
+    year: 2007,
+  };
+  let resolveStart;
+  const startResponse = new Promise((resolve) => { resolveStart = resolve; });
+  const toastCalls = [];
+  const renderSnapshots = [];
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [],
+        tasksSnapshot: '',
+        appliedTaskUpdateSignatures: {},
+        modal: {
+          album,
+          manualBusy: false,
+          statusText: '',
+          pastedImages: [],
+          selectedRemoteId: '',
+          pendingPastedImageId: '',
+        },
+      },
+    },
+    URLSearchParams,
+    console,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: (...args) => toastCalls.push(args),
+    fetch: async (url) => {
+      if (url === '/utilities/cover-lookup/start') return startResponse;
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    document: {
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-modal-body': { querySelector: () => null },
+      }[id] || null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.collectManualCoverLookupUrls = () => [];
+  context.renderCoverLookupDrawer = () => {};
+  context.renderCoverLookupModal = () => {
+    renderSnapshots.push({
+      manualBusy: context.state.coverLookup.modal.manualBusy,
+      statusText: context.state.coverLookup.modal.statusText,
+    });
+  };
+
+  const startPromise = context.startCoverLookupForAlbum(album);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(renderSnapshots.some((snapshot) => (
+    snapshot.manualBusy === true && snapshot.statusText === 'Starting cover search…'
+  )));
+  assert.equal(toastCalls[0]?.[0], 'Starting cover search…');
+
+  resolveStart({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      task: { id: 'accepted-task', status: 'running', album_payload: album },
+    }),
+  });
+  await startPromise;
+});
+
 test('accepted lookup renders running feedback before follow-up reads settle', async () => {
   const album = {
     album_artist: 'Neal Morse',
@@ -180,15 +333,18 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
   const startPromise = context.startCoverLookupForAlbum(album);
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(toastCalls.length, 1);
-  assert.equal(toastCalls[0][0], 'Cover art lookup started.');
-  assert.equal(toastCalls[0][1], 'success');
+  assert.deepEqual(
+    toastCalls.map((call) => call[0]),
+    ['Starting cover search…', 'Cover art lookup started.'],
+  );
+  const acceptedToast = toastCalls[1];
+  assert.equal(acceptedToast[1], 'success');
   assert.equal(
-    toastCalls[0][2],
+    acceptedToast[2],
     5000,
     'the lookup-start notification must remain readable while the accepted task begins rendering',
   );
-  assert.equal(toastCalls[0][3]?.placement, 'top-center');
+  assert.equal(acceptedToast[3]?.placement, 'top-center');
   assert.ok(renderSnapshots.some((snapshot) => (
     snapshot.manualBusy === false
     && snapshot.taskId === acceptedTask.id

@@ -2306,11 +2306,15 @@ async function openCoverLookupModal(album, options = {}) {
   if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();
   if (!els.overlay || !album) return;
-  const matchingTask = !options.taskId
-    ? (state.coverLookup.tasks || []).find((task) => buildTrackPathSignature(task?.album_payload) === buildTrackPathSignature(album))
-    : null;
+  const requestedTaskId = String(options.taskId || '');
+  const matchingTask = (state.coverLookup.tasks || []).find((task) => (
+    requestedTaskId
+      ? String(task?.id || '') === requestedTaskId
+      : buildTrackPathSignature(task?.album_payload) === buildTrackPathSignature(album)
+  ));
+  const cachedCandidates = sanitizeCoverLookupPossibleMatches(matchingTask?.possible_matches);
   state.coverLookup.modal.album = album;
-  state.coverLookup.modal.taskId = String(options.taskId || matchingTask?.id || '');
+  state.coverLookup.modal.taskId = String(requestedTaskId || matchingTask?.id || '');
   state.coverLookup.modal.remoteCover = null;
   state.coverLookup.modal.localCovers = [];
   revokeCoverLookupPastedImageUrls();
@@ -2320,9 +2324,11 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
-  state.coverLookup.modal.possibleMatches = [];
+  state.coverLookup.modal.possibleMatches = cachedCandidates;
   state.coverLookup.modal.candidateSnapshot = null;
-  state.coverLookup.modal.candidateGeneration = '';
+  state.coverLookup.modal.candidateGeneration = cachedCandidates.length
+    ? String(matchingTask?.id || '')
+    : '';
   state.coverLookup.modal.activeLocalSelectionPath = '';
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
@@ -2332,7 +2338,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.statusTone = 'neutral';
   state.coverLookup.modal.manualUrlText = '';
   state.coverLookup.modal.manualBusy = false;
-  state.coverLookup.modal.loading = true;
+  state.coverLookup.modal.loading = !cachedCandidates.length;
   state.coverLookup.modal.saving = false;
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
@@ -2342,7 +2348,7 @@ async function openCoverLookupModal(album, options = {}) {
   }
   renderCoverLookupModal();
   ensureCoverLookupPolling();
-  await refreshCoverLookupGallery();
+  await refreshCoverLookupGallery(!cachedCandidates.length);
 }
 
 function closeCoverLookupModal() {
@@ -2435,7 +2441,10 @@ async function startCoverLookupForAlbum(album, options = {}) {
     }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = true;
+      state.coverLookup.modal.statusText = 'Starting cover search…';
+      state.coverLookup.modal.statusTone = 'neutral';
       renderCoverLookupModal();
+      showToast('Starting cover search…', 'info', 2200, { placement: 'top-center' });
     }
     const manualUrls = !backgroundOnly ? collectManualCoverLookupUrls() : [];
     const response = await fetch('/utilities/cover-lookup/start', {

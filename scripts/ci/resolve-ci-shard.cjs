@@ -3,17 +3,29 @@ const FUNCTIONAL_SHARDS = Object.freeze({
     displayName: 'Gallery, Search & Visual',
     portBase: 5200,
   },
-  'cover-providers': {
-    displayName: 'Cover Providers',
+  'cover-providers-1': {
+    displayName: 'Cover Providers 1',
     portBase: 5300,
+  },
+  'cover-providers-2': {
+    displayName: 'Cover Providers 2',
+    portBase: 5350,
   },
   'metadata-mutations': {
     displayName: 'Metadata Mutations',
     portBase: 5400,
   },
-  'playback-utilities': {
-    displayName: 'Playback & Utilities',
+  'playback-utilities-1': {
+    displayName: 'Playback & Utilities 1',
     portBase: 5500,
+  },
+  'playback-utilities-2': {
+    displayName: 'Playback & Utilities 2',
+    portBase: 5550,
+  },
+  'playback-utilities-3': {
+    displayName: 'Playback & Utilities 3',
+    portBase: 5600,
   },
 });
 

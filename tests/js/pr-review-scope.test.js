@@ -251,6 +251,20 @@ test('focused E2E labels select only named functional, Phase 7, and performance 
   });
 });
 
+test('legacy functional family labels expand to every physical shard', () => {
+  assert.deepEqual(classifyPipelineLabels([
+    'ci:focused-e2e',
+    'ci:e2e:cover-providers',
+    'ci:e2e:playback-utilities',
+  ]).focusedFunctionalShards, [
+    'cover-providers-1',
+    'cover-providers-2',
+    'playback-utilities-1',
+    'playback-utilities-2',
+    'playback-utilities-3',
+  ]);
+});
+
 test('an exact performance target selects its owning shard without expanding the target', () => {
   const request = parseFocusedE2eRequest(
     '<!-- album-haven-focused-e2e:{"performanceTargets":["scan-cached"]} -->',

@@ -13,7 +13,8 @@ test('functional shard resolver preserves the existing port and artifact mapping
     outputDir: 'functional-output-gallery-search-visual',
     blobName: 'functional-blob-gallery-search-visual',
   });
-  assert.equal(resolveFunctionalShard('playback-utilities').portBase, 5500);
+  assert.equal(resolveFunctionalShard('cover-providers-2').portBase, 5350);
+  assert.equal(resolveFunctionalShard('playback-utilities-3').portBase, 5600);
   assert.throws(() => resolveFunctionalShard('unknown'), /Unknown functional shard/);
 });
 

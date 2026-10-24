@@ -629,7 +629,7 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 7
       matrix:
         shard: ${{ fromJSON(needs.review_scope.outputs.functional_shards_json) }}
     steps:

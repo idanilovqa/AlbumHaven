@@ -238,11 +238,6 @@ async function buildWatchedAlbumFixture({
     path.join(mediaRoot, 'cases', normalizedOwnedDirectoryName),
     normalizedOwnedDirectoryName,
   );
-  const albumDirectory = assertOwnedPath(
-    mediaRoot,
-    path.join(ownedRoot, artist, album),
-    normalizedOwnedDirectoryName,
-  );
   if (fs.existsSync(ownedRoot)) fs.rmSync(ownedRoot, { recursive: true });
   const createAlbum = async ({ album: albumName, year: albumYear, trackTitles }) => {
     const directory = assertOwnedPath(

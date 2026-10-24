@@ -14,11 +14,16 @@ function compile(react=React,globals={}){
   require:n=>n==='react'?react:require(n),...globals});return module.exports;
 }
 function hostFixture(t){
- const env=createNativeHomeRuntime(),{document,context:window}=env,slots=[],observers=[],requests=[];
+ const env=createNativeHomeRuntime(),{document,context:window}=env,slots=[],observers=[],requests=[],timers=new Set();
  document.defaultView=window;document.scrollingElement=document.documentElement;
  window.addEventListener=()=>{};window.removeEventListener=()=>{};window.getComputedStyle=()=>({overflowY:'visible'});
  window.MutationObserver=class{constructor(callback){this.callback=callback;this.active=false;observers.push(this);}observe(){this.active=true;}disconnect(){this.active=false;}};
- window.fetch=(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}));
+ window.fetch=(url,options)=>new Promise((resolve,reject)=>{
+  const abort=()=>{options.signal.removeEventListener('abort',abort);reject(Object.assign(new Error('aborted'),{name:'AbortError'}));};
+  options.signal.addEventListener('abort',abort,{once:true});
+  requests.push({url,options,resolve:value=>{options.signal.removeEventListener('abort',abort);resolve(value);}});
+  if(options.signal.aborted)abort();
+ });
  const account=document.createElement('div');account.id='app-shell';Object.assign(account.dataset,allowed().dataset);document.body.append(account);
  const node=document.createElement('div');document.body.append(node);let cursor=0,effects=[],tree;
  const shell={authenticated:true,visible:true,scopeKey:'own:library',entryKey:'entry:one',section:'recent'};
@@ -26,11 +31,14 @@ function hostFixture(t){
  const hooks={...React,useRef(value){return slots[cursor++]||={current:value};},
   useState(value){const i=cursor++;slots[i]||={value};return [slots[i].value,value=>{slots[i].value=value;}];},
   useLayoutEffect(effect,deps){const i=cursor++,old=slots[i];if(!old||deps.some((v,j)=>!Object.is(v,old.deps[j])))effects.push(()=>{old?.cleanup?.();slots[i]={deps,cleanup:effect()};});}};
- const module=compile(hooks,{document});
+ const module=compile(hooks,{document,
+  setTimeout(callback,delay){assert.equal(delay,60000);const timer={callback,delay};timers.add(timer);return timer;},
+  clearTimeout(timer){timers.delete(timer);}});
  const render=()=>{cursor=0;effects=[];tree=module.FoobarHistory({runtime,shell,scopeKey:shell.scopeKey});
   const element=elements(tree).find(e=>e.props['data-home-foobar-history']);if(element)element.props.ref.current=node;
   for(const effect of effects)effect();return tree;};
- const dispose=()=>{for(const slot of slots)slot?.cleanup?.();};t.after(dispose);
+ const dispose=()=>{for(const slot of slots)slot?.cleanup?.();};
+ t.after(async()=>{dispose();await settle();assert.equal(timers.size,0);assert.ok(observers.every(observer=>!observer.active));});
  return {render,dispose,account,node,shell,runtime,requests,observers,module,window};
 }
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};

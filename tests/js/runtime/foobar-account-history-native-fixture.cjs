@@ -9,7 +9,7 @@ async function platform(t, {entry = false, scrollOwner = 'inner', variable = fal
   c.addEventListener = (type, callback) => listeners.push({type, callback});
   c.removeEventListener = (type, callback) => {const i = listeners.findIndex(x => x.type === type && x.callback === callback); if (i >= 0) listeners.splice(i, 1);};
   c.dispatchEvent = event => {for (const x of [...listeners]) if (x.type === event.type) x.callback(event);};
-  c.MutationObserver = class {constructor(callback) {this.callback = callback; this.active = false; observers.push(this);} observe() {this.active = true;} disconnect() {this.active = false;}};
+  c.MutationObserver = class {constructor(callback) {this.callback = callback; this.active = false; observers.push(this);} observe(target, options) {this.target = target; this.options = options; this.active = true;} disconnect() {this.active = false;}};
   c.getComputedStyle = element => ({overflowY: scrollOwner !== 'document' && (element.id === 'albums-scroll' || scrollOwner === 'inner' && element.id === 'history-scroller') ? 'auto' : 'visible'});
   proto.focus = function () {document.activeElement = this;};
   Object.defineProperty(proto, 'value', {configurable: true, get() {return this._value || '';}, set(value) {this._value = String(value);}});

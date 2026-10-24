@@ -26,10 +26,17 @@ async function platform(t, options = {}) {
   for (const name of ['localStorage', 'sessionStorage']) c[name] = {setItem(...args) {storage.push([name, ...args]); throw new Error('Storage forbidden in this slice');}, getItem() {throw new Error('Storage read forbidden in this slice');}};
   let media = true, current = true, capabilityHook = null;
   c.AlbumHavenCapabilities = {allows(action) {capabilityHook?.(action); return action === 'library.media.read' && media;}};
+  const previousObservers = new Set(f.observers);
   for (const name of ['session-csrf-fetch.js', 'private-ui-transport.js', 'track-actions.js']) {
     const relative = 'music_app/static/js/runtime/' + name;
     H.vm.runInContext(H.read(relative), c, {filename: relative});
   }
+  // This Home transport is page-owned, unlike the borrowed history panel.
+  const pageObservers = f.observers.filter(observer => !previousObservers.has(observer));
+  assert.equal(pageObservers.length, 1);
+  const [pageObserver] = pageObservers;
+  assert.equal(pageObserver.target, shell);
+  assert.deepEqual(Array.from(pageObserver.options.attributeFilter), ['data-private-ui-context']);
   const transport = c.AlbumHavenPrivateUITransport;
   // Retrieve the genuine classic-script lexical owner, never a window alias.
   const nativeTracks = H.vm.runInContext('TrackActionsRuntime', c);
@@ -49,7 +56,12 @@ async function platform(t, options = {}) {
   await H.settle();
   t.after(() => {
     try {view.dispose(); actions.dispose(); /* Home transport has no disposal API. */ assert.equal(storage.length, 0);}
-    finally {for (const callback of cleanup) callback();}
+    finally {
+      // End the synthetic page after disposing the borrowed panel; inherited
+      // cleanup still requires every other observer and listener to be gone.
+      pageObserver.disconnect();
+      for (const callback of cleanup) callback();
+    }
   });
   const row = (index = 0) => f.owner.controller.getSnapshot().page.items[index];
   const nativeCalls = () => f.wire.calls.filter(call => call.route.startsWith('/history/native/'));

@@ -32,6 +32,7 @@ vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/navigation-
 const runtime = {
   openChoice: native.context.openUtilityChoiceDropdown,
   buttonHtml: config => native.context.ButtonComponent.renderButton(config),
+  iconHtml: (name, options) => native.context.ButtonComponent.renderIconSvg(name, options),
   actionHtml: config => native.context.ButtonComponent.renderActionButton(config),
   alertHtml: config => native.context.buildOnPageAlertHtml(config),
   tableHtml: config => native.context.buildCompactDataTable(config),

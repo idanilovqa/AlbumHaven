@@ -1045,6 +1045,7 @@ const HomeFriendsRuntime = (() => {
     mountDashboard: (host, options) => Dashboard.mount(host, options),
     openChoice: (trigger, options) => openUtilityChoiceDropdown(trigger, options),
     buttonHtml: config => ButtonComponent.renderButton(config),
+    iconHtml: (name, options) => ButtonComponent.renderIconSvg(name, options),
     actionHtml: config => ButtonComponent.renderActionButton(config),
     alertHtml: config => buildOnPageAlertHtml(config),
     galleryBarHtml: config => buildGalleryBarHtml(config),

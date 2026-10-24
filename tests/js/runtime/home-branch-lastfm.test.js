@@ -42,7 +42,8 @@ test('Home React branch actual bridge model JSX row retains uncertain report wit
  model.setScope(bridge.bridge.snapshot().scopeKey);await model.loadActivity(own);
  const actual=model.getSnapshot().activity.data.rows[0];assert.equal(actual.lastfm_assessment.state,'possible_observation');
  const native=createNativeHomeRuntime(),{activityTrackRow}=compile('activity-tracks.jsx');
- const runtime={escapeHtml:native.context.escapeHtml,artboxHtml:()=>'',actionHtml:()=>'',albumTrackRow:()=>null};
+ bridge.context.ButtonComponent=native.context.ButtonComponent;
+ const runtime={iconHtml:bridge.bridge.iconHtml,escapeHtml:native.context.escapeHtml,artboxHtml:()=>'',actionHtml:()=>'',albumTrackRow:()=>null};
  const html=activityTrackRow(runtime,actual,0,own,{}).cells.title.content;
  assert.match(html,/not a confirmed acknowledgement/);assert.doesNotMatch(html,/data-recent-scrobble-retry/);
  const panel=activityLifecycle();t.after(()=>panel.dispose());
@@ -113,4 +114,24 @@ test('Home React ActivityPanel uncertain assessment never creates retry interact
  t.after(()=>fixture.dispose());fixture.render({kind:'listens',account_ref:null,period:'all',value:ready([row('uncertain')])});
  assert.equal(fixture.host.querySelector('[data-recent-scrobble-retry]'),null);
  assert.match(fixture.host.textContent,/not a confirmed acknowledgement/);assert.equal(calls,0);
+});
+
+test('Home genuine runtime exposes the shared icon renderer for delivery status',()=>{
+ const f=setup(),native=createNativeHomeRuntime();f.context.ButtonComponent=native.context.ButtonComponent;
+ assert.equal(typeof f.bridge.iconHtml,'function');
+ assert.equal(f.bridge.iconHtml('more'),native.context.ButtonComponent.renderIconSvg('more'));
+ assert.match(f.bridge.iconHtml('more'),/<svg/);
+});
+
+test('Home delivery statuses and retry use only genuine shared registry icons',async()=>{
+ const f=setup(),native=createNativeHomeRuntime();f.context.ButtonComponent=native.context.ButtonComponent;
+ const runtime={iconHtml:f.bridge.iconHtml,actionHtml:f.bridge.actionHtml,escapeHtml:native.context.escapeHtml,
+  canRetryRecentScrobble:()=>true,retryRecentScrobble:()=>{}};
+ const {recentScrobbleDeliveryHtml,recentScrobbleRetryHtml}=await import(pathToFileURL(path.join(root,'music_app/static/js/home-friends/recent-scrobble-delivery.mjs')));
+ for(const state of ['not_eligible','unknown','accepted','delivery_unconfirmed','not_sent','reauthentication_required','rejected','retry_exhausted']){
+  const item={...row(state),scrobble_delivery:{state,next_step:state==='not_sent'?'retry_check':'none',show_status:true}};
+  const html=recentScrobbleDeliveryHtml(runtime,item,own);assert.match(html,/<svg/);assert.ok(html.includes(`data-recent-scrobble-delivery="${state}"`));
+  const retry=recentScrobbleRetryHtml(runtime,item,own);
+  if(state==='not_sent'){assert.match(retry,/<svg/);assert.match(retry,/Send this play to Last.fm/);}else assert.equal(retry,'');
+ }
 });

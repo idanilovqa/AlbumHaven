@@ -22,10 +22,10 @@ export function normalizeRecentScrobbleDelivery(value) {
 const labels = Object.freeze({
   not_eligible: ['close', 'This play is not eligible for Last.fm scrobbling.'],
   unknown: ['more', 'Last.fm delivery status is unknown.'],
-  accepted: ['complete', 'Last.fm accepted this play.'],
+  accepted: ['more', 'Last.fm accepted this play.'],
   delivery_unconfirmed: ['more', 'Last.fm delivery is unconfirmed. This does not mean the play was not sent.'],
   not_sent: ['close', 'This play was not sent to Last.fm.'],
-  reauthentication_required: ['tools', 'This play was not sent to Last.fm; sign-in is required.'],
+  reauthentication_required: ['more', 'This play was not sent to Last.fm; sign-in is required.'],
   rejected: ['close', 'This play was not sent to Last.fm; retry is not permitted by the stored result.'],
   retry_exhausted: ['close', 'This play was not sent to Last.fm; the retry limit was reached.'],
 });
@@ -57,7 +57,7 @@ export function canOfferRecentScrobbleRetry(runtime, row, context) {
 }
 export function recentScrobbleRetryHtml(runtime, row, context) {
   if (!canOfferRecentScrobbleRetry(runtime, row, context)) return '';
-  return runtime.actionHtml({icon: 'tools', ariaLabel: 'Send this play to Last.fm',
+  return runtime.actionHtml({icon: 'undo', ariaLabel: 'Send this play to Last.fm',
     title: 'Check current eligibility and send this play to Last.fm', presentation: 'bare',
     attributes: {'data-recent-scrobble-retry': 'true'}});
 }

@@ -27,6 +27,7 @@ function mountedHarness(utility = {}) {
   mount(); document.activeElement = mounted.row;
   const els = { overlay: { hidden: false }, detail: {} };
   const c = vm.createContext({ console, Date, Intl, URLSearchParams, document,
+    closeTagEditor() {},
     closeTagEditorExceptionMenu() {}, getTagEditorElements: () => ({ form: null }),
     state: { utility: { activeTab: 'appearance', appearanceKey: 'backgrounds', selectedRuleKey: 'problem-exclusions', loops: [], ...utility }, coverLookup: {} },
     getUtilityModalElements: () => els, renderUtilityModalContent: mount,

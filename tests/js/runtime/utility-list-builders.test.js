@@ -2777,7 +2777,7 @@ test('watchSaveTask routes a committed typo rename through destination reconcili
   context.buildUrl = (view) => `/albums?artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.window.history = { state: {}, replaceState() {} };
   context.fetchAndRender = async (_url, _push, options) => {
-    if (!options.shouldApplyResponse()) return false;
+    if (!options.shouldApplyResponse({ inventory_mutation_revision: 13 })) return false;
     const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
     context.state.view = {
       ...context.state.view,
@@ -2800,6 +2800,7 @@ test('watchSaveTask routes a committed typo rename through destination reconcili
       save_task_id: 'typo-rename-task',
       save_task_status: 'completed',
       requires_view_refresh: true,
+      inventory_mutation_revision: 13,
       destination_artist: 'Overhead',
       destination_album_key: destinationAlbum.identity_key,
       orphaned_source_artists: ['Ovderhead'],
@@ -3149,7 +3150,7 @@ for (const scenario of [
       normalizeGalleryScalePercent: value => Number(value || 100),
       resolveSelectedArtistFamilyDisplayMode: () => 'grouped',
       normalizeSearchFilters: value => value || {},
-    });
+  });
     for (const file of ['view-state-helpers.js', 'browser-navigation-helpers.js']) {
       vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), file), 'utf8'), context);
     }
@@ -3226,7 +3227,7 @@ for (const scenario of [
   });
 }
 
-test('watchSaveTask refreshes a partial year split so the untouched source release remains visible', async () => {
+test('watchSaveTask rejects a stale partial-year split projection before applying the committed revision', async () => {
   const context = loadHelpers();
   const selectedPath = 'D:\\Synthetic Music\\Rarity Artist\\Sparse Year Edit Fixture\\01 Selected.flac';
   const siblingPath = 'D:\\Synthetic Music\\Rarity Artist\\Sparse Year Edit Fixture\\02 Sibling.flac';
@@ -3269,25 +3270,43 @@ test('watchSaveTask refreshes a partial year split so the untouched source relea
   context.state.view.primary_artist_groups = selectedArtistGroups;
   context.state.view.family_artist_groups = [];
   context.state.view.artist_groups = selectedArtistGroups;
+  context.state.ui = {};
   const refreshCalls = [];
   context.buildApiUrl = () => '/view-data?surface=albums&artist=Rarity%20Artist';
+  const responsePayloads = [
+    { inventory_mutation_revision: 3, gallery_page: { projection_stale: true } },
+    { inventory_mutation_revision: 3, gallery_page: { projection_stale: false } },
+  ];
   context.fetchAndRender = async (...args) => {
     refreshCalls.push(args);
+    const responsePayload = responsePayloads[refreshCalls.length - 1];
+    const accepted = args[2].shouldApplyResponse(responsePayload);
+    if (!accepted) {
+      return false;
+    }
+    context.state.ui.appliedViewInventoryMutationRevision = responsePayload.inventory_mutation_revision;
     context.state.view.primary_artist_groups = canonicalGroups;
     context.state.view.artist_groups = canonicalGroups;
     return true;
   };
-  context.fetch = async () => ({
+  const terminalPayload = {
+    ok: true,
+    status: 'completed',
+    requires_view_refresh: true,
+    updated_albums: [finalizedDestination],
+    inventory_mutation_revision: 3,
+  };
+  let saveTaskPollCount = 0;
+  context.fetch = async () => {
+    saveTaskPollCount += 1;
+    return ({
     ok: true,
     async json() {
-      return {
-        ok: true,
-        status: 'completed',
-        requires_view_refresh: true,
-        updated_albums: [finalizedDestination],
-      };
+        return terminalPayload;
     },
-  });
+    });
+  };
+  context.waitForBrowserTimeout = async () => {};
   context.getAlbumRequestKey = (album) => String(album?.request_key || album?.key || '');
   context.getAlbumIdentity = (album) => String(album?.identity_key || album?.key || '');
   context.document.getElementById = (id) => (
@@ -3302,10 +3321,13 @@ test('watchSaveTask refreshes a partial year split so the untouched source relea
     tagEdits: {
       [selectedPath]: { year: '2014' },
     },
+    terminalPayload,
   });
 
-  assert.equal(refreshCalls.length, 1);
+  assert.equal(refreshCalls.length, 2);
+  assert.equal(saveTaskPollCount, 0);
   assert.equal(refreshCalls[0][2].preserveGalleryOptionsMenu, true);
+  assert.equal(refreshCalls[1][2].preserveGalleryOptionsMenu, true);
   assert.deepEqual(
     Array.from(context.state.view.artist_groups[0].albums, (album) => album.year),
     [2004, 2014],

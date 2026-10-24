@@ -22,6 +22,15 @@ async function loadProblematicFiles(force = false, options = {}) {
     }
     return result;
   }
+  const pendingCompleteLoad = state.utility.completeLoadPromise;
+  if (
+    state.utility.problematicFilesComplete === false
+    && pendingCompleteLoad
+    && pendingCompleteLoad.problematicSummaryRequestToken
+      === Number(state.utility.problematicSummaryRequestToken || 0)
+  ) {
+    return pendingCompleteLoad;
+  }
   if (state.utility.loaded && !force) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;

@@ -1975,20 +1975,25 @@ class VirtualArtistGrid {
       if (retainedCard.getAttribute?.('data-gallery-card-cover-only') === '1') {
         const retainedCover = retainedCard.querySelector?.('.cover');
         const nextCover = nextCard.querySelector?.('.cover');
-        if (!retainedCover || typeof nextCover?.replaceWith !== 'function') {
+        if (
+          !retainedCover
+          || typeof nextCover?.replaceWith !== 'function'
+          || typeof retainedCard.replaceChildren !== 'function'
+          || typeof nextCard.replaceWith !== 'function'
+        ) {
           this.albumCardNodeCache.delete(cacheKey);
           return;
         }
         nextCover.replaceWith(retainedCover);
+        retainedCard.replaceChildren(...Array.from(nextCard.childNodes || []));
+        retainedCard.removeAttribute?.('data-gallery-card-cover-only');
+        nextCard.replaceWith(retainedCard);
       } else {
         if (typeof nextCard.replaceWith !== 'function') return;
         nextCard.replaceWith(retainedCard);
       }
       this.albumCardNodeCache.delete(cacheKey);
-      this.albumCardNodeCache.set(
-        cacheKey,
-        retainedCard.getAttribute?.('data-gallery-card-cover-only') === '1' ? nextCard : retainedCard,
-      );
+      this.albumCardNodeCache.set(cacheKey, retainedCard);
       const productionUrl = String(retainedImage?.getAttribute?.('data-production-cover-src') || '').trim();
       const retainedImageDecoded = retainedImage instanceof HTMLImageElement
         && Boolean(retainedImage.complete)
@@ -2406,8 +2411,12 @@ class VirtualArtistGrid {
       };
     }
     const contentTop = section.top + this.sectionHeaderHeight;
-    const localStart = Math.max(0, start - contentTop);
-    const localEnd = Math.max(0, end - contentTop);
+    const keepSelectedPrimaryMounted = section.sectionType === 'primary'
+      && String(state?.view?.selected_artist || '').trim();
+    const localStart = keepSelectedPrimaryMounted ? 0 : Math.max(0, start - contentTop);
+    const localEnd = keepSelectedPrimaryMounted
+      ? Number(section.blocksHeight || 0)
+      : Math.max(0, end - contentTop);
     let firstIndex = 0;
     while (
       firstIndex < blocks.length

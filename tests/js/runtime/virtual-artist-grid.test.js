@@ -4327,6 +4327,7 @@ test('selected primary section remains mounted while browsing related family sec
     context.CARD_GALLERY_LAYOUT_CONFIG,
   );
 
+  assert.match(containerEl.innerHTML, /aria-label="Open Selected Artist 10 tracklist"/);
   scrollEl.scrollTop = Math.max(0, virtualGrid.totalHeight - scrollEl.clientHeight);
   virtualGrid.render(true);
 
@@ -4581,6 +4582,7 @@ test('deferred pointer render retains the scroll frame owner across a render gen
     },
     getAttribute(name) { return this.attributes[name] || ''; },
     setAttribute(name, value) { this.attributes[name] = String(value); },
+    removeAttribute(name) { delete this.attributes[name]; },
     querySelector(selector) {
       if (selector === '.cover') return retainedCover;
       if (selector === '.cover img' || selector === 'img[data-production-cover-src]') return retainedImage;
@@ -4600,11 +4602,18 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   );
   assert.equal(retainedCard.parentNode, null);
 
+  let nextCard;
   let nextCover = {
-    replaceWith(node) { nextCover = node; },
+    replaceWith(node) {
+      nextCard.childNodes[0] = node;
+      nextCover = node;
+    },
   };
+  const nextMetadata = { kind: 'fresh-metadata' };
+  const nextActions = { kind: 'fresh-actions' };
   let replacement = null;
-  const nextCard = {
+  nextCard = {
+    childNodes: [nextCover, nextMetadata, nextActions],
     attributes: {
       'data-gallery-card-key': 'compact-retained-card',
       'data-gallery-card-render-key': 'same-render',
@@ -4618,8 +4627,10 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   });
 
   assert.equal(nextCover, retainedCover, 'the decoded cover subtree must move into the fresh card');
-  assert.equal(replacement, null, 'the compact cache shell must not replace the complete fresh card');
-  assert.equal(virtualGrid.albumCardNodeCache.get('compact-retained-card'), nextCard);
+  assert.equal(replacement, retainedCard, 'the compact cache shell must regain the fresh card content');
+  assert.deepEqual(retainedCard.childNodes, [retainedCover, nextMetadata, nextActions]);
+  assert.equal(retainedCard.getAttribute('data-gallery-card-cover-only'), '');
+  assert.equal(virtualGrid.albumCardNodeCache.get('compact-retained-card'), retainedCard);
 }
 
 {

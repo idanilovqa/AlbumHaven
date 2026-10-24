@@ -890,6 +890,10 @@ def finalize_structural_tag_edit_save_task(
 
         def refresh_runtime_state() -> None:
             st = get_state()
+            st["inventory_mutation_revision"] = max(
+                int(st.get("inventory_mutation_revision") or 0),
+                int(persistence_result.get("inventory_mutation_revision") or 0),
+            )
             current_separate_release_keys = set(separate_release_keys)
             if committed_separate_release_key:
                 current_separate_release_keys.add(
@@ -1043,6 +1047,9 @@ def finalize_structural_tag_edit_save_task(
             "destination_album_id": persistence_result.get("destination_album_id"),
             "destination_album_key": persistence_result.get("destination_album_key"),
             "destination_artist": persistence_result.get("destination_artist_name"),
+            "inventory_mutation_revision": persistence_result.get(
+                "inventory_mutation_revision"
+            ),
             "orphaned_source_artists": list(
                 persistence_result.get("orphaned_source_artists") or []
             ),

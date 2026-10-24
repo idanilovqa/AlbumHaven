@@ -1694,12 +1694,13 @@ def test_structural_tag_edit_canonical_lookup_failure_after_commit_reports_compl
 ):
     task_id = create_save_task("edit-tags")
     events: list[str] = []
+    library_state = {"albums": [], "file_cache": {}}
 
     finalize_structural_tag_edit_save_task(
         task_id,
         config=_explicit_config(tmp_path),
         logger=_logger_stub(),
-        get_state=lambda: {"albums": [], "file_cache": {}},
+        get_state=lambda: library_state,
         rebuild_affected_albums_in_state=lambda *_args, **_kwargs: events.append(
             "memory-rebuilt"
         ),
@@ -1709,6 +1710,7 @@ def test_structural_tag_edit_canonical_lookup_failure_after_commit_reports_compl
             "destination_album_key": "album:telepathic-minds",
             "destination_artist_name": "Overhead",
             "orphaned_source_artists": ["Ovderhead"],
+            "inventory_mutation_revision": 13,
         },
         append_log_history=lambda *_args, **_kwargs: None,
         log_app_event=lambda *_args, **_kwargs: None,
@@ -1743,6 +1745,8 @@ def test_structural_tag_edit_canonical_lookup_failure_after_commit_reports_compl
     assert terminal_task["destination_album_key"] == "album:telepathic-minds"
     assert terminal_task["destination_artist"] == "Overhead"
     assert terminal_task["orphaned_source_artists"] == ["Ovderhead"]
+    assert terminal_task["inventory_mutation_revision"] == 13
+    assert library_state["inventory_mutation_revision"] == 13
 
 
 def test_structural_tag_edit_save_task_fails_without_publishing_memory_on_commit_error(

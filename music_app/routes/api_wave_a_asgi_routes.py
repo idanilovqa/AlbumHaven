@@ -1448,6 +1448,7 @@ def _authoritative_edit_tags_response(
         "destination_album_id",
         "destination_album_key",
         "destination_artist",
+        "inventory_mutation_revision",
         "orphaned_source_artists",
         "operation_id",
         "phase_timings_ms",

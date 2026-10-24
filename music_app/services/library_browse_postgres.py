@@ -2684,7 +2684,7 @@ class PostgresLibraryBrowseRepository:
             cached_payload["total_candidate_count"] = None
             cached_payload["projection_cache_status"] = "bounded"
             return cached_payload
-        with self._connect_to_database() as connection:
+        with self._browse_connection_context() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
             connection.execute("SET LOCAL jit = off")
@@ -4591,6 +4591,14 @@ def _load_duplicate_candidate_album_ids(
     # Compare only compact tag identities before loading full file metadata. SQL
     # collation is not Python's NFC/casefold rule; broad Unicode SQL candidates
     # otherwise pull thousands of unrelated albums into every artist request.
+    if cache_only:
+        kind = "duplicate-identities"
+        fingerprint = _duplicate_inventory_fingerprint(connection)
+        cached = repository._get_cached_utility_projection(kind, copy_payload=False)
+        if fingerprint and cached and cached.get("fingerprint") == fingerprint["fingerprint"]:
+            return _duplicate_candidate_ids_from_index(cached["index"], album_keys)
+        repository.queue_utility_projection_prewarm(kind)
+        return None
     if (
         album_keys
         and _coerce_int(
@@ -4605,9 +4613,6 @@ def _load_duplicate_candidate_album_ids(
     if fingerprint and cached and cached.get("fingerprint") == fingerprint["fingerprint"]:
         candidate_ids = _duplicate_candidate_ids_from_index(cached["index"], album_keys)
         return candidate_ids
-    if cache_only:
-        repository.queue_utility_projection_prewarm(kind)
-        return None
     cache_key = repository._utility_projection_cache_key(kind)
     with _UTILITY_PROJECTION_CACHE_LOCK:
         generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0

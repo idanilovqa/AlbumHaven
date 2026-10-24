@@ -570,6 +570,9 @@ def _transient_scan_view_response(
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
+    request_inventory_mutation_revision = int(
+        library_state.get("inventory_mutation_revision") or 0
+    )
     browse_state = resolve_active_scan_browse_state(library_state)
     default_root_gallery_page = (
         not _should_use_transient_scan_browse_state(library_state, browse_state)
@@ -612,6 +615,7 @@ def view_data(request: Request) -> JSONResponse:
             restart = "restart required" in str(error)
             return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
                                 status_code=409 if restart else 400)
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
 
@@ -622,6 +626,7 @@ def view_data(request: Request) -> JSONResponse:
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
             query_params=request.query_params,
         )
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
     if _is_postgres_selected_artist_request(request):
@@ -656,6 +661,7 @@ def view_data(request: Request) -> JSONResponse:
                     if field in root_sidebar_payload
                 }
             )
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_album_search_request(request):
@@ -681,6 +687,7 @@ def view_data(request: Request) -> JSONResponse:
                  "error": "Artist relationships are being prepared."},
                 status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
             )
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _log_view_data_request_from_asgi(request, payload, request_started_at)
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(compact_selected_artist_wire_payload(payload))
@@ -688,6 +695,7 @@ def view_data(request: Request) -> JSONResponse:
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
             query_params=request.query_params,
         )
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
     unsupported_selected_artist_response = _unsupported_postgres_selected_artist_browse_response(request)
@@ -710,6 +718,7 @@ def view_data(request: Request) -> JSONResponse:
         library_state=_library_state(request),
         client_surface_class=_client_surface_class_from_asgi(request),
     )
+    payload["inventory_mutation_revision"] = request_inventory_mutation_revision
     _log_view_data_request_from_asgi(request, payload, request_started_at)
     _project_missing_album_actions_for_request(request, payload)
     return JSONResponse(payload)

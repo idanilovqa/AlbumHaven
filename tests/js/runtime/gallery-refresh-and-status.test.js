@@ -86,12 +86,14 @@ test('same-query preserve-scroll response retains mounted children for scroll de
       albums: [{ key: 'neal::testimony', name: 'Testimony' }],
     }],
     payload_tier: 'full',
+    inventory_mutation_revision: 13,
   });
   await refresh;
 
   assert.equal(calls.renderView.length, 1);
   assert.equal(calls.renderView[0].preserveMountedGallery, undefined);
   assert.equal(calls.renderView[0].preserveMountedGalleryChildren, true);
+  assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 13);
 });
 
 test('post-scan search refresh rejects a transient active-scan snapshot', async () => {
@@ -3874,6 +3876,38 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
   assert.deepEqual(calls.showToast, []);
 });
 
+test('pollStatus does not reload a foreground view already read at the advanced inventory revision', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.ui.appliedViewInventoryMutationRevision = 13;
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 12,
+  };
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  await flushMicrotasks();
+  if (pendingRequests[1]) {
+    pendingRequests[1].resolveWith({ artist_groups: [] });
+  }
+  await statusRequest;
+
+  assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 13);
+  assert.deepEqual(calls.fetchRequests.map(request => request.url), [
+    '/status',
+  ]);
+  assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
 test('pollStatus defers an inventory refresh while a tag edit owns gallery resources', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};
@@ -6856,6 +6890,28 @@ async function resolveBoundedRootRefreshEndpoint(fixture, index, revision = 'fre
   Object.assign(payload.gallery_page, { anchor_artist: 'A', anchor_group_artist: 'A', anchor_offset: 0 });
   await resolveBoundedRootRefreshPage(fixture, index, payload);
 }
+
+test('canonical full root refresh reconstructs loaded coverage before rendering', async () => {
+  const f = boundedRootRefreshFixture();
+  assert.equal(f.context.rootGalleryRefreshCoverage(
+    '/view-data?surface=albums&gallery_page_size=50&payload_tier=sidebar',
+    { preserveScroll: true },
+  ), 0);
+  const request = f.context.fetchAndRender(
+    '/view-data?surface=albums&gallery_page_size=50&payload_tier=full',
+    false,
+    { preserveScroll: true, preserveAbsoluteScroll: true },
+  );
+
+  await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+
+  assert.equal(f.context.state.view, f.previousView);
+  assert.equal(f.calls.applyViewPayload.length, 0);
+  assert.equal(f.calls.renderView.length, 0);
+  assert.equal(f.pendingRequests.length, 2);
+  f.context.state.ui.activeViewRequestController.abort();
+  assert.equal(await request, false);
+});
 
 function assertBoundedRootRefreshUnapplied(fixture) {
   assert.equal(fixture.context.state.view, fixture.previousView);

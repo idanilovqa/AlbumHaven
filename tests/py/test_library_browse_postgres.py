@@ -2326,12 +2326,12 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     assert connection.commands[:1] == [
         ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", {}),
     ]
-    assert len(connection.commands) == 6
+    assert len(connection.commands) == 5
     missing_reads = [(command, params) for command, params in connection.commands if _is_missing_album_query(command)]
     assert len(missing_reads) == 1
     assert missing_reads[0][1] == {"album_key": None}
     fingerprint_reads = [(command, params) for command, params in connection.commands if "transaction_timestamp() as observed_at" in command]
-    assert len(fingerprint_reads) == 2
+    assert len(fingerprint_reads) == 3
     assert all(params == {} for _command, params in fingerprint_reads)
     identity_reads = [(command, params) for command, params in connection.commands if "files.scan_file_album as album" in command]
     assert identity_reads == []
@@ -11700,7 +11700,7 @@ def test_duplicate_compact_candidates_keep_conflicting_album_rows_for_container_
     assert _duplicate_candidate_ids_from_index(_duplicate_candidate_index_from_rows(rows), ["1"]) == [1, 2]
 
 
-def test_duplicate_candidate_lookup_uses_requested_identity_index_before_global_prewarm(
+def test_duplicate_candidate_cache_only_uses_cached_index_before_postgres_18_lookup(
     monkeypatch,
 ):
     import music_app.services.library_browse_postgres as browse
@@ -11716,7 +11716,9 @@ def test_duplicate_candidate_lookup_uses_requested_identity_index_before_global_
     monkeypatch.setattr(
         browse,
         "_load_duplicate_candidate_album_ids_for_keys",
-        lambda _connection, album_keys: [7, 9] if album_keys == ["one"] else [],
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cache-only lookup must use its current compact index")
+        ),
     )
     monkeypatch.setattr(browse, "_duplicate_identity_helpers_available", lambda _connection: True)
     monkeypatch.setattr(
@@ -11745,7 +11747,7 @@ def test_duplicate_candidate_lookup_uses_requested_identity_index_before_global_
         ["one"],
         repository=repository,
         cache_only=True,
-    ) == [7, 9]
+    ) == [1]
 
 
 def test_duplicate_candidate_lookup_uses_python_identity_before_postgres_18(monkeypatch):
@@ -12243,7 +12245,7 @@ def test_duplicate_absence_miss_does_not_mutate_borrowed_snapshot(monkeypatch):
     assert published["albums"]["new"]["_root_provenance_by_year"][2001]["root_ids"] == ["main"]
 
 
-def test_duplicate_source_attachment_targets_cache_miss_without_global_prewarm(monkeypatch):
+def test_duplicate_source_attachment_defers_pg18_cache_miss_to_global_prewarm(monkeypatch):
     from time import perf_counter
 
     import music_app.services.library_browse_postgres as browse
@@ -12291,16 +12293,9 @@ def test_duplicate_source_attachment_targets_cache_miss_without_global_prewarm(m
 
     elapsed_ms = (perf_counter() - started_at) * 1000
 
-    assert queued == []
-    assert len(connection.queries) == 2
-    candidate_sql, candidate_params = connection.queries[0]
-    source_sql, source_params = connection.queries[1]
-    assert "requested_identities as materialized" in candidate_sql
-    assert candidate_params == {"album_keys": ["one"]}
-    assert "candidate_containers as materialized" in source_sql
-    assert "active_problem_rows" not in source_sql
-    assert source_params == {"album_ids": [7]}
-    assert album["has_duplicate_files"] is False
+    assert queued == ["duplicate-identities"]
+    assert connection.queries == []
+    assert "has_duplicate_files" not in album
     assert elapsed_ms < 250, (
         "interactive duplicate projection cache misses must return within 250 ms; "
         f"measured {elapsed_ms:.1f} ms"
@@ -14560,6 +14555,14 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
     )
+    browse_connections = []
+
+    class BrowseConnection(_ProblematicSnapshotConnectionStub):
+        def __enter__(self):
+            browse_connections.append(self)
+            return self
+
+    repository._browse_connection_context = lambda: BrowseConnection()
     requested_limits = []
     requested_album_ids = []
     requested_missing_limits = []
@@ -14593,6 +14596,7 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
     payload = repository.build_problematic_files_page(limit=2)
 
     assert requested_limits == [2]
+    assert len(browse_connections) == 1
     assert requested_album_ids == [[1, 2]]
     assert requested_missing_limits == [2]
     assert [item["key"] for item in payload["items"]] == ["album-1", "album-2"]

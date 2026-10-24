@@ -1033,8 +1033,9 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   const url = new URL(apiUrl, 'http://localhost');
   if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums'
     || !url.searchParams.has('gallery_page_size')
+    || (url.searchParams.has('payload_tier') && url.searchParams.get('payload_tier') !== 'full')
     || ['q', 'artist', 'genre', 'mood', 'style', 'duration_min', 'duration_max',
-      'related_artist', 'primary_filter', 'gallery_cursor', 'payload_tier', 'root_sidebar']
+      'related_artist', 'primary_filter', 'gallery_cursor', 'root_sidebar']
       .some(key => url.searchParams.has(key))) return 0;
   const scope = state.view.gallery_page_scope || state.view;
   if (String(scope.gallery_scope || '') !== String(url.searchParams.get('gallery_scope') || '')) return 0;
@@ -1543,6 +1544,11 @@ async function fetchAndRender(url, push = true, options = {}) {
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
     applyViewPayload(payloadToApply, responseApplyOptions);
+    const appliedInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    if (Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0) {
+      state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
+    }
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
       artistCount: Number(state.view?.artist_count || 0),
@@ -2238,7 +2244,13 @@ async function pollStatus() {
       if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
         invalidateAllHydratedTrackModalAlbumDetails();
       }
-      state.ui.pendingInventoryMutationViewRefresh = true;
+      const appliedViewInventoryRevision = Number(
+        state.ui.appliedViewInventoryMutationRevision,
+      );
+      if (!Number.isSafeInteger(appliedViewInventoryRevision)
+        || appliedViewInventoryRevision < currentInventoryRevision) {
+        state.ui.pendingInventoryMutationViewRefresh = true;
+      }
     }
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);

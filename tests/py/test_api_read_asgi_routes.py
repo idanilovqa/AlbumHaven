@@ -692,6 +692,7 @@ def test_asgi_active_scan_album_search_prefers_postgres_committed_library_over_t
         "query": "tender",
         "album_count": 1,
         "view_data_source": "postgres_library_browse",
+        "inventory_mutation_revision": 0,
     }
     assert len(postgres_calls) == 1
 
@@ -780,6 +781,7 @@ def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
         "query": "Neal Morse",
         "payload_tier": "search_preview",
         "view_data_source": "postgres_library_browse",
+        "inventory_mutation_revision": 0,
     }
     assert len(postgres_calls) == 1
 
@@ -1061,6 +1063,7 @@ def test_asgi_view_data_scan_guard_preserves_postgres_root_sidebar_routing(
     assert _decode_json(body) == {
         "payload_tier": "sidebar",
         "view_data_source": "postgres_library_browse",
+        "inventory_mutation_revision": 0,
     }
     assert repository_calls == [{"payload_tier": "sidebar", "surface": "library", "gallery_offset": "6"}]
 
@@ -1165,6 +1168,7 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
         "selected_artist": "Mono",
         "album_count": 3,
         "artist_count": 2,
+        "inventory_mutation_revision": 0,
     }
     assert home_payload == {
         "kind": "home",
@@ -1808,6 +1812,7 @@ def test_asgi_selected_artist_without_omit_sidebar_uses_postgres_browse(app, asg
     asgi_app.state.library_state = {
         "albums": ["loaded"],
         "relation_views": {},
+        "inventory_mutation_revision": 13,
     }
 
     def fake_hydrate_library_state_for_config(
@@ -1886,6 +1891,7 @@ def test_asgi_selected_artist_without_omit_sidebar_uses_postgres_browse(app, asg
     assert payload["selected_artist"] == "Broadcast"
     assert payload["artists_sidebar"] == [{"artist": "Broadcast", "artist_display": "Broadcast", "count": 1}]
     assert payload["view_data_source"] == "postgres_library_browse"
+    assert payload["inventory_mutation_revision"] == 13
 
 
 def test_asgi_selected_artist_root_sidebar_composes_only_root_sidebar_fields(
@@ -3196,6 +3202,7 @@ def test_asgi_selected_artist_page_shapes_without_surface_use_postgres_browse(
         "persistence_backend": "postgres",
         "persistence_seam": "library_browse",
         "view_data_source": "postgres_library_browse",
+        "inventory_mutation_revision": 0,
     }
     assert hydrate_calls == []
 

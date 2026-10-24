@@ -4545,6 +4545,7 @@ def test_asgi_edit_tags_completed_warning_returns_committed_values_and_destinati
             destination_album_key="album:telepathic-minds",
             destination_artist="Overhead",
             orphaned_source_artists=["Ovderhead"],
+            inventory_mutation_revision=13,
         )
         kwargs["structural_tag_edit_reservation"].release()
         return {
@@ -4602,6 +4603,7 @@ def test_asgi_edit_tags_completed_warning_returns_committed_values_and_destinati
     assert payload["destination_album_key"] == "album:telepathic-minds"
     assert payload["destination_artist"] == "Overhead"
     assert payload["orphaned_source_artists"] == ["Ovderhead"]
+    assert payload["inventory_mutation_revision"] == 13
 
 
 def test_asgi_edit_tags_disconnect_after_commit_recovers_completed_task(

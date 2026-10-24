@@ -471,6 +471,60 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
   assert.equal(context.state.utility.completeLoadPromise, null);
 });
 
+test('loadProblematicFiles reuses its owned complete request for a concurrent forced load', async () => {
+  const fullResponse = createDeferred();
+  const requestedUrls = [];
+  const detail = {
+    key: 'first',
+    name: 'First detail',
+    detail_loaded: true,
+    tracks: [],
+    repair_preview_rows: [],
+    track_problem_rows: [],
+    problematic_track_paths: [],
+  };
+  const response = (payload) => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return payload;
+    },
+  });
+  const { context } = loadHelper({
+    async fetch(url) {
+      requestedUrls.push(String(url));
+      if (String(url).endsWith('?limit=50')) {
+        return response({
+          complete: false,
+          items: [{ key: 'first', name: 'First', detail_loaded: false }],
+          initial_detail: detail,
+        });
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const firstLoad = context.loadProblematicFiles(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.state.utility.problematicFilesComplete, false);
+  assert.ok(context.state.utility.completeLoadPromise);
+
+  const concurrentLoad = context.loadProblematicFiles(true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/problematic-files?limit=50',
+    '/utilities/problematic-files',
+  ]);
+
+  fullResponse.resolve(response({
+    complete: true,
+    items: [{ key: 'first', name: 'First canonical', detail_loaded: false }],
+    initial_detail: detail,
+  }));
+  await Promise.all([firstLoad, concurrentLoad]);
+});
+
 test('navigation-owned Problematic Files loading paints the bounded page before completion', async () => {
   const fullResponse = createDeferred();
   const { context, calls } = loadHelper({

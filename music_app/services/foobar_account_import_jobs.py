@@ -395,8 +395,11 @@ def _cached_terminal(live,source_ref,job,a):
             or not gate._integer(a['committed_revision'],a['expected_revision'],
                                   min(gate._MAX,a['expected_revision']+1))):
         raise SourceUnavailable()
-    outcome=terminal.decode_foobar_terminal(body,expected_header=_terminal_header(
-        live,source_ref,job,a,a['committed_revision']))
+    try:
+        outcome=terminal.decode_foobar_terminal(body,expected_header=_terminal_header(
+            live,source_ref,job,a,a['committed_revision']))
+    except terminal.FoobarTerminalUnavailable:
+        raise SourceUnavailable() from None
     if job['original_matching_library_id'] is None and any(outcome[i] for i in (18,19,20,21,22)):
         raise SourceUnavailable()
     return body

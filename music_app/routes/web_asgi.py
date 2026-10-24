@@ -253,6 +253,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             ),
             **context,
             "private_ui_context": private_context,
+            "duplicate_recovery_enabled": _app_config(request).get("ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED") is True,
             "account_foobar_allowed": account_foobar_allowed,
             "account_foobar_history_allowed": account_foobar_history_allowed,
             "account_foobar_context": account_foobar_context,

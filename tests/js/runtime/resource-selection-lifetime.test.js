@@ -741,3 +741,63 @@ test('a rejected acquisition cannot retire a currently owned native pane', () =>
   assert.equal(c.getTrackModalSelectionLease(), lease); assert.equal(host.firstElementChild, lease.dialog);
   lease.release();
 });
+
+// Home React ResourceDetail delegates to this genuine selection/modal owner.
+// Keep the renderer, selection lease, transport and recovery controller real.
+function duplicateRenderedEnvironment({allowed = true, enabled = true} = {}) {
+  const env = renderedEnvironment(), {c, document: d, overlay} = env;
+  const original = c.Element.prototype.addEventListener;
+  c.Element.prototype.addEventListener = function(type, handler, options = {}) {
+    const {signal, ...rest} = typeof options === 'object' ? options : {capture: options};
+    if (signal?.aborted) return;
+    original.call(this, type, handler, rest);
+    signal?.addEventListener('abort', () => this.removeEventListener(type, handler, rest), {once: true});
+  };
+  const shell = d.createElement('main'); shell.id = 'app-shell';
+  Object.assign(shell.dataset, {nativeAccountId:'1',nativeLibraryId:'2',privateUiContext:'a'.repeat(64),duplicateRecoveryEnabled:String(enabled)});
+  d.body.append(shell);
+  for (const id of ['track-modal-duplicate-warning','track-modal-duplicate-tabs']) {
+    const node=d.createElement('div');node.id=id;overlay.querySelector('.track-modal-body').append(node);
+  }
+  Object.assign(c,{Headers,TextEncoder,TextDecoder,location:{href:'https://albumhaven.invalid/',origin:'https://albumhaven.invalid/'},
+    crypto:{randomUUID:()=> '00000000-0000-4000-8000-000000000001'}});
+  const requests=[],confirms=[];
+  c.fetch=(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}));
+  c.showAppConfirmDialog=options=>{confirms.push(options);return Promise.resolve(true);};
+  c.showToast=()=>{};d.cookie='__Host-album_haven_csrf=synthetic';
+  for(const name of ['session-csrf-fetch.js','private-ui-transport.js','track-actions.js']) vm.runInContext(read(name),c);
+  c.fetchTrackModalAlbumDetails=async()=>({key:'local:one',name:'Album',tracks:[],allowed_actions:{'library.inventory.manage':allowed}});
+  const selected=target(),owner=c.AlbumHavenResourceSelection.create({sourceResource:()=>selected});
+  const ready=deferred(),failure=deferred();
+  const lease=owner.mountResourceSelection(env.host,{selection:selected,scopeKey:'scope',onState:state=>{if(state==='ready')ready.resolve();},onError:failure.resolve});
+  return {...env,shell,requests,confirms,lease,ready:()=>awaitNative(ready,failure),
+    reply(index,data){requests[index].resolve({ok:true,status:200,json:async()=>({data,context_ref:'a'.repeat(64)})});}};
+}
+const duplicateSettle=async()=>{for(let n=0;n<30;n++)await Promise.resolve();await new Promise(resolve=>setImmediate(resolve));};
+test('Home resource selection mounts recovery in the actual shared album renderer without eager reads', {timeout:5000},async t=>{
+  const env=duplicateRenderedEnvironment();t.after(()=>env.lease.dispose());await env.ready();
+  assert.ok(env.host.querySelector('[data-duplicate-action="load"]'));
+  assert.equal(env.requests.length,0);
+  env.click(env.host.querySelector('[data-duplicate-action="load"]'));await duplicateSettle();
+  assert.match(env.requests[0].url,/duplicate-folders\/choices$/);
+  assert.deepEqual(JSON.parse(env.requests[0].options.body),{album_key:'local:one'});
+  env.reply(0,{sources:[],operations:[{state:'trashed',operation_id:'saved',track_count:2}]});await duplicateSettle();
+  assert.ok(env.host.querySelector('[data-duplicate-action="restore"]'),'restoration stays discoverable without a live source');
+});
+test('Home actual selection leaves recovery absent for denied or default-off users', {timeout:5000},async t=>{
+  for(const options of [{allowed:false},{enabled:false}]){
+    const env=duplicateRenderedEnvironment(options);t.after(()=>env.lease.dispose());await env.ready();
+    assert.equal(env.host.querySelector('[data-duplicate-action]'),null);assert.equal(env.requests.length,0);
+  }
+});
+test('Home selection retirement rejects delayed recovery preview before confirmation or mutation', {timeout:5000},async t=>{
+  const env=duplicateRenderedEnvironment();t.after(()=>env.lease.dispose());await env.ready();
+  env.click(env.host.querySelector('[data-duplicate-action="load"]'));await duplicateSettle();
+  env.reply(0,{sources:[{id:1,label:'Keep'},{id:2,label:'Remove'}],operations:[]});await duplicateSettle();
+  env.click(env.host.querySelector('[data-duplicate-action="keep"][data-duplicate-id="1"]'));
+  env.click(env.host.querySelector('[data-duplicate-action="trash"][data-duplicate-id="2"]'));await duplicateSettle();
+  assert.equal(env.requests.length,2);env.lease.dispose();
+  assert.equal(env.requests[1].options.signal.aborted,true,'retired owner aborts outstanding HTTP read');
+  env.reply(1,{fingerprint:'b'.repeat(64),keep:'Keep',remove:'Remove',track_count:2,file_count:3});await duplicateSettle();
+  assert.equal(env.confirms.length,0);assert.equal(env.requests.length,2);
+});

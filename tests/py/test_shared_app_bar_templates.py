@@ -70,7 +70,7 @@ def render():
     environment = Environment(loader=FileSystemLoader(templates), autoescape=select_autoescape())
 
     def render_template(name="index.html", *, administrator=True):
-        actions = AllowedActions(("accounts.read",) if administrator else ())
+        actions = AllowedActions(("accounts.read", "accounts.create") if administrator else ())
         initial_view = {
             "gallery_scope": "local",
             "gallery_display_mode": "rows",
@@ -235,6 +235,12 @@ def test_settings_shell_owns_bar_above_navigation_with_no_duplicate_sidebar_bran
     assert not navigation.find_all("img"), "Settings must not repeat the logo in its sidebar"
     assert not bar.find_all("form", id="search-form"), "Settings leaves optional library search empty"
     assert ("hidden" in host.attrs) == (template == "index.html")
+
+
+def test_admin_members_shared_gallery_bar_renders_its_add_user_action(render):
+    bar = render("admin-members.html").one(**{"data-gallery-bar-instance": "page"})
+    add_user = bar.one("a", href="/admin/accounts/new")
+    assert add_user.one("span", **{"class": "ui-button__content"}).text.strip() == "Add user"
 
 
 def test_hosted_settings_keeps_bottom_player_outside_both_switchable_shells(render):

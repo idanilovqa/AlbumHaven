@@ -1,7 +1,8 @@
 {% from "partials/gallery-bar.html" import gallery_bar %}
 {# Settings/account pages configure the canonical GalleryBar; they do not own header geometry. #}
 {% macro page_gallery_bar(title, subtitle='', back_href='/', back_label='Back to library', settings_navigation=false) -%}
+{% set actions = caller() if caller is defined else '' %}
 {% call gallery_bar(title, subtitle, class_name='page-gallery-bar', back_href=back_href, back_label=back_label, instance='page', mobile_layout='mobile-primary', settings_navigation=settings_navigation, settings_parent=true) %}
-  {% if caller is defined %}{{ caller() }}{% endif %}
+  {{ actions }}
 {% endcall %}
 {%- endmacro %}

@@ -1184,6 +1184,8 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             dict(album or {}),
             album_context.track_paths,
             internal=True,
+            config=config,
+            preferred_task_id=task_id,
         )
         task_payload = cover_lookup_result(task_id)
     if not task_payload:

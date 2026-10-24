@@ -673,6 +673,7 @@ def _reusable_cover_lookup_task_id(
     requested_track_paths: set[str],
     *,
     config: Mapping[str, object] | None,
+    preferred_task_id: str = "",
 ) -> str:
     def path_key(value: object) -> str:
         text = str(value or "").strip()
@@ -698,6 +699,7 @@ def _reusable_cover_lookup_task_id(
         task_id = str(task.get("id") or "")
         if (
             task_id not in busy_ids
+            and (not preferred_task_id or task_id == preferred_task_id)
             and not bool(task.get("internal"))
             and is_terminal_cover_lookup_task(task)
             and sorted(filter(None, (path_key(path) for path in (task.get("track_paths") or [])))) == normalized_paths
@@ -713,12 +715,18 @@ def create_cover_lookup_task(
     *,
     internal: bool = False,
     config: Mapping[str, object] | None = None,
+    preferred_task_id: str = "",
 ) -> tuple[str, Event]:
-    task_id = "" if internal else _reusable_cover_lookup_task_id(
-        requested_track_paths,
-        config=config,
+    reusable_task_id = (
+        ""
+        if internal and not preferred_task_id
+        else _reusable_cover_lookup_task_id(
+            requested_track_paths,
+            config=config,
+            preferred_task_id=str(preferred_task_id or "").strip(),
+        )
     )
-    task_id = task_id or uuid.uuid4().hex
+    task_id = reusable_task_id or uuid.uuid4().hex
     cancel_event = Event()
     with _COVER_LOOKUP_TASKS_LOCK:
         if task_id in _COVER_LOOKUP_TASKS:
@@ -730,7 +738,7 @@ def create_cover_lookup_task(
         id=task_id,
         status="pending",
         type="cover-art-lookup",
-        internal=bool(internal),
+        internal=bool(internal and not reusable_task_id),
         artist=str(album.get("album_artist") or ""),
         album=str(album.get("name") or album.get("album") or ""),
         year=album.get("year"),

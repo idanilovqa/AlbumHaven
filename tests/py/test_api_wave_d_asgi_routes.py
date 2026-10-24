@@ -2729,14 +2729,29 @@ def test_asgi_cover_lookup_save_remote_accepts_equivalent_snapshot_uuid_after_re
     monkeypatch,
 ):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
 
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
     app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
-    generation = UUID(int=42)
     queued_calls: list[dict[str, object]] = []
+    task_id, _ = cover_lookup_tasks.create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+        config=app.config,
+    )
+    cover_lookup_tasks.update_cover_lookup_task(
+        task_id,
+        config=app.config,
+        status="completed",
+        progress=100,
+        finished_at="2026-10-24T00:00:00+00:00",
+        result_kind="possible-matches",
+    )
+    generation = UUID(task_id)
     reset_cover_lookup_runtime_state()
+    assert [task["id"] for task in list_cover_lookup_tasks(config=app.config)] == [task_id]
 
     class PersistedSnapshotRepository:
         def __init__(self, _config):
@@ -2784,8 +2799,11 @@ def test_asgi_cover_lookup_save_remote_accepts_equivalent_snapshot_uuid_after_re
     )
 
     assert status == 200
-    assert _decode_json(body)["ok"] is True
+    payload = _decode_json(body)
+    assert payload["ok"] is True
+    assert payload["task"]["id"] == generation.hex
     assert len(queued_calls) == 1
+    assert queued_calls[0]["args"][0] == generation.hex
     assert queued_calls[0]["args"][4]["url"] == "https://images.example/youtube.jpg"
 
 

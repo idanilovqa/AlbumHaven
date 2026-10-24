@@ -1,0 +1,96 @@
+{
+  "protocol": 1,
+  "valid": {
+    "refsRequest": {
+      "protocol": 1,
+      "tracks": [
+        {
+          "clientKey": "track-1",
+          "path": "C:/Synthetic/Album/song.flac"
+        }
+      ]
+    },
+    "refsResponse": {
+      "protocol": 1,
+      "expiresAt": "2099-10-24T00:00:00Z",
+      "tracks": [
+        {
+          "clientKey": "track-1",
+          "playbackRef": "playback-ref-1"
+        }
+      ]
+    },
+    "claimRequest": {
+      "protocol": 1,
+      "clientId": "00000000-0000-4000-8000-000000000001",
+      "clientSurface": "private_web",
+      "claimToken": null,
+      "state": "playing",
+      "track": {
+        "playbackRef": "playback-ref-1",
+        "title": "Synthetic Song",
+        "artist": "Synthetic Artist",
+        "album": "Synthetic Album",
+        "artworkUrl": null
+      }
+    },
+    "claimResponse": {
+      "protocol": 1,
+      "claimToken": "claim-token-1",
+      "expiresAt": "2099-10-23T23:00:30Z",
+      "playbackState": {
+        "is_playing_here": true,
+        "is_playing_elsewhere": false,
+        "elsewhere_client_kind": null,
+        "status_label": "Playing here",
+        "can_start_here": true,
+        "expiresAt": "2099-10-23T23:00:30Z",
+        "track": {
+          "title": "Synthetic Song",
+          "artist": "Synthetic Artist",
+          "album": "Synthetic Album",
+          "artworkUrl": null
+        }
+      }
+    }
+  },
+  "invalid": {
+    "pathLeakingClaimRequest": {
+      "protocol": 1,
+      "clientId": "00000000-0000-4000-8000-000000000001",
+      "clientSurface": "private_web",
+      "claimToken": null,
+      "state": "playing",
+      "track": {
+        "playbackRef": "playback-ref-1",
+        "title": "Synthetic Song",
+        "artist": "Synthetic Artist",
+        "album": "Synthetic Album",
+        "artworkUrl": null,
+        "path": "C:/Synthetic/Album/song.flac"
+      }
+    },
+    "unsupportedRefsResponse": {
+      "protocol": 2,
+      "expiresAt": "2099-10-24T00:00:00Z",
+      "tracks": [
+        {
+          "clientKey": "track-1",
+          "playbackRef": "playback-ref-1"
+        }
+      ]
+    },
+    "pathLeakingPlaybackState": {
+      "is_playing_here": false,
+      "is_playing_elsewhere": true,
+      "status_label": "Playing elsewhere",
+      "track": {
+        "title": "Synthetic Song",
+        "artist": "Synthetic Artist",
+        "album": "Synthetic Album",
+        "artworkUrl": null,
+        "path": "C:/Synthetic/Album/song.flac"
+      }
+    }
+  }
+}

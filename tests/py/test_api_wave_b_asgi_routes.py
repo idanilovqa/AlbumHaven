@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+from uuid import uuid4
 
 import pytest
 
@@ -135,6 +136,42 @@ def scoped_history_runtime(app, monkeypatch, ledger):
     return HistoryScope(
         library_id=owner["library_id"], account_id=owner["account_id"], origin_kind="request",
     )
+
+
+@pytest.fixture
+def playback_claim(app, scoped_history_runtime, ledger):
+    from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
+    from music_app.services.playback_references import PlaybackReferenceService
+
+    owner = ledger["own"]
+    root_path = str(Path(owner["path"]).parent)
+    with ledger["connect"]() as connection:
+        connection.execute(
+            "insert into library.library_memberships (library_id, account_id, membership_role) "
+            "values (%s, %s, 'owner')", (owner["library_id"], owner["account_id"]),
+        )
+        root = connection.execute(
+            "insert into library.library_roots (library_id, root_path) values (%s, %s) returning id",
+            (owner["library_id"], root_path),
+        ).fetchone()
+        connection.execute("update library.local_track_files set library_root_id = %s where track_id = %s",
+                           (root["id"], owner["track_id"]))
+    app.config["MUSIC_DIR"] = root_path
+    asgi_app = _make_asgi_app()
+    actor = asgi_app.state.current_actor_resolver.resolve(None)
+    config = {**app.config, **asgi_app.state.auth_policy_config}
+    reference = PlaybackReferenceService(config).issue_batch(actor, [
+        {"clientKey": "history-track", "path": owner["path"]},
+    ])["tracks"][0]["playbackRef"]
+    client_id = str(uuid4())
+    service = PostgresPlaybackClaims(config)
+    claim = service.acquire(actor, client_id=client_id, client_surface="private_web", track={
+        "playbackRef": reference, "title": "Song", "artist": "Artist", "album": "Album", "artworkUrl": None,
+    })
+    try:
+        yield {"clientId": client_id, "claimToken": claim["claimToken"]}
+    finally:
+        service.release(actor, client_id=client_id, claim_token=claim["claimToken"])
 
 
 @pytest.fixture
@@ -1027,6 +1064,7 @@ def test_asgi_lastfm_and_playback_routes_preserve_validation_side_effects(
     monkeypatch,
     local_log_history_items,
     connected_lastfm_session,
+    playback_claim,
 ):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
     from music_app.services.lastfm import LastfmError
@@ -1069,13 +1107,13 @@ def test_asgi_lastfm_and_playback_routes_preserve_validation_side_effects(
         asgi_app,
         "POST",
         "/playback/session/now-playing",
-        json_body={"artist": "Artist", "title": "Song", "trackNumber": "07"},
+        json_body={**playback_claim, "artist": "Artist", "title": "Song", "trackNumber": "07"},
     )
     scrobble_status, _scrobble_headers, scrobble_body = _run_asgi_request(
         asgi_app,
         "POST",
         "/playback/session/scrobble",
-        json_body={"artist": "Artist", "title": "Song", "album": "Album"},
+        json_body={**playback_claim, "artist": "Artist", "title": "Song", "album": "Album"},
     )
 
     assert credentials_status == 503
@@ -1497,6 +1535,7 @@ def test_asgi_playback_session_scrobble_logs_success_history_entry(
     monkeypatch,
     local_log_history_items,
     connected_lastfm_session,
+    playback_claim,
 ):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
@@ -1517,6 +1556,7 @@ def test_asgi_playback_session_scrobble_logs_success_history_entry(
         "POST",
         "/playback/session/scrobble",
         json_body={
+            **playback_claim,
             "artist": "Artist",
             "title": "Song",
             "album": "Album",
@@ -1540,6 +1580,7 @@ def test_asgi_playback_session_scrobble_reports_disconnected_no_send(
     app,
     monkeypatch,
     local_log_history_items,
+    playback_claim,
 ):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
     from music_app.services.lastfm import LastfmSubmissionOutcome
@@ -1561,7 +1602,7 @@ def test_asgi_playback_session_scrobble_reports_disconnected_no_send(
         asgi_app,
         "POST",
         "/playback/session/scrobble",
-        json_body={"artist": "Artist", "title": "Song", "timestamp": 12345},
+        json_body={**playback_claim, "artist": "Artist", "title": "Song", "timestamp": 12345},
     )
 
     assert status == 200
@@ -1579,7 +1620,7 @@ def test_asgi_playback_session_scrobble_reports_disconnected_no_send(
 
 
 def test_asgi_playback_session_complete_persists_listen_history(
-    app, monkeypatch, ledger, connected_lastfm_session,
+    app, monkeypatch, ledger, connected_lastfm_session, playback_claim,
 ):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
@@ -1604,6 +1645,7 @@ def test_asgi_playback_session_complete_persists_listen_history(
         scrobble_eligible=True, track_number="1", request_origin=request_origin,
         segments=[{"start_seconds": 0, "end_seconds": 180}],
     )
+    completion.update(playback_claim)
     asgi_app = _make_asgi_app()
     asgi_app.state.logger = app.logger
     asgi_app.state.library_state = app.library_state

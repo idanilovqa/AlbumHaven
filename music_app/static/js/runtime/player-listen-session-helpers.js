@@ -1,6 +1,7 @@
 const MIN_RECORDED_LISTEN_SECONDS = 10;
 const LISTEN_SESSION_LONG_PAUSE_MS = 60 * 60 * 1000;
 let measuredPlaybackDeviceId = '';
+const pendingPlaybackSessionRequests = new Set();
 
 function newMeasuredPlaybackId() {
   if (typeof crypto === 'undefined') return '';
@@ -124,6 +125,7 @@ function buildNowPlayingPayload(track, session = null) {
   const activeSession = session || state.player.listenSession;
   return {
     ...buildMeasuredCompletionFields(activeSession),
+    ...(typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {}),
     path: String(track.path || ''),
     title: String(track.title || ''),
     artist: String(track.artist || ''),
@@ -150,16 +152,32 @@ function buildPlaybackRequestOrigin() {
 }
 
 async function postPlaybackSession(url, payload) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || 'Playback sync failed');
+  const claim = typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {};
+  const promise = (async () => {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, ...claim }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Playback sync failed');
+    return data;
+  })();
+  const pending = { claimToken: claim.claimToken, promise };
+  pendingPlaybackSessionRequests.add(pending);
+  try {
+    return await promise;
+  } finally {
+    pendingPlaybackSessionRequests.delete(pending);
   }
-  return data;
+}
+
+async function drainPlaybackSessionRequests(claimToken) {
+  while (claimToken) {
+    const pending = [...pendingPlaybackSessionRequests].filter(request => request.claimToken === claimToken);
+    if (!pending.length) return;
+    await Promise.allSettled(pending.map(request => request.promise));
+  }
 }
 
 function ensureListenSession(track = null) {
@@ -322,6 +340,7 @@ async function finalizeListenSession(reason, options = {}) {
     state.player.listenSession = null;
   }
   session.completionState = 'pending';
+  if (session.nowPlayingPromise) await Promise.resolve(session.nowPlayingPromise).catch(() => {});
   if (options.skipCloseSegment !== true) {
     closeListenSegment(options.currentTime, session);
   }
@@ -384,6 +403,34 @@ async function finalizeListenSession(reason, options = {}) {
 
 function getTrackIdentity(track) {
   return `${String(track?.path || '')}::${String(track?.src || '')}`;
+}
+
+async function persistPausedListenSession(session = state.player.listenSession) {
+  if (!session) return false;
+  await Promise.all([session.nowPlayingPromise, session.scrobblePromise]);
+  if (!shouldPersistListenSession(session)
+      || (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects())) return false;
+  const payload = {
+    ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: false }),
+    ended_at: session.paused_at || isoNow(),
+    total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
+    max_contiguous_seconds: Math.round(longestListenedSegmentSeconds(session) * 1000) / 1000,
+    finished_fully: false,
+    skipped: false,
+    completion_reason: 'paused',
+    scrobble_eligible: canScrobbleListenSession(session),
+    scrobbled: Boolean(session.scrobbled),
+    segments: session.segments.map(segment => ({
+      start_seconds: Number(segment.start_seconds || 0), end_seconds: Number(segment.end_seconds || 0),
+    })),
+  };
+  try {
+    await postPlaybackSession('/playback/session/complete', payload);
+    return true;
+  } catch (_error) {
+    return false;
+  }
 }
 
 function flushListenSessionOnUnload(reason = 'unload') {

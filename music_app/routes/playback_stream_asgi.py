@@ -216,9 +216,15 @@ def _gathered_failures(results: list[object]) -> list[BaseException]:
     return [result for result in results if isinstance(result, BaseException)]
 
 
+class _PlaybackCleanupError(RuntimeError):
+    """Cleanup aggregate containing only operation labels and sanitized failures."""
+
+
 def _format_cleanup_failure(error: BaseException) -> str:
-    message = str(error)
-    return message if message else type(error).__name__
+    # Decoder exceptions can contain private media paths or protocol tokens.
+    if isinstance(error, _PlaybackCleanupError):
+        return str(error)
+    return type(error).__name__
 
 
 def _bounded_integer(
@@ -513,15 +519,28 @@ class _PlaybackPcmConnection:
         ):
             return await self._reject_open(CLOSE_INVALID_CONTROL)
 
-        raw_path = control.get("path")
-        if not isinstance(raw_path, str) or not raw_path:
-            return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
-        if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
+        if "path" in control and "playbackRef" in control:
             return await self._reject_open(CLOSE_INVALID_CONTROL)
-        resolved_path = resolve_configured_media_path(
-            self._websocket.app.state.config,
-            raw_path,
-        )
+        if "playbackRef" in control:
+            from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
+            from music_app.routes.playback_control_asgi import playback_config
+
+            try:
+                service = PlaybackReferenceService(playback_config(self._websocket))
+                resolved_path = await asyncio.to_thread(service.resolve,
+                    self._websocket.state.current_actor, control["playbackRef"])
+            except PlaybackContractError:
+                return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+        else:
+            raw_path = control.get("path")
+            if not isinstance(raw_path, str) or not raw_path:
+                return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+            if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
+                return await self._reject_open(CLOSE_INVALID_CONTROL)
+            resolved_path = resolve_configured_media_path(
+                self._websocket.app.state.config,
+                raw_path,
+            )
         if resolved_path is None:
             return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
 
@@ -778,8 +797,7 @@ class _PlaybackPcmConnection:
             if message == "ffmpeg returned truncated partial PCM frame"
             else "decoder_failed"
         )
-        if message.startswith("ffmpeg"):
-            message = "FFmpeg" + message[len("ffmpeg") :]
+        message = "FFmpeg returned truncated partial PCM frame" if error_code == "truncated_pcm" else "Audio decoder failed."
         await self._send_json(
             {
                 "type": "error",
@@ -838,7 +856,9 @@ class _PlaybackPcmConnection:
         failures = _gathered_failures(results)
         if failures:
             details = "; ".join(_format_cleanup_failure(failure) for failure in failures)
-            raise RuntimeError(f"playback stream cleanup failed: {details}")
+            raise _PlaybackCleanupError(
+                f"playback stream cleanup failed: decoder cancel failed: {details}"
+            )
 
     async def reject(self, code: int) -> None:
         await self._finalize(close_code=code)
@@ -892,7 +912,7 @@ class _PlaybackPcmConnection:
                 details = "; ".join(
                     _format_cleanup_failure(failure) for failure in failures
                 )
-                raise RuntimeError(f"playback connection cleanup failed: {details}")
+                raise _PlaybackCleanupError(f"playback connection cleanup failed: {details}")
 
 
 @router.websocket("/playback/pcm")

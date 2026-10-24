@@ -309,17 +309,19 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
 let playerTrackSelectionToken = 0;
 
 async function playTrackFromPayload(track, options = {}) {
+  const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
-  if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(track)) {
+  if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) {
     return false;
   }
+  if (selectionToken !== playerTrackSelectionToken) return false;
+  pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
-  const selectionToken = ++playerTrackSelectionToken;
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
@@ -424,9 +426,8 @@ async function handleStreamingPlaybackEnded(event = {}) {
   handledStreamingEndedIdentity = identity;
   const playback = getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('stopped', track);
-  }
+  const ownershipVersion = typeof getPlaybackOwnershipState === 'function'
+    ? (getPlaybackOwnershipState().requestVersion || 0) : null;
   if (typeof finalizeListenSession === 'function') {
     await finalizeListenSession('ended', {
       session,
@@ -434,6 +435,10 @@ async function handleStreamingPlaybackEnded(event = {}) {
       duration: Number(playback.duration) || 0,
       finishedFully: true,
     });
+  }
+  if (typeof releasePlaybackOwnership === 'function'
+      && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0))) {
+    await releasePlaybackOwnership('stopped', track);
   }
   updatePlayerUi();
 }
@@ -817,13 +822,14 @@ function togglePlayerPlayback(options = {}) {
   if (typeof resumeStreamingPlayback !== 'function'
       || typeof pauseStreamingPlayback !== 'function') return false;
   if (playback.paused) {
-    if (typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(state.player.current)) {
-      return false;
-    }
-    const restart = playback.ended && typeof seekStreamingPlayback === 'function'
-      ? seekStreamingPlayback(0)
-      : null;
-    Promise.resolve(restart).then(() => resumeStreamingPlayback()).then((resumed) => {
+    const track = state.player.current;
+    Promise.resolve().then(async () => {
+      if (typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) return false;
+      if (track !== state.player.current) return false;
+      pendingPlayerPlaybackHandoff = null;
+      if (playback.ended && typeof seekStreamingPlayback === 'function') await seekStreamingPlayback(0);
+      return resumeStreamingPlayback();
+    }).then((resumed) => {
       if (resumed === false) return;
       beginStreamingPlayerListenSession(
         state.player.current,
@@ -841,14 +847,21 @@ function togglePlayerPlayback(options = {}) {
 function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   if (pendingPlayerPlaybackHandoff) return pendingPlayerPlaybackHandoff;
   if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
-  const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(() => {
+  const ownershipVersion = typeof getPlaybackOwnershipState === 'function'
+    ? (getPlaybackOwnershipState().requestVersion || 0) : null;
+  const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
+    if (ownershipVersion !== null && ownershipVersion !== (getPlaybackOwnershipState().requestVersion || 0)) return false;
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {
-      void maybeScrobbleListenSession(state.player.listenSession);
+      await maybeScrobbleListenSession(state.player.listenSession);
     }
-    if (typeof releasePlaybackOwnership === 'function') {
-      releasePlaybackOwnership('paused', state.player.current);
+    if (typeof persistPausedListenSession === 'function') {
+      await persistPausedListenSession(state.player.listenSession);
+    }
+    if (typeof releasePlaybackOwnership === 'function'
+        && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0))) {
+      await releasePlaybackOwnership('paused', state.player.current);
     }
     updatePlayerUi();
     return true;

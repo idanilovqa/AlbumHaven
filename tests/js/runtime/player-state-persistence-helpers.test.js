@@ -333,11 +333,65 @@ test('paired unload events preserve the first rendered snapshot exactly once', (
   renderedCurrentTime = 0;
   context.persistPlayerStateForUnload('beforeunload');
 
-  assert.equal(releaseCalls, 1);
+  assert.equal(releaseCalls, 0, 'unload leaves claim expiry to bound recovery after final beacon effects');
   assert.deepEqual(flushedReasons, ['pagehide']);
   assert.deepEqual(storedSnapshots.map((snapshot) => snapshot.paused), [false]);
   assert.equal(storedSnapshots.at(-1).currentTime, 3.22);
   assert.equal(storedSnapshots.at(-1).paused, false);
+});
+
+test('active restore awaits server ownership before requesting autoplay', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  const starts = [];
+  let initialPageshow = null;
+  const restoredTrack = {
+    src: '/track?path=restored.flac',
+    path: 'C:/Music/restored.flac',
+    title: 'Restored',
+    artist: 'Artist',
+    album: 'Album',
+    coverPath: '',
+  };
+  const context = loadHelper({
+    state: {
+      player: {
+        current: null,
+        lastKnownWasPlaying: false,
+        lastPersistedSnapshot: '',
+        restoredFromStorage: false,
+        playbackQueue: null,
+      },
+    },
+    getLocalStorageItem: () => JSON.stringify({
+      track: restoredTrack,
+      playbackQueue: null,
+      currentTime: 18,
+      paused: false,
+      loop: { active: false, start: 0, end: 0 },
+    }),
+    canRestoreActivePlayback: () => claim,
+    startStreamingTrack: async (track, options) => { starts.push({ track, options }); },
+    setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+    resolveAlbumForPlayerTrack: () => null,
+    window: {
+      addEventListener(type, listener) {
+        if (type === 'pageshow') initialPageshow = listener;
+      },
+    },
+  });
+
+  context.restorePlayerState();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof initialPageshow, 'function');
+  initialPageshow();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(starts, [], 'restore cannot treat a pending Promise as authorization');
+
+  resolveClaim(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].options.autoplay, true);
 });
 
 test('unload preserves the rendered playhead before playback ownership teardown', () => {

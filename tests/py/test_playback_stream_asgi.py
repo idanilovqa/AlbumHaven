@@ -2901,7 +2901,8 @@ def test_registry_shutdown_waits_for_racing_reject_cleanup_when_close_raises():
     asyncio.run(scenario())
 
 
-def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resources():
+@pytest.mark.parametrize("private_detail", ["", r"C:\private\music\track.flac Bearer secret-playback-token"])
+def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resources(private_detail, caplog):
     class ShutdownWebSocketDouble:
         async def close(self, *, code: int) -> None:
             assert code == 1001
@@ -2915,7 +2916,7 @@ def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resou
         async def cancel(self) -> None:
             self.cancel_calls += 1
             if self.cancel_error:
-                raise RuntimeError("decoder cancel failed")
+                raise RuntimeError("decoder cancel failed " + private_detail)
 
     async def scenario() -> None:
         registry = playback_stream_asgi.PlaybackPcmRegistry()
@@ -2944,8 +2945,14 @@ def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resou
             "continuity": continuity,
         }
 
-        with pytest.raises(RuntimeError, match="decoder cancel failed"):
+        with pytest.raises(RuntimeError, match="decoder cancel failed") as failure:
             await registry.shutdown()
+
+        assert "RuntimeError" in str(failure.value)
+        if private_detail:
+            for secret in (r"C:\private\music\track.flac", "secret-playback-token"):
+                assert secret not in str(failure.value)
+                assert secret not in caplog.text
 
         assert failing_decoder.cancel_calls == 1
         assert healthy_decoder.cancel_calls == 1

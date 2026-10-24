@@ -89,6 +89,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/loops/pitch-preview/{preview_id}"): "library.loops.media.read",
     ("GET", "/utilities/cover-lookup/remote-image"): "library.covers.remote.read",
     ("GET", "/playback/waveform"): "library.media.read",
+    ("POST", "/playback/refs"): "library.media.read",
+    ("GET", "/playback/state"): "library.media.read",
+    ("PUT", "/playback/state"): "library.media.read",
+    ("DELETE", "/playback/state"): "library.media.read",
     ("POST", "/refresh-api"): "library.refresh",
     (
         "POST",

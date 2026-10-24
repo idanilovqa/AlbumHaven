@@ -203,9 +203,7 @@ function persistPlayerStateForUnload(reason) {
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('paused', state.player.current);
-  }
+  // Let the lease expire: an unload release could overtake the final beacon.
   flushListenSessionOnUnload(reason);
   persistPlayerState(true, {
     preservePlayingState: true,
@@ -234,10 +232,10 @@ function restorePlayerState() {
   const savedPaused = typeof parsed.paused === 'boolean'
     ? parsed.paused
     : !Boolean(parsed.wasPlaying);
-  const canResumePlayback = !savedPaused
-    && (typeof canRestoreActivePlayback !== 'function'
-      || Boolean(canRestoreActivePlayback(parsed)));
+  const ownershipResult = !savedPaused
+    && (typeof canRestoreActivePlayback !== 'function' || canRestoreActivePlayback(parsed));
   const restore = async () => {
+    let canResumePlayback = false;
     state.player.playbackQueue = null;
     const restoredQueue = restorePersistedPlaybackQueue(parsed, track.path);
     const restoredQueueHasAlbumSnapshot = restoredQueue
@@ -286,15 +284,20 @@ function restorePlayerState() {
       updatePlayerUi();
       persistPlayerState(true);
     };
-    const startRestoredRole = () => startStreamingTrack(track, {
+    const startWithOwnership = (allowed) => {
+      canResumePlayback = Boolean(allowed);
+      return startStreamingTrack(track, {
       startSeconds: boundedTime,
       autoplay: canResumePlayback,
       ...(canResumePlayback ? {
         allowSuspendedAutoplayFallback: true,
         onAutoplayStarted: completeRestoredAutoplay,
       } : {}),
-    });
-    const restoredRolePromise = canResumePlayback
+      });
+    };
+    const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
+      ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
+    const restoredRolePromise = !savedPaused
       && typeof window !== 'undefined'
       && typeof window.addEventListener === 'function'
       ? new Promise((resolve, reject) => {

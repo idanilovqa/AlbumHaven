@@ -53,7 +53,47 @@ function loadHelper(overrides = {}) {
   return { context, fetchCalls, beaconCalls };
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
 async function run() {
+  {
+    const pending = deferred();
+    const { context } = loadHelper({
+      getPlaybackClaimContext: () => ({ clientId: 'browser-client', claimToken: 'claim-token' }),
+      fetch: () => pending.promise,
+    });
+    const request = context.postPlaybackSession('/playback/session/now-playing', { title: 'Song' });
+    let drained = false;
+    const drain = context.drainPlaybackSessionRequests('claim-token').then(() => { drained = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(drained, false);
+
+    pending.resolve({ ok: true, json: async () => ({ ok: true }) });
+    await request;
+    await drain;
+    assert.equal(drained, true);
+  }
+  {
+    const pending = deferred();
+    const { context } = loadHelper({
+      getPlaybackClaimContext: () => ({ clientId: 'browser-client', claimToken: 'claim-token' }),
+      fetch: () => pending.promise,
+    });
+    const request = context.postPlaybackSession('/playback/session/complete', { title: 'Song' });
+    const drain = context.drainPlaybackSessionRequests('claim-token');
+    pending.reject(new Error('network unavailable'));
+
+    await assert.rejects(request, /network unavailable/);
+    await assert.doesNotReject(drain);
+  }
   {
     const rawTitle = 'Track Two (feat. Guest Singer)';
     const scrobbleSession = {
@@ -371,6 +411,7 @@ async function run() {
       completionState: '',
     };
     const { context, beaconCalls } = loadHelper({
+      getPlaybackClaimContext: () => ({ clientId: 'unload-client', claimToken: 'unload-claim' }),
       state: {
         player: {
           listenSession: flushSession,
@@ -386,6 +427,11 @@ async function run() {
     assert.equal(beaconCalls.length, 2);
     assert.equal(beaconCalls[0][0], '/playback/session/complete');
     assert.equal(beaconCalls[1][0], '/playback/session/scrobble');
+    for (const [, body] of beaconCalls) {
+      const payload = JSON.parse(await body.text());
+      assert.equal(payload.clientId, 'unload-client');
+      assert.equal(payload.claimToken, 'unload-claim');
+    }
     assert.equal(context.state.player.listenSession, null);
   }
   {
@@ -544,6 +590,66 @@ async function run() {
     assert.equal(fetchCalls[fetchCalls.length - 1][0], '/playback/session/complete');
     const pausedPayload = JSON.parse(fetchCalls[fetchCalls.length - 1][1].body);
     assert.equal(pausedPayload.ended_at, '2026-05-14T00:00:25Z');
+  }
+  {
+    let currentTime = 30;
+    const track = {
+      path: 'C:/Music/song.flac', title: 'Song', artist: 'Artist', album: 'Album',
+      coverPath: '', trackNumber: '1',
+    };
+    const session = {
+      track,
+      started_at: '2026-05-14T00:00:00Z',
+      started_at_unix: 1778716800,
+      ended_at: '',
+      duration_seconds: 120,
+      segments: [{ start_seconds: 0, end_seconds: 30 }],
+      segmentActive: false,
+      activeSegmentStartSeconds: 0,
+      paused_at: '2026-05-14T00:00:30Z',
+      paused_at_unix_ms: 1000,
+      pause_offset_seconds: 30,
+      scrobbled: false,
+      completionState: '',
+      measurement: {
+        deviceId: 'browser-device',
+        sessionId: 'measured-session',
+        sequence: 0,
+        total: 30,
+        contiguous: 30,
+        longest: 30,
+      },
+    };
+    const { context, fetchCalls } = loadHelper({
+      state: { player: { current: track, listenSession: session } },
+      Date: { now: () => 1001 },
+      getPlayerPlaybackSnapshot: () => ({ currentTime, duration: 120 }),
+      getPlaybackClaimContext: () => ({ clientId: 'browser-client', claimToken: 'claim-token' }),
+    });
+
+    assert.equal(await context.persistPausedListenSession(session), true);
+    const pausedPayload = JSON.parse(fetchCalls.at(-1)[1].body);
+    assert.equal(pausedPayload.session_id, 'measured-session');
+    assert.equal(pausedPayload.sequence, 1);
+    assert.equal(pausedPayload.finalized, false);
+
+    const resumed = await context.resumeListenSessionPlayback(track, 30);
+    assert.strictEqual(resumed, session, 'short pause resumes the same measured listen');
+    currentTime = 60;
+    session.measurement.total = 60;
+    session.measurement.contiguous = 60;
+    session.measurement.longest = 60;
+    await context.finalizeListenSession('ended', {
+      session,
+      currentTime,
+      duration: 120,
+      finishedFully: true,
+    });
+    const finalPayload = JSON.parse(fetchCalls.at(-1)[1].body);
+    assert.equal(finalPayload.session_id, pausedPayload.session_id);
+    assert.equal(finalPayload.sequence, 3);
+    assert.equal(finalPayload.finalized, true);
+    assert.equal(finalPayload.completion_reason, 'ended');
   }
   {
     let nowValue = 0;

@@ -1,0 +1,72 @@
+/* Account-owned Foobar surface; shared Button and CompactDataTable own primitives. */
+.foobar-import {
+  min-width: 0;
+  max-width: 68rem;
+  line-height: 1.5;
+}
+.foobar-import [hidden] { display: none !important; }
+.foobar-import p { overflow-wrap: anywhere; }
+.foobar-import__group {
+  min-width: 0;
+  margin: 1.25rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border-color, #7777);
+  border-radius: .5rem;
+}
+.foobar-import__group legend { padding: 0 .35rem; font-weight: 600; }
+.foobar-import__field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: .35rem;
+  max-width: 42rem;
+  min-width: 0;
+  margin: .75rem 0;
+}
+.foobar-import__field > input,
+.foobar-import__field > select {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  font: inherit;
+}
+.foobar-import__field input[type="file"] { padding: .4rem 0; }
+.foobar-import__check { display: flex; align-items: flex-start; gap: .65rem; margin: .75rem 0; }
+.foobar-import__check input { flex: 0 0 auto; width: 1.15rem; height: 1.15rem; margin-top: .2rem; }
+.foobar-import__actions { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; margin: .8rem 0; }
+.foobar-import__actions .ui-button { max-width: 100%; white-space: normal; }
+.foobar-import__hint { font-size: .925em; }
+.foobar-import__status { font-weight: 600; }
+.foobar-import__error,
+.foobar-import__caution { padding: .75rem; border-inline-start: .25rem solid currentColor; }
+.foobar-import__error { font-weight: 600; }
+.foobar-import__review,
+.foobar-import__job { min-width: 0; margin-block: 1.5rem; }
+.foobar-import__personal {
+  min-width: 0;
+  margin-block: 1.5rem;
+  padding: 1rem;
+  border: 2px solid var(--border-color, #7777);
+  border-radius: .5rem;
+}
+.foobar-import__personal > h4 { margin-top: 0; }
+.foobar-import__conflict-check { margin: 0; }
+.foobar-import__conflict-check:has(input:disabled) { opacity: .75; }
+.foobar-import__table { max-width: 100%; min-width: 0; overflow-x: auto; margin-block: .75rem; }
+.foobar-import__table [role="cell"] { min-width: 0; overflow-wrap: anywhere; }
+.foobar-import__progress { display: block; width: 100%; height: 1.15rem; margin: .75rem 0; }
+.foobar-import__details { min-width: 0; margin: 1rem 0; }
+.foobar-import__details > summary { cursor: pointer; padding-block: .45rem; font-weight: 600; }
+.foobar-import :is(input, select, button, summary, [tabindex]):focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+@media (max-width: 600px) {
+  .foobar-import__group { padding: .75rem; }
+  .foobar-import__personal { padding: .75rem; }
+  .foobar-import__actions { align-items: stretch; }
+  .foobar-import__actions .ui-button { flex: 1 1 12rem; }
+  .foobar-import__table { max-width: 100%; }
+}

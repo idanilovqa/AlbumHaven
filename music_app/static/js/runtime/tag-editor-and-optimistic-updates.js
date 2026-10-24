@@ -2077,6 +2077,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
+  DuplicateFolderRecoveryUI.mount(album, els.duplicateWarning, resolvedAlbumKey);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   const evidenceRows = [];
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength, evidenceRows);
@@ -2667,3 +2668,99 @@ async function confirmProblemSuggestions() {
     syncProblemSuggestionSelection();
   }
 }
+
+const DuplicateFolderRecoveryUI = (() => {
+  let active = null;
+  function mount(album, host, albumKey) {
+    active?.abort(); active = null;
+    if (!host || document.getElementById('app-shell')?.dataset?.duplicateRecoveryEnabled !== 'true'
+      || album?.allowed_actions?.['library.inventory.manage'] !== true
+      || trackModalPresentationRestrictions?.can_open_album_page === false) return;
+    const controller = new AbortController(), scope = TrackActionsRuntime.scope().token;
+    active = controller;
+    const panel = document.createElement('div');
+    panel.setAttribute('data-duplicate-folder-recovery', '');
+    controller.signal.addEventListener('abort', () => panel.remove(), {once: true});
+    host.append(panel); host.hidden = false;
+    let busy = false, keep = null, choices = null;
+    const current = () => !controller.signal.aborted && panel.isConnected
+      && !panel.closest('[hidden], [inert]')
+      && (typeof isTrackModalContentVisible !== 'function' || isTrackModalContentVisible())
+      && TrackActionsRuntime.scope().token === scope
+      && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey;
+    const button = (label, action, id, disabled = false) => ButtonComponent.renderButton({
+      label, variant: 'secondary', disabled,
+      attributes: {'data-duplicate-action': action, ...(id === undefined ? {} : {'data-duplicate-id': String(id)})},
+    });
+    const paint = () => {
+      if (!current()) return;
+      if (!choices) {panel.innerHTML = button('Manage duplicate copies', 'load', undefined, busy); return;}
+      panel.innerHTML = choices.sources.map(source => button(
+        keep === source.id ? `Keeping ${source.label}` : `Keep ${source.label}`, 'keep', source.id, busy)
+        + button(`Trash ${source.label}`, 'trash', source.id, busy || keep === null || keep === source.id)).join('')
+        + choices.operations.filter(op => op.state !== 'restored').map(op => button(
+          op.state === 'trashed' ? `Restore ${op.track_count} tracks` : 'Reconcile pending move',
+          op.state === 'trashed' ? 'restore' : 'reconcile', op.operation_id, busy)
+          + (op.state === 'pending_trash' ? button('Cancel pending move / restore', 'restore', op.operation_id, busy) : '')).join('')
+        + button('Refresh copies', 'load', undefined, busy);
+    };
+    const request = async (action, body) => {
+      if (!current()) throw Object.assign(new Error('Duplicate selection was superseded.'), {name: 'AbortError'});
+      const response = await PrivateUITransport.request(`/api/library/duplicate-folders/${action}`, {
+        method: 'POST', body, signal: controller.signal, isCurrent: current,
+      });
+      if (!current()) throw Object.assign(new Error('Duplicate selection was superseded.'), {name: 'AbortError'});
+      return response.data;
+    };
+    const load = async () => {
+      choices = await request('choices', {album_key: albumKey});
+      if (!Array.isArray(choices?.sources) || !Array.isArray(choices?.operations)) throw new Error('Invalid recovery response.');
+      if (!choices.sources.some(source => source.id === keep)) keep = null;
+    };
+    panel.addEventListener('click', async event => {
+      const target = event.target.closest('[data-duplicate-action]');
+      if (!target || !panel.contains(target) || busy || !current()) return;
+      const action = target.dataset.duplicateAction, id = target.dataset.duplicateId;
+      if (action === 'keep') {keep = Number(id); paint(); return;}
+      busy = true; paint();
+      let mutationStarted = false;
+      try {
+        if (action === 'load') await load();
+        else if (action === 'trash') {
+          if (!Number.isInteger(keep) || keep === Number(id)) return;
+          const body = {album_key: albumKey, keep_id: keep, remove_id: Number(id)};
+          const preview = await request('preview', body);
+          const accepted = await showAppConfirmDialog({title: 'Move duplicate copy to trash?',
+            message: `Keep ${preview.keep}. Move ${preview.remove} (${preview.track_count} tracks, ${preview.file_count} files) to recoverable trash. Nothing is permanently deleted.`,
+            acceptLabel: 'Move to trash', cancelLabel: 'Cancel', danger: true});
+          if (!accepted || !current()) return;
+          const command = {...body, fingerprint: preview.fingerprint, operation_id: crypto.randomUUID()};
+          mutationStarted = true;
+          await request('trash', command);
+          if (current()) {invalidateHydratedTrackModalAlbumDetails([album]); await load();}
+        } else if (action === 'restore' || action === 'reconcile') {
+          const operation = choices.operations.find(op => op.operation_id === id);
+          if (!operation) return;
+          const accepted = await showAppConfirmDialog({title: action === 'restore' ? 'Restore this copy?' : 'Reconcile this move?',
+            message: action === 'restore' ? 'Restore the copy to its original folder. Existing files will never be overwritten.'
+              : 'Check the saved operation and finish its original move only if the exact source is still unchanged.',
+            acceptLabel: action === 'restore' ? 'Restore' : 'Reconcile', cancelLabel: 'Cancel'});
+          if (!accepted || !current()) return;
+          mutationStarted = true;
+          await request(action, {operation_id: id});
+          if (current()) {invalidateHydratedTrackModalAlbumDetails([album]); await load();}
+        }
+        if (mutationStarted && current()) {
+          showToast('Duplicate copy updated. Refresh the album to see its current files.', 'info', 4500);
+        }
+      } catch (error) {
+        if (mutationStarted) choices = null;
+        if (current()) showToast(mutationStarted
+          ? 'The outcome is not confirmed. Refresh copies and reconcile the saved operation; do not repeat the move.'
+          : (error?.message || 'Duplicate recovery is unavailable.'), 'error', 6500);
+      } finally {busy = false; paint();}
+    }, {signal: controller.signal});
+    paint();
+  }
+  return Object.freeze({mount});
+})();

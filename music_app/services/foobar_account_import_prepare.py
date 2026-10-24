@@ -382,8 +382,14 @@ def _collect_sources(connection, live, *, payload, proof, first, command, ticket
     Both complete scans must terminate successfully, even after a capacity stop.
     These are private source records, never a ready or committed response.
     """
+    from .foobar_account_import_apply import _scalar_counter_phase_bytes
     controls = _caller_controls(plans,states,len(lookup_result.identities))
     sizes = []
+    # Scalar-only lower bound; it excludes every header/state/row delimiter.
+    # Each additional row adds positive disjoint hex bytes, so this bound and
+    # the existing scalar-counter reservation are monotone in prefix length.
+    # No suffix can fit after this lower bound fails. Still drain both scans.
+    minimum_prepared_bytes = 0
     stopped = False
     scan = indexed.iter_source_rows(payload, offset=command.offset)
     try:
@@ -419,6 +425,11 @@ def _collect_sources(connection, live, *, payload, proof, first, command, ticket
                 stopped = True
                 continue
             sizes.append(_SizedSource(size,n,record_size))
+            minimum_prepared_bytes += 2*(item.identity_bytes+n+size.evidence_bytes+size.display_bytes)
+            if (minimum_prepared_bytes > envelope.MAX_BYTES
+                    or _scalar_counter_phase_bytes(minimum_prepared_bytes,
+                        source_count=len(sizes),taste_count=0)+REVIEW_CONTROL_BYTES > MAX_PRIVATE_BYTES):
+                stopped = True
     finally:
         scan.close()
     sizes = tuple(sizes)

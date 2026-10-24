@@ -749,7 +749,7 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     if payload.get("measurement_version") is not None:
         try:
             result, status = await run_in_threadpool(record_playback_session_complete, config,
-                {**payload, "finalized": False}, account_id=trusted.account_id, library_id=trusted.library_id,
+                {**payload, "finalized": payload.get("finalized", False)}, account_id=trusted.account_id, library_id=trusted.library_id,
                 lastfm_session=session, user_timezone="UTC",
                 normalize_playback_track_payload=normalize_playback_track_payload,
                 is_meaningful_listen_session=is_meaningful_listen_session,

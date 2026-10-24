@@ -3028,7 +3028,7 @@ function loadLeaseRecoveryRuntime(harness) {
 }
 
 for (const interruptionMs of [1_000, 3_600_001]) {
-  test(`lease interruption of ${interruptionMs}ms resets contiguous listening and honors long-pause splitting`, async () => {
+  test(`lease interruption of ${interruptionMs}ms resets contiguous listening while preserving session identity`, async () => {
     const harness = createEngineHarness({ measuredListening: true });
     loadLeaseRecoveryRuntime(harness);
     const { context } = harness;
@@ -3066,15 +3066,8 @@ for (const interruptionMs of [1_000, 3_600_001]) {
       await harness.settle();
       consumeTwentySeconds();
       const resumed = context.state.player.listenSession;
-      if (interruptionMs > 3_600_000) {
-        assert.notEqual(resumed.measurement.sessionId, original.measurement.sessionId,
-          'an ownership interruption exceeding one hour must start a new measured session');
-        assert.equal(original.measurement.total, 20);
-        assert.equal(resumed.measurement.total, 20);
-      } else {
-        assert.strictEqual(resumed, original);
-        assert.equal(resumed.measurement.total, 40, 'interrupted silence adds no measured time');
-      }
+      assert.strictEqual(resumed, original, 'time-only interruption must not create another provider identity');
+      assert.equal(resumed.measurement.total, 40, 'interrupted silence adds no measured time');
       assert.equal(resumed.measurement.longest, 20,
         'separate audible intervals must not merge across ownership loss');
     } finally {

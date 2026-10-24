@@ -344,6 +344,81 @@ def test_shared_protocol_fixtures_match_live_reference_and_claim_contracts(playb
     assert invalid["track"]["path"] not in str(failure.value)
 
 
+@pytest.mark.parametrize("heard_before_pause", [30, 70])
+def test_durable_pause_then_two_hour_resume_scrobbles_once_and_retains_statistics(
+    playback_inventory, playback_app, monkeypatch, heard_before_pause,
+):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services.listen_history import build_measured_playback_statistics
+
+    fixture = playback_inventory
+    configure_native_app(playback_app, fixture)
+    provider_calls = []
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: {"key": "test-session"})
+    monkeypatch.setattr(routes, "scrobble_track", lambda *args, **kwargs: provider_calls.append(args))
+    clock = lambda: datetime.now(timezone.utc)
+    claims = claims_service(fixture, clock)
+    reference = issue(reference_service(fixture, clock), fixture)["tracks"][0]["playbackRef"]
+    client_id = str(uuid4())
+    track = {"playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    claim = claims.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track)
+    started = datetime.now(timezone.utc) - timedelta(seconds=heard_before_pause)
+    payload = {
+        "clientId": client_id, "claimToken": claim["claimToken"], "path": fixture.paths[1],
+        "title": "Track", "artist": "Owner", "album": "Album", "duration_seconds": 120,
+        "started_at": started.isoformat(), "started_at_unix": int(started.timestamp()),
+        "ended_at": (started + timedelta(seconds=heard_before_pause)).isoformat(),
+        "measurement_version": "rendered-pcm-v1", "device_id": str(uuid4()), "session_id": str(uuid4()),
+        "sequence": 1, "finalized": True, "measured_listened_seconds": heard_before_pause,
+        "max_measured_contiguous_seconds": heard_before_pause, "total_listened_seconds": heard_before_pause,
+        "max_contiguous_seconds": heard_before_pause, "completion_reason": "paused", "finished_fully": False,
+        "skipped": False, "segments": [{"start_seconds": 0, "end_seconds": heard_before_pause}],
+    }
+    def statistics():
+        return build_measured_playback_statistics(fixture.config, account_id=fixture.actor.account_id,
+                                                library_id=fixture.actor.current_library_id)
+
+    baseline = statistics()
+    for _ in range(2):
+        status, _, body = run_asgi_request(playback_app, "POST", "/playback/session/complete", json_body=payload)
+        assert status == 200, decode_json(body)
+    claims.release(fixture.actor, client_id=client_id, claim_token=claim["claimToken"])
+    assert run_asgi_request(playback_app, "POST", "/playback/session/complete", json_body=payload)[0] == 403
+    assert statistics() == {"local_playcount": baseline["local_playcount"] + 1,
+                            "total_listening_seconds": baseline["total_listening_seconds"] + heard_before_pause}
+    assert len(provider_calls) == int(heard_before_pause >= 60)
+
+    resumed = claims.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track)
+    resumed_payload = {**payload, "claimToken": resumed["claimToken"], "sequence": 2,
+                       "ended_at": (started + timedelta(hours=2, seconds=heard_before_pause + 40)).isoformat(),
+                       "measured_listened_seconds": heard_before_pause + 40,
+                       "total_listened_seconds": heard_before_pause + 40,
+                       "max_measured_contiguous_seconds": max(heard_before_pause, 40),
+                       "max_contiguous_seconds": max(heard_before_pause, 40)}
+    try:
+        for _ in range(2):
+            status, _, body = run_asgi_request(playback_app, "POST", "/playback/session/scrobble", json_body=resumed_payload)
+            assert status == 200, decode_json(body)
+        for _ in range(2):
+            status, _, body = run_asgi_request(playback_app, "POST", "/playback/session/complete",
+                                             json_body={**resumed_payload, "sequence": 3})
+            assert status == 200, decode_json(body)
+        for malformed in (None, "true", 1, []):
+            assert run_asgi_request(playback_app, "POST", "/playback/session/scrobble",
+                                   json_body={**resumed_payload, "sequence": 4, "finalized": malformed})[0] == 400
+        assert len(provider_calls) == 1, "same-session pause/resume and retries must not duplicate provider submissions"
+        assert statistics() == {"local_playcount": baseline["local_playcount"] + 1,
+                                "total_listening_seconds": baseline["total_listening_seconds"] + heard_before_pause + 40}
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            rows = connection.execute("select finalized, last_sequence from integration.listen_history "
+                                      "where session_id=%s and account_id=%s and library_id=%s",
+                                      (payload["session_id"], fixture.actor.account_id,
+                                       fixture.actor.current_library_id)).fetchall()
+        assert len(rows) == 1 and rows[0]["finalized"] is True and rows[0]["last_sequence"] == 3
+    finally:
+        claims.release(fixture.actor, client_id=client_id, claim_token=resumed["claimToken"])
+
+
 def test_http_reference_and_claim_lifecycle_round_trip(playback_inventory, playback_app):
     fixture = playback_inventory
     configure_native_app(playback_app, fixture)

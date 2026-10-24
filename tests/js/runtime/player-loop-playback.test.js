@@ -626,6 +626,67 @@ for (const transition of ['resume', 'new-track']) {
   });
 }
 
+test('pause awaiting an old scrobble cannot checkpoint a newer playing session', async () => {
+  let finishScrobble;
+  const pendingScrobble = new Promise(resolve => { finishScrobble = resolve; });
+  const ownership = { requestVersion: 1 };
+  const checkpoints = [];
+  const releases = [];
+  const { context } = loadHelper({
+    getPlaybackOwnershipState: () => ownership,
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120, paused: false }),
+    pauseStreamingPlayback: async () => true,
+    maybeScrobbleListenSession: () => pendingScrobble,
+    persistPausedListenSession: async session => { checkpoints.push(session); return true; },
+    releasePlaybackOwnership: async (...args) => { releases.push(args); },
+  });
+  context.state.player.listenSession = { id: 'old-session' };
+  const pause = context.pausePlayerPlaybackForHandoff();
+  await new Promise(resolve => setImmediate(resolve));
+  ownership.requestVersion += 1;
+  context.state.player.current = { path: 'new.flac', src: '/track?path=new.flac' };
+  const playingSession = { id: 'new-session', segmentActive: true };
+  context.state.player.listenSession = playingSession;
+  finishScrobble(true);
+  await pause;
+  assert.deepEqual(checkpoints, [], 'an old scrobble response must not finalize the new audible listen as paused');
+  assert.deepEqual(releases, []);
+  assert.strictEqual(context.state.player.listenSession, playingSession);
+});
+
+for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
+  test(`pause checkpoint ${outcome} reports only a current genuine save failure`, async () => {
+    const ownership = { requestVersion: 1 };
+    const warnings = [];
+    const releases = [];
+    const session = { id: 'paused-session' };
+    const { context } = loadHelper({
+      getPlaybackOwnershipState: () => ownership,
+      getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120, paused: false }),
+      pauseStreamingPlayback: async () => true,
+      maybeScrobbleListenSession: async () => false,
+      persistPausedListenSession: async () => {
+        if (outcome === 'nothing-to-save') return false;
+        if (outcome === 'superseded-failure') ownership.requestVersion += 1;
+        throw new Error('checkpoint rejected');
+      },
+      showToast: (...args) => { warnings.push(args); },
+      releasePlaybackOwnership: async (...args) => { releases.push(args); return true; },
+    });
+    context.state.player.listenSession = session;
+    const result = await context.pausePlayerPlaybackForHandoff();
+    assert.equal(warnings.length, outcome === 'failure' ? 1 : 0);
+    if (outcome === 'failure') {
+      assert.equal(result, false, 'failed persistence must not report successful save');
+      assert.equal(warnings[0][1], 'error');
+      assert.equal(warnings[0][2], 4200);
+    }
+    assert.equal(releases.length, outcome === 'superseded-failure' ? 0 : 1,
+      'a failed save must not retain the playback lease indefinitely');
+    assert.strictEqual(context.state.player.listenSession, session);
+  });
+}
+
 test('an old pause completion cannot release a newer playback claim', async () => {
   let resolveEffects;
   const pendingEffects = new Promise((resolve) => { resolveEffects = resolve; });

@@ -72,8 +72,9 @@ def test_immediate_scrobble_then_final_completion_preserves_server_receipt(ledge
     from music_app.routes import api_wave_b_asgi_routes as wave
     from music_app.services import current_actor_asgi
     owner = ledger['own']; entry = payload(ledger); entry['finalized'] = False
-    actor = SimpleNamespace(account_id=owner['account_id'], is_authenticated=True, current_library_id=owner['library_id'],
-                            library_relationships=(SimpleNamespace(library_id=owner['library_id']),))
+    from tests.py.test_settings_measured_completion_scope import authorized_playback
+    actor, config, claim = authorized_playback(ledger)
+    entry.update(claim)
     async def resolve(_request): return actor
     async def body(): return entry
     calls=[]
@@ -86,7 +87,7 @@ def test_immediate_scrobble_then_final_completion_preserves_server_receipt(ledge
     monkeypatch.setattr(wave, 'get_lastfm_user_timezone', lambda *args,**kwargs:'UTC')
     monkeypatch.setattr(wave, 'scrobble_track', provider)
     monkeypatch.setattr(wave, '_log_lastfm_scrobble_event', lambda *args,**kwargs:None)
-    request=SimpleNamespace(json=body,state=SimpleNamespace(current_actor=actor),app=SimpleNamespace(state=SimpleNamespace(config=ledger['config'])))
+    request=SimpleNamespace(json=body,state=SimpleNamespace(current_actor=actor),app=SimpleNamespace(state=SimpleNamespace(config=config,auth_policy_config={})))
     response=asyncio.run(wave.playback_session_scrobble(request))
     assert response.status_code == 200
     before=rows(ledger);assert len(before)==1 and before[0]['finalized'] is False

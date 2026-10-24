@@ -871,24 +871,38 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   }
   if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
   pendingPlayerPlaybackHandoffSelectionToken = ++playerTrackSelectionToken;
+  const selectionToken = playerTrackSelectionToken;
+  const track = state.player.current;
+  const session = state.player.listenSession;
   const ownership = typeof getPlaybackOwnershipState === 'function' ? getPlaybackOwnershipState() : null;
   const ownershipVersion = ownership ? (ownership.requestVersion = (ownership.requestVersion || 0) + 1) : null;
+  const isCurrentPause = () => selectionToken === playerTrackSelectionToken
+    && session === state.player.listenSession && track === state.player.current
+    && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
-    if (ownershipVersion !== null && ownershipVersion !== (getPlaybackOwnershipState().requestVersion || 0)) return false;
+    if (!isCurrentPause()) return false;
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {
-      await maybeScrobbleListenSession(state.player.listenSession);
+      await maybeScrobbleListenSession(session);
     }
+    if (!isCurrentPause()) return false;
+    let saved = true;
     if (typeof persistPausedListenSession === 'function') {
-      await persistPausedListenSession(state.player.listenSession);
+      try {
+        await persistPausedListenSession(session);
+      } catch (_error) {
+        if (!isCurrentPause()) return false;
+        saved = false;
+        showToast('Listening history could not be saved.', 'error', 4200);
+      }
     }
-    if (typeof releasePlaybackOwnership === 'function'
-        && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0))) {
-      await releasePlaybackOwnership('paused', state.player.current);
+    if (!isCurrentPause()) return saved;
+    if (typeof releasePlaybackOwnership === 'function') {
+      await releasePlaybackOwnership('paused', track);
     }
     updatePlayerUi();
-    return true;
+    return saved;
   });
   const trackedPause = pauseEffects.finally(() => {
     if (pendingPlayerPlaybackHandoff === trackedPause) pendingPlayerPlaybackHandoff = null;

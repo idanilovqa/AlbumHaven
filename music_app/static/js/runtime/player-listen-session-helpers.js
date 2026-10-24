@@ -1,5 +1,5 @@
 const MIN_RECORDED_LISTEN_SECONDS = 10;
-const LISTEN_SESSION_LONG_PAUSE_MS = 60 * 60 * 1000;
+const PLAYBACK_SESSION_REQUEST_TIMEOUT_MS = 10000;
 let measuredPlaybackDeviceId = '';
 const pendingPlaybackSessionRequests = new Set();
 
@@ -51,9 +51,10 @@ function buildMeasuredCompletionFields(session, { advance = false, finalized = f
   const measurement = session?.measurement;
   if (!measurement?.deviceId || !measurement.sessionId) return {};
   if (advance) measurement.sequence = (Number(measurement.sequence) || 0) + 1;
+  measurement.finalized = Boolean(measurement.finalized || finalized);
   return {
     measurement_version: 'rendered-pcm-v1', device_id: measurement.deviceId,
-    session_id: measurement.sessionId, sequence: Number(measurement.sequence) || 0, finalized,
+    session_id: measurement.sessionId, sequence: Number(measurement.sequence) || 0, finalized: measurement.finalized,
     measured_listened_seconds: Math.round(measurement.total * 1000) / 1000,
     max_measured_contiguous_seconds: Math.round(measurement.longest * 1000) / 1000,
   };
@@ -105,14 +106,6 @@ function markListenSessionPaused(currentTime = null) {
   session.pause_offset_seconds = Math.max(0, Number(currentTime == null ? getPlayerPlaybackSnapshot().currentTime : currentTime) || 0);
 }
 
-function hasListenSessionExceededPauseThreshold(session) {
-  return Boolean(
-    session
-    && Number(session.paused_at_unix_ms || 0) > 0
-    && (Date.now() - Number(session.paused_at_unix_ms || 0)) >= LISTEN_SESSION_LONG_PAUSE_MS
-  );
-}
-
 function canScrobbleListenSession(session) {
   const duration = getListenSessionDuration(session);
   if (!duration) return false;
@@ -153,13 +146,16 @@ function buildPlaybackRequestOrigin() {
 
 async function postPlaybackSession(url, payload) {
   const claim = typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {};
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PLAYBACK_SESSION_REQUEST_TIMEOUT_MS);
   const promise = (async () => {
     const response = await fetch(url, {
       method: 'POST',
+      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, ...claim }),
     });
-    const data = await response.json().catch(() => ({}));
+    const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'Playback sync failed');
     return data;
   })();
@@ -168,6 +164,7 @@ async function postPlaybackSession(url, payload) {
   try {
     return await promise;
   } finally {
+    clearTimeout(timeout);
     pendingPlaybackSessionRequests.delete(pending);
   }
 }
@@ -188,35 +185,9 @@ function ensureListenSession(track = null) {
   return state.player.listenSession;
 }
 
-async function maybeSplitListenSessionAfterLongPause(track = null) {
-  const session = state.player.listenSession;
-  if (!hasListenSessionExceededPauseThreshold(session)) return false;
-  const finishedSession = session;
-  const resumeTrack = track || finishedSession.track || state.player.current;
-  state.player.listenSession = null;
-  await finalizeListenSession('long-pause-timeout', {
-    session: finishedSession,
-    currentTime: Number(finishedSession.pause_offset_seconds || 0),
-    duration: Number(finishedSession.duration_seconds || getPlayerPlaybackSnapshot().duration) || 0,
-    endedAtOverride: String(finishedSession.paused_at || ''),
-    skipCloseSegment: true,
-  });
-  if (resumeTrack) {
-    startListenSession(resumeTrack);
-  }
-  return true;
-}
-
 async function resumeListenSessionPlayback(track = null, currentTime = null) {
-  const split = await maybeSplitListenSessionAfterLongPause(track);
   const session = ensureListenSession(track);
   if (!session) return null;
-  if (split) {
-    for (const role of Object.values(state.player.streaming?.roles || {})) {
-      if (role && (role.role === 'current' || role.continuityOptions?.kind !== 'queued-next')
-          && String(role.track?.path || '') === String(session.track?.path || '')) role.measuredListenSession = session;
-    }
-  }
   clearListenPauseMarker(session);
   beginListenSegment(currentTime);
   return session;
@@ -407,12 +378,16 @@ function getTrackIdentity(track) {
 
 async function persistPausedListenSession(session = state.player.listenSession) {
   if (!session) return false;
+  const claimToken = typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext().claimToken : null;
   await Promise.all([session.nowPlayingPromise, session.scrobblePromise]);
-  if (!shouldPersistListenSession(session)
+  if (session !== state.player.listenSession
+      || (typeof getPlaybackClaimContext === 'function' && claimToken !== getPlaybackClaimContext().claimToken)
+      || !shouldPersistListenSession(session)
       || (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects())) return false;
+  session.scrobblePayload = null;
   const payload = {
     ...buildNowPlayingPayload(session.track, session),
-    ...buildMeasuredCompletionFields(session, { advance: true, finalized: false }),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.paused_at || isoNow(),
     total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
     max_contiguous_seconds: Math.round(longestListenedSegmentSeconds(session) * 1000) / 1000,
@@ -425,12 +400,8 @@ async function persistPausedListenSession(session = state.player.listenSession) 
       start_seconds: Number(segment.start_seconds || 0), end_seconds: Number(segment.end_seconds || 0),
     })),
   };
-  try {
-    await postPlaybackSession('/playback/session/complete', payload);
-    return true;
-  } catch (_error) {
-    return false;
-  }
+  await postPlaybackSession('/playback/session/complete', payload);
+  return true;
 }
 
 function flushListenSessionOnUnload(reason = 'unload') {

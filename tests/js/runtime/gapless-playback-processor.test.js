@@ -1429,7 +1429,7 @@ function measuredProcessorReceiver(fixture, initialSeconds) {
   const role = {role:'current',streamId:41,generation:fixture.generation,track,eosReceived:true};
   const engine = {generation:fixture.generation,roles:{current:role},context:{sampleRate:48000},snapshot:{currentTime:0,duration:200},diagnostics:{staleMessages:0,underruns:0,bufferedFrames:{current:128},inFlightFrames:{current:0}}};
   const completions=[];const requests=[];
-  const c={window:{},console,crypto:require('node:crypto'),state:{player:{current:track}},isoNow:()=> '2026-09-09T12:00:00Z',unixNowSeconds:()=>1788955200,getPlayerPlaybackSnapshot:()=>engine.snapshot,
+  const c={window:{},console,AbortController,setTimeout,clearTimeout,crypto:require('node:crypto'),state:{player:{current:track}},isoNow:()=> '2026-09-09T12:00:00Z',unixNowSeconds:()=>1788955200,getPlayerPlaybackSnapshot:()=>engine.snapshot,
     fetch:async(_url,options)=>{requests.push(JSON.parse(options.body));return {ok:true,json:async()=>({ok:true})};}};
   vm.createContext(c);
   for(const name of ['player-streaming-engine.js','player-listen-session-helpers.js'])vm.runInContext(fs.readFileSync(path.join(path.dirname(processorPath),'../runtime',name),'utf8'),c);

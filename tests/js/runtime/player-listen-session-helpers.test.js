@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const test = require('node:test');
 
 const helperPath = path.join(
   __dirname,
@@ -39,6 +40,9 @@ function loadHelper(overrides = {}) {
       },
     },
     Blob,
+    AbortController,
+    setTimeout,
+    clearTimeout,
     getPlayerPlaybackSnapshot: () => ({
       currentTime: 0,
       duration: 0,
@@ -53,6 +57,64 @@ function loadHelper(overrides = {}) {
   return { context, fetchCalls, beaconCalls };
 }
 
+for (const stalledStage of ['headers', 'body']) {
+  test(`listen request bounds a stalled ${stalledStage} and releases its claim drain`, async () => {
+    const timers = new Map();
+    const cleared = [];
+    let signal;
+    let bodyStarted = false;
+    const { context } = loadHelper({
+      getPlaybackClaimContext: () => ({ clientId: 'client', claimToken: 'stalled-claim' }),
+      setTimeout: (callback, delay) => { timers.set(1, { callback, delay }); return 1; },
+      clearTimeout: id => { cleared.push(id); timers.delete(id); },
+      fetch: (_url, options) => {
+        signal = options.signal;
+        const stalled = () => new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('request aborted')), { once: true });
+        });
+        if (stalledStage === 'headers') return stalled();
+        return Promise.resolve({ ok: true, json: () => { bodyStarted = true; return stalled(); } });
+      },
+    });
+    let settled = false;
+    let failure;
+    const request = context.postPlaybackSession('/playback/session/complete', { title: 'Paused' })
+      .then(() => { settled = true; }, error => { settled = true; failure = error; });
+    let drained = false;
+    const drain = context.drainPlaybackSessionRequests('stalled-claim').then(() => { drained = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+    assert.equal(drained, false);
+    if (stalledStage === 'body') assert.equal(bodyStarted, true);
+    assert.equal(timers.size, 1, 'listen writes must have a deadline spanning headers and response body');
+    const deadline = timers.get(1);
+    assert.ok(deadline.delay > 0 && deadline.delay <= 10000, 'listen writes use the bounded ownership request budget');
+    deadline.callback();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, true, 'a stalled write must not hold Pause or a preview handoff indefinitely');
+    assert.ok(failure, 'timeout must reject rather than report a saved listen');
+    assert.equal(signal.aborted, true);
+    assert.equal(drained, true, 'claim release must be able to finish after the failed write');
+    assert.deepEqual(cleared, [1]);
+    assert.equal(timers.size, 0);
+    assert.equal(vm.runInContext('pendingPlaybackSessionRequests.size', context), 0);
+    await Promise.all([request, drain]);
+  });
+}
+
+test('successful listen request clears its deadline and pending claim entry', async () => {
+  const timers = new Map();
+  const cleared = [];
+  const { context } = loadHelper({
+    setTimeout: (callback, delay) => { timers.set(1, { callback, delay }); return 1; },
+    clearTimeout: id => { cleared.push(id); timers.delete(id); },
+  });
+  await context.postPlaybackSession('/playback/session/complete', { title: 'Saved' });
+  assert.deepEqual(cleared, [1]);
+  assert.equal(timers.size, 0);
+  assert.equal(vm.runInContext('pendingPlaybackSessionRequests.size', context), 0);
+});
+
 function deferred() {
   let resolve;
   let reject;
@@ -62,6 +124,130 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test('authorized pause leaves a durable checkpoint when unowned unload discards local state', async () => {
+  let authorized = true;
+  const track = { path: 'C:/Music/closed.flac', title: 'Closed', artist: 'Artist', album: 'Album' };
+  const { context, fetchCalls, beaconCalls } = loadHelper({
+    crypto: require('node:crypto'),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120 }),
+    canEmitPlaybackSessionSideEffects: () => authorized,
+    getPlaybackClaimContext: () => ({ clientId: 'client', claimToken: 'claim' }),
+  });
+  context.state.player.current = track;
+  context.startListenSession(track);
+  const session = context.state.player.listenSession;
+  session.duration_seconds = 120;
+  session.segments = [{ start_seconds: 0, end_seconds: 30 }];
+  Object.assign(session.measurement, { total: 30, contiguous: 30, longest: 30 });
+  context.markListenSessionPaused(30);
+  assert.equal(await context.persistPausedListenSession(session), true);
+  authorized = false;
+  assert.equal(context.flushListenSessionOnUnload('pagehide'), false);
+  assert.equal(context.state.player.listenSession, null);
+  assert.equal(beaconCalls.length, 0);
+  assert.equal(fetchCalls.length, 1);
+  const checkpoint = JSON.parse(fetchCalls[0][1].body);
+  assert.equal(checkpoint.finalized, true, 'closing a paused tab must not strand an invisible unfinished ledger row');
+  assert.equal(checkpoint.measured_listened_seconds, 30);
+});
+
+for (const heardBeforePause of [30, 70]) {
+  test(`same-track two-hour resume preserves one scrobble after ${heardBeforePause}s before pause`, async () => {
+    let now = Date.parse('2026-05-14T00:01:10Z');
+    let offset = heardBeforePause;
+    let authorized = true;
+    const track = { path: 'C:/Music/continued.flac', title: 'Continued', artist: 'Artist', album: 'Album' };
+    const { context, fetchCalls, beaconCalls } = loadHelper({
+      crypto: require('node:crypto'),
+      Date: { now: () => now },
+      isoNow: () => new Date(now).toISOString(),
+      getPlayerPlaybackSnapshot: () => ({ currentTime: offset, duration: 120 }),
+      canEmitPlaybackSessionSideEffects: () => authorized,
+      getPlaybackClaimContext: () => ({ clientId: 'client', claimToken: 'claim' }),
+    });
+    context.state.player.current = track;
+    context.startListenSession(track);
+    const session = context.state.player.listenSession;
+    session.duration_seconds = 120;
+    session.segments = [{ start_seconds: 0, end_seconds: heardBeforePause }];
+    Object.assign(session.measurement, { total: heardBeforePause, contiguous: heardBeforePause, longest: heardBeforePause });
+    await context.maybeScrobbleListenSession(session);
+    context.markListenSessionPaused(offset);
+    assert.equal(await context.persistPausedListenSession(session), true);
+    authorized = false;
+    const writesAtPause = fetchCalls.length;
+    assert.equal(await context.maybeScrobbleListenSession(session), false);
+    assert.equal(fetchCalls.length, writesAtPause, 'released ownership cannot authorize another write');
+    assert.equal(beaconCalls.length, 0);
+    now += 2 * 60 * 60 * 1000;
+    authorized = true;
+    const resumed = await context.resumeListenSessionPlayback(track, offset);
+    assert.strictEqual(resumed, session, 'time-only pauses must preserve the measured and provider identity');
+    offset += 40;
+    context.closeListenSegment(offset);
+    Object.assign(session.measurement, { total: heardBeforePause + 40, contiguous: 0,
+      longest: Math.max(heardBeforePause, 40) });
+    await context.maybeScrobbleListenSession(session);
+    await context.maybeScrobbleListenSession(session);
+    context.markListenSessionPaused(offset);
+    await context.persistPausedListenSession(session);
+    assert.equal(fetchCalls.filter(([url]) => url === '/playback/session/scrobble').length, 1);
+    assert.equal(session.scrobbled, true);
+    const checkpoints = fetchCalls.filter(([url]) => url === '/playback/session/complete')
+      .map(([, options]) => JSON.parse(options.body));
+    assert.ok(checkpoints.every(payload => payload.finalized === true));
+    assert.ok(checkpoints.every(payload => payload.session_id === session.measurement.sessionId));
+  });
+}
+
+for (const change of ['session', 'claim']) {
+  test(`pause checkpoint does not borrow a new ${change} after its pending scrobble drains`, async () => {
+    const pending = deferred();
+    let claim = { clientId: 'client', claimToken: 'old-claim' };
+    const track = { path: 'old.flac', title: 'Old', artist: 'Artist', album: 'Album' };
+    const { context, fetchCalls } = loadHelper({
+      crypto: require('node:crypto'),
+      getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120 }),
+      canEmitPlaybackSessionSideEffects: () => true,
+      getPlaybackClaimContext: () => claim,
+    });
+    context.state.player.current = track;
+    context.startListenSession(track);
+    const session = context.state.player.listenSession;
+    session.duration_seconds = 120;
+    session.segments = [{ start_seconds: 0, end_seconds: 30 }];
+    Object.assign(session.measurement, { total: 30, contiguous: 30, longest: 30 });
+    context.markListenSessionPaused(30);
+    session.scrobblePromise = pending.promise;
+    const checkpoint = context.persistPausedListenSession(session);
+    if (change === 'claim') claim = { clientId: 'client', claimToken: 'new-claim' };
+    else context.state.player.listenSession = { id: 'new-session', segmentActive: true };
+    pending.resolve(true);
+    assert.equal(await checkpoint, false);
+    assert.equal(fetchCalls.length, 0, 'the old paused payload cannot use a replacement playback authority');
+  });
+}
+
+test('pause checkpoint exposes a genuine persistence rejection instead of a benign no-op', async () => {
+  const track = { path: 'failed.flac', title: 'Failed', artist: 'Artist', album: 'Album' };
+  const { context } = loadHelper({
+    crypto: require('node:crypto'),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120 }),
+    canEmitPlaybackSessionSideEffects: () => true,
+    getPlaybackClaimContext: () => ({ clientId: 'client', claimToken: 'claim' }),
+    fetch: async () => { throw new Error('checkpoint unavailable'); },
+  });
+  context.state.player.current = track;
+  context.startListenSession(track);
+  const session = context.state.player.listenSession;
+  session.duration_seconds = 120;
+  session.segments = [{ start_seconds: 0, end_seconds: 30 }];
+  Object.assign(session.measurement, { total: 30, contiguous: 30, longest: 30 });
+  context.markListenSessionPaused(30);
+  await assert.rejects(context.persistPausedListenSession(session), /checkpoint unavailable/);
+  assert.strictEqual(context.state.player.listenSession, session);
+});
 
 async function run() {
   {
@@ -631,7 +817,7 @@ async function run() {
     const pausedPayload = JSON.parse(fetchCalls.at(-1)[1].body);
     assert.equal(pausedPayload.session_id, 'measured-session');
     assert.equal(pausedPayload.sequence, 1);
-    assert.equal(pausedPayload.finalized, false);
+    assert.equal(pausedPayload.finalized, true);
 
     const resumed = await context.resumeListenSessionPlayback(track, 30);
     assert.strictEqual(resumed, session, 'short pause resumes the same measured listen');
@@ -706,12 +892,9 @@ async function run() {
     nowValue = (60 * 60 * 1000) + 1;
     const resumedSession = await context.resumeListenSessionPlayback(splitSession.track, 40);
 
-    assert.equal(fetchCalls[fetchCalls.length - 1][0], '/playback/session/complete');
-    const splitPayload = JSON.parse(fetchCalls[fetchCalls.length - 1][1].body);
-    assert.equal(splitPayload.completion_reason, 'long-pause-timeout');
-    assert.equal(splitPayload.ended_at, '2026-05-14T00:00:30Z');
-    assert.equal(splitPayload.max_contiguous_seconds, 30);
-    assert.equal(context.state.player.listenSession.started_at, '2026-05-14T02:00:00Z');
+    assert.equal(fetchCalls.length, 0, 'resuming the same track must not finalize a second logical listen');
+    assert.strictEqual(resumedSession, splitSession);
+    assert.equal(context.state.player.listenSession.started_at, '2026-05-14T00:00:00Z');
     assert.equal(context.state.player.listenSession.segmentActive, true);
     assert.equal(context.state.player.listenSession.activeSegmentStartSeconds, 40);
     assert.equal(resumedSession, context.state.player.listenSession);

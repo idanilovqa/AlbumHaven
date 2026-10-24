@@ -28765,11 +28765,47 @@ function applyCoverLookupCandidateSource(candidateSource) {
   if (!candidateSource) return;
   const modal = state.coverLookup.modal;
   const generation = coverLookupCandidateGenerationKey(candidateSource.generation);
-  if (generation !== coverLookupCandidateGenerationKey(modal.candidateGeneration)) {
-    modal.candidateGeneration = generation;
-    modal.remoteSelectionOverrideGeneration = '';
-    modal.remoteSelectionOverrideCandidateId = '';
-    modal.remoteSelectionOverrideUrl = '';
+  const overrideGeneration = coverLookupCandidateGenerationKey(modal.remoteSelectionOverrideGeneration);
+  const overrideCandidateId = String(
+    modal.remoteSelectionOverrideCandidateId || modal.selectedRemoteId || '',
+  );
+  const overrideUrl = normalizeCoverLookupCandidateUrl(
+    modal.remoteSelectionOverrideUrl || '',
+  ).toLowerCase();
+  const candidateMatchesOverride = (candidate) => (
+    overrideUrl
+      ? normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === overrideUrl
+      : String(candidate?.id || '') === overrideCandidateId
+  );
+  const retainedOverride = (modal.possibleMatches || []).find(candidateMatchesOverride);
+  modal.candidateGeneration = generation;
+  let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
+  const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
+  if (hasExplicitRemoteSelection) {
+    const incomingOverride = possibleMatches.find(candidateMatchesOverride);
+    const selectedOverride = overrideGeneration !== generation
+      ? (retainedOverride || incomingOverride)
+      : incomingOverride;
+    if (selectedOverride) {
+      const selectedOverrideId = String(selectedOverride.id || '');
+      const selectedOverrideUrl = normalizeCoverLookupCandidateUrl(selectedOverride.url).toLowerCase();
+      const selectedOverrideIsPresent = possibleMatches.some((candidate) => (
+        String(candidate?.id || '') === selectedOverrideId
+        && normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === selectedOverrideUrl
+      ));
+      if (!selectedOverrideIsPresent) {
+        possibleMatches = [selectedOverride, ...possibleMatches.filter((candidate) => (
+          String(candidate?.id || '') !== selectedOverrideId
+          && (
+            !selectedOverrideUrl
+            || normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() !== selectedOverrideUrl
+          )
+        ))];
+      }
+    }
+    modal.possibleMatches = possibleMatches;
+    modal.selectedRemoteId = String(selectedOverride?.id || '');
+    return;
   }
   modal.possibleMatches = possibleMatches;
   const hasPendingNonRemoteSelection = Boolean(
@@ -28778,10 +28814,6 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || (modal.localCovers || []).some((cover) => Boolean(cover?.is_active))
     || String(modal.activeLocalSelectionPath || '')
     || String(getCoverLookupActiveLocalPath() || '')
-  );
-  const userOverrodeThisGeneration = Boolean(
-    generation
-    && coverLookupCandidateGenerationKey(modal.remoteSelectionOverrideGeneration) === generation
   );
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
   const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
@@ -29660,6 +29692,29 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
+function buildCoverLookupDrawerTerminalSignatures(tasks) {
+  return Object.fromEntries((Array.isArray(tasks) ? tasks : []).map((task) => {
+    const taskId = String(task?.id || '').trim();
+    const status = String(task?.status || '').trim();
+    const terminalSignature = isCompletedCoverLookupTask(task)
+      ? `${status}|${String(task?.result_kind || '').trim()}|${String(task?.finished_at || '').trim()}`
+      : '';
+    return [taskId, terminalSignature];
+  }).filter(([taskId]) => taskId));
+}
+
+function hasPendingCoverLookupDrawerTerminalPublication(tasks) {
+  const renderedSignatures = state.coverLookup.drawerRenderedTerminalSignatures;
+  if (!renderedSignatures || typeof renderedSignatures !== 'object') return false;
+  return (Array.isArray(tasks) ? tasks : []).some((task) => {
+    if (!isCompletedCoverLookupTask(task)) return false;
+    const taskId = String(task?.id || '').trim();
+    if (!taskId) return false;
+    const currentSignature = buildCoverLookupDrawerTerminalSignatures([task])[taskId];
+    return renderedSignatures[taskId] !== currentSignature;
+  });
+}
+
 const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
 const COVER_LOOKUP_TASK_OVERSCAN = 10;
 const COVER_LOOKUP_TASK_ESTIMATED_HEIGHT = 74;
@@ -29677,7 +29732,6 @@ function getCoverLookupTaskRenderWindow(tasks, body) {
 }
 
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
-  coverLookupTaskBadgeRevision += 1;
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
   const badge = document.getElementById('cover-lookup-drawer-badge');
@@ -29712,8 +29766,8 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     : tasks.length;
   if (summary) {
     summary.textContent = [
-      displayedActiveCount ? `${displayedActiveCount} active` : '',
-      displayedTerminalCount ? `${displayedTerminalCount} finished` : '',
+      activeCount ? `${activeCount} active` : '',
+      terminalCount ? `${terminalCount} finished` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
   }
   badge.hidden = badgeCount <= 0;
@@ -29732,13 +29786,22 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     return;
   }
 
-  const preserveSelectedNotificationText = preserveInteraction
-    && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
+  const preserveTextSelection = preserveInteraction
+    && hasActiveCoverLookupDrawerTextSelection(body);
+  const preservePressedAction = preserveInteraction && Boolean(
+    body.querySelector?.('.cover-lookup-task-open:active')
+    || body.querySelector?.('.cover-lookup-task-actions :active')
+  );
+  const preserveActiveAction = preserveInteraction
+    && hasActiveCoverLookupDrawerAction(body)
+    && (
+      preservePressedAction
+      || !hasPendingCoverLookupDrawerTerminalPublication(tasks)
+    );
+  const preserveSelectedNotificationText = preserveTextSelection || preserveActiveAction;
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
-      body.innerHTML = historyPending && badgeCount > 0
-        ? `<div class="cover-lookup-drawer-empty">${state.coverLookup.tasksLoadFailed ? 'Notifications could not be loaded. Close and reopen this panel to retry.' : 'Loading notifications…'}</div>`
-        : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
+      body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
       state.coverLookup.drawerRenderedTerminalSignatures = {};
     }
     syncCoverLookupElapsedTimer();
@@ -29844,6 +29907,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
     const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;
     if (measuredHeight > 0) state.coverLookup.taskEstimatedHeight = measuredHeight + measuredGap;
+    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
   }
   syncCoverLookupElapsedTimer();
 }
@@ -30333,30 +30397,6 @@ function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
   const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
   const remaining = current.filter((task) => !incomingIds.has(String(task?.id || '')));
   return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
-}
-
-async function loadCoverLookupTaskSummary() {
-  const allows = window.AlbumHavenCapabilities?.allows;
-  if (typeof allows === 'function'
-      && !allows.call(window.AlbumHavenCapabilities, 'library.covers.tasks.read')) return false;
-  const tasksRequestSequence = coverLookupTasksRequestSequence;
-  const badgeRevision = coverLookupTaskBadgeRevision;
-  try {
-    const response = await fetch('/utilities/cover-lookup/tasks?summary=1', {
-      headers: { Accept: 'application/json' },
-    });
-    const data = await response.json().catch(() => ({}));
-    if (tasksRequestSequence !== coverLookupTasksRequestSequence
-        || badgeRevision !== coverLookupTaskBadgeRevision) return false;
-    if (!response.ok || !data.ok) return false;
-    state.coverLookup.taskSummary = data.summary && typeof data.summary === 'object'
-      ? data.summary
-      : null;
-    renderCoverLookupTaskBadgeCount(data.summary?.badge_count);
-    return true;
-  } catch (_error) {
-    return false;
-  }
 }
 
 async function loadCoverLookupTasks(options = {}) {
@@ -41566,8 +41606,6 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
     if (task?.album_payload) {
-      state.coverLookup.drawerOpen = false;
-      renderCoverLookupDrawer();
       openCoverLookupModal(task.album_payload, { taskId });
     }
     return;
@@ -46098,7 +46136,6 @@ document.getElementById('cover-lookup-drawer-body')?.addEventListener(
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();
-if (typeof loadCoverLookupTaskSummary === 'function') void loadCoverLookupTaskSummary();
 if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();

@@ -794,8 +794,6 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
     if (task?.album_payload) {
-      state.coverLookup.drawerOpen = false;
-      renderCoverLookupDrawer();
       openCoverLookupModal(task.album_payload, { taskId });
     }
     return;

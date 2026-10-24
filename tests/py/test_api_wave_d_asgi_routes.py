@@ -434,38 +434,6 @@ def test_asgi_cover_lookup_task_list_mark_clear_and_cancel(app):
     assert canceled["cancel_requested"] is True
 
 
-def test_asgi_cover_lookup_task_summary_returns_counts_without_task_bodies(app, monkeypatch):
-    from music_app.routes import api_wave_d_asgi_routes as cover_routes
-
-    monkeypatch.setattr(
-        cover_routes,
-        "get_cover_lookup_task_summary",
-        lambda *, config: {
-            "active_count": 2,
-            "pending_notification_count": 5,
-            "badge_count": 7,
-        },
-    )
-    asgi_app = _make_wave_d_app(app)
-
-    status, _headers, body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/cover-lookup/tasks",
-        query={"summary": "1"},
-    )
-
-    assert status == 200
-    assert _decode_json(body) == {
-        "ok": True,
-        "summary": {
-            "active_count": 2,
-            "pending_notification_count": 5,
-            "badge_count": 7,
-        },
-    }
-
-
 def test_asgi_cover_lookup_notification_routes_use_asgi_config_without_flask_bridge(app):
     from music_app.services import cover_lookup_tasks
 

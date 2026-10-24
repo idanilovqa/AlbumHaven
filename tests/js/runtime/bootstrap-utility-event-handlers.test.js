@@ -1036,7 +1036,7 @@ test('applying the base incomplete-order filter preserves a selection after deta
   assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
 });
 
-test('opening a cover lookup task from inside the drawer closes the drawer before opening the task modal', async () => {
+test('opening a cover lookup task keeps the drawer open behind the task modal', async () => {
   const { context } = createContext();
   const albumPayload = {
     album: 'Kill Em All',
@@ -1070,10 +1070,9 @@ test('opening a cover lookup task from inside the drawer closes the drawer befor
   await context.handleUtilityBootstrapClick(event);
 
   assert.equal(wasPrevented(), true);
-  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
   assert.deepEqual(transitions, [
-    'render:false',
-    'open:false:Metallica:Kill Em All:cover-task-12',
+    'open:true:Metallica:Kill Em All:cover-task-12',
   ]);
 });
 
@@ -1180,7 +1179,7 @@ test('drag-selecting cover lookup task text suppresses only its immediate click 
   await context.handleUtilityBootstrapClick(secondClick.event);
 
   assert.equal(secondClick.wasPrevented(), true);
-  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
   assert.equal(modalOpenCount, 1);
 });
 
@@ -1238,7 +1237,7 @@ test('an ordinary click opens a cover lookup task when its preexisting text sele
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
-  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
   assert.equal(modalOpenCount, 1);
 });
 
@@ -1334,7 +1333,7 @@ test('keyboard activation opens a cover lookup task while unrelated page text re
   await context.handleUtilityBootstrapClick(event);
 
   assert.equal(wasPrevented(), true);
-  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
   assert.equal(modalOpenCount, 1);
 });
 

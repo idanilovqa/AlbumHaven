@@ -151,7 +151,7 @@ require('node:test')('polling preserves a pressed task before selection exists a
     'Explicit user removal must not be blocked by interaction preservation');
 });
 
-require('node:test')('closed drawer reconciles terminal task state despite a hidden hovered action', () => {
+require('node:test')('closed drawer releases cards and renders terminal task state when reopened', () => {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'saved-task', status: 'running', artist: 'Artist', album: 'Album' };
   context.state.coverLookup.tasks = [task];
@@ -164,6 +164,9 @@ require('node:test')('closed drawer reconciles terminal task state despite a hid
   task.result_kind = 'cover-updated';
   context.renderCoverLookupDrawer();
 
+  assert.equal(bodyElement.innerHTML, '');
+  context.state.coverLookup.drawerOpen = true;
+  context.renderCoverLookupDrawer();
   assert.match(bodyElement.innerHTML, />Art chosen</);
 });
 

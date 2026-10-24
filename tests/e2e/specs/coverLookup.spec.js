@@ -540,21 +540,20 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
   });
 
   await stepLogger.step('Choose the returned cover and keep the completed duration frozen', async () => {
+    // Sequential cover-review workflow: Notifications intentionally stays open behind Cover Look Up,
+    // so closing the lookup returns directly to the next notification.
     await coverLookupActions.openTaskWithKeyboard(actionedTaskTitle, 'Enter');
     await coverLookupActions.waitForModalReady();
     await coverLookupActions.waitForModalResultsReady();
     await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(NOTIFICATION_ACTIONED_TARGET.album);
-    await coverLookupActions.coverLookup.waitForDrawerState(false);
-    await expect(coverLookupActions.coverLookup.drawer).toHaveCSS('opacity', '0');
+    await coverLookupActions.coverLookup.waitForDrawerState(true);
     await coverLookupActions.closeModal();
-    await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
     await coverLookupActions.openTaskWithKeyboard(actionedTaskTitle, 'Space');
     await coverLookupActions.waitForModalReady();
     await coverLookupActions.waitForModalResultsReady();
     await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(NOTIFICATION_ACTIONED_TARGET.album);
-    await coverLookupActions.coverLookup.waitForDrawerState(false);
-    await expect(coverLookupActions.coverLookup.drawer).toHaveCSS('opacity', '0');
+    await coverLookupActions.coverLookup.waitForDrawerState(true);
     await coverLookupActions.selectFirstRemoteCoverAndSave();
     await coverLookupActions.waitForTaskStatus(actionedTaskTitle, 'Art chosen');
     expect(await coverLookupActions.readTaskElapsed(actionedTaskTitle)).toBe(terminalDuration);

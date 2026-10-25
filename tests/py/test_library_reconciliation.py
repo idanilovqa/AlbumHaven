@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -209,11 +211,18 @@ def test_watchdog_maps_configured_root_disappearance_to_unavailable_health_event
     root.mkdir()
     root.rmdir()
     published = []
-    requests = []
+    admitted = []
+    problems = []
+    admission_failures = []
     coordinator = LibraryEventCoordinator(
-        emit_request=requests.append,
-        emit_health_event=published.append,
+        admitted.append,
+        record_problem=problems.append,
+        report_admission_failure=admission_failures.append,
     )
+
+    def publish(event):
+        published.append(event)
+        coordinator.accept(event)
 
     event = SimpleNamespace(
         event_type=event_type,
@@ -224,18 +233,21 @@ def test_watchdog_maps_configured_root_disappearance_to_unavailable_health_event
     publish_watchdog_event(
         event,
         roots=[{"id": "main", "path": str(root)}],
-        publish=coordinator.accept,
+        publish=publish,
         clock=lambda: 4.0,
     )
-    coordinator.flush()
 
-    assert requests == []
+    assert admitted == []
+    assert admission_failures == []
     assert len(published) == 1
     assert published[0].kind is LibraryEventKind.ROOT_UNAVAILABLE
     assert published[0].root_id == "main"
     assert published[0].path == root.resolve(strict=False)
     assert published[0].is_directory is True
     assert published[0].observed_at == 4.0
+    assert [(problem.code, problem.root_id) for problem in problems] == [
+        ("root_unavailable", "main")
+    ]
 
 
 def test_library_watch_service_starts_and_stops_injected_source_once(tmp_path: Path):
@@ -282,6 +294,25 @@ def test_library_watch_service_starts_and_stops_injected_source_once(tmp_path: P
     assert source.is_alive is False
 
 
+def test_library_watch_service_timed_stop_bounds_lock_wait(monkeypatch):
+    import time
+    from music_app.services import library_watch
+
+    calls = []
+
+    class Lock:
+        def acquire(self, *, timeout):
+            calls.append(timeout)
+            return False
+
+    service = library_watch.LibraryWatchService(None, lambda _event: None)
+    service._lock = Lock()
+    monkeypatch.setattr(time, "monotonic", lambda: 100.0)
+    with pytest.raises(TimeoutError, match="watcher.*deadline"):
+        service.stop(timeout=0.25)
+    assert calls == [0.25]
+
+
 def test_library_watch_service_replaces_roots_by_restarting_source():
     from music_app.services.library_reconciliation import LibraryWatchService
 
@@ -304,6 +335,580 @@ def test_library_watch_service_replaces_roots_by_restarting_source():
 
     assert service.replace_roots([{"id": "new-root", "path": "D:/Music"}]) is True
     assert calls == ["start", ("stop", 2.0), ("roots", ("new-root",)), "start"]
+
+
+def _capturing_observer():
+    class Observer:
+        ident = None
+        emitters = ()
+
+        def __init__(self):
+            self.handlers = []
+            self.alive = False
+
+        def schedule(self, handler, _path, *, recursive):
+            assert recursive
+            self.handlers.append(handler)
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+
+        def join(self, _timeout):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+    return Observer()
+
+
+def test_pre_attribution_dispatch_failure_reports_copied_configured_root_ids(
+    monkeypatch, tmp_path: Path,
+):
+    from music_app.services import library_watch
+
+    private_root = tmp_path / "private-music-root"
+    second_root = tmp_path / "second-music-root"
+    private_root.mkdir()
+    second_root.mkdir()
+    roots = (
+        {"id": "root-a", "path": private_root},
+        {"id": "root-b", "path": second_root},
+    )
+    observer = _capturing_observer()
+    unattributed_reports = []
+    monkeypatch.setattr(
+        library_watch,
+        "publish_watchdog_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("normalization failed")
+        ),
+    )
+    source = library_watch.WatchdogLibraryEventSource(
+        roots,
+        observer_factory=lambda: observer,
+        report_unattributed_failure=unattributed_reports.append,
+    )
+    try:
+        source.start(lambda _event: None)
+        observer.handlers[0].on_any_event(
+            SimpleNamespace(
+                event_type="created",
+                src_path=str(private_root / "Album" / "track.flac"),
+                is_directory=False,
+            )
+        )
+    finally:
+        source.stop(timeout=1.0)
+
+    assert unattributed_reports == [("root-a", "root-b")]
+    assert all(isinstance(value, str) for value in unattributed_reports[0])
+    assert str(private_root) not in repr(unattributed_reports)
+
+
+def test_replace_roots_normalization_failure_preserves_and_reports_old_roots(
+    tmp_path: Path,
+):
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    original = LookupError("root id conversion failed")
+
+    class FailingRootId:
+        def __str__(self):
+            raise original
+
+    old_roots = (
+        {"id": "root-a", "path": tmp_path / "private-a"},
+        {"id": "root-b", "path": tmp_path / "private-b"},
+    )
+    unattributed_reports = []
+    source = WatchdogLibraryEventSource(
+        old_roots,
+        report_unattributed_failure=unattributed_reports.append,
+    )
+    old_root_snapshot = source._roots
+    old_id_snapshot = source._configured_root_ids
+
+    with pytest.raises(LookupError) as caught:
+        source.replace_roots(
+            ({"id": FailingRootId(), "path": tmp_path / "replacement"},)
+        )
+
+    assert caught.value is original
+    assert source._roots == old_root_snapshot
+    assert source._configured_root_ids == old_id_snapshot
+    assert unattributed_reports == [("root-a", "root-b")]
+    assert all(isinstance(root_id, str) for root_id in unattributed_reports[0])
+    assert all(str(root["path"]) not in repr(unattributed_reports) for root in old_roots)
+
+
+def test_pre_attribution_reporter_failure_does_not_stop_later_dispatch(
+    monkeypatch, tmp_path: Path,
+):
+    from music_app.services import library_watch
+
+    root = tmp_path / "music"
+    root.mkdir()
+    observer = _capturing_observer()
+    original = RuntimeError("normalization failed")
+    dispatches = []
+    unattributed_reports = []
+
+    def publish_event(event, **_kwargs):
+        if not dispatches:
+            dispatches.append(original)
+            raise original
+        dispatches.append(event)
+
+    def report(root_ids):
+        unattributed_reports.append(root_ids)
+        raise LookupError("recovery reporter unavailable")
+
+    monkeypatch.setattr(library_watch, "publish_watchdog_event", publish_event)
+    source = library_watch.WatchdogLibraryEventSource(
+        ({"id": "root-a", "path": root},),
+        observer_factory=lambda: observer,
+        report_unattributed_failure=report,
+    )
+    try:
+        source.start(lambda _event: None)
+        first = SimpleNamespace(
+            event_type="created",
+            src_path=str(root / "first.flac"),
+            is_directory=False,
+        )
+        second = SimpleNamespace(
+            event_type="created",
+            src_path=str(root / "second.flac"),
+            is_directory=False,
+        )
+
+        observer.handlers[0].on_any_event(first)
+        assert source.is_alive
+        observer.handlers[0].on_any_event(second)
+    finally:
+        source.stop(timeout=1.0)
+
+    assert dispatches == [original, second]
+    assert unattributed_reports == [("root-a",)]
+
+
+@pytest.mark.parametrize(
+    "reporter_fails",
+    [False, True],
+    ids=["report-recorded", "reporter-failure-preserves-startup-error"],
+)
+def test_startup_instrumentation_failure_reports_all_configured_roots_once(
+    monkeypatch, tmp_path: Path, reporter_fails: bool,
+):
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    roots = tuple(
+        {"id": root_id, "path": tmp_path / root_id}
+        for root_id in ("root-a", "root-b")
+    )
+    for root in roots:
+        Path(root["path"]).mkdir()
+    unattributed_reports = []
+    startup_failure = RuntimeError("instrumentation failed")
+
+    def report(root_ids):
+        unattributed_reports.append(root_ids)
+        if reporter_fails:
+            raise LookupError("recovery reporter unavailable")
+
+    class Emitter:
+        def __init__(self, path):
+            self.watch = SimpleNamespace(path=path)
+            self.run = lambda: None
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+    class Observer:
+        ident = None
+
+        def __init__(self):
+            self.emitters = set()
+            self.alive = False
+
+        def schedule(self, _handler, path, *, recursive):
+            assert recursive
+            emitter = Emitter(path)
+            self.emitters.add(emitter)
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+            for emitter in self.emitters:
+                emitter.alive = False
+
+        def join(self, _timeout):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+    observer = Observer()
+    source = WatchdogLibraryEventSource(
+        roots,
+        observer_factory=lambda: observer,
+        report_unattributed_failure=report,
+    )
+    monkeypatch.setattr(
+        source,
+        "_instrument_emitter",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(startup_failure),
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        source.start(lambda _event: None)
+
+    assert caught.value is startup_failure
+    assert unattributed_reports == [("root-a", "root-b")]
+    assert all(isinstance(value, str) for value in unattributed_reports[0])
+    assert all(not emitter.is_alive() for emitter in observer.emitters)
+
+
+def test_cross_root_normalized_failure_remains_coordinator_attributed(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    root_paths = {
+        root_id: tmp_path / root_id
+        for root_id in ("root-a", "root-b", "root-c")
+    }
+    for root_path in root_paths.values():
+        root_path.mkdir()
+    exact_reports = []
+    unattributed_reports = []
+    coordinator = LibraryEventCoordinator(
+        lambda _event: (_ for _ in ()).throw(
+            RuntimeError("database unavailable")
+        ),
+        record_problem=lambda _problem: None,
+        report_admission_failure=exact_reports.append,
+    )
+    observer = _capturing_observer()
+    source = WatchdogLibraryEventSource(
+        tuple(
+            {"id": root_id, "path": root_path}
+            for root_id, root_path in root_paths.items()
+        ),
+        observer_factory=lambda: observer,
+        report_unattributed_failure=unattributed_reports.append,
+    )
+    try:
+        source.start(coordinator.accept)
+        observer.handlers[0].on_any_event(
+            SimpleNamespace(
+                event_type="moved",
+                src_path=str(root_paths["root-a"] / "old.flac"),
+                dest_path=str(root_paths["root-b"] / "new.flac"),
+                is_directory=False,
+            )
+        )
+    finally:
+        source.stop(timeout=1.0)
+
+    assert exact_reports == [("root-a", "root-b")]
+    assert unattributed_reports == []
+
+
+def test_native_watcher_reattaches_root_when_repair_restores_directory(tmp_path):
+    from music_app.services.library_watch import (
+        LibraryEventKind,
+        WatchdogLibraryEventSource,
+    )
+
+    missing = tmp_path / "restored"
+    timers = []
+
+    class Timer:
+        daemon = False
+
+        def __init__(self, _delay, callback):
+            self.callback = callback
+
+        def start(self):
+            timers.append(self)
+
+        def cancel(self):
+            pass
+
+    class Emitter:
+        def __init__(self, path):
+            self.watch = SimpleNamespace(path=path)
+            self.run = lambda: None
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+    class Observer:
+        ident = None
+
+        def __init__(self):
+            self.emitters = set()
+            self.alive = False
+            self.scheduled = []
+
+        def schedule(self, _handler, path, *, recursive):
+            self.scheduled.append((path, recursive))
+            emitter = Emitter(path)
+            self.emitters.add(emitter)
+            return emitter.watch
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+            for emitter in self.emitters:
+                emitter.alive = False
+
+        def join(self, _timeout):
+            pass
+
+        def is_alive(self):
+            return self.alive
+
+    observer = Observer()
+    published = []
+    source = WatchdogLibraryEventSource(
+        ({"id": "restored", "path": missing},),
+        observer_factory=lambda: observer,
+        retry_timer_factory=Timer,
+    )
+
+    source.start(published.append)
+    assert published[0].kind is LibraryEventKind.ROOT_UNAVAILABLE
+    assert observer.scheduled == []
+    assert len(timers) == 1
+
+    missing.mkdir()
+    timers.pop().callback()
+
+    assert observer.scheduled == [(str(missing.resolve()), True)]
+    assert timers == []
+    assert source.is_alive
+    source.stop(timeout=1.0)
+
+
+def test_native_watcher_retry_cannot_attach_after_stop(tmp_path):
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    missing = tmp_path / "restored"
+    timers = []
+    schedule_entered = Event()
+    release_schedule = Event()
+    stop_returned = Event()
+
+    class Timer:
+        daemon = False
+
+        def __init__(self, _delay, callback):
+            self.callback = callback
+
+        def start(self):
+            timers.append(self)
+
+        def cancel(self):
+            pass
+
+    class Emitter:
+        def __init__(self, path):
+            self.watch = SimpleNamespace(path=path)
+            self.run = lambda: None
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+    class Observer:
+        ident = None
+
+        def __init__(self):
+            self.emitters = set()
+            self.alive = False
+            self.scheduled = []
+
+        def schedule(self, _handler, path, *, recursive):
+            schedule_entered.set()
+            assert release_schedule.wait(1.0)
+            self.scheduled.append((path, recursive))
+            emitter = Emitter(path)
+            self.emitters.add(emitter)
+            return emitter.watch
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+            for emitter in self.emitters:
+                emitter.alive = False
+
+        def join(self, _timeout):
+            pass
+
+        def is_alive(self):
+            return self.alive
+
+    observer = Observer()
+    source = WatchdogLibraryEventSource(
+        ({"id": "restored", "path": missing},),
+        observer_factory=lambda: observer,
+        retry_timer_factory=Timer,
+    )
+    source.start(lambda _event: None)
+    missing.mkdir()
+    retry = Thread(target=timers.pop().callback)
+    retry.start()
+    assert schedule_entered.wait(1.0)
+
+    def stop_source():
+        source.stop(timeout=1.0)
+        stop_returned.set()
+
+    stopper = Thread(target=stop_source)
+    stopper.start()
+    assert not stop_returned.wait(0.05)
+    release_schedule.set()
+    retry.join(1.0)
+    stopper.join(1.0)
+
+    assert not retry.is_alive()
+    assert not stopper.is_alive()
+    assert observer.scheduled == [(str(missing.resolve()), True)]
+    assert all(not emitter.is_alive() for emitter in observer.emitters)
+
+
+def test_native_watcher_ignores_cancelled_retry_from_previous_run(tmp_path):
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    missing = tmp_path / "missing"
+    timers = []
+
+    class Timer:
+        daemon = False
+
+        def __init__(self, _delay, callback):
+            self.callback = callback
+
+        def start(self):
+            timers.append(self)
+
+        def cancel(self):
+            pass
+
+    class Observer:
+        ident = None
+        emitters = ()
+
+        def __init__(self):
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+
+        def join(self, _timeout):
+            pass
+
+        def is_alive(self):
+            return self.alive
+
+    observers = iter((Observer(), Observer()))
+    source = WatchdogLibraryEventSource(
+        ({"id": "missing", "path": missing},),
+        observer_factory=lambda: next(observers),
+        retry_timer_factory=Timer,
+    )
+    source.start(lambda _event: None)
+    stale_timer = timers.pop()
+    source.stop(timeout=1.0)
+    source.replace_roots(({"id": "missing", "path": missing},))
+    source.start(lambda _event: None)
+
+    assert len(timers) == 1
+    current_timer = timers[0]
+    stale_timer.callback()
+
+    assert timers == [current_timer]
+    source.stop(timeout=1.0)
+
+
+def test_native_watcher_keeps_retrying_when_reattach_health_write_fails(tmp_path):
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    missing = tmp_path / "missing"
+    timers = []
+    health_write_fails = False
+
+    class Timer:
+        daemon = False
+
+        def __init__(self, _delay, callback):
+            self.callback = callback
+
+        def start(self):
+            timers.append(self)
+
+        def cancel(self):
+            pass
+
+    class Observer:
+        ident = None
+        emitters = ()
+
+        def __init__(self):
+            self.alive = False
+
+        def schedule(self, _handler, _path, *, recursive):
+            assert recursive
+            raise OSError("native attach failed")
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+
+        def join(self, _timeout):
+            pass
+
+        def is_alive(self):
+            return self.alive
+
+    def publish(_event):
+        if health_write_fails:
+            raise RuntimeError("database unavailable")
+
+    source = WatchdogLibraryEventSource(
+        ({"id": "missing", "path": missing},),
+        observer_factory=Observer,
+        retry_timer_factory=Timer,
+    )
+    source.start(publish)
+    retry = timers.pop()
+    missing.mkdir()
+    health_write_fails = True
+
+    retry.callback()
+
+    assert len(timers) == 1
+    source.stop(timeout=1.0)
 
 
 def _native_watch_health():
@@ -329,229 +934,6 @@ def _native_watch_health():
             return cleared
 
     return LibraryWatchHealthService(Store())
-
-
-@pytest.mark.parametrize(
-    ("failure", "restart_failure"),
-    [("zero_bytes", False), ("notify_enum_dir", False), ("zero_bytes", True)],
-)
-def test_native_windows_overflow_blocks_destruction_until_manual_recovery(
-    monkeypatch, tmp_path: Path, failure: str, restart_failure: bool,
-):
-    import ctypes
-    import os
-    import queue
-    import struct
-    from threading import Event
-
-    if os.name != "nt":
-        pytest.skip("Exercises the installed Windows Watchdog native backend")
-    from watchdog.observers import read_directory_changes, winapi
-
-    from music_app import _recover_library_watch_after_manual_scan
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.library_watch import (
-        LibraryEventKind, LibraryWatchService, WatchdogLibraryEventSource,
-    )
-
-    root = tmp_path / "music"
-    root.mkdir()
-    track = root / "01.flac"
-    track.write_bytes(b"complete")
-    roots = [{"id": "main", "path": str(root)}]
-    reads = []
-    health_seen = Event()
-    track_seen = Event()
-    published = []
-    requests = []
-    health = _native_watch_health()
-    fail_open = False
-
-    def open_handle(_path):
-        if fail_open:
-            raise OSError("native directory handle unavailable")
-        commands = queue.Queue()
-        reads.append(commands)
-        return commands
-
-    def read_changes(handle, buffer, _size, _recursive, _flags, nbytes, *_args):
-        command = handle.get(timeout=3)
-        if command == "zero_bytes":
-            return
-        if command in {"stop", "notify_enum_dir"}:
-            error = OSError("native notification read interrupted")
-            error.winerror = 995 if command == "stop" else 1022
-            raise error
-        assert command == "created"
-        name = "01.flac".encode("utf-16-le")
-        record = struct.pack("<III", 0, winapi.FILE_ACTION_CREATED, len(name)) + name
-        ctypes.memmove(buffer, record, len(record))
-        ctypes.cast(nbytes, ctypes.POINTER(winapi.DWORD)).contents.value = len(record)
-
-    monkeypatch.setattr(read_directory_changes, "get_directory_handle", open_handle)
-    monkeypatch.setattr(
-        read_directory_changes, "close_directory_handle", lambda handle: handle.put("stop"),
-    )
-    monkeypatch.setattr(winapi, "ReadDirectoryChangesW", read_changes)
-    monkeypatch.setattr(winapi, "_is_observed_path_deleted", lambda *_args: False)
-    # A failed baseline emitter must not leak a thread exception into other tests.
-    monkeypatch.setattr("threading.excepthook", lambda _args: None)
-
-    def record_health(event):
-        published.append(event)
-        health.record_event(event)
-        health_seen.set()
-
-    coordinator = LibraryEventCoordinator(
-        emit_request=requests.append,
-        emit_health_event=record_health,
-        stable_sample_interval=0,
-    )
-
-    def publish(event):
-        coordinator.accept(event)
-        if event.kind is LibraryEventKind.CREATED:
-            track_seen.set()
-
-    source = WatchdogLibraryEventSource(roots, clock=lambda: 8.0)
-    watcher = LibraryWatchService(source, publish)
-    observers = []
-    emitters = []
-    try:
-        watcher.start()
-        observers.append(source._observer)
-        emitters.extend(source._observer.emitters)
-        assert isinstance(emitters[0], read_directory_changes.WindowsApiEmitter)
-        reads[-1].put(failure)
-        assert health_seen.wait(2), "native notification loss never reached library health"
-        assert published[0].kind is LibraryEventKind.OVERFLOW
-        assert published[0].root_id == "main"
-        assert published[0].path == root.resolve()
-        assert published[0].observed_at == 8.0
-        assert not health.root_allows_destructive_reconciliation("main")
-        coordinator.flush()
-        assert requests == []
-        assert health.clear_after_scan(
-            scan_mode="incremental", observed_root_ids={"main"},
-        ) == 0
-        assert not health.root_allows_destructive_reconciliation("main")
-
-        recovery = dict(
-            health_service=health,
-            targeted_reconciler=SimpleNamespace(replace_roots=lambda _roots: None),
-            watch_service=watcher,
-            root_definitions=roots,
-            scan_mode="manual_full_rescan",
-            scan_started_at=None,
-            observed_root_ids={"main"},
-        )
-        if restart_failure:
-            fail_open = True
-            with pytest.raises(OSError, match="native directory handle unavailable"):
-                _recover_library_watch_after_manual_scan(**recovery)
-            assert not health.root_allows_destructive_reconciliation("main")
-            assert published[-1].kind is LibraryEventKind.ROOT_UNAVAILABLE
-            assert source._observer is None
-            assert not watcher.is_alive
-            return
-        assert _recover_library_watch_after_manual_scan(**recovery) == 1
-        observers.append(source._observer)
-        emitters.extend(source._observer.emitters)
-        assert len(reads) == 2
-        assert watcher.is_alive
-        assert health.root_allows_destructive_reconciliation("main")
-        reads[-1].put("created")
-        assert track_seen.wait(2)
-        coordinator.flush()
-        assert len(requests) == 1
-        assert requests[0].paths == frozenset({track.resolve()})
-    finally:
-        watcher.stop()
-        coordinator.stop()
-        assert all(not observer.is_alive() for observer in observers)
-        assert all(not emitter.is_alive() for emitter in emitters)
-    assert len(published) == 1, "intentional shutdown must not create a health failure"
-
-
-@pytest.mark.parametrize("termination", ["exception", "early_return"])
-def test_native_emitter_termination_is_unhealthy_while_dispatcher_is_alive(
-    monkeypatch, tmp_path: Path, termination: str,
-):
-    from threading import Event
-
-    from watchdog.observers.api import BaseObserver, EventEmitter
-
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.library_watch import (
-        LibraryEventKind, LibraryWatchService, WatchdogLibraryEventSource,
-    )
-
-    failed_root = tmp_path / "failed"
-    healthy_root = tmp_path / "healthy"
-    failed_root.mkdir()
-    healthy_root.mkdir()
-    trigger = Event()
-    observed_exceptions = []
-    published = []
-    requests = []
-    health = _native_watch_health()
-
-    class NativeEmitter(EventEmitter):
-        def queue_events(self, _timeout):
-            if Path(self.watch.path) == failed_root:
-                assert trigger.wait(2)
-                if termination == "exception":
-                    raise OSError("native emitter failure")
-                self.stop()
-            else:
-                self.stopped_event.wait(2)
-
-    monkeypatch.setattr("threading.excepthook", observed_exceptions.append)
-
-    def record_health(event):
-        published.append(event)
-        health.record_event(event)
-
-    coordinator = LibraryEventCoordinator(
-        emit_request=requests.append, emit_health_event=record_health,
-    )
-    source = WatchdogLibraryEventSource(
-        [
-            {"id": "failed", "path": str(failed_root)},
-            {"id": "healthy", "path": str(healthy_root)},
-        ],
-        observer_factory=lambda: BaseObserver(NativeEmitter),
-        clock=lambda: 9.0,
-    )
-    watcher = LibraryWatchService(source, coordinator.accept)
-    observer = None
-    emitters = ()
-    try:
-        watcher.start()
-        observer = source._observer
-        emitters = tuple(observer.emitters)
-        failed = next(emitter for emitter in emitters if Path(emitter.watch.path) == failed_root)
-        trigger.set()
-        failed.join(2)
-        assert not failed.is_alive()
-        assert observer.is_alive(), "the real dispatcher outlives its failed producer"
-        assert not watcher.is_alive, "dispatcher liveness must not hide emitter termination"
-        assert len(published) == 1
-        assert published[0].kind is LibraryEventKind.ROOT_UNAVAILABLE
-        assert published[0].root_id == "failed"
-        assert published[0].observed_at == 9.0
-        assert not health.root_allows_destructive_reconciliation("failed")
-        assert health.root_allows_destructive_reconciliation("healthy")
-        coordinator.flush()
-        assert requests == []
-        assert len(observed_exceptions) == (1 if termination == "exception" else 0)
-    finally:
-        trigger.set()
-        watcher.stop()
-        coordinator.stop()
-        assert observer is None or not observer.is_alive()
-        assert all(not emitter.is_alive() for emitter in emitters)
-    assert len(published) == 1
 
 
 @pytest.mark.parametrize("failure_stage", ["schedule", "thread_start"])
@@ -636,7 +1018,7 @@ def _recording_watchdog_observer_factory(calls):
 
 
 @pytest.mark.parametrize("platform", ["linux", "linux2"])
-def test_linux_default_watcher_stays_idle_through_manual_recovery(
+def test_linux_default_watcher_stays_idle_without_loading_native_backend(
     monkeypatch, tmp_path: Path, caplog, platform: str,
 ):
     import builtins
@@ -645,9 +1027,9 @@ def test_linux_default_watcher_stays_idle_through_manual_recovery(
 
     import watchdog.observers
 
-    from music_app import _recover_library_watch_after_manual_scan
     from music_app.services.library_watch import (
-        LibraryEvent, LibraryEventKind, LibraryWatchService, WatchdogLibraryEventSource,
+        LibraryWatchService,
+        WatchdogLibraryEventSource,
     )
 
     root = tmp_path / "private-music-root"
@@ -656,7 +1038,6 @@ def test_linux_default_watcher_stays_idle_through_manual_recovery(
     calls = []
     imports = []
     events = []
-    health = _native_watch_health()
     source = WatchdogLibraryEventSource(roots)
     watcher = LibraryWatchService(source, events.append)
     original_import = builtins.__import__
@@ -677,22 +1058,6 @@ def test_linux_default_watcher_stays_idle_through_manual_recovery(
         assert not watcher.is_alive
         assert source._observer is None
         assert events == []
-        assert health.root_allows_destructive_reconciliation("main")
-
-        health.record_event(LibraryEvent(LibraryEventKind.OVERFLOW, "main", root, observed_at=1.0))
-        assert not health.root_allows_destructive_reconciliation("main")
-        reconciler_roots = []
-        assert _recover_library_watch_after_manual_scan(
-            health_service=health,
-            targeted_reconciler=SimpleNamespace(replace_roots=reconciler_roots.append),
-            watch_service=watcher,
-            root_definitions=roots,
-            scan_mode="manual_full_rescan",
-            scan_started_at=None,
-            observed_root_ids={"main"},
-        ) == 1
-        assert reconciler_roots == [tuple(roots)]
-        assert health.root_allows_destructive_reconciliation("main")
 
         assert watcher.replace_roots([{"id": "unavailable", "path": str(root / "absent")}])
         assert watcher.stop()
@@ -931,6 +1296,54 @@ def test_derived_cover_preview_events_do_not_enter_reconciliation(tmp_path, even
         roots=[{"id": "main", "path": str(root)}], publish=events.append, clock=lambda: 1.0,
     )
     assert events == []
+
+
+def test_watchdog_uses_aware_utc_acceptance_time_without_leaking_cover_variants(
+    tmp_path,
+):
+    from music_app.services.library_watch import publish_watchdog_event
+
+    root = tmp_path / "Music"
+    accepted_at = datetime(
+        2026,
+        10,
+        9,
+        8,
+        30,
+        tzinfo=timezone(timedelta(hours=-4)),
+    )
+    events = []
+    publish_watchdog_event(
+        SimpleNamespace(
+            event_type="created",
+            src_path=str(root / "Album" / "track.flac"),
+            is_directory=False,
+        ),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=events.append,
+        clock=lambda: accepted_at,
+    )
+    publish_watchdog_event(
+        SimpleNamespace(
+            event_type="modified",
+            src_path=str(
+                root
+                / "Album"
+                / ".album-haven"
+                / "cover_variants"
+                / "ab"
+                / "preview.webp"
+            ),
+            is_directory=False,
+        ),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=events.append,
+        clock=lambda: accepted_at,
+    )
+
+    assert len(events) == 1
+    assert events[0].observed_at == accepted_at.astimezone(timezone.utc)
+    assert events[0].observed_at.tzinfo is timezone.utc
 
 
 def test_watcher_uses_shared_managed_preview_classifier(tmp_path, monkeypatch):

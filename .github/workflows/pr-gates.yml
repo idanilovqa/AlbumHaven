@@ -292,6 +292,7 @@ jobs:
         run: |
           "PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL=$env:DATABASE_MIGRATOR_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "PYTEST_DESTRUCTIVE_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PYTEST_DESTRUCTIVE_WORKER_DATABASE_URL=$env:ALBUM_HAVEN_WORKER_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "PYTEST_DESTRUCTIVE_PGPASSFILE=$env:PGPASSFILE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Provision pristine PostgreSQL for persistent Python contracts
@@ -324,6 +325,8 @@ jobs:
           "PGPASSFILE=$combinedPgpass" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_FAKE_E2E_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_WORKER_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_WORKER_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_WORKER_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

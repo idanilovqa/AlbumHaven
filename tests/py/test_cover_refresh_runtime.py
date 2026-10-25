@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import threading
 
-from music_app.services import cover_refresh_runtime
+from music_app.services import cover_refresh_execution, cover_refresh_runtime
 
 
 def test_cover_pass_snapshot_refreshes_selection_once_without_runtime_alias(monkeypatch):
@@ -612,7 +614,7 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
         "cover_generation": 7,
     }
 
-    cover_refresh_runtime.refresh_cover_artwork_request(
+    result = cover_refresh_runtime.refresh_cover_artwork_request(
         get_state=lambda: library_state,
         cache_lock=threading.Lock(),
         config=runtime_config,
@@ -653,6 +655,186 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
     assert library_state["covers_in_progress"] is False
     assert len(logged) == 1
     assert logged[0]["mode"] == "background"
+    assert result == {
+        "changed": False,
+        "processed": 1,
+        "downloaded": 0,
+        "skipped": 1,
+        "failed": 0,
+        "downloaded_paths": [],
+        "job_results": [],
+    }
+
+
+@pytest.fixture
+def claimed_existing_cover(tmp_path, monkeypatch):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    cover = folder / "cover.jpg"
+    cover.write_bytes(b"existing-cover-bytes")
+    track = str(folder / "01.flac")
+    entries = {track: {
+        "album_id": 19,
+        "cover_path": None,
+        "cover_revision": "previous-revision",
+        "cover_selection_origin": "automatic",
+    }}
+    state = {
+        "file_cache": {track: dict(entries[track])},
+        "scan_generation": 7,
+        "scan_in_progress": False,
+        "cover_generation": 11,
+    }
+    config = {}
+    monkeypatch.setattr(
+        cover_refresh_execution, "persist_cover_selection_for_tracks_for_config",
+        lambda *_args, **_kwargs: pytest.fail("claimed recovery must not use generic persistence"),
+    )
+    return SimpleNamespace(
+        track=track, cover=cover, entries=entries, state=state, config=config,
+        kwargs={
+            "config": config,
+            "job": {"folder": folder, "track_paths": [track]},
+            "cover_path": cover,
+            "file_cache": entries,
+            "get_state": lambda: state,
+            "library_state": state,
+            "cache_lock": threading.Lock(),
+            "scan_generation": 7,
+            "cover_generation": 11,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("origin", "revision"), [("automatic", "previous-revision"), (None, None)],
+)
+def test_existing_cover_recovery_uses_claimed_persister_with_exact_fence(
+    claimed_existing_cover, origin, revision,
+):
+    case = claimed_existing_cover
+    for entries in (case.entries, case.state["file_cache"]):
+        entries[case.track].update(cover_selection_origin=origin, cover_revision=revision)
+    calls, commits = [], []
+    selected_revision = cover_refresh_execution.cover_revision_for_path(case.cover)
+
+    def persist(track_paths, selected_cover_path, **options):
+        calls.append((track_paths, selected_cover_path))
+        assert options.keys() == {
+            "cover_revision", "cover_selection_origin", "reject_if_user_controlled",
+            "expected_cover_state", "commit_guard",
+        }
+        assert options["cover_revision"] == selected_revision
+        assert options["cover_selection_origin"] == "automatic"
+        assert options["reject_if_user_controlled"] is True
+        assert options["expected_cover_state"] == (origin, revision)
+        assert case.entries[case.track]["cover_path"] is None
+        assert case.state["file_cache"][case.track]["cover_path"] is None
+        options["commit_guard"](lambda: commits.append("committed"))
+        return {"album_rows_updated": 1, "track_file_rows_updated": 1}
+
+    case.config["CLAIMED_COVER_SELECTION_PERSISTER"] = persist
+
+    assert cover_refresh_execution._recover_existing_cover_selection(**case.kwargs) == (True, False)
+    assert calls == [({case.track}, case.cover.resolve())]
+    assert commits == ["committed"]
+    for entries in (case.entries, case.state["file_cache"]):
+        assert entries[case.track]["cover_path"] == str(case.cover.resolve())
+        assert entries[case.track]["cover_revision"] == selected_revision
+        assert entries[case.track]["cover_selection_origin"] == "automatic"
+
+
+@pytest.mark.parametrize(
+    "rejection",
+    ["blocked_by_user_selection", "blocked_by_expected_cover_state", "claim_cancelled", "generation_changed"],
+)
+def test_existing_cover_recovery_claim_rejection_does_not_publish_runtime(
+    claimed_existing_cover, rejection,
+):
+    case = claimed_existing_cover
+    baseline = dict(case.entries[case.track])
+    calls, commits = [], []
+
+    def persist(track_paths, selected_cover_path, **options):
+        calls.append((track_paths, selected_cover_path))
+        assert options["expected_cover_state"] == ("automatic", "previous-revision")
+        assert options["reject_if_user_controlled"] is True
+        if rejection == "claim_cancelled":
+            raise RuntimeError("cover refresh claim no longer active")
+        if rejection == "generation_changed":
+            case.state["cover_generation"] += 1
+            options["commit_guard"](lambda: commits.append("committed"))
+            pytest.fail("stale generation must not commit")
+        return {rejection: True}
+
+    case.config["CLAIMED_COVER_SELECTION_PERSISTER"] = persist
+
+    if rejection in {"claim_cancelled", "generation_changed"}:
+        with pytest.raises(RuntimeError, match="claim no longer active|changed before commit"):
+            cover_refresh_execution._recover_existing_cover_selection(**case.kwargs)
+    else:
+        assert cover_refresh_execution._recover_existing_cover_selection(**case.kwargs) == (False, True)
+    assert calls == [({case.track}, case.cover.resolve())]
+    assert commits == []
+    assert case.entries[case.track] == baseline
+    assert case.state["file_cache"][case.track] == baseline
+
+
+def test_claimed_cover_refresh_runs_nonempty_plan_with_safe_logger_plumbing(
+    runtime_config, monkeypatch
+):
+    from music_app.jobs.safe_logging import DurablePipelineLogger
+    from music_app.services import app_logging, state as state_service
+
+    executions = []
+    monkeypatch.setattr(
+        state_service,
+        "select_background_cover_refresh_jobs",
+        lambda **_kwargs: [{"folder": "opaque-folder", "track_paths": []}],
+    )
+    monkeypatch.setattr(
+        state_service,
+        "run_cover_jobs",
+        lambda **kwargs: (
+            kwargs["logger"].verbose("private candidate %s", "private-url"),
+            app_logging.flush_log_handlers_debounced(
+                kwargs["logger"], min_interval_seconds=0.1
+            ),
+            executions.append(kwargs),
+            {
+                "changed": False,
+                "processed": 1,
+                "downloaded": 0,
+                "skipped": 1,
+                "failed": 0,
+                "downloaded_paths": [],
+                "job_results": [],
+            },
+        )[-1],
+    )
+    monkeypatch.setattr(
+        state_service, "log_cover_refresh_completion", lambda **_kwargs: None
+    )
+    logger = DurablePipelineLogger(
+        logging.getLogger("test.cover.claimed.nonempty"), domain="cover"
+    )
+
+    result = cover_refresh_runtime.run_claimed_cover_refresh(
+        scope=SimpleNamespace(
+            file_cache={},
+            progress_total=1,
+            mode="post_scan",
+            force_search=False,
+        ),
+        config=runtime_config,
+        logger=logger,
+        should_cancel=lambda: False,
+        progress=lambda **_kwargs: True,
+    )
+
+    assert result["processed"] == 1
+    assert len(executions) == 1
+    assert executions[0]["logger"] is logger
 
 
 def test_refresh_cover_artwork_for_track_paths_request_logs_no_jobs_found(runtime_config, logger):

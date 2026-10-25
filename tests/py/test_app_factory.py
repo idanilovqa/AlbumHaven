@@ -5,12 +5,14 @@ import asyncio
 import importlib.util
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 import runpy
 import subprocess
 import sys
 import threading
 import types
+from uuid import UUID
 
 import pytest
 from packaging.requirements import Requirement
@@ -24,18 +26,6 @@ from tests.py.asgi_testing import runtime_app_from_asgi_app
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-
-
-class _FatalFlaskContextAccess:
-    def __init__(self, runtime) -> None:
-        self._runtime = runtime
-
-    def __getattr__(self, name: str):
-        if name in {"app_context", "test_request_context"}:
-            raise AssertionError("Last.fm retry worker must not access Flask context methods")
-        return getattr(self._runtime, name)
-
-
 @pytest.fixture(autouse=True)
 def _stub_relation_projection_startup(monkeypatch):
     from music_app.services import (
@@ -241,7 +231,7 @@ def _run_asgi_http_get(app, path: str) -> tuple[int, dict[str, str], bytes]:
     return run_asgi_request(app, "GET", path)
 
 
-def _run_asgi_lifespan(app) -> list[dict[str, object]]:
+def _run_asgi_lifespan(app, *, after_startup=None) -> list[dict[str, object]]:
     async def call() -> list[dict[str, object]]:
         sent: list[dict[str, object]] = []
         events = iter(
@@ -256,6 +246,8 @@ def _run_asgi_lifespan(app) -> list[dict[str, object]]:
 
         async def send(message: dict[str, object]) -> None:
             sent.append(message)
+            if message["type"] == "lifespan.startup.complete" and after_startup is not None:
+                after_startup()
 
         await app({"type": "lifespan", "asgi": {"version": "3.0"}}, receive, send)
         return sent
@@ -481,25 +473,15 @@ def test_app_entrypoint_exports_fastapi_app(monkeypatch):
     assert isinstance(entrypoint.app, FastAPI)
 
 
-def test_create_asgi_app_lifespan_starts_retry_worker_and_shutdown(monkeypatch):
+def test_create_asgi_app_lifespan_hydrates_and_shuts_down(monkeypatch):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
 
     calls: list[tuple[str, object]] = []
     monkeypatch.setattr(
         state,
         "hydrate_runtime_library_state_on_startup",
         lambda app: calls.append(("hydrate", app)) or True,
-    )
-    monkeypatch.setattr(
-        lastfm_retry,
-        "start_lastfm_retry_worker",
-        lambda app: calls.append(("startup", app)),
-    )
-    monkeypatch.setattr(
-        lastfm_retry,
-        "stop_lastfm_retry_worker",
-        lambda app: calls.append(("stop", app)) or True,
     )
     monkeypatch.setattr(
         runtime_shutdown,
@@ -518,18 +500,610 @@ def test_create_asgi_app_lifespan_starts_retry_worker_and_shutdown(monkeypatch):
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert [name for name, _runtime in calls] == ["hydrate", "startup", "stop", "shutdown"]
+    assert [name for name, _runtime in calls] == ["hydrate", "shutdown"]
     for _name, runtime in calls:
         assert runtime.config is asgi_app.state.config
         assert runtime.logger is asgi_app.state.logger
         assert runtime.library_state is asgi_app.state.library_state
 
 
+def _watcher_session_lifecycle_harness(
+    monkeypatch, *, host_library_id=41, resolve_error=None, session_state=None
+):
+    import music_app
+    from music_app.services import (
+        cover_preview_backfill,
+        library_event_coordinator,
+        library_reconciliation,
+        library_roots,
+        library_watch_health,
+        log_history,
+        runtime_shutdown,
+        scan_jobs_postgres,
+        watcher_recovery_postgres,
+        watcher_session_recovery,
+    )
+
+    events = []
+    callbacks = {}
+    failures = {"begin": None, "expand": None, "replace": None, "set": None}
+    state = session_state if session_state is not None else {
+        "open": False,
+        "overflow_occurrences": 0,
+        "participants": set(),
+    }
+    expected_library_id = host_library_id if host_library_id is not None else 52
+
+    class ScanJobs:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://watcher-session-test"
+
+        @staticmethod
+        def resolve_local_library_id():
+            events.append("library.resolve")
+            if resolve_error is not None:
+                raise resolve_error
+            return 52
+
+    class WatcherRepository:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://watcher-session-test"
+
+        @staticmethod
+        def record_problem(**_values):
+            return True
+
+    class SessionController:
+        def __init__(self, repository):
+            assert isinstance(repository, WatcherRepository)
+            callbacks["controller"] = self
+
+        def start(
+            self, *, library_id, session_token, logical_root_ids, started_at
+        ):
+            assert library_id == expected_library_id
+            assert isinstance(session_token, UUID)
+            assert logical_root_ids == ("root-a",)
+            assert isinstance(started_at, datetime)
+            assert started_at.tzinfo is not None
+            assert started_at.utcoffset() == timezone.utc.utcoffset(started_at)
+            events.append("session.begin")
+            if failures["begin"] is not None:
+                raise failures["begin"]
+            if state["open"]:
+                state["overflow_occurrences"] += 1
+            state["open"] = True
+            state["participants"] = set(logical_root_ids)
+            return ()
+
+        def expand_participants(self, logical_root_ids):
+            events.append(("session.expand", logical_root_ids))
+            if failures["expand"] is not None:
+                raise failures["expand"]
+            state["participants"].update(logical_root_ids)
+
+        def set_participants(self, logical_root_ids):
+            events.append(("session.set", logical_root_ids))
+            if failures["set"] is not None:
+                raise failures["set"]
+            state["participants"] = set(logical_root_ids)
+
+        def report_admission_failure(self, *, logical_root_ids):
+            assert isinstance(logical_root_ids, tuple)
+            assert all(isinstance(root_id, str) for root_id in logical_root_ids)
+            events.append(("session.report", logical_root_ids))
+            callbacks.setdefault("reporters", []).append(id(self))
+
+        def stop_retry_and_flush(self, *, deadline):
+            assert isinstance(deadline, float)
+            events.append("retry.cancel_join_flush")
+
+        def finish(self, *, deadline):
+            events.append("session.finish")
+            state["open"] = False
+            state["participants"] = set()
+            return True
+
+    class Coordinator:
+        def __init__(
+            self,
+            _accept_event,
+            *,
+            record_problem,
+            report_admission_failure=None,
+        ):
+            assert callable(record_problem)
+            callbacks["coordinator"] = report_admission_failure
+            events.append("coordinator.construct")
+
+        @staticmethod
+        def accept(_event):
+            return True
+
+        def stop(self):
+            events.append("coordinator.stop")
+            return True
+
+    class Source:
+        def __init__(self, _roots, *, report_unattributed_failure=None):
+            callbacks["source"] = report_unattributed_failure
+            events.append("source.construct")
+
+    class WatchService:
+        def __init__(self, _source, _publish):
+            callbacks["watch"] = self
+            self.root_ids = ("root-a",)
+
+        def start(self):
+            events.append("watch.start")
+            return True
+
+        def stop(self, *, timeout=None):
+            events.append("watch.stop")
+            return True
+
+        def replace_roots(self, roots):
+            events.append(
+                ("watch.replace", tuple(root["id"] for root in roots))
+            )
+            if failures["replace"] is not None:
+                raise failures["replace"]
+            self.root_ids = tuple(root["id"] for root in roots)
+            return True
+
+    monkeypatch.setattr(
+        library_watch_health,
+        "LibraryWatchHealthService",
+        lambda _store: types.SimpleNamespace(
+            uses_durable_repository=lambda _repository, _library_id: True
+        ),
+    )
+    monkeypatch.setattr(
+        cover_preview_backfill,
+        "CoverPreviewBackfill",
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            start=lambda: True, stop=lambda: True
+        ),
+    )
+    monkeypatch.setattr(scan_jobs_postgres, "PostgresScanJobRepository", ScanJobs)
+    monkeypatch.setattr(
+        watcher_recovery_postgres,
+        "PostgresWatcherRecoveryRepository",
+        WatcherRepository,
+    )
+    monkeypatch.setattr(
+        watcher_session_recovery,
+        "WatcherSessionRecoveryController",
+        SessionController,
+    )
+    monkeypatch.setattr(library_event_coordinator, "LibraryEventCoordinator", Coordinator)
+    monkeypatch.setattr(library_reconciliation, "LibraryWatchService", WatchService)
+    monkeypatch.setattr(library_reconciliation, "WatchdogLibraryEventSource", Source)
+    monkeypatch.setattr(
+        library_roots,
+        "get_library_roots",
+        lambda _config: ({"id": "root-a", "path": "C:/Music"},),
+    )
+    monkeypatch.setattr(
+        log_history,
+        "resolve_media_host_history_scope",
+        lambda _config: (
+            None
+            if host_library_id is None
+            else types.SimpleNamespace(library_id=host_library_id)
+        ),
+    )
+    monkeypatch.setattr(music_app, "_start_library_warmup", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
+
+    app = music_app.create_asgi_app()
+    app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://watcher-session-test"
+    )
+    return types.SimpleNamespace(
+        app=app,
+        callbacks=callbacks,
+        events=events,
+        failures=failures,
+        state=state,
+    )
+
+
+def test_watcher_session_startup_resolves_library_then_wires_one_controller(
+    monkeypatch,
+):
+    harness = _watcher_session_lifecycle_harness(monkeypatch, host_library_id=None)
+
+    async def exercise():
+        async with harness.app.router.lifespan_context(harness.app):
+            assert harness.events == [
+                "library.resolve",
+                "session.begin",
+                "coordinator.construct",
+                "source.construct",
+                "watch.start",
+            ]
+            assert callable(harness.callbacks["coordinator"])
+            assert callable(harness.callbacks["source"])
+            harness.callbacks["coordinator"](("root-a",))
+            harness.callbacks["source"](("root-a", "root-b"))
+            assert harness.events[-2:] == [
+                ("session.report", ("root-a",)),
+                ("session.report", ("root-a", "root-b")),
+            ]
+            assert harness.callbacks["reporters"] == [
+                id(harness.callbacks["controller"]),
+                id(harness.callbacks["controller"]),
+            ]
+
+    asyncio.run(exercise())
+
+    assert harness.events[-4:] == [
+        "watch.stop",
+        "retry.cancel_join_flush",
+        "session.finish",
+        "coordinator.stop",
+    ]
+
+
+@pytest.mark.parametrize("failed_stage", ("library-resolution", "session-begin"))
+def test_watcher_session_startup_failure_prevents_runtime_construction(
+    monkeypatch, failed_stage
+):
+    failure = RuntimeError(f"{failed_stage} unavailable")
+    if failed_stage == "library-resolution":
+        harness = _watcher_session_lifecycle_harness(
+            monkeypatch, host_library_id=None, resolve_error=failure
+        )
+        expected_events = ["library.resolve"]
+    else:
+        harness = _watcher_session_lifecycle_harness(monkeypatch)
+        harness.failures["begin"] = failure
+        expected_events = ["session.begin"]
+
+    async def exercise():
+        with pytest.raises(RuntimeError, match=f"{failed_stage} unavailable"):
+            async with harness.app.router.lifespan_context(harness.app):
+                raise AssertionError("failed watcher startup must not yield")
+
+    asyncio.run(exercise())
+    assert harness.events == expected_events
+
+
+def test_watcher_session_clean_shutdown_prevents_recovery_on_next_start(monkeypatch):
+    state = {"open": False, "overflow_occurrences": 0, "participants": set()}
+
+    for _ in range(2):
+        harness = _watcher_session_lifecycle_harness(
+            monkeypatch, session_state=state
+        )
+
+        async def exercise():
+            async with harness.app.router.lifespan_context(harness.app):
+                pass
+
+        asyncio.run(exercise())
+        assert harness.events.count("session.begin") == 1
+        assert harness.events.count("session.finish") == 1
+
+    assert state == {"open": False, "overflow_occurrences": 0, "participants": set()}
+
+
+@pytest.mark.parametrize("stale_token", (False, True), ids=("storage", "stale-token"))
+def test_watcher_session_expand_failure_leaves_existing_observer_running(
+    monkeypatch, stale_token
+):
+    from music_app.services.watcher_recovery_postgres import (
+        WatcherSessionReplacedError,
+    )
+
+    harness = _watcher_session_lifecycle_harness(monkeypatch)
+    error_type = WatcherSessionReplacedError if stale_token else RuntimeError
+    harness.failures["expand"] = error_type("session expansion unavailable")
+
+    async def exercise():
+        async with harness.app.router.lifespan_context(harness.app):
+            harness.events.clear()
+            with pytest.raises(error_type, match="session expansion unavailable"):
+                harness.app.state.replace_library_watch_roots(
+                    ({"id": "root-b", "path": "D:/Music"},)
+                )
+            assert harness.events == [("session.expand", ("root-b",))]
+            assert harness.state["participants"] == {"root-a"}
+
+    asyncio.run(exercise())
+
+
+def test_watcher_session_replacement_failures_retain_union_until_successful_set(
+    monkeypatch,
+):
+    harness = _watcher_session_lifecycle_harness(monkeypatch)
+
+    async def exercise():
+        async with harness.app.router.lifespan_context(harness.app):
+            harness.events.clear()
+            harness.failures["set"] = RuntimeError("session set unavailable")
+            with pytest.raises(RuntimeError, match="session set unavailable"):
+                harness.app.state.replace_library_watch_roots(
+                    ({"id": "root-b", "path": "D:/Music"},)
+                )
+            assert harness.events[-1] == (
+                "session.report",
+                ("root-a", "root-b"),
+            )
+            assert harness.state["participants"] == {"root-a", "root-b"}
+
+            harness.events.clear()
+            harness.failures["set"] = None
+            harness.failures["replace"] = RuntimeError(
+                "watch replace unavailable"
+            )
+            with pytest.raises(RuntimeError, match="watch replace unavailable"):
+                harness.app.state.replace_library_watch_roots(
+                    ({"id": "root-c", "path": "E:/Music"},)
+                )
+            assert harness.events[-1] == (
+                "session.report",
+                ("root-b", "root-c"),
+            )
+            assert harness.state["participants"] == {"root-a", "root-b", "root-c"}
+
+            harness.events.clear()
+            harness.failures["replace"] = None
+            harness.app.state.replace_library_watch_roots(
+                ({"id": "root-c", "path": "E:/Music"},)
+            )
+            assert harness.events == [
+                ("session.expand", ("root-c",)),
+                ("watch.replace", ("root-c",)),
+                ("session.set", ("root-c",)),
+            ]
+            assert harness.state["participants"] == {"root-c"}
+
+    asyncio.run(exercise())
+
+
+def test_watcher_session_shutdown_timeout_rejects_later_replacements(monkeypatch):
+    harness = _watcher_session_lifecycle_harness(monkeypatch)
+    entered = threading.Event()
+    release = threading.Event()
+    errors = []
+
+    async def exercise():
+        worker = None
+        try:
+            with pytest.raises(RuntimeError, match="watcher lifecycle stop deadline"):
+                async with harness.app.router.lifespan_context(harness.app):
+                    watch = harness.callbacks["watch"]
+                    original_replace = watch.replace_roots
+
+                    def blocked_replace(roots):
+                        entered.set()
+                        assert release.wait(10), "replacement was not released"
+                        return original_replace(roots)
+
+                    monkeypatch.setattr(watch, "replace_roots", blocked_replace)
+
+                    def replace():
+                        try:
+                            harness.app.state.replace_library_watch_roots(
+                                ({"id": "root-b", "path": "D:/Music"},)
+                            )
+                        except BaseException as exc:
+                            errors.append(exc)
+
+                    worker = threading.Thread(target=replace)
+                    worker.start()
+                    assert entered.wait(2)
+        finally:
+            release.set()
+            if worker is not None:
+                worker.join(2)
+                assert not worker.is_alive()
+        assert errors == []
+        assert harness.state["open"] is True
+        with pytest.raises(RuntimeError, match="stopping"):
+            harness.app.state.replace_library_watch_roots(
+                ({"id": "root-c", "path": "E:/Music"},)
+            )
+
+    asyncio.run(exercise())
+
+
+def test_watcher_session_concurrent_replacements_serialize_complete_transition(
+    monkeypatch,
+):
+    harness = _watcher_session_lifecycle_harness(monkeypatch)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    second_completed = threading.Event()
+    errors = []
+
+    async def exercise():
+        async with harness.app.router.lifespan_context(harness.app):
+            harness.events.clear()
+            watch = harness.callbacks["watch"]
+            replace_roots = watch.replace_roots
+
+            def blocked_replace(roots):
+                if roots[0]["id"] == "root-b":
+                    first_entered.set()
+                    assert release_first.wait(5), "first replacement was not released"
+                return replace_roots(roots)
+
+            monkeypatch.setattr(watch, "replace_roots", blocked_replace)
+
+            def replace(root_id, *, second=False):
+                if second:
+                    second_started.set()
+                try:
+                    harness.app.state.replace_library_watch_roots(
+                        ({"id": root_id, "path": f"C:/Music/{root_id}"},)
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    if second:
+                        second_completed.set()
+
+            first = threading.Thread(target=replace, args=("root-b",))
+            second = threading.Thread(
+                target=replace, args=("root-c",), kwargs={"second": True}
+            )
+            first.start()
+            try:
+                assert first_entered.wait(5), "first replacement did not enter observer"
+                second.start()
+                assert second_started.wait(5), "second replacement did not start"
+                assert not second_completed.wait(0.1), "replacement interleaved"
+                assert harness.events == [("session.expand", ("root-b",))]
+            finally:
+                release_first.set()
+                first.join(5)
+                if second.ident is not None:
+                    second.join(5)
+                assert not first.is_alive()
+                assert not second.is_alive()
+
+            assert errors == []
+            assert harness.events == [
+                ("session.expand", ("root-b",)),
+                ("watch.replace", ("root-b",)),
+                ("session.set", ("root-b",)),
+                ("session.expand", ("root-c",)),
+                ("watch.replace", ("root-c",)),
+                ("session.set", ("root-c",)),
+            ]
+            assert watch.root_ids == ("root-c",)
+            assert harness.state["participants"] == {"root-c"}
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "failed_stage",
+    (
+        "observer-stop",
+        "callback-cancel",
+        "callback-join",
+        "final-flush",
+        "session-finish",
+        "session-finish-false",
+    ),
+)
+def test_watcher_session_shutdown_failure_surfaces_and_leaves_session_open(
+    failed_stage, monkeypatch,
+):
+    import time
+    from music_app import _stop_library_watch_runtime
+
+    monkeypatch.setattr(time, "monotonic", lambda: 120.0)
+    calls = []
+
+    def stop_watch(*, timeout=None):
+        calls.append("watch.stop")
+        if failed_stage == "observer-stop":
+            raise RuntimeError(failed_stage)
+
+    stop_failures = {"callback-cancel", "callback-join", "final-flush"}
+    flush_label = (
+        f"retry.cancel_join_flush:{failed_stage}"
+        if failed_stage in stop_failures
+        else "retry.cancel_join_flush"
+    )
+
+    def stop_retry_and_flush(*, deadline):
+        assert deadline == 123.0
+        calls.append(flush_label)
+        if failed_stage in stop_failures:
+            raise RuntimeError(failed_stage)
+
+    def finish(*, deadline):
+        assert deadline == 123.0
+        calls.append("session.finish")
+        if failed_stage == "session-finish":
+            raise RuntimeError(failed_stage)
+        return failed_stage != "session-finish-false"
+
+    with pytest.raises(
+        RuntimeError,
+        match=("finish" if failed_stage == "session-finish-false" else failed_stage),
+    ):
+        _stop_library_watch_runtime(
+            watch_service=types.SimpleNamespace(stop=stop_watch),
+            watcher_session_controller=types.SimpleNamespace(
+                stop_retry_and_flush=stop_retry_and_flush,
+                finish=finish,
+            ),
+            event_coordinator=types.SimpleNamespace(
+                stop=lambda: calls.append("coordinator.stop")
+            ),
+            deadline=123.0,
+        )
+
+    expected = ["watch.stop"]
+    if failed_stage != "observer-stop":
+        expected.append(flush_label)
+    if failed_stage.startswith("session-finish"):
+        expected.append("session.finish")
+    assert calls == expected
+
+
+@pytest.mark.parametrize("now", (120.0, 124.0))
+def test_watcher_session_shutdown_observer_uses_remaining_deadline(monkeypatch, now):
+    import time
+    from music_app import _stop_library_watch_runtime
+
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+    calls = []
+
+    def stop_watch(*, timeout):
+        calls.append(("watch.stop", timeout))
+        assert timeout == max(0.0, 123.0 - now)
+        if timeout == 0:
+            raise TimeoutError("observer deadline exhausted")
+
+    def stop_retry_and_flush(*, deadline):
+        assert deadline == 123.0
+        calls.append("retry.cancel_join_flush")
+
+    def finish(*, deadline):
+        assert deadline == 123.0
+        calls.append("session.finish")
+        return True
+
+    def stop():
+        _stop_library_watch_runtime(
+            watch_service=types.SimpleNamespace(stop=stop_watch),
+            watcher_session_controller=types.SimpleNamespace(
+                stop_retry_and_flush=stop_retry_and_flush, finish=finish
+            ),
+            event_coordinator=types.SimpleNamespace(
+                stop=lambda: calls.append("coordinator.stop")
+            ),
+            deadline=123.0,
+        )
+
+    if now > 123.0:
+        with pytest.raises(TimeoutError, match="observer deadline exhausted"):
+            stop()
+        assert calls == [("watch.stop", 0.0)]
+    else:
+        stop()
+        assert calls == [
+            ("watch.stop", 3.0),
+            "retry.cancel_join_flush",
+            "session.finish",
+            "coordinator.stop",
+        ]
+
+
 def test_create_asgi_app_lifespan_requests_warmup_stop_before_worker_shutdown(
     monkeypatch,
 ):
     import music_app
-    from music_app.services import lastfm_retry, runtime_shutdown
+    from music_app.services import runtime_shutdown
 
     calls = []
 
@@ -545,12 +1119,6 @@ def test_create_asgi_app_lifespan_requests_warmup_stop_before_worker_shutdown(
         "_start_library_warmup",
         lambda *_args, **_kwargs: WarmupHandle(),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
-    monkeypatch.setattr(
-        lastfm_retry,
-        "stop_lastfm_retry_worker",
-        lambda _runtime: calls.append("lastfm-stop"),
-    )
     monkeypatch.setattr(
         runtime_shutdown,
         "request_runtime_shutdown",
@@ -561,7 +1129,7 @@ def test_create_asgi_app_lifespan_requests_warmup_stop_before_worker_shutdown(
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert calls == ["warmup-stop", "lastfm-stop", "runtime-stop"]
+    assert calls == ["warmup-stop", "runtime-stop"]
 
 
 def test_create_asgi_app_lifespan_starts_and_stops_cover_preview_backfill(
@@ -833,9 +1401,6 @@ def test_library_warmup_stop_during_postgres_prewarm_skips_relation_projection()
         runtime,
         lambda _runtime: (_ for _ in ()).throw(AssertionError("hydrate must not run")),
         lambda _runtime: relation_calls.append("relations"),
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("scan must not start")
-        ),
         prewarm,
     )
     assert prewarm_started.wait(timeout=2)
@@ -867,10 +1432,79 @@ def test_library_warmup_stop_during_postgres_prewarm_skips_relation_projection()
     assert relation_calls == []
 
 
+@pytest.fixture
+def stub_watcher_session(monkeypatch):
+    from music_app.services import (
+        cover_preview_backfill,
+        library_reconciliation,
+        postgres_connections,
+        scan_jobs_postgres,
+        watcher_session_recovery,
+    )
+
+    class Session:
+        def __init__(self, _repository):
+            pass
+
+        def start(self, **_kwargs):
+            return ()
+
+        def stop_retry_and_flush(self, *, deadline):
+            pass
+
+        def finish(self, *, deadline):
+            return True
+
+    class Backfill:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def note_foreground_activity(self):
+            pass
+
+    class Source:
+        is_alive = False
+
+        def __init__(self, _roots, **_kwargs):
+            pass
+
+        def start(self, _publish):
+            pass
+
+        def stop(self, *, timeout):
+            pass
+
+    monkeypatch.setattr(watcher_session_recovery, "WatcherSessionRecoveryController", Session)
+    monkeypatch.setattr(library_reconciliation, "WatchdogLibraryEventSource", Source)
+    monkeypatch.setattr(postgres_connections, "prewarm_connection_pool", lambda _url: None)
+    monkeypatch.setattr(
+        cover_preview_backfill,
+        "CoverPreviewBackfill",
+        Backfill,
+    )
+    monkeypatch.setattr(
+        scan_jobs_postgres.PostgresScanJobRepository,
+        "resolve_local_library_id",
+        lambda _self: 1,
+    )
+
+
 def test_postgres_relation_warmup_waits_for_startup_grace(monkeypatch):
     import music_app
 
     monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0.05)
+    monkeypatch.setattr(
+        "music_app.services.state.start_background_refresh_for_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("scan must not start")
+        ),
+    )
     relation_started = threading.Event()
     runtime = types.SimpleNamespace(
         config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
@@ -882,9 +1516,6 @@ def test_postgres_relation_warmup_waits_for_startup_grace(monkeypatch):
         runtime,
         lambda _runtime: (_ for _ in ()).throw(AssertionError("hydrate must not run")),
         lambda _runtime, **_kwargs: relation_started.set(),
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("scan must not start")
-        ),
         lambda _database_url: None,
     )
     try:
@@ -894,19 +1525,14 @@ def test_postgres_relation_warmup_waits_for_startup_grace(monkeypatch):
         asyncio.run(handle.stop())
 
 
-def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch):
+def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch, stub_watcher_session):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
         lambda _runtime: None,
     )
     from config import Config
     from music_app import create_asgi_app
-    from music_app.services import (
-        cover_preview_backfill,
-        lastfm_retry,
-        postgres_connections,
-        state,
-    )
+    from music_app.services import postgres_connections, state
 
     monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
     monkeypatch.setattr(
@@ -914,7 +1540,6 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
         "ensure_runtime_relation_projection_ready",
         lambda _runtime, **_kwargs: (_ for _ in ()).throw(RuntimeError("projection failed")),
     )
-    retry_calls = []
 
     monkeypatch.setattr(
         Config,
@@ -926,22 +1551,13 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
         "prewarm_connection_pool",
         lambda _database_url: None,
     )
-    monkeypatch.setattr(cover_preview_backfill.CoverPreviewBackfill, "start", lambda _self: None)
-    monkeypatch.setattr(cover_preview_backfill.CoverPreviewBackfill, "stop", lambda _self: None)
-    monkeypatch.setattr(
-        lastfm_retry,
-        "start_lastfm_retry_worker",
-        lambda _runtime: retry_calls.append("started"),
-    )
-
     assert _run_asgi_lifespan(create_asgi_app()) == [
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert retry_calls == ["started"]
 
 
-def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch):
+def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch, stub_watcher_session):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
         lambda _runtime: None,
@@ -949,7 +1565,7 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
     import music_app
     from config import Config
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
+    from music_app.services import postgres_connections, runtime_shutdown, state
 
     calls = []
     projection_started = threading.Event()
@@ -997,12 +1613,6 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
         lambda database_url: calls.append(("prewarm", database_url)),
         raising=False,
     )
-    monkeypatch.setattr(
-        lastfm_retry,
-        "start_lastfm_retry_worker",
-        lambda _runtime: calls.append("lastfm"),
-    )
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
     monkeypatch.setattr(music_app._LibraryWarmupHandle, "request_stop", request_stop)
 
@@ -1032,7 +1642,6 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
         assert calls == [
             ("prewarm", "postgresql://album_haven_app@localhost/app"),
             "relations",
-            "lastfm",
         ]
         assert asgi_app.state.library_warmup_thread is not None
         assert asgi_app.state.library_warmup_thread.daemon is True
@@ -1051,14 +1660,16 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
 def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch,
     caplog,
+    stub_watcher_session,
 ):
     import music_app
     from config import Config
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
+    from music_app.services import postgres_connections, runtime_shutdown, state
 
     monkeypatch.setattr(state, "hydrate_runtime_scan_metadata_on_startup", lambda _runtime: None)
     calls = []
+    projection_ready = threading.Event()
     database_url = "postgresql://album_haven_app@localhost/app"
     monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
 
@@ -1081,19 +1692,20 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch.setattr(
         state,
         "ensure_runtime_relation_projection_ready",
-        lambda _runtime, **_kwargs: calls.append("relations"),
+        lambda _runtime, **_kwargs: (calls.append("relations"), projection_ready.set()),
     )
     monkeypatch.setattr(
         state,
         "start_background_refresh_for_state",
         lambda *_args, **_kwargs: calls.append("scan"),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
+    def wait_for_projection():
+        assert projection_ready.wait(2), "relation warmup did not complete"
+
     with caplog.at_level(logging.ERROR):
-        messages = _run_asgi_lifespan(create_asgi_app())
+        messages = _run_asgi_lifespan(create_asgi_app(), after_startup=wait_for_projection)
 
     assert messages == [
         {"type": "lifespan.startup.complete"},
@@ -1105,7 +1717,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
 
 def test_create_asgi_app_lifespan_marks_empty_startup_scan_pending_without_starting_it(monkeypatch):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
 
     calls = []
     monkeypatch.setattr(
@@ -1120,8 +1732,6 @@ def test_create_asgi_app_lifespan_marks_empty_startup_scan_pending_without_start
             ("scan", library_state, config, logger, force, scan_mode)
         ),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda app: calls.append(("start", app)))
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda app: calls.append(("stop", app)))
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda app: calls.append(("shutdown", app)))
 
     asgi_app = create_asgi_app()
@@ -1130,25 +1740,25 @@ def test_create_asgi_app_lifespan_marks_empty_startup_scan_pending_without_start
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert [call[0] for call in calls] == ["hydrate", "start", "stop", "shutdown"]
+    assert [call[0] for call in calls] == ["hydrate", "shutdown"]
     assert asgi_app.state.library_state["cold_scan_pending"] is True
     assert asgi_app.state.library_state["cold_scan_handoff_status"] == "pending"
 
 
 @pytest.mark.parametrize(
-    ("repair_required", "expected_scan_calls"),
+    ("repair_required", "expected_pending"),
     [
-        (True, [(True, "background")]),
-        (False, []),
+        (True, True),
+        (False, False),
     ],
 )
-def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_repair(
+def test_create_asgi_app_lifespan_hands_incomplete_metadata_repair_to_durable_scan(
     monkeypatch,
     repair_required,
-    expected_scan_calls,
+    expected_pending,
 ):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
 
     def hydrate(runtime):
         runtime.library_state["file_cache"] = {
@@ -1177,23 +1787,28 @@ def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_re
             (force, scan_mode)
         ),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
-    assert _run_asgi_lifespan(create_asgi_app()) == [
+    asgi_app = create_asgi_app()
+    assert _run_asgi_lifespan(asgi_app) == [
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert scan_calls == expected_scan_calls
+    assert scan_calls == []
+    assert asgi_app.state.library_state["cold_scan_pending"] is expected_pending
+    assert asgi_app.state.library_state["cold_scan_force"] is expected_pending
+    assert asgi_app.state.library_state["cold_scan_is_cold_start"] is not expected_pending
+    assert asgi_app.state.library_state["cold_scan_handoff_status"] == (
+        "pending" if expected_pending else "idle"
+    )
 
 
 @pytest.mark.parametrize("root_query", [{}, {"surface": "albums"}], ids=["home", "albums"])
-def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch, root_query):
+def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch, root_query, stub_watcher_session):
     from config import Config
     from music_app import create_asgi_app
     from music_app.routes import web_asgi
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
     from music_app.services.library_roots import normalize_persisted_library_root_settings
 
     class MissingSnapshotAdapter:
@@ -1225,6 +1840,35 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
                 }
             )
 
+    durable_enqueues = []
+
+    class FakeScanJobRepository:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://album_haven_app@localhost/app"
+
+        @staticmethod
+        def resolve_local_library_id():
+            return 1
+
+        @staticmethod
+        def enqueue_targeted_reconciliation(**_kwargs):
+            raise AssertionError("startup without watcher events must not enqueue")
+
+        @staticmethod
+        def enqueue_authorized_full_scan(**kwargs):
+            durable_enqueues.append(kwargs)
+            return types.SimpleNamespace(created=True, job_id=901, intent_id=85)
+
+        @staticmethod
+        def load_authorized_full_scan_status(**_kwargs):
+            return {
+                "state": "idle",
+                "progress_current": 0,
+                "progress_total": 0,
+                "phase": "idle",
+                "mode": "idle",
+            }
+
     monkeypatch.setattr(
         "music_app.routes.api_read_asgi_routes.load_database_identity_status",
         lambda *_args, **_kwargs: {},
@@ -1239,6 +1883,10 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     monkeypatch.setattr(
         "music_app.services.library_roots.PostgresLibraryRootSettingsStore",
         FakePostgresLibraryRootSettingsStore,
+    )
+    monkeypatch.setattr(
+        "music_app.services.scan_jobs_postgres.PostgresScanJobRepository",
+        FakeScanJobRepository,
     )
     monkeypatch.setattr(state, "select_scan_cache_adapter", lambda _config: MissingSnapshotAdapter())
     monkeypatch.setattr(state, "load_exception_overrides", lambda _config: {})
@@ -1256,10 +1904,31 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         "submit",
         lambda function, *args, **kwargs: submissions.append((function, args, kwargs)),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _app: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _app: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _app: None)
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    policy_evaluation = types.SimpleNamespace(
+        decision=types.SimpleNamespace(allowed=True),
+        audit=types.SimpleNamespace(library_id=1),
+    )
+
+    def fake_require_action(_action):
+        async def dependency(request):
+            request.state.policy_evaluation = policy_evaluation
+            return policy_evaluation
+
+        return dependency
+
+    monkeypatch.setattr(web_asgi, "require_action", fake_require_action)
+    monkeypatch.setattr(
+        web_asgi,
+        "_authorized_scan_request",
+        lambda _request: (
+            policy_evaluation,
+            1,
+            "network:test-origin",
+            ("startup-main",),
+        ),
+    )
     monkeypatch.setattr(
         web_asgi,
         "PostgresLibraryBrowseRepository",
@@ -1301,17 +1970,12 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     assert b'"scanInProgress": true' in root_body
     assert b'"scanPhase": "discovering"' in root_body
     assert status_status == 200
-    assert json.loads(status_body)["scan_in_progress"] is True
-    assert len(submissions) == 1
-    submitted_function, submitted_args, submitted_kwargs = submissions[0]
-    assert submitted_function is state._refresh_library_worker
-    assert submitted_args == (
-        asgi_app.state.library_state,
-        asgi_app.state.config,
-        asgi_app.state.logger,
-        False,
-    )
-    assert submitted_kwargs == {}
+    assert "scan_in_progress" in json.loads(status_body)
+    assert submissions == []
+    assert len(durable_enqueues) == 1
+    assert durable_enqueues[0]["library_id"] == 1
+    assert durable_enqueues[0]["force"] is False
+    assert durable_enqueues[0]["mode"] == "background"
 
 
 @pytest.mark.parametrize(
@@ -1337,7 +2001,7 @@ def test_create_asgi_app_lifespan_does_not_start_duplicate_or_masked_scan(
     state_patch,
 ):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
 
     scan_calls = []
 
@@ -1351,8 +2015,6 @@ def test_create_asgi_app_lifespan_does_not_start_duplicate_or_masked_scan(
         "start_background_refresh_for_state",
         lambda *args, **kwargs: scan_calls.append((args, kwargs)),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _app: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _app: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _app: None)
 
     asgi_app = create_asgi_app()
@@ -1370,11 +2032,10 @@ def test_create_asgi_app_lifespan_reports_background_hydration_exception_without
     monkeypatch,
 ):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, state
+    from music_app.services import state
 
     failure = RuntimeError("strict Postgres query failed")
     hydration_attempted = threading.Event()
-    retry_calls = []
     scan_calls = []
 
     def fail_hydration(_app):
@@ -1387,8 +2048,6 @@ def test_create_asgi_app_lifespan_reports_background_hydration_exception_without
         "start_background_refresh_for_state",
         lambda *args, **kwargs: scan_calls.append((args, kwargs)),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda app: retry_calls.append(app))
-
     asgi_app = create_asgi_app()
 
     assert _run_asgi_lifespan(asgi_app) == [
@@ -1396,241 +2055,7 @@ def test_create_asgi_app_lifespan_reports_background_hydration_exception_without
         {"type": "lifespan.shutdown.complete"},
     ]
     assert hydration_attempted.wait(timeout=2)
-    assert len(retry_calls) == 1
     assert scan_calls == []
-
-
-def test_lastfm_retry_worker_stops_on_request(app, monkeypatch):
-    from music_app.services import lastfm_retry
-
-    attempts = 0
-    attempted = threading.Event()
-
-    def fake_retry(_config):
-        nonlocal attempts
-        attempts += 1
-        attempted.set()
-        return {
-            "pending_before": 0,
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "pending_after": 0,
-        }
-
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 0.01)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
-    app.config["TESTING"] = False
-
-    try:
-        lastfm_retry.start_lastfm_retry_worker(app)
-        assert attempted.wait(timeout=1)
-
-        assert lastfm_retry.stop_lastfm_retry_worker(app, wait=True, timeout=1) is True
-        assert lastfm_retry._WORKER_THREAD is None
-        assert attempts >= 1
-    finally:
-        lastfm_retry.stop_lastfm_retry_worker(wait=True, timeout=1)
-
-
-def test_lastfm_retry_worker_restarts_after_signal_only_stop(app, monkeypatch):
-    from music_app.services import lastfm_retry
-
-    attempts = 0
-    attempted = threading.Event()
-
-    def fake_retry(_config):
-        nonlocal attempts
-        attempts += 1
-        attempted.set()
-        return {
-            "pending_before": 0,
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "pending_after": 0,
-        }
-
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 1)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
-    app.config["TESTING"] = False
-
-    try:
-        lastfm_retry.start_lastfm_retry_worker(app)
-        assert attempted.wait(timeout=1)
-        first_thread = lastfm_retry._WORKER_THREAD
-
-        assert lastfm_retry.stop_lastfm_retry_worker(app) is True
-        attempted.clear()
-        lastfm_retry.start_lastfm_retry_worker(app)
-
-        assert attempted.wait(timeout=1)
-        assert lastfm_retry._WORKER_THREAD is not first_thread
-        assert attempts >= 2
-    finally:
-        lastfm_retry.stop_lastfm_retry_worker(wait=True, timeout=1)
-
-
-def test_lastfm_retry_worker_pass_uses_captured_config_without_app_context(app, monkeypatch):
-    from music_app.services import lastfm_retry
-
-    class OnePassStopEvent:
-        def __init__(self) -> None:
-            self.stopped = False
-            self.waited_interval: float | None = None
-
-        def is_set(self) -> bool:
-            return self.stopped
-
-        def set(self) -> None:
-            self.stopped = True
-
-        def wait(self, interval: float) -> bool:
-            self.waited_interval = interval
-            self.stopped = True
-            return True
-
-    class SynchronousThread:
-        def __init__(self, *, target, name: str, daemon: bool) -> None:
-            self.target = target
-            self.name = name
-            self.daemon = daemon
-            self.started = False
-
-        def is_alive(self) -> bool:
-            return False
-
-        def start(self) -> None:
-            self.started = True
-            self.target()
-
-        def join(self, timeout: float | None = None) -> None:
-            return None
-
-    retry_calls: list[object] = []
-    log_calls: list[dict[str, object]] = []
-    threads: list[SynchronousThread] = []
-    stop_event = OnePassStopEvent()
-
-    def fake_retry(config):
-        retry_calls.append(config)
-        return {
-            "pending_before": 1,
-            "attempted": 1,
-            "succeeded": 1,
-            "failed": 0,
-            "pending_after": 0,
-        }
-
-    def fake_log_app_event(config, logger, action, **kwargs):
-        log_calls.append({
-            "config": config,
-            "logger": logger,
-            "action": action,
-            **kwargs,
-        })
-
-    def make_thread(*, target, name: str, daemon: bool) -> SynchronousThread:
-        thread = SynchronousThread(target=target, name=name, daemon=daemon)
-        threads.append(thread)
-        return thread
-
-    monkeypatch.setattr(lastfm_retry.threading, "Event", lambda: stop_event)
-    monkeypatch.setattr(lastfm_retry.threading, "Thread", make_thread)
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 12.5)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
-    monkeypatch.setattr(lastfm_retry, "log_app_event", fake_log_app_event)
-    app.config["TESTING"] = False
-    guarded_app = _FatalFlaskContextAccess(app)
-
-    try:
-        lastfm_retry.start_lastfm_retry_worker(guarded_app)
-    finally:
-        lastfm_retry.stop_lastfm_retry_worker(guarded_app, wait=True, timeout=1)
-
-    assert retry_calls == [app.config]
-    assert log_calls == [
-        {
-            "config": app.config,
-            "logger": app.logger,
-            "action": "Last.fm retry pass completed",
-            "attempted": 1,
-            "succeeded": 1,
-            "failed": 0,
-            "pending_after": 0,
-        }
-    ]
-    assert stop_event.waited_interval == 12.5
-    assert threads[0].name == "albumhaven-lastfm-retry"
-    assert threads[0].daemon is True
-
-
-def test_lastfm_retry_worker_exception_logging_uses_captured_config_without_app_context(app, monkeypatch):
-    from music_app.services import lastfm_retry
-
-    class OnePassStopEvent:
-        def __init__(self) -> None:
-            self.stopped = False
-
-        def is_set(self) -> bool:
-            return self.stopped
-
-        def set(self) -> None:
-            self.stopped = True
-
-        def wait(self, _interval: float) -> bool:
-            self.stopped = True
-            return True
-
-    class SynchronousThread:
-        def __init__(self, *, target, name: str, daemon: bool) -> None:
-            self.target = target
-            self.name = name
-            self.daemon = daemon
-
-        def is_alive(self) -> bool:
-            return False
-
-        def start(self) -> None:
-            self.target()
-
-        def join(self, timeout: float | None = None) -> None:
-            return None
-
-    log_calls: list[dict[str, object]] = []
-
-    def fail_retry(_config):
-        raise RuntimeError("retry exploded")
-
-    def fake_log_app_event(config, logger, action, **kwargs):
-        log_calls.append({
-            "config": config,
-            "logger": logger,
-            "action": action,
-            **kwargs,
-        })
-
-    monkeypatch.setattr(lastfm_retry.threading, "Event", OnePassStopEvent)
-    monkeypatch.setattr(lastfm_retry.threading, "Thread", SynchronousThread)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fail_retry)
-    monkeypatch.setattr(lastfm_retry, "log_app_event", fake_log_app_event)
-    app.config["TESTING"] = False
-    guarded_app = _FatalFlaskContextAccess(app)
-
-    try:
-        lastfm_retry.start_lastfm_retry_worker(guarded_app)
-    finally:
-        lastfm_retry.stop_lastfm_retry_worker(guarded_app, wait=True, timeout=1)
-
-    assert log_calls == [
-        {
-            "config": app.config,
-            "logger": app.logger,
-            "action": "Last.fm retry worker failed",
-            "level": "error",
-            "error": "retry exploded",
-        }
-    ]
 
 
 def test_create_asgi_app_serves_status_without_http_flask_bridge():
@@ -1701,7 +2126,7 @@ def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration(monkey
 
     handle = _start_library_warmup(
         runtime, unexpected_inventory_hydration, ensure_relations,
-        unexpected_inventory_hydration, lambda _url: None,
+        lambda _url: None,
         hydrate_metadata=load_metadata,
     )
     try:
@@ -1728,7 +2153,7 @@ def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization(
 
     handle = _start_library_warmup(
         runtime, lambda _app: None, lambda *_args, **_kwargs: completed.set(),
-        lambda _app: None, lambda _url: None, hydrate_metadata=broken_metadata,
+        lambda _url: None, hydrate_metadata=broken_metadata,
     )
     try:
         assert completed.wait(2), "Optional timestamp failure must not skip relation initialization"
@@ -1748,7 +2173,6 @@ def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration(mo
         runtime,
         lambda _runtime: calls.append("full_hydrate"),
         lambda _runtime, **_kwargs: calls.append("relations"),
-        lambda *_args, **_kwargs: calls.append("scan"),
         lambda _url: calls.append("prewarm"),
         hydrate_metadata=lambda _runtime: calls.append("metadata"),
         recover_persistence=lambda _runtime: calls.append("recovery"),

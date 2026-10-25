@@ -34,6 +34,14 @@ def context(monkeypatch,tmp_path,*,library=9,relationship=9,host=9,mode='self_ho
     effects=[]
     request=SimpleNamespace(json=body,state=SimpleNamespace(current_actor=actor),query_params={},
         app=SimpleNamespace(state=SimpleNamespace(config=config,media_host_library_id=host,replace_library_watch_roots=lambda *_args:effects.append('watch'))))
+    def require_refresh(action):
+        assert action == 'library.refresh'
+        async def authorize(received_request):
+            assert received_request is request
+            request.state.refresh_authorized = True
+            return SimpleNamespace(audit=SimpleNamespace(library_id=library))
+        return authorize
+    monkeypatch.setattr(wave, 'require_action', require_refresh)
     monkeypatch.setattr(wave,'_app_config',lambda _request:config)
     monkeypatch.setattr(wave,'_library_state',lambda _request:{})
     monkeypatch.setattr(wave,'_start_background_refresh_for_asgi_request',lambda _request:lambda:effects.append('refresh'))
@@ -52,6 +60,8 @@ def test_matching_root_request_passes_captured_host_and_library_scope(monkeypatc
     before=copy.deepcopy(request.app.state.config)
     code,_body=invoke(getattr(wave,'library_settings_'+operation),request)
     assert code==200 and effects
+    if operation == 'write':
+        assert request.state.refresh_authorized is True
     scope=effects[0][1]
     assert scope['library_id']==9 and scope['media_host_library_id']==9
     assert request.app.state.media_host_library_id==9 and request.app.state.config==before

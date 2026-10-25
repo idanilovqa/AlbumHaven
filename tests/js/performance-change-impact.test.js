@@ -176,6 +176,40 @@ test('backend publication and invalidation owners require family and search gate
   }
 });
 
+test('Phase 8 mutation owners retain search and Problematic Files performance gates', () => {
+  const searchAndProblematicOwners = [
+    'music_app/jobs/scan_handlers.py',
+    'music_app/services/library_watch.py',
+    'music_app/services/targeted_library_reconciliation.py',
+    'music_app/services/targeted_reconciliation_scheduler.py',
+  ];
+  const requiredTargets = [
+    'artist-family',
+    'search-all-artists',
+    'search-browse',
+    'utility-problematic-files',
+    'problematic-files-focused',
+  ];
+  for (const changedPath of searchAndProblematicOwners) {
+    assert.ok(contract.requiredPaths.includes(changedPath), `${changedPath} must remain an explicit performance owner`);
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    for (const target of requiredTargets) {
+      assert.ok(targets.includes(target), `${changedPath} must require ${target}`);
+    }
+  }
+
+  for (const changedPath of [
+    'music_app/jobs/cover_handlers.py',
+    'music_app/services/cover_refresh_execution.py',
+  ]) {
+    assert.ok(contract.requiredPaths.includes(changedPath), `${changedPath} must remain an explicit performance owner`);
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    for (const target of ['utility-problematic-files', 'problematic-files-focused']) {
+      assert.ok(targets.includes(target), `${changedPath} must require ${target}`);
+    }
+  }
+});
+
 test('shared browse changes retain every search gate in focused CI', () => {
   for (const changedPath of [
     'music_app/services/library_browse_postgres.py',

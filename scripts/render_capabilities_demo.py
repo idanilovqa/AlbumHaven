@@ -62,6 +62,48 @@ def _drop_mismatched_nontransactional_index(connection) -> str:
     return state
 
 
+def _pg_trgm_gin_operator_class(connection) -> str:
+    row = connection.execute(
+        """
+        select pg_catalog.format(
+                 '%I.%I', operator_namespace.nspname, operator_class.opcname
+               ) as qualified_operator_class
+        from pg_catalog.pg_extension as extension
+        join pg_catalog.pg_namespace as extension_namespace
+          on extension_namespace.oid = extension.extnamespace
+        join pg_catalog.pg_depend as operator_dependency
+          on operator_dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+         and operator_dependency.refobjid = extension.oid
+         and operator_dependency.deptype = 'e'
+        join pg_catalog.pg_opclass as operator_class
+          on operator_dependency.classid = 'pg_catalog.pg_opclass'::regclass
+         and operator_dependency.objid = operator_class.oid
+        join pg_catalog.pg_namespace as operator_namespace
+          on operator_namespace.oid = operator_class.opcnamespace
+         and operator_namespace.oid = extension_namespace.oid
+        join pg_catalog.pg_am as access_method
+          on access_method.oid = operator_class.opcmethod
+        where extension.extname = 'pg_trgm'
+          and operator_class.opcname = 'gin_trgm_ops'
+          and access_method.amname = 'gin'
+        """
+    ).fetchone()
+    qualified = str(row[0] or '') if row else ''
+    if not qualified:
+        raise RuntimeError('The extension-owned pg_trgm GIN operator class is missing.')
+    return qualified
+
+
+def _schema_aware_0083_sql(connection, migration_sql: str) -> str:
+    released_operator_class = 'library.gin_trgm_ops'
+    if migration_sql.count(released_operator_class) != 1:
+        raise RuntimeError('Migration 0083 has an unexpected operator-class contract.')
+    return migration_sql.replace(
+        released_operator_class,
+        _pg_trgm_gin_operator_class(connection),
+    )
+
+
 def configure(runtime_url: str) -> None:
     origin = os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('ALBUM_HAVEN_PUBLIC_BASE_URL', '')
     url = urlsplit(origin)
@@ -150,7 +192,7 @@ def migrate(connection) -> None:
         if path.name == NONTRANSACTIONAL_MIGRATION:
             _drop_mismatched_nontransactional_index(connection)
             try:
-                connection.execute(migration_sql)
+                connection.execute(_schema_aware_0083_sql(connection, migration_sql))
                 state = _nontransactional_index_state(connection)
                 if state != 'ready':
                     raise RuntimeError(

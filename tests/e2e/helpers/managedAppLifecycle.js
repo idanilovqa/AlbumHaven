@@ -240,5 +240,8 @@ export function createManagedAppLifecycle(options = {}) {
       }
       return scheduleRestart('watcher-cleanup', { ownedDirectoryName: normalizedName });
     },
+    cleanupWatcherRecoveryFixture() {
+      return scheduleRestart('watcher-recovery-cleanup');
+    },
   };
 }

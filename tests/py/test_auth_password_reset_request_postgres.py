@@ -1,12 +1,11 @@
 from datetime import datetime, timedelta, timezone
-import hashlib
 
-from music_app.services.auth_tokens import IssuedOpaqueToken
+import pytest
+
+from music_app.services.auth_mail_jobs_postgres import AcceptedAuthMailJob
 
 
 NOW = datetime(2026, 8, 31, 18, 0, tzinfo=timezone.utc)
-RAW_TOKEN = "A" * 43
-TOKEN_DIGEST = hashlib.sha256(RAW_TOKEN.encode("ascii")).digest()
 
 
 class Cursor:
@@ -55,13 +54,14 @@ class Connection:
             )
             return Cursor(
                 {
+                    "id": 101 + index,
                     "bucket_kind": kind,
                     "window_started_at": NOW,
                     "failure_count": 5 if kind == self.blocked_kind else 0,
                     "window_expires_at": NOW.replace(hour=19),
                     "blocked_until": None,
                 }
-                for kind in kinds
+                for index, kind in enumerate(kinds)
             )
         if "insert into app.password_reset_tokens" in normalized:
             return Cursor(({"id": 71},))
@@ -79,6 +79,18 @@ class Audit:
         return 91
 
 
+class Jobs:
+    def __init__(self, *, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def compose_existing_intent_in_transaction(self, connection, **values):
+        self.calls.append((connection, values))
+        if self.fail:
+            raise RuntimeError("job enqueue failed")
+        return AcceptedAuthMailJob(values["outbox_id"], 92, 1, 1)
+
+
 def _config():
     return {
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app",
@@ -92,7 +104,7 @@ def _config():
     }
 
 
-def _service(connection, audit):
+def _service(connection, audit, jobs=None):
     from music_app.services.auth_password_reset_request_postgres import (
         PostgresPasswordResetRequestService,
     )
@@ -100,9 +112,9 @@ def _service(connection, audit):
     return PostgresPasswordResetRequestService(
         _config(),
         connect=lambda _url: connection,
-        token_issuer=lambda: IssuedOpaqueToken(RAW_TOKEN, TOKEN_DIGEST),
         clock=lambda: NOW,
         audit_repository=audit,
+        job_repository=jobs or Jobs(),
     )
 
 
@@ -116,8 +128,9 @@ def test_eligible_request_charges_three_buckets_and_commits_one_reset_and_outbox
     }
     connection = Connection(account=account)
     audit = Audit()
+    jobs = Jobs()
 
-    result = _service(connection, audit).request_reset(
+    result = _service(connection, audit, jobs).request_reset(
         candidate="Member+one@example.test",
         source_key="203.0.113.9",
         request_ref="forgot-1",
@@ -125,11 +138,7 @@ def test_eligible_request_charges_three_buckets_and_commits_one_reset_and_outbox
     )
 
     assert result.accepted is True
-    assert result.delivery is not None
-    assert result.delivery.raw_token == RAW_TOKEN
-    assert result.delivery.outbox_id == 81
-    assert result.delivery.recipient == "Member+one@example.test"
-    assert RAW_TOKEN not in repr(result)
+    assert result.accepted_job == AcceptedAuthMailJob(81, 92, 1, 1)
     assert connection.events == ["begin", "commit"]
     statements = [sql for sql, _ in connection.operations]
     account_lookup = next(sql for sql in statements if "from app.accounts" in sql)
@@ -137,9 +146,9 @@ def test_eligible_request_charges_three_buckets_and_commits_one_reset_and_outbox
     assert "join app.account_credentials credential" in account_lookup
     assert "for share of account, credential" in account_lookup
     assert sum("insert into app.auth_throttles" in sql for sql in statements) == 3
-    assert any("update app.password_reset_tokens" in sql and "revoked_at" in sql for sql in statements)
-    assert any("insert into app.password_reset_tokens" in sql for sql in statements)
+    assert not any("password_reset_tokens" in sql for sql in statements)
     assert any("insert into app.mail_outbox" in sql for sql in statements)
+    assert jobs.calls[0][1]["actor_account_id"] is None
     assert audit.calls[0]["target_account_id"] == 41
 
 
@@ -155,7 +164,7 @@ def test_unknown_request_charges_candidate_and_source_and_returns_same_public_sh
     )
 
     assert result.accepted is True
-    assert result.delivery is None
+    assert result.accepted_job is None
     assert connection.events == ["begin", "commit"]
     statements = [sql for sql, _ in connection.operations]
     assert sum("insert into app.auth_throttles" in sql for sql in statements) == 2
@@ -182,34 +191,61 @@ def test_blocked_request_is_generic_and_does_not_issue_or_revoke_reset():
     )
 
     assert result.accepted is True
-    assert result.delivery is None
+    assert result.accepted_job is None
     statements = [sql for sql, _ in connection.operations]
     assert not any("password_reset_tokens" in sql for sql in statements)
     assert audit.calls[0]["outcome"].value == "throttled"
 
 
-def test_reset_issuance_refreshes_clock_after_token_provider():
-    from music_app.services.auth_password_reset_request_postgres import PostgresPasswordResetRequestService
+def test_public_job_enqueue_failure_rolls_back_outbox_throttles_and_audit():
+    connection = Connection(account={
+        "id": 41, "is_active": True, "disabled_at": None,
+        "contact_email": "member@example.test", "credential_version": 3,
+    })
+    audit = Audit()
+    with pytest.raises(RuntimeError, match="persistence operation failed"):
+        _service(connection, audit, Jobs(fail=True)).request_reset(
+            candidate="member", source_key="203.0.113.9",
+            request_ref="forgot-enqueue-failure", source_class="public",
+        )
+    assert connection.events == ["begin", "rollback"]
+    assert audit.calls == []
 
-    clock = [NOW]
-    connection = Connection(account={"id": 41, "is_active": True, "disabled_at": None,
-        "contact_email": "member@example.test", "credential_version": 3})
+
+def test_reset_acceptance_refreshes_clock_after_throttle_locks():
+    from music_app.services.auth_password_reset_request_postgres import (
+        PostgresPasswordResetRequestService,
+    )
+
+    refreshed = NOW + timedelta(seconds=1801)
+    clock_values = iter((NOW, refreshed))
+    connection = Connection(account={
+        "id": 41,
+        "is_active": True,
+        "disabled_at": None,
+        "contact_email": "member@example.test",
+        "credential_version": 3,
+    })
     audit = Audit()
 
-    def delayed_token():
-        clock[0] += timedelta(seconds=1801)
-        return IssuedOpaqueToken(RAW_TOKEN, TOKEN_DIGEST)
+    result = PostgresPasswordResetRequestService(
+        _config(),
+        connect=lambda _url: connection,
+        clock=lambda: next(clock_values),
+        audit_repository=audit,
+        job_repository=Jobs(),
+    ).request_reset(
+        candidate="member",
+        source_key="203.0.113.9",
+        request_ref="delayed-throttle-lock",
+    )
 
-    result = PostgresPasswordResetRequestService(_config(), connect=lambda _: connection,
-        clock=lambda: clock[0], token_issuer=delayed_token, audit_repository=audit).request_reset(
-            candidate="member", source_key="203.0.113.9", request_ref="delayed-provider")
-
-    assert result.delivery is not None
-    token_params = next(params for sql, params in connection.operations
-        if "insert into app.password_reset_tokens" in sql)
-    assert token_params[3:5] == (clock[0], clock[0] + timedelta(seconds=1800))
-    assert next(params for sql, params in connection.operations
-        if "update app.password_reset_tokens" in sql)[0] == clock[0]
-    assert next(params for sql, params in connection.operations
-        if "insert into app.mail_outbox" in sql)[2] == clock[0]
-    assert audit.calls[0]["occurred_at"] == clock[0]
+    assert result.accepted_job is not None
+    outbox_params = next(
+        params
+        for sql, params in connection.operations
+        if "insert into app.mail_outbox" in sql
+    )
+    assert outbox_params[1] == refreshed
+    assert outbox_params[3] == refreshed + timedelta(seconds=1800)
+    assert audit.calls[0]["occurred_at"] == refreshed

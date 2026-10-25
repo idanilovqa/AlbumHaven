@@ -235,6 +235,15 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   const edgeColors = await page.evaluate(() => {
     const button = document.querySelector('.utility-problem-filter-button');
     const menu = document.querySelector('.utility-problem-filter-menu');
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext('2d');
+    const rgba = color => {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return Array.from(context.getImageData(0, 0, 1, 1).data);
+    };
     return {
       connectorLeftColor: getComputedStyle(button, '::after').borderLeftColor,
       connectorRightColor: getComputedStyle(button, '::after').borderRightColor,
@@ -242,9 +251,9 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
       connectorRight: getComputedStyle(button, '::after').right,
       edgeOverlay: getComputedStyle(menu, '::before').display,
       topEdgeOverlay: getComputedStyle(menu, '::after').display,
-      buttonSurface: getComputedStyle(button).getPropertyValue('--trigger-anchor-background').trim(),
+      buttonSurface: rgba(getComputedStyle(button).getPropertyValue('--trigger-anchor-background').trim()),
       buttonBottomBorder: getComputedStyle(button).borderBottomWidth,
-      menuSurface: getComputedStyle(menu).backgroundColor,
+      menuSurface: rgba(getComputedStyle(menu).backgroundColor),
       menu: getComputedStyle(menu).borderRightColor,
     };
   });
@@ -252,7 +261,7 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   expect(edgeColors.connectorRightColor).toBe(edgeColors.connectorLeftColor);
   expect(edgeColors.edgeOverlay).toBe('none');
   expect(edgeColors.topEdgeOverlay).toBe('none');
-  expect(edgeColors.buttonSurface).toBe(edgeColors.menuSurface);
+  expect(edgeColors.buttonSurface).toEqual(edgeColors.menuSurface);
   expect(edgeColors.buttonBottomBorder).toBe('0px');
   expect(await page.locator('.utility-problem-filter-menu').evaluate(menu => menu.scrollWidth <= menu.clientWidth)).toBe(true);
   const screenshot = await page.screenshot();

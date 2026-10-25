@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,7 +28,10 @@ _HEALTH_EVENT_KINDS = {
     LibraryEventKind.ROOT_UNAVAILABLE,
 }
 _HEALTH_PROBLEM_STATES = {
+    "cross_root_uncertain",
     "overflow",
+    "rollback_pending_work",
+    "root_unavailable",
     "reconciliation_failed",
     "stable_write_unavailable",
 }
@@ -79,14 +82,28 @@ where library.libraries.id = bootstrap_library.id
   );
 """
 
-_LOAD_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """
+_LOAD_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """,
+durable_health as (
+  select coalesce(
+           jsonb_object_agg(
+             incident.root_id,
+             jsonb_build_object(
+               'state', incident.state,
+               'detected_at', incident.detected_at,
+               'event_id', incident.event_id
+             )
+           ),
+           '{}'::jsonb
+         ) as payload
+  from library.load_local_watcher_incidents() as incident
+)
 /* watch_health_load */
 select coalesce(
-         library.libraries.metadata -> 'library_watch_health',
-         '{}'::jsonb
-       ) as library_watch_health
+         library.libraries.metadata -> 'library_watch_health', '{}'::jsonb
+       ) || durable_health.payload as library_watch_health
 from library.libraries
-join bootstrap_library on bootstrap_library.id = library.libraries.id;
+join bootstrap_library on bootstrap_library.id = library.libraries.id
+cross join durable_health;
 """
 
 
@@ -108,95 +125,67 @@ def guard_destructive_library_publication(connection, root_ids):
         raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
     yield
 
-
-@contextmanager
-def guard_recovery_library_publication(
-    connection,
-    root_ids,
-    *,
-    detected_before: str,
-):
-    """Allow recovery over known warnings while rejecting newer failures."""
-
-    row = connection.execute(
-        _LOAD_LIBRARY_WATCH_HEALTH_SQL.rstrip().rstrip(";")
-        + " for update of libraries;"
-    ).fetchone()
-    payload = _row_value(row, "library_watch_health")
-    if not isinstance(payload, Mapping):
-        raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
-    for root_id in root_ids:
-        problem = payload.get(str(root_id))
-        if not isinstance(problem, Mapping):
-            continue
-        detected_at = str(problem.get("detected_at") or "")
-        try:
-            normalized_detected_at = _normalized_cutoff(
-                detected_at,
-                fallback=lambda: datetime.max.replace(tzinfo=timezone.utc),
-            )
-        except (TypeError, ValueError):
-            raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE) from None
-        if not detected_at or normalized_detected_at > detected_before:
-            raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
-    yield
-
-_CLEAR_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """
-/* watch_health_clear */
-update library.libraries
-set metadata = jsonb_set(
-      coalesce(library.libraries.metadata, '{}'::jsonb),
-      '{library_watch_health}',
-      coalesce(
-        (
-          select jsonb_object_agg(health_entry.key, health_entry.value)
-          from jsonb_each(
-            coalesce(
-              library.libraries.metadata -> 'library_watch_health',
-              '{}'::jsonb
-            )
-          ) as health_entry
-          where not (
-            health_entry.key = any(%(root_ids)s::text[])
-            and nullif(health_entry.value ->> 'detected_at', '') is not null
-            and (health_entry.value ->> 'detected_at')::timestamptz
-              <= %(detected_before)s::timestamptz
-          )
-        ),
-        '{}'::jsonb
-      ),
-      true
-    ),
-    updated_at = now()
-from bootstrap_library
-where library.libraries.id = bootstrap_library.id;
-"""
-
-
 def opaque_root_key(root_id: object) -> str:
     normalized = str(root_id or "").strip()
     return f"root_{sha256(normalized.encode('utf-8')).hexdigest()[:16]}"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class LibraryWatchHealthProblem:
     root_id: str
     state: str
     detected_at: str
-    event_id: str = ""
+    incident_id: str
+    warning_token: str
+    occurrence_count: int
+    acknowledged: bool
+
+    def __init__(
+        self,
+        root_id: str,
+        state: str,
+        detected_at: str,
+        incident_id: str = "",
+        warning_token: str = "",
+        occurrence_count: int = 1,
+        acknowledged: bool = False,
+        *,
+        event_id: str = "",
+    ) -> None:
+        identity = str(incident_id or event_id or "").strip()
+        object.__setattr__(self, "root_id", str(root_id or "").strip())
+        object.__setattr__(self, "state", str(state or "").strip())
+        object.__setattr__(self, "detected_at", str(detected_at or "").strip())
+        object.__setattr__(self, "incident_id", identity)
+        object.__setattr__(self, "warning_token", str(warning_token or "").strip())
+        object.__setattr__(self, "occurrence_count", max(1, int(occurrence_count)))
+        object.__setattr__(self, "acknowledged", bool(acknowledged))
+
+    @property
+    def event_id(self) -> str:
+        """Mixed-version alias retained until legacy health is contracted."""
+
+        return self.incident_id
 
     @property
     def message(self) -> str:
         return WATCH_HEALTH_MESSAGE
 
-    def as_public_dict(self) -> dict[str, str]:
-        return {
+    def as_public_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
             "state": self.state,
             "root_key": opaque_root_key(self.root_id),
             "detected_at": self.detected_at,
             "message": WATCH_HEALTH_MESSAGE,
-            **({"event_id": self.event_id} if self.event_id else {}),
         }
+        if self.warning_token:
+            payload.update(
+                incident_id=self.incident_id,
+                acknowledged=self.acknowledged,
+            )
+        elif self.incident_id:
+            payload["event_id"] = self.incident_id
+        return payload
 
 
 class PostgresLibraryWatchHealthStore:
@@ -249,37 +238,6 @@ class PostgresLibraryWatchHealthStore:
                 )
         return sorted(problems, key=lambda problem: problem.root_id)
 
-    def clear(
-        self,
-        root_ids: Iterable[object],
-        *,
-        detected_before: str,
-    ) -> int:
-        normalized = list(
-            dict.fromkeys(
-                root_id
-                for value in root_ids
-                if (root_id := str(value or "").strip())
-            )
-        )
-        if not normalized:
-            return 0
-        existing = {
-            problem.root_id
-            for problem in self.load()
-            if problem.detected_at <= detected_before
-        }
-        with self._connect_to_database() as connection:
-            connection.execute(
-                _CLEAR_LIBRARY_WATCH_HEALTH_SQL,
-                {
-                    "root_ids": normalized,
-                    "detected_before": detected_before,
-                },
-            )
-            _commit_if_supported(connection)
-        return len(existing.intersection(normalized))
-
     def _connect_to_database(self) -> Any:
         if not self._database_url:
             raise RuntimeError(
@@ -291,17 +249,31 @@ class PostgresLibraryWatchHealthStore:
 class LibraryWatchHealthService:
     def __init__(
         self,
-        store: PostgresLibraryWatchHealthStore,
+        store: object,
         *,
+        legacy_store: PostgresLibraryWatchHealthStore | None = None,
+        library_id: int | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._store = store
+        self._legacy_store = legacy_store
+        self._library_id = library_id
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._pending: dict[str, LibraryWatchHealthProblem] = {}
         self._lock = Lock()
         self._persistence_lock = Lock()
-        self._recovered_before: dict[str, str] = {}
-        self._recovery_generation: dict[str, int] = {}
+
+    def configure_mixed_version_read(
+        self,
+        *,
+        legacy_store: PostgresLibraryWatchHealthStore,
+        library_id: int,
+    ) -> None:
+        self._legacy_store = legacy_store
+        self._library_id = library_id
+
+    def uses_durable_repository(self, repository: object, library_id: int) -> bool:
+        return self._store is repository and self._library_id == library_id
 
     def record_event(self, event: LibraryEvent) -> bool:
         if event.kind not in _HEALTH_EVENT_KINDS:
@@ -323,8 +295,6 @@ class LibraryWatchHealthService:
         root_id = str(raw_root_id or "").strip()
         if not root_id:
             return False
-        with self._lock:
-            recovery_generation = self._recovery_generation.get(root_id, 0)
         problem = LibraryWatchHealthProblem(
             root_id=root_id,
             state=state,
@@ -332,13 +302,6 @@ class LibraryWatchHealthService:
             event_id=str(uuid4()),
         )
         with self._lock:
-            # Wall-clock ticks can repeat. Only a recovery completed during
-            # this record operation can make its captured warning obsolete.
-            if (
-                recovery_generation != self._recovery_generation.get(root_id, 0)
-                and problem.detected_at <= self._recovered_before.get(root_id, "")
-            ):
-                return True
             pending = self._pending.get(root_id)
             if pending is None or pending.detected_at <= problem.detected_at:
                 self._pending[root_id] = problem
@@ -355,7 +318,20 @@ class LibraryWatchHealthService:
         return True
 
     def load_problems(self) -> list[LibraryWatchHealthProblem]:
-        persisted = {problem.root_id: problem for problem in self._store.load()}
+        load_status = getattr(self._store, "load_status", None)
+        if callable(load_status):
+            if not isinstance(self._library_id, int) or self._library_id < 1:
+                raise RuntimeError("durable watcher library scope is unavailable")
+            durable = load_status(library_id=self._library_id)
+            persisted = {problem.root_id: problem for problem in durable}
+            if self._legacy_store is not None:
+                for problem in self._legacy_store.load():
+                    persisted.setdefault(problem.root_id, problem)
+        else:
+            persisted = {
+                problem.root_id: problem
+                for problem in self._store.load()  # type: ignore[attr-defined]
+            }
         with self._lock:
             persisted.update(self._pending)
         return sorted(persisted.values(), key=lambda problem: problem.root_id)
@@ -366,9 +342,7 @@ class LibraryWatchHealthService:
             if normalized in self._pending:
                 return False
         try:
-            return all(
-                problem.root_id != normalized for problem in self._store.load()
-            )
+            return all(problem.root_id != normalized for problem in self.load_problems())
         except Exception:
             # A health-store outage must fail closed for destructive changes.
             return False
@@ -384,92 +358,23 @@ class LibraryWatchHealthService:
             with guard_destructive_library_publication(connection, roots):
                 yield
 
-    def recovery_publication_guard(self, reconciliation_started_at: object):
-        detected_before = _normalized_cutoff(
-            reconciliation_started_at,
-            fallback=self._now,
-        )
-
-        @contextmanager
-        def guard(connection, root_ids):
-            roots = tuple(str(root_id) for root_id in root_ids)
-            with self._lock:
-                if any(
-                    problem.detected_at > detected_before
-                    for root_id in roots
-                    if (problem := self._pending.get(root_id)) is not None
-                ):
-                    raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
-                with guard_recovery_library_publication(
-                    connection,
-                    roots,
-                    detected_before=detected_before,
-                ):
-                    yield
-
-        return guard
-
-    def clear_after_scan(
+    def complete_repair(
         self,
         *,
         scan_mode: object,
-        observed_root_ids: Iterable[object],
-        scan_started_at: object | None = None,
-    ) -> int:
-        if str(scan_mode or "").strip() != "manual_full_rescan":
-            return 0
-        return self._clear_recovered(
-            observed_root_ids,
-            detected_before=_normalized_cutoff(
-                scan_started_at,
-                fallback=self._now,
-            ),
+        repair_id: int | None,
+        inventory_revision: int,
+        claim: object,
+        now: datetime,
+    ) -> bool:
+        if str(scan_mode or "").strip() != "manual_full_rescan" or repair_id is None:
+            return False
+        return self._store.complete_repair(
+            claim=claim,
+            repair_id=repair_id,
+            inventory_revision=inventory_revision,
+            now=now,
         )
-
-    def clear_after_reconciliation(
-        self,
-        *,
-        observed_root_ids: Iterable[object],
-        reconciliation_started_at: object,
-    ) -> int:
-        """Clear only warnings that predate a successful root catch-up."""
-
-        return self._clear_recovered(
-            observed_root_ids,
-            detected_before=_normalized_cutoff(
-                reconciliation_started_at,
-                fallback=self._now,
-            ),
-        )
-
-    def _clear_recovered(
-        self,
-        observed_root_ids: Iterable[object],
-        *,
-        detected_before: str,
-    ) -> int:
-        normalized = {
-            root_id
-            for value in observed_root_ids
-            if (root_id := str(value or "").strip())
-        }
-        with self._persistence_lock:
-            cleared = self._store.clear(
-                normalized,
-                detected_before=detected_before,
-            )
-            with self._lock:
-                for root_id in normalized:
-                    self._recovery_generation[root_id] = self._recovery_generation.get(root_id, 0) + 1
-                    # A caller may have captured an old timestamp before this
-                    # recovery but not yet published its pending warning.
-                    self._recovered_before[root_id] = max(
-                        detected_before, self._recovered_before.get(root_id, ""),
-                    )
-                    problem = self._pending.get(root_id)
-                    if problem is not None and problem.detected_at <= detected_before:
-                        self._pending.pop(root_id, None)
-        return cleared
 
 
 def _row_value(row: object, key: str) -> object:
@@ -487,25 +392,6 @@ def _commit_if_supported(connection: Any) -> None:
     commit = getattr(connection, "commit", None)
     if callable(commit):
         commit()
-
-
-def _normalized_cutoff(
-    value: object,
-    *,
-    fallback: Callable[[], datetime],
-) -> str:
-    if isinstance(value, datetime):
-        cutoff = value
-    elif isinstance(value, (int, float)):
-        cutoff = datetime.fromtimestamp(float(value), timezone.utc)
-    elif str(value or "").strip():
-        normalized = str(value).strip().replace("Z", "+00:00")
-        cutoff = datetime.fromisoformat(normalized)
-    else:
-        cutoff = fallback()
-    if cutoff.tzinfo is None:
-        cutoff = cutoff.replace(tzinfo=timezone.utc)
-    return cutoff.astimezone(timezone.utc).isoformat()
 
 
 def _connect(database_url: str) -> Any:

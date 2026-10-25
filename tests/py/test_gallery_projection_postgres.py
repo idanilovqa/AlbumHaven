@@ -957,4 +957,3 @@ def test_persisted_gallery_anchor_resolves_published_artist_alias(monkeypatch, s
     assert page[0]["artist_name"] == displayed_artist
     assert metadata["anchor_artist"] == "Artist alias"
     assert metadata["anchor_group_artist"] == displayed_artist
-

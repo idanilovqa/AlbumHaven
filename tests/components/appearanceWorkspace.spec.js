@@ -485,6 +485,7 @@ for (const method of ['mount', 'mountSeekbar']) {
     await expect(themedControl).toHaveCSS('background-color', method === 'mount' ? expected.deviceControl : expected.control);
     await expect(themedControl).toHaveCSS('border-top-color', expected.line);
     await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('border-top-color', expected.line);
     await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('color', expected.ink);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('background-color', expected.control);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('color', expected.ink);

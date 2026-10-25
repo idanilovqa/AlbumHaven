@@ -12,7 +12,6 @@ from fastapi import FastAPI
 
 from music_app.services.auth_login_postgres import LoginOutcome, LoginResult
 from music_app.services.auth_password_reset_request_postgres import (
-    PasswordResetDelivery,
     PasswordResetRequestResult,
 )
 from music_app.services.auth_password_reset_lifecycle_postgres import (
@@ -116,12 +115,7 @@ class FakeResetRequests:
 
     def request_reset(self, **kwargs):
         self.calls.append(kwargs)
-        delivery = (
-            PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
-            if self.eligible
-            else None
-        )
-        return PasswordResetRequestResult(delivery=delivery)
+        return PasswordResetRequestResult()
 
 
 class FakeResetLifecycle:
@@ -352,7 +346,7 @@ def test_get_forgot_password_mints_purpose_bound_csrf_and_renders_approved_recov
 
 
 @pytest.mark.parametrize("eligible", [False, True])
-def test_forgot_password_submission_has_one_generic_response_and_background_delivery(auth_asgi, eligible):
+def test_forgot_password_submission_has_one_generic_response_without_request_delivery(auth_asgi, eligible):
     app, preauth, _ = _app(auth_asgi)
     reset_requests = FakeResetRequests(eligible=eligible)
     delivered = []
@@ -375,19 +369,21 @@ def test_forgot_password_submission_has_one_generic_response_and_background_deli
     assert b"member@example.test" not in body
     assert preauth.consumed == [CSRF]
     assert len(reset_requests.calls) == 1
-    assert bool(delivered) is eligible
+    assert delivered == []
+    assert reset_requests.calls[0]["client_surface"] == "private_web"
+    assert reset_requests.calls[0]["request_origin_ref"].endswith(".public")
     assert any(
         value.startswith(FORGOT_CSRF_COOKIE + "=") and "Max-Age=0" in value
         for value in _set_cookies(headers)
     )
 
 
-@pytest.mark.parametrize("returns_awaitable", [False, True])
-def test_public_reset_delivery_callback_allows_event_loop_progress(auth_asgi, returns_awaitable):
+def test_public_reset_enqueue_allows_event_loop_progress(auth_asgi):
     from threading import Event
 
     app, _, _ = _app(auth_asgi)
-    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+    requests = FakeResetRequests(eligible=True)
+    app.state.password_reset_request_service = requests
     calls = []
 
     async def exercise():
@@ -396,17 +392,13 @@ def test_public_reset_delivery_callback_allows_event_loop_progress(auth_asgi, re
         heartbeat = asyncio.Event()
         progress = []
 
-        async def finish_delivery():
-            assert asyncio.get_running_loop() is loop
-            calls.append("awaited")
-
         def record_progress():
             progress.append(entered.is_set() and not completed.is_set())
             release.set()
             heartbeat.set()
 
-        def callback(received):
-            calls.append(received)
+        def callback(**kwargs):
+            calls.append(kwargs)
             entered.set()
             loop.call_soon_threadsafe(record_progress)
             try:
@@ -414,43 +406,29 @@ def test_public_reset_delivery_callback_allows_event_loop_progress(auth_asgi, re
                 release.wait(timeout=1.0)
             finally:
                 completed.set()
-            return finish_delivery() if returns_awaitable else None
+            return PasswordResetRequestResult()
 
-        app.state.password_reset_delivery = callback
-        task = asyncio.create_task(auth_asgi._deliver_password_reset(app, delivery))
+        requests.request_reset = callback
+        task = asyncio.create_task(_request_async(
+            app, "POST", path="/forgot-password",
+            form={"candidate": "member@example.test", "csrf_token": CSRF},
+            headers={
+                "origin": "https://music.test",
+                "cookie": f"{FORGOT_CSRF_COOKIE}={CSRF}",
+            },
+        ))
         try:
             await asyncio.wait_for(heartbeat.wait(), timeout=5.0)
-            await asyncio.wait_for(task, timeout=5.0)
+            status, _, _ = await asyncio.wait_for(task, timeout=5.0)
+            assert status == 200
             assert progress == [True]
         finally:
             release.set()
             await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5.0)
 
     asyncio.run(exercise())
-    assert calls == ([delivery, "awaited"] if returns_awaitable else [delivery])
-
-
-@pytest.mark.parametrize("failure", [False, True])
-def test_public_reset_delivery_awaits_async_callbacks_and_contains_failure(auth_asgi, failure):
-    app, _, _ = _app(auth_asgi)
-    calls = []
-    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
-
-    async def exercise():
-        loop = asyncio.get_running_loop()
-
-        async def callback(received):
-            assert asyncio.get_running_loop() is loop
-            await asyncio.sleep(0)
-            calls.append(received)
-            if failure:
-                raise RuntimeError("private SMTP failure")
-
-        app.state.password_reset_delivery = callback
-        await auth_asgi._deliver_password_reset(app, delivery)
-
-    asyncio.run(exercise())
-    assert calls == [delivery]
+    assert len(calls) == 1
+    assert calls[0]["candidate"] == "member@example.test"
 
 
 def test_public_recovery_padding_uses_one_minimum_duration_for_fast_paths(

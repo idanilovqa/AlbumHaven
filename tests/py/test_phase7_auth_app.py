@@ -8,6 +8,382 @@ import sys
 import pytest
 
 
+def test_application_servers_clean_partial_secondary_start_when_primary_start_fails(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
+    launcher = importlib.import_module("phase7AuthApp")
+    import music_app
+
+    servers = []
+    threads = []
+
+    class Server:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+            servers.append(self)
+
+        def run(self):
+            return None
+
+    class Thread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+            self.started = False
+            self.joined = False
+            threads.append(self)
+
+        def start(self):
+            if self.name == "album-haven-phase7-primary":
+                raise RuntimeError("primary thread start failed")
+            self.started = True
+
+        def join(self, timeout=None):
+            del timeout
+            self.joined = True
+
+        def is_alive(self):
+            return self.started and not self.joined
+
+    monkeypatch.setattr(music_app, "create_asgi_app", lambda: object())
+    monkeypatch.setattr(launcher.threading, "Thread", Thread)
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        SimpleNamespace(
+            Config=lambda app, **kwargs: SimpleNamespace(app=app, **kwargs),
+            Server=Server,
+        ),
+    )
+    owner = launcher._ApplicationServers(primary_port=5101, secondary_port=5102)
+
+    with pytest.raises(RuntimeError, match="primary thread start failed"):
+        owner.start()
+
+    assert servers[1].should_exit is True
+    assert threads[1].joined is True
+    assert owner._entries == []
+
+
+def _start_reset_lifecycle_harness(
+    tmp_path, monkeypatch, *, stubborn_port=None, require_quiescence=True,
+):
+    from http.client import HTTPConnection
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    import music_app
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
+    launcher = importlib.import_module("phase7AuthApp")
+    temp_root = tmp_path / "phase7"
+    temp_root.mkdir()
+    events, control_servers, app_servers, errors = [], [], [], []
+    release_apps = threading.Event()
+    initial_servers = []
+
+    class Lock:
+        def __init__(self, *, database_url):
+            assert database_url == "isolated-setup"
+
+        def acquire(self): events.append("acquire")
+        def release(self): events.append("release")
+
+    class CaptureServer:
+        def __init__(self, *_args): pass
+        def serve_forever(self): pass
+        def begin_shutdown(self): pass
+        def shutdown(self): pass
+        def server_close(self): pass
+        def drain_requests(self, _timeout): return True
+
+    control_factory = launcher._ControlServer
+
+    def build_control(address, state):
+        server = control_factory(address, state)
+        control_servers.append(server)
+        return server
+
+    class Worker:
+        def __init__(self, number): self.number = number
+        def start(self): events.append(f"worker-start-{self.number}")
+        def stop(self): events.append(f"worker-stop-{self.number}")
+
+    workers = []
+
+    def build_worker(_url):
+        worker = Worker(len(workers) + 1)
+        workers.append(worker)
+        return worker
+
+    class Config:
+        def __init__(self, app, *, host, port, **_kwargs):
+            self.app = app
+            self.host = host
+            self.port = port
+
+    class Server:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+            self.started = threading.Event()
+            self.stopped = threading.Event()
+            app_servers.append(self)
+
+        def run(self):
+            events.append(f"app-start-{self.config.port}")
+            self.started.set()
+            while not release_apps.is_set():
+                if self.should_exit and self.config.port != stubborn_port:
+                    break
+                time.sleep(0.005)
+            events.append(f"app-stop-{self.config.port}")
+            self.stopped.set()
+
+    def legacy_run(app, *, host, port, **kwargs):
+        Server(Config(app, host=host, port=port, **kwargs)).run()
+
+    app_number = 0
+
+    def create_app():
+        nonlocal app_number
+        app_number += 1
+        events.append(f"app-create-{app_number}")
+        return object()
+
+    def reset_tables(_url):
+        if require_quiescence:
+            assert initial_servers and all(server.stopped.is_set() for server in initial_servers), (
+                "database truncate started before every ASGI lifespan stopped"
+            )
+        events.append("truncate")
+
+    monkeypatch.setattr(sys, "argv", [
+        "phase7AuthApp.py", "--port", "5101", "--smtp-port", "0",
+        "--control-port", "0", "--worker-port", "5102",
+    ])
+    monkeypatch.setattr(launcher, "resolve_isolated_database_urls", lambda: ("isolated-setup", "isolated-runtime"))
+    monkeypatch.setattr(launcher.tempfile, "mkdtemp", lambda **_kwargs: str(temp_root))
+    monkeypatch.setattr(launcher, "IsolatedDatabaseOwnershipLock", Lock)
+    monkeypatch.setattr(launcher, "_SMTPServer", CaptureServer)
+    monkeypatch.setattr(launcher, "_ControlServer", build_control)
+    for name in ("_configure_environment", "prepare_isolated_database", "_bootstrap_owner"):
+        monkeypatch.setattr(launcher, name, lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "persist_settings_playback_inventory", lambda *_args, **_kwargs: events.append("inventory"))
+    monkeypatch.setattr(launcher, "seed_bootstrap_owner_and_library", lambda _url: events.append("seed"))
+    monkeypatch.setattr(launcher, "reset_application_tables", reset_tables)
+    monkeypatch.setattr(launcher, "build_isolated_jobs_worker", build_worker, raising=False)
+    monkeypatch.setattr(launcher, "APPLICATION_SHUTDOWN_TIMEOUT_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(music_app, "create_asgi_app", create_app)
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(Config=Config, Server=Server, run=legacy_run))
+
+    def launch():
+        try:
+            launcher.main()
+        except BaseException as error:
+            errors.append(error)
+
+    owner = threading.Thread(target=launch)
+    owner.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        running = [server for server in app_servers if server.started.is_set()]
+        if control_servers and {server.config.port for server in running} == {5101, 5102}:
+            initial_servers.extend(running)
+            break
+        time.sleep(0.005)
+    assert len(initial_servers) == 2, "both application lifespans must start before reset"
+
+    def reset():
+        connection = HTTPConnection(*control_servers[0].server_address, timeout=3)
+        try:
+            connection.request("POST", "/reset", body=b"")
+            response = connection.getresponse()
+            return response.status, response.read()
+        finally:
+            connection.close()
+
+    def stop():
+        release_apps.set()
+        for server in app_servers:
+            server.should_exit = True
+        owner.join(timeout=5)
+        assert not owner.is_alive()
+        for server in control_servers:
+            server.server_close()
+
+    return SimpleNamespace(
+        app_servers=app_servers,
+        errors=errors,
+        events=events,
+        initial_servers=initial_servers,
+        reset=reset,
+        stop=stop,
+        workers=workers,
+    )
+
+
+def test_phase7_reset_stops_all_app_lifespans_before_truncate_and_restarts_them(
+    tmp_path, monkeypatch,
+):
+    harness = _start_reset_lifecycle_harness(tmp_path, monkeypatch)
+    try:
+        status, body = harness.reset()
+        assert (status, body) == (200, b'{"ok": true}')
+        assert all(server.stopped.is_set() for server in harness.initial_servers)
+        assert len(harness.app_servers) == 4, "reset must create fresh primary and secondary apps"
+        assert {server.config.port for server in harness.app_servers[2:]} == {5101, 5102}
+        truncate = harness.events.index("truncate")
+        assert max(harness.events.index(f"app-stop-{port}") for port in (5101, 5102)) < truncate
+        assert truncate < harness.events.index("seed")
+        assert truncate < harness.events.index("inventory", truncate)
+        assert all(
+            harness.events.index(f"app-start-{port}", truncate) > truncate
+            for port in (5101, 5102)
+        )
+        assert harness.events.index("worker-stop-1") < truncate < harness.events.index("worker-start-2")
+    finally:
+        harness.stop()
+
+
+def test_phase7_reset_refuses_truncate_when_any_app_lifespan_does_not_stop(
+    tmp_path, monkeypatch,
+):
+    harness = _start_reset_lifecycle_harness(
+        tmp_path, monkeypatch, stubborn_port=5102, require_quiescence=False,
+    )
+    try:
+        status, body = harness.reset()
+        assert status == 500
+        assert b"shutdown" in body.lower()
+        assert "truncate" not in harness.events
+        assert "seed" not in harness.events
+        assert len(harness.workers) == 1, "failed reset must not replace the durable worker"
+    finally:
+        harness.stop()
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_worker(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
+    launcher = importlib.import_module("phase7AuthApp")
+    monkeypatch.setattr(launcher, "build_isolated_jobs_worker",
+        lambda _url: SimpleNamespace(start=lambda: None, stop=lambda: None), raising=False)
+
+
+@pytest.mark.parametrize("stop_fails", [False, True])
+def test_phase7_durable_worker_quiesces_for_reset_and_before_database_cleanup(
+    tmp_path, monkeypatch, stop_fails,
+):
+    import threading
+    import time
+    from types import SimpleNamespace
+    import music_app
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
+    launcher = importlib.import_module("phase7AuthApp")
+    temp_root = tmp_path / "phase7"
+    temp_root.mkdir()
+    events, states = [], []
+
+    class Lock:
+        def __init__(self, **_kwargs): pass
+        def acquire(self): events.append("acquire")
+        def release(self): events.append("release")
+
+    class CaptureServer:
+        def __init__(self, _address, state): states.append(state)
+        def begin_shutdown(self): pass
+        def shutdown(self): pass
+        def server_close(self): pass
+        def drain_requests(self, _timeout):
+            events.append("capture-drained")
+            return True
+
+    class Worker:
+        def __init__(self, number): self.number = number
+        def start(self): events.append(f"start-{self.number}")
+        def stop(self):
+            events.append(f"stop-{self.number}")
+            if stop_fails:
+                raise RuntimeError("worker shutdown unproven")
+
+    workers = []
+    def build_worker(url):
+        assert url == "isolated-runtime"
+        worker = Worker(len(workers) + 1)
+        workers.append(worker)
+        return worker
+
+    app_servers = []
+
+    class Config:
+        def __init__(self, app, **_kwargs):
+            self.app = app
+
+    class Server:
+        def __init__(self, config):
+            self.config = config
+            self.number = len(app_servers) + 1
+            self.should_exit = False
+            app_servers.append(self)
+
+        def run(self):
+            events.append("app-run")
+            if stop_fails:
+                return
+            if self.number == 1:
+                def request_reset():
+                    states[0].reset_fixture()
+                    events.append("reset-complete")
+                    app_servers[1].should_exit = True
+
+                threading.Thread(target=request_reset).start()
+            while not self.should_exit:
+                time.sleep(0.005)
+
+    monkeypatch.setattr(sys, "argv", ["phase7AuthApp.py", "--port", "0", "--smtp-port", "0", "--control-port", "0"])
+    monkeypatch.setattr(launcher, "resolve_isolated_database_urls", lambda: ("isolated-setup", "isolated-runtime"))
+    monkeypatch.setattr(launcher.tempfile, "mkdtemp", lambda **_kwargs: str(temp_root))
+    monkeypatch.setattr(launcher, "IsolatedDatabaseOwnershipLock", Lock)
+    for name in ("_SMTPServer", "_ControlServer"):
+        monkeypatch.setattr(launcher, name, CaptureServer)
+    for name in ("_configure_environment", "prepare_isolated_database", "_bootstrap_owner", "persist_settings_playback_inventory", "_start_thread"):
+        monkeypatch.setattr(launcher, name, lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "build_isolated_jobs_worker", build_worker, raising=False)
+    monkeypatch.setattr(launcher, "seed_bootstrap_owner_and_library", lambda _url: events.append("seed"))
+    monkeypatch.setattr(launcher, "reset_application_tables", lambda _url: events.append("reset"))
+    monkeypatch.setattr(music_app, "create_asgi_app", lambda: object())
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(Config=Config, Server=Server))
+
+    if stop_fails:
+        with pytest.raises(RuntimeError, match="shutdown"):
+            launcher.main()
+        assert "reset" not in events and "release" not in events
+        assert temp_root.exists()
+    else:
+        launcher.main()
+        first_run, second_run = (
+            index for index, event in enumerate(events) if event == "app-run"
+        )
+        assert events.index("stop-1") < events.index("reset") < events.index("seed")
+        assert events.index("seed") < second_run
+        assert events.index("start-2") < events.index("reset-complete")
+        assert events.index("reset-complete") < events.index("stop-2")
+        assert first_run < events.index("stop-1")
+        assert events[-2:] == ["reset", "release"]
+        assert events.count("capture-drained") == 2
+        assert not temp_root.exists()
+
+
 @pytest.mark.parametrize("failure_point", ["acquire", "interrupted_acquire", "control_bind", "configure"])
 def test_phase7_startup_failure_cleans_only_owned_database_and_closes_bound_servers(
     tmp_path, monkeypatch, failure_point
@@ -89,10 +465,21 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
         def release(self): events.append("release")
 
     class Thread:
-        def __init__(self, **_kwargs): pass
+        created = 0
+
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+            self.number = Thread.created
+            self.ran = False
+            Thread.created += 1
+
         def start(self): pass
-        def join(self, timeout): events.append(("join", timeout))
-        def is_alive(self): return failure_point == "secondary"
+        def join(self, timeout):
+            events.append(("join", timeout))
+            if timeout is None and self.number == 0 and not self.ran:
+                self.ran = True
+                self.target()
+        def is_alive(self): return failure_point == "secondary" and self.number == 1
 
     class CaptureServer:
         def __init__(self, *_args): pass
@@ -107,6 +494,13 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
             if failure_point == "capture_close":
                 raise RuntimeError("capture close failed")
 
+    class Worker:
+        def start(self):
+            events.append("worker-start")
+
+        def stop(self):
+            events.append("worker-stop")
+
     def run(*_args, **_kwargs):
         if original_failure:
             raise primary_error
@@ -119,12 +513,12 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
         monkeypatch.setattr(launcher, name, CaptureServer)
     for name in ["_configure_environment", "prepare_isolated_database", "_bootstrap_owner", "persist_settings_playback_inventory", "_start_thread"]:
         monkeypatch.setattr(launcher, name, lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "build_isolated_jobs_worker", lambda _url: Worker())
     monkeypatch.setattr(launcher, "threading", SimpleNamespace(Thread=Thread, Lock=lambda: None, Event=lambda: SimpleNamespace(set=lambda: None)))
     monkeypatch.setattr(music_app, "create_asgi_app", lambda: object())
     monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(
         Config=lambda *_args, **_kwargs: object(),
-        Server=lambda *_args: SimpleNamespace(should_exit=False, run=lambda: None),
-        run=run,
+        Server=lambda *_args: SimpleNamespace(should_exit=False, run=run),
     ))
     monkeypatch.setattr(launcher, "reset_application_tables", lambda _url: events.append("reset"))
     with pytest.raises(RuntimeError) as caught:
@@ -141,6 +535,7 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
     assert temp_root.exists(), "a surviving writer may still be using its fixture"
     assert events.count("capture-closed") == 2
     assert ("join", 10) in events
+    assert "worker-stop" in events, "capture cleanup failures must not leave the durable worker running"
 
 @pytest.mark.parametrize("outcome", ["drained", "scheduled", "timeout", "primary_failure"])
 def test_phase7_drains_control_requests_before_database_release(tmp_path, monkeypatch, outcome):
@@ -216,6 +611,18 @@ def test_phase7_drains_control_requests_before_database_release(tmp_path, monkey
         if outcome == "primary_failure":
             raise primary_error
 
+    class Config:
+        def __init__(self, app, **_kwargs):
+            self.app = app
+
+    class Server:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+
+        def run(self):
+            run()
+
     monkeypatch.setattr(sys, "argv", ["phase7AuthApp.py", "--port", "0", "--smtp-port", "0", "--control-port", "0"])
     monkeypatch.setattr(launcher, "resolve_isolated_database_urls", lambda: ("isolated-setup", "isolated-runtime"))
     monkeypatch.setattr(launcher.tempfile, "mkdtemp", lambda **_kwargs: str(temp_root))
@@ -227,7 +634,7 @@ def test_phase7_drains_control_requests_before_database_release(tmp_path, monkey
     monkeypatch.setattr(launcher, "CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS", 0.05 if outcome in {"timeout", "primary_failure"} else 2, raising=False)
     monkeypatch.setattr(launcher.threading, "Thread", make_thread)
     monkeypatch.setattr(music_app, "create_asgi_app", lambda: object())
-    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(run=run))
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(Config=Config, Server=Server))
     monkeypatch.setattr(launcher, "reset_application_tables", lambda _url: events.append("cleanup-reset"))
 
     def launch():

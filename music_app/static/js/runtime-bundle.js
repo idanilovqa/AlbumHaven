@@ -30642,6 +30642,7 @@ async function loadCoverLookupTasks(options = {}) {
     const missingActiveTask = activeOnly
       && Array.from(previousActiveTaskIds).some((taskId) => !incomingTaskIds.has(taskId));
     const nextTasks = mergeCoverLookupTaskSummaries(incomingTasks, requestMode);
+    const completesInitialHydration = !activeOnly && !state.coverLookup.tasksHydrated;
     if (!activeOnly) {
       state.coverLookup.tasksHydrated = true;
       state.coverLookup.tasksLoadFailed = false;
@@ -30670,7 +30671,7 @@ async function loadCoverLookupTasks(options = {}) {
     })));
     const tasksChanged = snapshot !== state.coverLookup.tasksSnapshot;
     state.coverLookup.tasks = nextTasks;
-    if (tasksChanged) renderCoverLookupDrawer();
+    if (tasksChanged || completesInitialHydration) renderCoverLookupDrawer();
     nextTasks.forEach((task) => {
       applyCoverLookupTaskUpdates(task);
     });

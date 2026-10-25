@@ -968,11 +968,11 @@ test('FTC-COVERS-035 persisted notification candidates remain visible and save a
     await managedAppLifecycle.restart();
     const restarted = await freshBrowserSession.create();
     await restarted.galleryActions.goto();
-    await restarted.galleryActions.waitForGalleryReady();
-    await restarted.coverLookupActions.waitForDrawerBadgeCountAtLeast(1);
     const loading = await restarted.coverLookupActions.openDrawerAndObserveInitialLoading();
     expect(loading).toMatchObject({ loadingSeen: true, falseEmptySeen: false });
     await restarted.coverLookupActions.waitForTaskStatusById(taskId, /^[1-9]\d* covers? found$/);
+    await restarted.coverLookupActions.waitForDrawerBadgeCountAtLeast(1);
+    await restarted.galleryActions.waitForGalleryReady();
 
     await restarted.coverLookupActions.openTask(PROGRESSIVE_CANDIDATE_TARGET.album);
     await restarted.coverLookupActions.waitForModalReady();

@@ -556,6 +556,33 @@ require('node:test')('open drawer shows a loading card until the first history r
   assert.match(bodyElement.innerHTML, /not looking for anything/i);
 });
 
+require('node:test')('first history response clears loading after an unchanged active poll wins the race', async () => {
+  let resolveActiveRequest;
+  let resolveHistoryRequest;
+  const response = () => ({
+    ok: true,
+    json: async () => ({ ok: true, tasks: [], total_count: 0, active_count: 0, finished_count: 0 }),
+  });
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: (url) => new Promise((resolve) => {
+      if (String(url).includes('active_only=true')) resolveActiveRequest = () => resolve(response());
+      else resolveHistoryRequest = () => resolve(response());
+    }),
+  });
+  context.state.coverLookup.tasksHydrated = false;
+
+  const historyRequest = context.loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
+  const activeRequest = context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  resolveActiveRequest();
+  await activeRequest;
+  resolveHistoryRequest();
+  await historyRequest;
+
+  assert.equal(context.state.coverLookup.tasksHydrated, true);
+  assert.doesNotMatch(bodyElement.innerHTML, /Loading notifications/);
+  assert.match(bodyElement.innerHTML, /not looking for anything/i);
+});
+
 require('node:test')('failed first history request replaces loading card with a readable error', async () => {
   const { context, bodyElement } = createDrawerHarness({
     fetch: async () => { throw new Error('network unavailable'); },

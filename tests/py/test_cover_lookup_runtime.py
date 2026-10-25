@@ -2276,6 +2276,7 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
             display_only=True,
             art_kind="cover",
         ),
+        notification_action_taken=False,
         apply_cover_selection_for_tracks=fake_apply_cover_selection_for_tracks,
         persist_cover_selection_for_tracks=fake_persist_cover_selection_for_tracks,
     )
@@ -2306,7 +2307,7 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
             "progress_label": "Completed",
             "finished_at": updates[0]["finished_at"],
             "selected_candidate_id": "candidate-1",
-            "notification_action_taken": True,
+            "notification_action_taken": False,
             "message": "Selected remote cover art saved as a linked artwork source.",
             "result_kind": "cover-updated",
             "updated_albums": [{"key": "album-1"}],

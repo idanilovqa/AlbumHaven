@@ -779,14 +779,7 @@ function isCompletedCoverLookupTask(task) {
 }
 
 function isActionedCoverLookupNotification(task) {
-  return isCompletedCoverLookupTask(task) && (
-    Boolean(task?.notification_action_taken)
-    || (
-      String(task?.status || '') === 'completed'
-      && String(task?.result_kind || '') === 'cover-updated'
-      && String(task?.job_kind || '') === 'save_remote_selection'
-    )
-  );
+  return isCompletedCoverLookupTask(task) && Boolean(task?.notification_action_taken);
 }
 
 function isCoverLookupSavePending(task) {
@@ -1492,13 +1485,15 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
-    const isCoverUpdated = status === 'completed' && String(task?.result_kind || '') === 'cover-updated';
+    const artChosen = isActionedCoverLookupNotification(task);
     const foundCount = Number.isFinite(Number(task?.possible_match_count))
       ? Math.max(0, Number(task.possible_match_count))
       : Array.isArray(task?.possible_matches)
         ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
         : 0;
     const statusLabel = savePending
+      ? 'Saving art…'
+      : artChosen
       ? 'Art chosen'
       : status === 'failed'
       ? (String(task?.result_kind || '') === 'interrupted' ? 'Lookup interrupted' : 'Lookup failed')
@@ -1506,21 +1501,19 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? 'Canceled'
       : isNoResult
       ? 'No covers found'
-          : isCoverUpdated
-            ? 'Art chosen'
       : status === 'completed'
         ? `${foundCount ? `${foundCount} ` : ''}covers found`
       : status === 'pending'
           ? 'Queued'
           : 'Searching';
-    const taskStateClass = savePending
+    const taskStateClass = artChosen
       ? 'is-completed'
       : status === 'failed'
       ? 'is-failed'
       : ['pending', 'running'].includes(status)
         ? 'is-running'
         : 'is-completed';
-    const elapsedStateClass = savePending
+    const elapsedStateClass = artChosen
       ? 'is-completed'
       : status === 'failed'
       ? 'is-failed'

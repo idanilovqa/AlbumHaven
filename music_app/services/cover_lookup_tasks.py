@@ -178,20 +178,8 @@ def is_terminal_cover_lookup_task(task_payload: dict[str, object] | None) -> boo
 
 
 def _is_actioned_cover_lookup_notification(task_payload: Mapping[str, object] | None) -> bool:
-    if not is_terminal_cover_lookup_task(dict(task_payload or {})):
-        return False
-    if bool((task_payload or {}).get("notification_action_taken")):
-        return True
-    job_contract = (task_payload or {}).get("job_contract")
-    job_kind = str(
-        (task_payload or {}).get("job_kind")
-        or (job_contract.get("job_kind") if isinstance(job_contract, Mapping) else "")
-        or ""
-    ).strip()
-    return (
-        str((task_payload or {}).get("status") or "").strip().casefold() == "completed"
-        and str((task_payload or {}).get("result_kind") or "").strip() == "cover-updated"
-        and job_kind == "save_remote_selection"
+    return is_terminal_cover_lookup_task(dict(task_payload or {})) and bool(
+        (task_payload or {}).get("notification_action_taken")
     )
 
 

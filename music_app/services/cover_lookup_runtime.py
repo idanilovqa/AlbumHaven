@@ -265,6 +265,7 @@ def queue_cover_lookup_save_remote_task(
     library_state: dict[str, object],
     user_agent: str | None = None,
     cover_selection_origin: str = "user",
+    notification_action_taken: bool = True,
     apply_cover_selection_for_tracks,
     persist_cover_selection_for_tracks=None,
 ) -> None:
@@ -281,6 +282,7 @@ def queue_cover_lookup_save_remote_task(
         candidate_id,
         selected_remote_image_from_lookup_match(selected_match),
         cover_selection_origin=cover_selection_origin,
+        notification_action_taken=notification_action_taken,
         apply_cover_selection_for_tracks=apply_cover_selection_for_tracks,
         persist_cover_selection_for_tracks=persist_cover_selection_for_tracks,
     )
@@ -1005,6 +1007,7 @@ def _run_cover_lookup_save_remote_task(
     selected_image: SelectedRemoteImage,
     *,
     cover_selection_origin: str = "user",
+    notification_action_taken: bool = True,
     apply_cover_selection_for_tracks,
     persist_cover_selection_for_tracks=None,
 ) -> None:
@@ -1092,7 +1095,7 @@ def _run_cover_lookup_save_remote_task(
                 progress_label="Completed",
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 selected_candidate_id=candidate_id,
-                notification_action_taken=True,
+                notification_action_taken=notification_action_taken,
                 message="Selected remote cover art saved as a linked artwork source.",
                 result_kind="cover-updated",
                 updated_albums=updated_albums,
@@ -1245,7 +1248,7 @@ def _run_cover_lookup_save_remote_task(
             progress_label="Completed",
             finished_at=datetime.now(timezone.utc).isoformat(),
             selected_candidate_id=candidate_id,
-            notification_action_taken=True,
+            notification_action_taken=notification_action_taken,
             message="Selected cover art saved.",
             result_kind="cover-updated",
             updated_albums=updated_albums,

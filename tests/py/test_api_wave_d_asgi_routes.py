@@ -3090,6 +3090,7 @@ def test_asgi_cover_lookup_save_remote_queues_candidate_from_persisted_snapshot(
     assert len(queued_calls) == 1
     assert queued_calls[0]["args"][4]["url"] == "https://images.example/saved.jpg"
     assert queued_calls[0]["kwargs"]["cover_selection_origin"] == "user"
+    assert queued_calls[0]["kwargs"]["notification_action_taken"] is True
     assert list_cover_lookup_tasks(config=app.config) == []
 
 
@@ -3229,12 +3230,15 @@ def test_asgi_cover_lookup_save_remote_recovers_task_from_snapshot_generation(
                 "best_candidate_id": candidate["id"],
             }
 
-    queued_task_ids = []
+    queued_calls = []
     monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeRepository)
     monkeypatch.setattr(
         asgi_routes,
         "queue_cover_lookup_save_remote_task",
-        lambda queued_task_id, *_args, **_kwargs: queued_task_ids.append(queued_task_id),
+        lambda queued_task_id, *_args, **kwargs: queued_calls.append({
+            "task_id": queued_task_id,
+            "kwargs": kwargs,
+        }),
     )
 
     status, _headers, body = _run_asgi_request(
@@ -3250,7 +3254,8 @@ def test_asgi_cover_lookup_save_remote_recovers_task_from_snapshot_generation(
 
     assert status == 200
     assert _decode_json(body)["task"]["id"] == task_id
-    assert queued_task_ids == [task_id]
+    assert [call["task_id"] for call in queued_calls] == [task_id]
+    assert queued_calls[0]["kwargs"]["notification_action_taken"] is False
 
 
 def test_asgi_cover_lookup_save_remote_keeps_action_taken_through_background_completion(app, monkeypatch):
@@ -3278,7 +3283,12 @@ def test_asgi_cover_lookup_save_remote_keeps_action_taken_through_background_com
             }
         ],
     )
-    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_save_remote_task", lambda *_args, **_kwargs: None)
+    queued_calls = []
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *_args, **kwargs: queued_calls.append(kwargs),
+    )
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.flask_app = _FatalFlaskBridge()
 
@@ -3304,6 +3314,7 @@ def test_asgi_cover_lookup_save_remote_keeps_action_taken_through_background_com
     )
 
     assert status == 200
+    assert queued_calls[0]["notification_action_taken"] is True
     assert queued_task["status"] == "running"
     assert queued_task["notification_action_taken"] is False
     completed_task = next(

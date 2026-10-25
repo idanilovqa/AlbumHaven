@@ -1385,6 +1385,26 @@ def test_cover_lookup_tasks_mark_action_taken_uses_postgres_selection_without_to
     }
 
 
+def test_cover_lookup_tasks_clear_completed_keeps_early_provider_choice():
+    task_id, _ = create_cover_lookup_task(
+        {"album_artist": "Artist", "name": "Album"},
+        set(),
+    )
+    update_cover_lookup_task(
+        task_id,
+        status="completed",
+        result_kind="cover-updated",
+        notification_action_taken=False,
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    assert clear_completed_cover_lookup_tasks(
+        [task_id],
+        actioned_only=True,
+    ) == 0
+    assert cover_lookup_result(task_id)["notification_action_taken"] is False
+
+
 def test_cover_lookup_tasks_clear_completed_uses_postgres_selection_without_touching_file(
     config,
     monkeypatch,

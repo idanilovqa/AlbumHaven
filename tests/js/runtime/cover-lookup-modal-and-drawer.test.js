@@ -260,6 +260,7 @@ require('node:test')('closed drawer releases cards and renders terminal task sta
   context.hasActiveCoverLookupDrawerAction = () => true;
   task.status = 'completed';
   task.result_kind = 'cover-updated';
+  task.notification_action_taken = true;
   context.renderCoverLookupDrawer();
 
   assert.equal(bodyElement.innerHTML, '');
@@ -293,7 +294,7 @@ require('node:test')('accepted remote save keeps its finished card in place with
   context.renderCoverLookupDrawer();
 
   assert.deepEqual(Array.from(merged, (task) => task.id), before.map((task) => task.id));
-  assert.match(bodyElement.innerHTML, /Garip[\s\S]*>Art chosen</);
+  assert.match(bodyElement.innerHTML, /Garip[\s\S]*>Saving art…</);
   assert.doesNotMatch(bodyElement.innerHTML, /Garip[\s\S]*>Searching</);
   assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task="garip"/);
   assert.equal(context.document.getElementById('cover-lookup-drawer-summary').textContent, '3 finished');
@@ -344,6 +345,7 @@ require('node:test')('a hovered running task does not hide another task terminal
 
   savedTask.status = 'completed';
   savedTask.result_kind = 'cover-updated';
+  savedTask.notification_action_taken = true;
   context.renderCoverLookupDrawer();
 
   assert.match(
@@ -3611,7 +3613,12 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
     context.renderCoverLookupDrawer();
 
-    assert.match(bodyElement.innerHTML, /cover-lookup-task-status-label[^>]*>Canceled<\/span>/);
+    assert.match(
+      bodyElement.innerHTML,
+      notificationActionTaken
+        ? /cover-lookup-task-status-label[^>]*>Art chosen<\/span>/
+        : /cover-lookup-task-status-label[^>]*>Canceled<\/span>/,
+    );
     assert.match(bodyElement.innerHTML, /data-clear-cover-lookup-task="canceled-task"/);
     assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/);
     assert.match(bodyElement.innerHTML, /aria-label="Open Cover Look Up: Canceled Album — Canceled Artist"/);
@@ -3998,6 +4005,44 @@ require('node:test')('initial cover gallery load finishes before task polling st
   finishGallery();
   await closedBeforeReady;
   assert.deepEqual(order, ['gallery']);
+});
+
+require('node:test')('actioned terminal notifications render source-neutral Art chosen status', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  context.state.coverLookup.tasks = [
+    {
+      id: 'pasted-zero', status: 'completed', result_kind: 'no-results',
+      notification_action_taken: true, artist: 'Artist', album: 'Pasted cover',
+    },
+    {
+      id: 'local-after-failure', status: 'failed',
+      notification_action_taken: true, artist: 'Artist', album: 'Local after failure',
+    },
+    {
+      id: 'local-after-cancel', status: 'canceled',
+      notification_action_taken: true, artist: 'Artist', album: 'Local after cancel',
+    },
+    {
+      id: 'unresolved-zero', status: 'completed', result_kind: 'no-results',
+      notification_action_taken: false, artist: 'Artist', album: 'Unresolved',
+    },
+    {
+      id: 'early-provider-choice', status: 'completed', result_kind: 'cover-updated',
+      notification_action_taken: false, artist: 'Artist', album: 'Early choice',
+    },
+    {
+      id: 'early-provider-save', status: 'running', job_kind: 'save_remote_selection',
+      notification_action_taken: false, artist: 'Artist', album: 'Early save',
+    },
+  ];
+
+  context.renderCoverLookupDrawer();
+
+  assert.equal((bodyElement.innerHTML.match(/Art chosen/g) || []).length, 3);
+  assert.equal((bodyElement.innerHTML.match(/No covers found/g) || []).length, 1);
+  assert.match(bodyElement.innerHTML, /Early choice/);
+  assert.match(bodyElement.innerHTML, /Saving art…/);
+  assert.doesNotMatch(bodyElement.innerHTML, /Lookup failed|Canceled/);
 });
 
 

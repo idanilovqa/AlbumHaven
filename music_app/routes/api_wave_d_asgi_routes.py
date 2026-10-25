@@ -44,6 +44,7 @@ from music_app.services.cover_lookup_tasks import (
     count_cover_lookup_task_notifications,
     cover_lookup_result,
     create_cover_lookup_task,
+    is_terminal_cover_lookup_task,
     load_cover_lookup_task_summary_page,
     serialize_cover_lookup_task_payload,
     update_cover_lookup_task,
@@ -1130,6 +1131,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             if task_payload:
                 task_id = normalized_task_id
     selected_match = None
+    notification_action_taken = is_terminal_cover_lookup_task(task_payload)
     if task_payload:
         repository, album_id, identity_error = _resolved_snapshot_album_context(
             config,
@@ -1183,6 +1185,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
                 ({"ok": False, "error": "Saved cover candidate generation was not found"}, 404)
             )
         snapshot_candidates = candidate_snapshot.get("candidates")
+        notification_action_taken = is_terminal_cover_lookup_task(candidate_snapshot)
         selected_match = next(
             (
                 dict(item)
@@ -1259,6 +1262,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         library_state=library_state,
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
         cover_selection_origin="user",
+        notification_action_taken=notification_action_taken,
         apply_cover_selection_for_tracks=apply_cover_path_for_tracks,
         persist_cover_selection_for_tracks=persist_authoritative_cover_selection,
     )

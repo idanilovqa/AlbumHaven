@@ -2950,6 +2950,15 @@ class PostgresLibraryBrowseRepository:
             if path not in normalized_paths:
                 continue
             file_entry = dict(_row_json_mapping(row_payload.get("file_entry")))
+            album_cover_path = str(row_payload.get("album_cover_path") or "").strip()
+            if album_cover_path:
+                file_entry["cover_path"] = album_cover_path
+            album_cover_revision = str(
+                _row_json_mapping(row_payload.get("album_metadata")).get("cover_revision")
+                or ""
+            ).strip()
+            if album_cover_revision:
+                file_entry["cover_revision"] = album_cover_revision
             file_entry["path"] = path
             entries[path] = file_entry
         return entries
@@ -10129,6 +10138,8 @@ def _cover_state_rows_by_track_paths_sql() -> str:
         )
         select
             library.local_track_files.private_path as file_private_path,
+            library.local_albums.cover_path as album_cover_path,
+            library.local_albums.metadata as album_metadata,
             coalesce(
                 library.local_track_files.metadata #> '{scan_cache,file_entry}',
                 '{}'::jsonb
@@ -10136,6 +10147,9 @@ def _cover_state_rows_by_track_paths_sql() -> str:
         from library.local_track_files
         join library.local_tracks
           on library.local_tracks.id = library.local_track_files.track_id
+        left join library.local_albums
+          on library.local_albums.id = library.local_tracks.album_id
+         and library.local_albums.library_id = library.local_tracks.library_id
         join bootstrap_context
           on bootstrap_context.library_id = library.local_tracks.library_id
         where coalesce(

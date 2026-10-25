@@ -557,29 +557,22 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         album_id = _album_id(queued_album)
         if album_id is not None:
             repository = PostgresLibraryBrowseRepository(config)
+            reconciliation = latest_structural_tag_edit_destination(
+                reservation_resource_keys,
+                completed_after_monotonic=reconciliation_started_at,
+            )
+            destination_album_id = int(
+                (reconciliation or {}).get("destination_album_id") or 0
+            )
             refreshed_album = await run_in_threadpool(
                 repository.build_album_detail_payload_by_id,
-                album_id,
+                destination_album_id or album_id,
             )
             if refreshed_album is not None:
                 queued_album = _album_with_context_tracks(refreshed_album)
                 album_context = resolve_album_context(config, queued_album)
-            if album_context is None:
-                reconciliation = latest_structural_tag_edit_destination(
-                    reservation_resource_keys,
-                    completed_after_monotonic=reconciliation_started_at,
-                )
-                destination_album_id = int(
-                    (reconciliation or {}).get("destination_album_id") or 0
-                )
-                if destination_album_id > 0:
-                    refreshed_album = await run_in_threadpool(
-                        repository.build_album_detail_payload_by_id,
-                        destination_album_id,
-                    )
-                    if refreshed_album is not None:
-                        queued_album = _album_with_context_tracks(refreshed_album)
-                        album_context = resolve_album_context(config, queued_album)
+            elif destination_album_id > 0:
+                album_context = None
             if album_context is None and requested_track_paths:
                 current_albums = await run_in_threadpool(
                     repository.build_album_payloads_by_track_paths,

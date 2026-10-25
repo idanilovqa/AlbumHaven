@@ -17840,9 +17840,9 @@ def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
             return [
                 {
                     "file_private_path": selected_path,
+                    "album_cover_path": r"D:\Music\Approved Covers\cover.jpg",
+                    "album_metadata": {"cover_revision": "revision-1"},
                     "file_entry": {
-                        "cover_path": r"D:\Music\Artist\Album\cover.jpg",
-                        "cover_revision": "revision-1",
                         "remote_cover_url": "https://images.example/cover.jpg",
                     },
                 }
@@ -17870,7 +17870,7 @@ def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
 
     assert entries == {
         selected_path: {
-            "cover_path": r"D:\Music\Artist\Album\cover.jpg",
+            "cover_path": r"D:\Music\Approved Covers\cover.jpg",
             "cover_revision": "revision-1",
             "remote_cover_url": "https://images.example/cover.jpg",
             "path": selected_path,
@@ -17879,6 +17879,7 @@ def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
     assert executed["params"] == {"track_paths": [selected_path]}
     sql = str(executed["sql"])
     assert "library.local_track_files.private_path = any(%(track_paths)s::text[])" in sql
+    assert "join library.local_albums" in sql
     assert "matched_album_ids" not in sql
     assert "ignored_repair_rollup" not in sql
     assert "library.ignored_repairs" not in sql

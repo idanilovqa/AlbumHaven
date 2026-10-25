@@ -6,6 +6,7 @@ from music_app.services.loops import get_loop
 import asyncio
 import hashlib
 import logging
+import os
 import time
 from datetime import timezone
 from email.utils import parsedate_to_datetime
@@ -963,30 +964,40 @@ def _conditional_file_response(
     *,
     max_age: int | None = None,
     no_cache: bool = False,
+    stat_result=None,
+    content: bytes | None = None,
 ) -> Response:
-    stat_result = path.stat()
-    response = FileResponse(
+    resolved_stat = stat_result or path.stat()
+    file_response = FileResponse(
         path,
-        stat_result=stat_result,
+        stat_result=resolved_stat,
         filename=path.name,
         content_disposition_type="inline",
     )
     if max_age is not None:
-        response.headers["Cache-Control"] = f"public, max-age={max_age}"
+        file_response.headers["Cache-Control"] = f"public, max-age={max_age}"
     elif no_cache:
-        response.headers["Cache-Control"] = "no-cache"
+        file_response.headers["Cache-Control"] = "no-cache"
 
     if_none_match = request.headers.get("if-none-match")
-    etag = response.headers.get("etag")
+    etag = file_response.headers.get("etag")
     if if_none_match and etag:
         if _etag_matches(if_none_match, etag):
-            return _not_modified_response(response)
-        return response
+            return _not_modified_response(file_response)
+        return file_response if content is None else Response(
+            content=content,
+            media_type=file_response.media_type,
+            headers=dict(file_response.headers),
+        )
 
     if_modified_since = request.headers.get("if-modified-since")
-    if if_modified_since and _not_modified_since_matches(if_modified_since, stat_result.st_mtime):
-        return _not_modified_response(response)
-    return response
+    if if_modified_since and _not_modified_since_matches(if_modified_since, resolved_stat.st_mtime):
+        return _not_modified_response(file_response)
+    return file_response if content is None else Response(
+        content=content,
+        media_type=file_response.media_type,
+        headers=dict(file_response.headers),
+    )
 
 
 @router.get("/favicon.ico")
@@ -1296,6 +1307,52 @@ async def saved_loop_pitch_preview(request: Request, preview_id: str) -> FileRes
     return _conditional_file_response(request, resolved, no_cache=True)
 
 
+def _cached_cover_variant_response(
+    request: Request,
+    source_path: Path,
+    cache_roots: tuple[Path, ...],
+    *,
+    max_size: int,
+    max_age: int,
+    storage_policy,
+    revision: str = "",
+) -> Response | None:
+    for _attempt in range(2):
+        retry = False
+        for index, cache_root in enumerate(cache_roots):
+            cached_variant = find_existing_cover_display_variant(
+                source_path,
+                cache_root=cache_root,
+                max_size=max_size,
+                **({"revision": revision} if revision else {}),
+            )
+            if cached_variant is None:
+                continue
+            relocating_fallback = bool(
+                index
+                and getattr(getattr(storage_policy, "snapshot", None), "requested_mode", None)
+            )
+            if not relocating_fallback:
+                return _conditional_file_response(request, cached_variant, max_age=max_age)
+            try:
+                with cached_variant.open("rb") as handle:
+                    stat_result = os.fstat(handle.fileno())
+                    content = handle.read()
+            except FileNotFoundError:
+                retry = True
+                break
+            return _conditional_file_response(
+                request,
+                cached_variant,
+                max_age=max_age,
+                stat_result=stat_result,
+                content=content,
+            )
+        if not retry:
+            return None
+    return None
+
+
 def _cover_response(
     request: Request,
     path: str,
@@ -1329,17 +1386,17 @@ def _cover_response(
             data_dir=config.get("DATA_DIR"),
             storage_policy=storage_policy,
         )
-        for cache_root in cache_roots:
-            cached_variant = find_existing_cover_display_variant(
-                candidate,
-                cache_root=cache_root,
-                max_size=requested_size,
-                revision=normalized_revision,
-            )
-            if cached_variant is not None:
-                return _conditional_file_response(
-                    request, cached_variant, max_age=31536000
-                )
+        cached_response = _cached_cover_variant_response(
+            request,
+            candidate,
+            cache_roots,
+            max_size=requested_size,
+            max_age=31536000,
+            storage_policy=storage_policy,
+            revision=normalized_revision,
+        )
+        if cached_response is not None:
+            return cached_response
 
     resolved = resolve_configured_media_path(
         config,
@@ -1361,19 +1418,18 @@ def _cover_response(
             {"revision": normalized_revision} if normalized_revision else {}
         )
         try:
-            cached_variant = None
-            for cache_root in cache_roots:
-                cached_variant = find_existing_cover_display_variant(
-                    resolved,
-                    cache_root=cache_root,
-                    max_size=requested_size,
-                    **revision_options,
-                )
-                if cached_variant is not None:
-                    break
-            if cached_variant is not None:
-                resolved = cached_variant
-            elif config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
+            cached_response = _cached_cover_variant_response(
+                request,
+                resolved,
+                cache_roots,
+                max_size=requested_size,
+                max_age=31536000 if normalized_revision else 300,
+                storage_policy=storage_policy,
+                revision=normalized_revision,
+            )
+            if cached_response is not None:
+                return cached_response
+            if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
                 generation_options = {}
                 if inventory_recorder is not None:
                     generation_options["on_published"] = inventory_recorder

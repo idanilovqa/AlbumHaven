@@ -3624,7 +3624,7 @@ def test_cover_lookup_task_identity_does_not_repeat_validated_album_resolution()
 
 
 @pytest.mark.parametrize("compact_request", [False, True])
-def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
+def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lookup(
     app,
     monkeypatch,
     compact_request,
@@ -3736,15 +3736,14 @@ def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
         {str(stale_path)},
     )))
     assert (stale_path_key in acquired[1]) is not compact_request
-    assert events[1] == ("refreshed", 14674, None)
-    assert events[2][0] == "reconciled"
-    assert events[2][1] == acquired[1]
-    assert events[2][2] > 0
-    assert events[3] == ("refreshed", 24674, None)
-    assert events[4] == "released"
-    assert events[5][0] == "queued"
-    assert events[5][1]["album_artist"] == "Overhead"
-    assert events[5][2] == {str(current_path)}
+    assert events[1][0] == "reconciled"
+    assert events[1][1] == acquired[1]
+    assert events[1][2] > 0
+    assert events[2] == ("refreshed", 24674, None)
+    assert events[3] == "released"
+    assert events[4][0] == "queued"
+    assert events[4][1]["album_artist"] == "Overhead"
+    assert events[4][2] == {str(current_path)}
 
 
 def test_cover_lookup_reconciliation_uses_inline_album_detail_track_rows():

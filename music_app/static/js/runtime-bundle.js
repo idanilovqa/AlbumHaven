@@ -29309,13 +29309,28 @@ function markTrackModalCoverTransitionPending(album) {
   return true;
 }
 
+function findCoverLookupAlbumReplacement(album, candidates) {
+  const trackSignature = buildTrackPathSignature(album);
+  if (trackSignature) {
+    return candidates.find((candidate) => buildTrackPathSignature(candidate) === trackSignature) || null;
+  }
+  const identityFields = ['album_id', 'id', 'key', 'album_ref', 'request_key', 'identity_key'];
+  return candidates.find((candidate) => {
+    const sharedFields = identityFields.filter((field) => (
+      String(album?.[field] ?? '').trim() && String(candidate?.[field] ?? '').trim()
+    ));
+    return sharedFields.length > 0 && sharedFields.every((field) => (
+      String(candidate[field]).trim() === String(album[field]).trim()
+    ));
+  }) || null;
+}
+
 function syncCoverLookupAlbumReferences(updatedAlbums) {
   const candidates = Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [];
   if (!candidates.length) return;
   const modalAlbum = state.coverLookup.modal.album;
   if (modalAlbum) {
-    const currentSignature = buildTrackPathSignature(modalAlbum);
-    const replacement = candidates.find((album) => buildTrackPathSignature(album) === currentSignature);
+    const replacement = findCoverLookupAlbumReplacement(modalAlbum, candidates);
     if (replacement) {
       state.coverLookup.modal.album = replacement;
     }
@@ -29323,8 +29338,7 @@ function syncCoverLookupAlbumReferences(updatedAlbums) {
   state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
     const taskAlbum = task && typeof task === 'object' ? task.album_payload : null;
     if (!taskAlbum) return task;
-    const signature = buildTrackPathSignature(taskAlbum);
-    const replacement = candidates.find((album) => buildTrackPathSignature(album) === signature);
+    const replacement = findCoverLookupAlbumReplacement(taskAlbum, candidates);
     return replacement ? { ...task, album_payload: replacement } : task;
   });
   persistCoverLookupNotificationTasks(state.coverLookup.tasks || []);

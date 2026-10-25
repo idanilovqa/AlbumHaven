@@ -372,6 +372,66 @@ def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatc
     }
 
 
+def test_asgi_cover_lookup_notification_page_preserves_each_album_payload(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    items = [
+        {
+            "id": "angels-task",
+            "album": "Ангелы",
+            "album_payload": {
+                "album_id": 41,
+                "key": "black-obelisk::angels::2005",
+                "cover_preview_url": "/cover?path=angels&v=one",
+            },
+        },
+        {
+            "id": "garip-task",
+            "album": "Garip",
+            "album_payload": {
+                "album_id": 84,
+                "key": "altin-gun::garip::2026",
+                "cover_preview_url": "/cover?path=garip&v=two",
+            },
+        },
+        {
+            "id": "revelations-task",
+            "album": "Revelations of Divine Love",
+            "album_payload": {
+                "album_id": 126,
+                "key": "susanne-sundfor::revelations::2026",
+                "cover_preview_url": "/cover?path=revelations&v=three",
+            },
+        },
+    ]
+    monkeypatch.setattr(
+        asgi_routes,
+        "load_cover_lookup_task_summary_page",
+        lambda **_kwargs: {
+            "items": items,
+            "next_cursor": None,
+            "counts": {"total_count": 3, "active_count": 0, "finished_count": 3},
+        },
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "GET",
+        "/utilities/cover-lookup/tasks",
+        query={"limit": 50},
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["tasks"] == items
+    assert [task["album_payload"]["album_id"] for task in payload["tasks"]] == [
+        41,
+        84,
+        126,
+    ]
+    assert len({task["album_payload"]["cover_preview_url"] for task in payload["tasks"]}) == 3
+
+
 @pytest.mark.parametrize("operation", ["clear", "mark-action-taken", "cancel"])
 def test_asgi_stale_cover_notification_id_returns_only_not_found_and_preserves_other_tasks(app, operation):
     from music_app.services import cover_lookup_tasks

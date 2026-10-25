@@ -468,7 +468,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     );
     expect(expectedCover).not.toBeNull();
     await coverLookupActions.setProviderFixtureMode('normal');
-    await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover));
+    await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover).slice(1));
     const toastPlacement = await coverLookupActions.startSearchAndReadToastPlacement();
     expect(toastPlacement.horizontalCenterDelta).toBeLessThanOrEqual(2);
     expect(toastPlacement.finalVisualState).toMatchObject({
@@ -650,6 +650,103 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await coverLookupActions.waitForDrawerEmpty();
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
+});
+
+test('FTC-COVERS-036 notification cards keep independent album identity after cover save', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  trackModalActions,
+}, testInfo) => {
+  testInfo.setTimeout(240000);
+  const targets = [
+    NOTIFICATION_ACTIONED_TARGET,
+    PARTIAL_COVER_LOOKUP_TARGET,
+    COVER_LOOKUP_TARGET,
+  ];
+  const expectedCover = findFixtureCoverBySubtitle(
+    Object.values(MANUAL_PROVIDER_COVER).join(' - '),
+  );
+  expect(expectedCover).not.toBeNull();
+
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  const notifications = [];
+  for (const identity of targets) {
+    expect(await galleryActions.selectAlbumDetailsByIdentity(identity)).toEqual(identity);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    await coverLookupActions.setProviderFixtureMode('normal');
+    await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover).slice(1));
+    const start = await coverLookupActions.startSearch();
+    const taskId = String(start.task?.id || '').trim();
+    expect(taskId).not.toBe('');
+    notifications.push({ taskId, identity });
+    await coverLookupActions.closeModal();
+    await trackModalActions.close();
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.waitForDrawerOpen();
+    await coverLookupActions.waitForTaskStatusById(taskId, /^(?:\d+ )?covers found$/u);
+    await coverLookupActions.waitForTaskCoverDecodedById(taskId);
+    await coverLookupActions.closeDrawer();
+  }
+
+  await coverLookupActions.openDrawer();
+  await coverLookupActions.waitForDrawerOpen();
+  const readCards = async () => Object.fromEntries(await Promise.all(
+    notifications.map(async ({ taskId }) => [
+      taskId,
+      await coverLookupActions.readTaskCardEvidenceById(taskId),
+    ]),
+  ));
+  const before = await readCards();
+  expect(new Set(Object.values(before).map((evidence) => evidence.taskId)).size).toBe(3);
+  expect(new Set(Object.values(before).map((evidence) => evidence.imageSrc)).size).toBe(3);
+
+  const verifyCardDestinations = async () => {
+    for (const { taskId, identity } of notifications) {
+      expect(before[taskId]).toMatchObject({
+        taskId,
+        title: identity.album,
+        byline: [identity.artist, identity.year].filter(Boolean).join(' · '),
+      });
+      await coverLookupActions.openTaskById(taskId);
+      await coverLookupActions.waitForModalReady();
+      await expect(coverLookupActions.coverLookup.modalSubtitle).toHaveText([
+        identity.artist,
+        identity.album,
+        identity.year,
+      ].filter(Boolean).join(' - '));
+      await coverLookupActions.closeModal();
+      await coverLookupActions.waitForDrawerOpen();
+    }
+  };
+
+  await verifyCardDestinations();
+  const selected = notifications.at(-1);
+  await coverLookupActions.openTaskById(selected.taskId);
+  await coverLookupActions.waitForModalReady();
+  await coverLookupActions.waitForModalResultsReady();
+  await coverLookupActions.selectFirstRemoteCoverAndSave();
+  await coverLookupActions.waitForTaskStatusById(selected.taskId, 'Art chosen');
+
+  const afterSave = await readCards();
+  for (const { taskId } of notifications.slice(0, -1)) {
+    expect(afterSave[taskId]).toEqual(before[taskId]);
+  }
+  expect(afterSave[selected.taskId].imageSrc).not.toBe(before[selected.taskId].imageSrc);
+  expect({
+    ...afterSave[selected.taskId],
+    imageSrc: before[selected.taskId].imageSrc,
+  }).toEqual(before[selected.taskId]);
+  expect(new Set(Object.values(afterSave).map((evidence) => evidence.imageSrc)).size).toBe(3);
+  await verifyCardDestinations();
+
+  await coverLookupActions.closeDrawer();
+  await coverLookupActions.openDrawer();
+  await coverLookupActions.waitForDrawerOpen();
+  expect(await readCards()).toEqual(afterSave);
+  await verifyCardDestinations();
 });
 
 test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload', { tag: '@area:cover-providers' }, async ({

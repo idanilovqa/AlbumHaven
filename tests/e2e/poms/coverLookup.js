@@ -505,6 +505,14 @@ export class CoverLookup extends BasePage {
     ).locator('..');
   }
 
+  taskOpenButtonById(taskId) {
+    return this.taskCardById(taskId).locator('.cover-lookup-task-open');
+  }
+
+  taskCoverById(taskId) {
+    return this.taskCardById(taskId).locator('img.cover-lookup-task-cover').first();
+  }
+
   taskInfoByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-open');
   }

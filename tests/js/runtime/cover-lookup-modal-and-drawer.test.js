@@ -92,6 +92,60 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
   );
 });
 
+require('node:test')('cover updates preserve unrelated pathless notification artwork', () => {
+  const selectedAlbum = {
+    album_id: 41,
+    id: 'shared-legacy-id',
+    key: 'black-obelisk::angels::2005',
+    album_artist: 'Чёрный Обелиск',
+    name: 'Ангелы',
+  };
+  const unrelatedAlbum = {
+    key: 'altin-gun::garip::2026',
+    album_artist: 'Altın Gün',
+    name: 'Garip',
+    cover_path: 'C:/music/Altin Gun/Garip/cover.jpg',
+  };
+  const secondUnrelatedAlbum = {
+    key: 'susanne-sundfor::revelations::2026',
+    album_artist: 'Susanne Sundfør',
+    name: 'Revelations of Divine Love',
+    cover_path: 'C:/music/Susanne Sundfor/Revelations/cover.jpg',
+  };
+  const updatedSelectedAlbum = {
+    ...selectedAlbum,
+    cover_path: 'C:/music/Black Obelisk/Angels/cover.jpg',
+  };
+  const conflictingLegacyIdAlbum = {
+    album_id: 999,
+    id: selectedAlbum.id,
+    key: 'unrelated::album::2026',
+    cover_path: 'C:/music/Unrelated/cover.jpg',
+  };
+  const context = loadHelper({ persistCoverLookupNotificationTasks: () => {} });
+  context.state.coverLookup.modal = { album: selectedAlbum };
+  context.state.coverLookup.tasks = [
+    { id: 'angels-task', album_payload: selectedAlbum },
+    { id: 'garip-task', album_payload: unrelatedAlbum },
+    { id: 'revelations-task', album_payload: secondUnrelatedAlbum },
+  ];
+
+  context.syncCoverLookupAlbumReferences([conflictingLegacyIdAlbum, updatedSelectedAlbum]);
+
+  assert.strictEqual(context.state.coverLookup.modal.album, updatedSelectedAlbum);
+  assert.strictEqual(context.state.coverLookup.tasks[0].album_payload, updatedSelectedAlbum);
+  assert.strictEqual(
+    context.state.coverLookup.tasks[1].album_payload,
+    unrelatedAlbum,
+    'an album without track paths must not match every other pathless notification',
+  );
+  assert.strictEqual(
+    context.state.coverLookup.tasks[2].album_payload,
+    secondUnrelatedAlbum,
+    'each unrelated pathless notification must retain its own album and artwork',
+  );
+});
+
 require('node:test')('cover lookup hover icon loads only when requested', () => {
   const hoverIcon = { dataset: { src: '/static/images/cover-lookup-notification-icon.png' }, src: '' };
   const listeners = {};

@@ -1206,6 +1206,31 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-036 notification cards keep independent album identity after cover save",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:notification-identity-isolation"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:notification-identity-isolation"
+    ],
+    "expectedContracts": [
+      "notification-card-identity-isolation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:notification-identity-isolation",
+      "filesystemCopy": "media/cases/notification-identity-isolation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload",
     "profile": "functional-core",
     "setupScope": "isolated",

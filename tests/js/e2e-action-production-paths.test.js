@@ -1552,6 +1552,10 @@ test('manual all-provider scenarios explicitly opt into normal provider results'
       searchMarker: 'startSearchAndReadToastPlacement()',
     },
     {
+      title: 'FTC-COVERS-036 notification cards keep independent album identity after cover save',
+      searchMarker: 'enterManualUrls(',
+    },
+    {
       title: 'FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload',
       searchMarker: 'holdLaterProviderFixture()',
     },

@@ -923,6 +923,31 @@ export class CoverLookupActions {
     await image.evaluate(waitForDisplayedImageDecode);
   }
 
+  async waitForTaskCoverDecodedById(taskId, options = {}) {
+    const image = this.coverLookup.taskCoverById(taskId);
+    await expect(image).toBeVisible({ timeout: options.timeout || 30000 });
+    // parity-check: allow-read-only-measurement-evaluate -- verify the exact notification's rendered image decoded
+    await image.evaluate(waitForDisplayedImageDecode);
+  }
+
+  async readTaskCardEvidenceById(taskId) {
+    const card = this.coverLookup.taskCardById(taskId);
+    await expect(card).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- atomically bind card identity, click target, and rendered art
+    return card.evaluate((element) => {
+      const opener = element.querySelector('[data-open-cover-lookup-task]');
+      const image = element.querySelector('img.cover-lookup-task-cover');
+      return {
+        taskId: String(opener?.getAttribute('data-open-cover-lookup-task') || ''),
+        title: String(element.querySelector('.cover-lookup-task-title')?.textContent || '').trim(),
+        byline: String(element.querySelector('.cover-lookup-task-byline')?.textContent || '').trim(),
+        imageSrc: image instanceof HTMLImageElement
+          ? String(image.currentSrc || image.getAttribute('src') || '').trim()
+          : '',
+      };
+    });
+  }
+
   async readTaskStatus(taskTitle) {
     return (await this.coverLookup.taskStatusByTitle(taskTitle).textContent() || '').trim();
   }
@@ -1145,6 +1170,10 @@ export class CoverLookupActions {
 
   async openTask(taskTitle) {
     await this.coverLookup.taskOpenButtonByTitle(taskTitle).click();
+  }
+
+  async openTaskById(taskId) {
+    await this.coverLookup.taskOpenButtonById(taskId).click();
   }
 
   async openTaskWithKeyboard(taskTitle, key = 'Enter') {

@@ -705,6 +705,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-036 notification cards keep independent album identity after cover save",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally",
               "area": "cover-providers"
             },

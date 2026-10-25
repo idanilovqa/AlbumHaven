@@ -19,7 +19,7 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 53],
   ['cover-providers-1', 12],
-  ['cover-providers-2', 12],
+  ['cover-providers-2', 13],
   ['metadata-mutations', 14],
   ['playback-utilities-1', 14],
   ['playback-utilities-2', 14],
@@ -921,7 +921,7 @@ validatorTest('all seven shards use explicit effect-compatible wave budgets', ()
   const expected = new Map([
     ['gallery-search-visual', { cases: 53, waves: [1, 2] }],
     ['cover-providers-1', { cases: 12, waves: [1, 2] }],
-    ['cover-providers-2', { cases: 12, waves: [1, 2] }],
+    ['cover-providers-2', { cases: 13, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 14, waves: [1, 2, 5] }],

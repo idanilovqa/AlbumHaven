@@ -142,6 +142,53 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
     assert len(json.dumps(summary).encode("utf-8")) < 4_096
 
 
+def test_terminal_task_list_summaries_keep_album_identity_and_artwork_isolated():
+    from music_app.services import cover_lookup_tasks as task_service
+
+    tasks = [
+        {
+            "id": "angels-task",
+            "status": "completed",
+            "album_payload": {
+                "album_id": 41,
+                "key": "black-obelisk::angels::2005",
+                "name": "Ангелы",
+                "album_artist": "Чёрный Обелиск",
+                "cover_path": "C:/Music/Black Obelisk/Angels/cover.jpg",
+                "tracks": [{"path": "C:/Music/Black Obelisk/Angels/01.flac"}],
+            },
+        },
+        {
+            "id": "garip-task",
+            "status": "completed",
+            "album_payload": {
+                "album_id": 84,
+                "key": "altin-gun::garip::2026",
+                "name": "Garip",
+                "album_artist": "Altın Gün",
+                "cover_path": "C:/Music/Altin Gun/Garip/cover.jpg",
+                "tracks": [{"path": "C:/Music/Altin Gun/Garip/01.flac"}],
+            },
+        },
+    ]
+
+    summaries = [
+        task_service.summarize_cover_lookup_task_for_list(task) for task in tasks
+    ]
+
+    assert [summary["id"] for summary in summaries] == ["angels-task", "garip-task"]
+    assert [summary["album_payload"]["album_id"] for summary in summaries] == [41, 84]
+    assert [summary["album_payload"]["key"] for summary in summaries] == [
+        "black-obelisk::angels::2005",
+        "altin-gun::garip::2026",
+    ]
+    assert [summary["album_payload"]["cover_path"] for summary in summaries] == [
+        "C:/Music/Black Obelisk/Angels/cover.jpg",
+        "C:/Music/Altin Gun/Garip/cover.jpg",
+    ]
+    assert all("tracks" not in summary["album_payload"] for summary in summaries)
+
+
 def test_task_list_uses_compact_persisted_summaries(monkeypatch):
     from music_app.services import cover_lookup_tasks as task_service
 

@@ -127,7 +127,7 @@ test('FTC-COVERS-007 settles its held provider before clearing the active task',
     "test('FTC-COVERS-007 notification states and bulk clear preserve active work'",
     2,
   )[1]
-    .split("test('FTC-COVERS-013", 1)[0];
+    .split("test('FTC-COVERS-036", 1)[0];
 
   assert.match(
     scenario,

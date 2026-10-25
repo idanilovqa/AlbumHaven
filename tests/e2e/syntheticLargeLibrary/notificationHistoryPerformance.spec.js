@@ -305,7 +305,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
             expect(notificationArtEvidence.naturalWidth).toBeGreaterThan(0);
             expect(notificationArtEvidence.naturalHeight).toBeGreaterThan(0);
             notificationCoverLookupDecodedArtMs = performance.now() - notificationCoverLookupStartedAt;
-            await coverLookupActions.coverLookup.waitForDrawerState(false);
+            await coverLookupActions.coverLookup.waitForDrawerState(true);
           },
         ),
       );

@@ -768,7 +768,7 @@ export class TagEditorActions {
         `Tag edit was not terminally failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
       );
     }
-    await expect(this.tagEditor.overlay).toBeVisible({ timeout });
+    await expect(this.tagEditor.overlay).toBeHidden({ timeout });
     await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
     await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
     await expect(this.tagEditor.repairAlertMessage).toContainText(

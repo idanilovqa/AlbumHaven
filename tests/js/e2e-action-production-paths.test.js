@@ -3130,9 +3130,16 @@ test('terminal tag-edit failure waits for the failure notification before readin
       return '<repair alert message>';
     },
   };
+  const overlay = {
+    ...passingLocator,
+    async _expect(expression) {
+      events.push(expression);
+      return { matches: true, received: { value: true }, log: [] };
+    },
+  };
   const actions = new TagEditorActions({
     confirmOverlay: passingLocator,
-    overlay: passingLocator,
+    overlay,
     repairAlert: passingLocator,
     repairAlertMessage,
   });
@@ -3147,6 +3154,7 @@ test('terminal tag-edit failure waits for the failure notification before readin
     timeout: 1000,
   });
 
+  assert.ok(events.includes('to.be.hidden'));
   assert.ok(events.includes('to.have.text'));
   assert.equal(result.alertText, 'permission denied table ignored_versions');
 });

@@ -2247,11 +2247,29 @@ def test_asgi_pasted_cover_persistence_failure_restores_prior_cover_bytes_and_st
 def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_image_fetch(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import cover_lookup_tasks
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
-    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused@localhost/test"
+    persisted_remote_url = "https://images.example/persisted-active.jpg"
+    cover_state_loads: list[set[str]] = []
+
+    def build_cover_state_entries_by_paths(_repository, track_paths):
+        cover_state_loads.append(set(track_paths))
+        return {
+            str(track_path): {
+                "path": str(track_path),
+                "remote_cover_url": persisted_remote_url,
+            }
+        }
+
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_cover_state_entries_by_paths",
+        build_cover_state_entries_by_paths,
+    )
     extraction_calls: list[dict[str, object]] = []
     fetch_calls: list[dict[str, object]] = []
     log_calls: list[dict[str, object]] = []
@@ -2328,6 +2346,8 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
         "candidate-old",
         "candidate-new",
     ]
+    assert payload["gallery"]["remote_cover"]["url"] == persisted_remote_url
+    assert cover_state_loads == [{str(track_path)}]
     assert extraction_calls[0]["urls"] == ["https://manual.example/cover"]
     assert extraction_calls[0]["user_agent"] == app.config["MUSICBRAINZ_USER_AGENT"]
     assert [call["message"] for call in log_calls] == [
@@ -3544,7 +3564,11 @@ def test_postgres_local_cover_commit_updates_live_runtime_not_inventory_snapshot
 
 
 @pytest.mark.parametrize("cached", [False, True])
-def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory(app, monkeypatch, cached):
+def test_cover_gallery_reads_saved_remote_cover_from_postgres_when_runtime_cache_is_stale(
+    app,
+    monkeypatch,
+    cached,
+):
     from music_app.routes import api_wave_d_asgi_routes as routes
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -3561,7 +3585,8 @@ def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory
         "remote_cover_height": 640,
     }
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused@localhost/test"
-    app.library_state["file_cache"] = {str(track_path): dict(entry)} if cached else {}
+    stale_entry = {"path": str(track_path), "title": "Song without hydrated cover state"}
+    app.library_state["file_cache"] = {str(track_path): stale_entry} if cached else {}
     app.library_state["albums"] = []
     loads = []
 
@@ -3585,8 +3610,8 @@ def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory
     assert remote["source_label"] == "Spotify"
     assert remote["album_url"] == entry["remote_cover_album_url"]
     assert (remote["width"], remote["height"]) == (640, 640)
-    assert loads == ([] if cached else [{str(track_path)}])
-    assert app.library_state["file_cache"] == ({str(track_path): entry} if cached else {})
+    assert loads == [{str(track_path)}]
+    assert app.library_state["file_cache"] == ({str(track_path): stale_entry} if cached else {})
 
 
 def test_cover_lookup_task_identity_does_not_repeat_validated_album_resolution():

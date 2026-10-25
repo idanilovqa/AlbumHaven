@@ -103,6 +103,28 @@ def test_same_volume_move_is_atomic_and_checkpointed(tmp_path):
     assert repository.completed[0]["status"] == "completed"
 
 
+def test_same_volume_move_removes_byte_identical_source_recreated_after_checkpoint(tmp_path):
+    content = b"preview-recreated-during-relocation"
+    source = tmp_path / "source.webp"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.webp"
+    source.write_bytes(content)
+    repository = FakeRepository([item(source, target, content)])
+    original_complete = repository.complete_item
+
+    def complete_item(**result):
+        original_complete(**result)
+        source.write_bytes(content)
+
+    repository.complete_item = complete_item
+
+    run_worker(repository)
+
+    assert target.read_bytes() == content
+    assert not source.exists()
+    assert repository.completed[0]["status"] == "completed"
+    assert repository.cleanup_failures == []
+
+
 def test_cross_volume_copy_checkpoints_before_source_deletion(tmp_path, monkeypatch):
     content = b"cross-volume-preview"
     source = tmp_path / "source.webp"

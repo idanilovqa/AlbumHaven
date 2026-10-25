@@ -249,16 +249,18 @@ async def _serialize_cover_gallery_from_asgi(
     track_paths: set[str],
     task_id: str = "",
     candidate_snapshot: Mapping[str, object] | None = None,
+    *,
+    refresh_persisted_cover_state: bool = False,
 ) -> dict[str, object]:
     config = _app_config(request)
     file_cache = _library_state(request).get("file_cache", {}) or {}
-    missing_paths = track_paths - set(file_cache)
-    if missing_paths and str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
+    paths_to_load = track_paths if refresh_persisted_cover_state else track_paths - set(file_cache)
+    if paths_to_load and str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
         selected_entries = await run_in_threadpool(
             PostgresLibraryBrowseRepository(config).build_cover_state_entries_by_paths,
-            missing_paths,
+            paths_to_load,
         )
         file_cache = {**file_cache, **selected_entries}
     task_payload = serialize_cover_lookup_task_payload(cover_lookup_result(task_id) if task_id else {})
@@ -475,6 +477,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
             album_context.track_paths,
             task_id,
             candidate_snapshot,
+            refresh_persisted_cover_state=True,
         )
     )
 

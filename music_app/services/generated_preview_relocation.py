@@ -206,6 +206,7 @@ def _relocate_item(item: Mapping[str, object], *, operation_id: str) -> dict[str
         if _same_volume(source, target):
             try:
                 source.replace(target)
+                result["source_to_delete"] = source
             except OSError as exc:
                 if exc.errno != errno.EXDEV:
                     raise

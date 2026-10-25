@@ -1772,6 +1772,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   const mutation = {
     taskId: normalizedTaskId,
     albumKey: selectedKey,
+    originalTrackPaths: Array.from(getAlbumTrackPaths(originalAlbum)),
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
@@ -1795,12 +1796,16 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (survivingKeys.has(selectedKey)) {
       state.utility.selectedProblematicKey = selectedKey;
     } else {
+      const retainedAlbum = findAlbumByTrackPaths(
+        items,
+        new Set(Array.isArray(mutation.originalTrackPaths) ? mutation.originalTrackPaths : []),
+      );
       const priorKeys = Array.isArray(mutation.priorKeys) ? mutation.priorKeys : [];
       const selectedIndex = priorKeys.indexOf(selectedKey);
       const previousSurvivor = selectedIndex > 0
         ? priorKeys.slice(0, selectedIndex).reverse().find((key) => survivingKeys.has(key))
         : '';
-      state.utility.selectedProblematicKey = previousSurvivor || String(items[0]?.key || '');
+      state.utility.selectedProblematicKey = String(retainedAlbum?.key || previousSurvivor || items[0]?.key || '');
     }
     const survivorKey = String(state.utility.selectedProblematicKey || '');
     const survivor = items.find((album) => String(album?.key || '') === survivorKey) || null;

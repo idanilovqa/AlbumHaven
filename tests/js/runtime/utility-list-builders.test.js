@@ -3730,6 +3730,49 @@ test('watchSaveTask owns Problematic Files mutation state until its matching ter
   }
 });
 
+test('Problematic Files mutation follows the retained source album when a structural edit changes its key', async () => {
+  const context = loadHelpers();
+  const retainedTrackPath = 'C:/Music/Rarity/02 - Remain Editable.mp3';
+  const originalAlbum = {
+    key: 'rarity-before-edit',
+    name: 'Two Track Rarity Fixture',
+    tracks: [
+      { path: 'C:/Music/Rarity/01 - Apply Rarity Here.mp3' },
+      { path: retainedTrackPath },
+    ],
+  };
+  const unrelatedAlbum = {
+    key: 'unrelated-neighbor',
+    name: 'Unrelated Neighbor',
+    detail_loaded: true,
+    track_paths: ['C:/Music/Unrelated/01 - Track.mp3'],
+  };
+  const retainedAlbum = {
+    key: 'rarity-after-edit',
+    name: 'Two Track Rarity Fixture',
+    detail_loaded: true,
+    track_paths: [retainedTrackPath],
+  };
+  context.state.utility = {
+    activeTab: 'problematic-files',
+    loaded: true,
+    problematicFiles: [unrelatedAlbum, originalAlbum],
+    selectedProblematicKey: originalAlbum.key,
+  };
+  context.getUtilityModalElements = () => ({ list: { scrollTop: 0, scrollHeight: 0, clientHeight: 0 } });
+  context.renderUtilityModalContent = () => {};
+
+  context.claimProblematicSaveTaskMutation('structural-key-change', originalAlbum);
+  context.state.utility.problematicFiles = [unrelatedAlbum, retainedAlbum];
+  await context.settleProblematicSaveTaskMutation('structural-key-change', { reconcileSelection: true });
+
+  assert.equal(
+    context.state.utility.selectedProblematicKey,
+    retainedAlbum.key,
+    'a surviving track must keep the edited logical album selected before neighbor fallback',
+  );
+});
+
 test('pending Problematic Files mutation preserves explicit sidebar navigation and its newer scroll position', async () => {
   const context = loadHelpers();
   const removedAlbum = {

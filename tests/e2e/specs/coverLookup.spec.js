@@ -706,6 +706,13 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     ]),
   ));
   const before = await readCards();
+  const readTargetOrder = async () => page.locator('[data-open-cover-lookup-task]').evaluateAll(
+    (elements, taskIds) => elements
+      .map((element) => String(element.getAttribute('data-open-cover-lookup-task') || ''))
+      .filter((taskId) => taskIds.includes(taskId)),
+    notifications.map(({ taskId }) => taskId),
+  );
+  const orderBeforeSave = await readTargetOrder();
   expect(new Set(Object.values(before).map((evidence) => evidence.taskId)).size).toBe(3);
   expect(new Set(Object.values(before).map((evidence) => evidence.imageSrc)).size).toBe(3);
 
@@ -741,6 +748,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await coverLookupActions.waitForDrawerOpen();
   expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
   await coverLookupActions.waitForTaskStatusById(selected.taskId, 'Art chosen');
+  expect(await readTargetOrder()).toEqual(orderBeforeSave);
 
   const afterSave = await readCards();
   for (const { taskId } of notifications.slice(0, -1)) {
@@ -758,6 +766,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
   expect(await readCards()).toEqual(afterSave);
+  expect(await readTargetOrder()).toEqual(orderBeforeSave);
   await verifyCardDestinations();
 
   await coverLookupActions.closeDrawer();
@@ -766,6 +775,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
   expect(await readCards()).toEqual(afterSave);
+  expect(await readTargetOrder()).toEqual(orderBeforeSave);
   await verifyCardDestinations();
 });
 

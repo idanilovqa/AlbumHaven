@@ -317,6 +317,7 @@ def _count_notifications(connection: Any) -> dict[str, int]:
                 (
                     list(_ACTIVE_STATUSES),
                     list(_FINISHED_STATUSES),
+                    list(_ACTIVE_STATUSES),
                     list(_SOURCE_FAMILIES),
                 ),
             )
@@ -779,9 +780,19 @@ def _count_notifications_sql() -> str:
           count(*)::int as total_count,
           count(*) filter (
             where ops.cover_lookup_tasks.status = any(%s::text[])
+              and coalesce(
+                ops.cover_lookup_tasks.metadata -> 'source_payload'
+                  -> 'job_contract' ->> 'job_kind',
+                ''
+              ) <> 'save_remote_selection'
           )::int as active_count,
           count(*) filter (
             where ops.cover_lookup_tasks.status = any(%s::text[])
+               or (
+                 ops.cover_lookup_tasks.status = any(%s::text[])
+                 and ops.cover_lookup_tasks.metadata -> 'source_payload'
+                   -> 'job_contract' ->> 'job_kind' = 'save_remote_selection'
+               )
           )::int as finished_count
         from ops.cover_lookup_tasks
         join bootstrap_context
@@ -826,7 +837,8 @@ def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) 
               'selected_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'selected_candidate_id',
               'best_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'best_candidate_id',
               'candidate_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_revision',
-              'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at'
+              'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at',
+              'job_kind', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'job_contract' -> 'job_kind'
             )
             || jsonb_build_object(
               'id', ops.cover_lookup_tasks.task_key,

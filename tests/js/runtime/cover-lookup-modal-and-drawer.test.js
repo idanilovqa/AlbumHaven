@@ -268,6 +268,37 @@ require('node:test')('closed drawer releases cards and renders terminal task sta
   assert.match(bodyElement.innerHTML, />Art chosen</);
 });
 
+require('node:test')('accepted remote save keeps its finished card in place without looking like another search', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const before = [
+    { id: 'newer-finished', status: 'completed', artist: 'Artist', album: 'Newer' },
+    { id: 'garip', status: 'completed', artist: 'Altın Gün', album: 'Garip', result_kind: 'matches-found' },
+    { id: 'older-finished', status: 'completed', artist: 'Artist', album: 'Older' },
+  ];
+  context.state.coverLookup.tasks = before;
+
+  const merged = context.mergeCoverLookupTaskSummaries([{
+    ...before[1],
+    status: 'running',
+    progress: 92,
+    progress_label: 'Saving selected cover art...',
+    job_kind: 'save_remote_selection',
+  }], 'active');
+  context.state.coverLookup.tasks = merged;
+  context.state.coverLookup.notificationCounts = {
+    total_count: 3,
+    active_count: 0,
+    finished_count: 3,
+  };
+  context.renderCoverLookupDrawer();
+
+  assert.deepEqual(Array.from(merged, (task) => task.id), before.map((task) => task.id));
+  assert.match(bodyElement.innerHTML, /Garip[\s\S]*>Art chosen</);
+  assert.doesNotMatch(bodyElement.innerHTML, /Garip[\s\S]*>Searching</);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task="garip"/);
+  assert.equal(context.document.getElementById('cover-lookup-drawer-summary').textContent, '3 finished');
+});
+
 for (const interaction of ['focus', 'hover']) {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'cancel-transition', status: 'running', artist: 'Artist', album: 'Album' };
@@ -382,6 +413,7 @@ function createDrawerHarness(overrides = {}) {
   };
   const bodyElement = { innerHTML: '' };
   const badgeElement = { hidden: false, textContent: '' };
+  const summaryElement = { textContent: '' };
   const buttonClasses = new Set();
   const buttonElement = {
     classList: {
@@ -419,6 +451,7 @@ function createDrawerHarness(overrides = {}) {
         'cover-lookup-drawer': drawerElement,
         'cover-lookup-drawer-body': bodyElement,
         'cover-lookup-drawer-badge': badgeElement,
+        'cover-lookup-drawer-summary': summaryElement,
         'cover-lookup-drawer-button': buttonElement,
         'cover-lookup-drawer-clear': clearElement,
         'cover-lookup-modal': modalElement,

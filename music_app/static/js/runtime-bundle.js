@@ -29256,6 +29256,16 @@ function isCompletedCoverLookupTask(task) {
   return ['completed', 'failed', 'canceled'].includes(String(task?.status || ''));
 }
 
+function isCoverLookupSavePending(task) {
+  return ['pending', 'running'].includes(String(task?.status || ''))
+    && String(task?.job_kind || '') === 'save_remote_selection';
+}
+
+function isActiveCoverLookupSearchTask(task) {
+  return ['pending', 'running'].includes(String(task?.status || ''))
+    && !isCoverLookupSavePending(task);
+}
+
 function getCoverLookupStatusTone(task) {
   if (!task || typeof task !== 'object') {
     return 'neutral';
@@ -29750,7 +29760,7 @@ function buildCoverLookupCandidateSnapshot(task) {
 
 function syncCoverLookupElapsedTimer() {
   const hasActiveTasks = (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
-    .some((task) => ['pending', 'running'].includes(String(task?.status || '')));
+    .some((task) => isActiveCoverLookupSearchTask(task));
   if (!state.coverLookup.drawerOpen || !hasActiveTasks) {
     stopCoverLookupElapsedTimer();
     return;
@@ -29871,8 +29881,10 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
-  const loadedActiveCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
-  const loadedTerminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
+  const loadedActiveCount = tasks.filter((task) => isActiveCoverLookupSearchTask(task)).length;
+  const loadedTerminalCount = tasks.filter((task) => (
+    isCompletedCoverLookupTask(task) || isCoverLookupSavePending(task)
+  )).length;
   const counts = state.coverLookup.notificationCounts;
   const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
   const activeCount = hasAuthoritativeCounts
@@ -29941,7 +29953,8 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   state.coverLookup.taskRenderWindowStart = renderWindow.start;
   const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
   const taskMarkup = visibleTasks.map((task) => {
-    const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
+    const savePending = isCoverLookupSavePending(task);
+    const progress = savePending ? 100 : Math.max(0, Math.min(100, Number(task?.progress || 0)));
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
@@ -29951,7 +29964,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       : Array.isArray(task?.possible_matches)
         ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
         : 0;
-    const statusLabel = status === 'failed'
+    const statusLabel = savePending
+      ? 'Art chosen'
+      : status === 'failed'
       ? (String(task?.result_kind || '') === 'interrupted' ? 'Lookup interrupted' : 'Lookup failed')
       : status === 'canceled'
       ? 'Canceled'
@@ -29964,17 +29979,24 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       : status === 'pending'
           ? 'Queued'
           : 'Searching';
-    const taskStateClass = status === 'failed'
+    const taskStateClass = savePending
+      ? 'is-completed'
+      : status === 'failed'
       ? 'is-failed'
       : ['pending', 'running'].includes(status)
         ? 'is-running'
         : 'is-completed';
-    const elapsedStateClass = status === 'failed'
+    const elapsedStateClass = savePending
+      ? 'is-completed'
+      : status === 'failed'
       ? 'is-failed'
       : isCompleted
         ? 'is-completed'
         : 'is-active';
-    const elapsedLabel = getCoverLookupTaskElapsedLabel(task, Date.now());
+    const elapsedLabel = getCoverLookupTaskElapsedLabel(
+      savePending ? { ...task, status: 'completed' } : task,
+      Date.now(),
+    );
     const albumTitle = String(task?.album || '').trim() || 'Unknown album';
     const albumByline = [task?.artist || '', task?.year || ''].filter(Boolean).join(' · ');
     const openLabel = `Open Cover Look Up: ${albumTitle}${albumByline ? ` — ${albumByline}` : ''}`;
@@ -30030,7 +30052,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
             attributes: { 'data-retry-cover-lookup-task': task.id || '' },
           })
           : ''}
-        ${['pending', 'running'].includes(status)
+        ${isActiveCoverLookupSearchTask(task)
           ? ButtonComponent.renderActionButton({
             icon: 'close',
             semantic: 'destructive',
@@ -30555,6 +30577,15 @@ function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
   const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
   const remaining = current.filter((task) => !incomingIds.has(String(task?.id || '')));
+  if (mode === 'active') {
+    const currentIds = new Set(current.map((task) => String(task?.id || '')).filter(Boolean));
+    const incomingById = new Map(incoming.map((task) => [String(task?.id || ''), task]));
+    const newTasks = incoming.filter((task) => !currentIds.has(String(task?.id || '')));
+    return [
+      ...newTasks,
+      ...current.map((task) => incomingById.get(String(task?.id || '')) || task),
+    ];
+  }
   return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
 }
 
@@ -30625,6 +30656,7 @@ async function loadCoverLookupTasks(options = {}) {
       notification_action_taken: Boolean(task.notification_action_taken),
       possible_match_count: Number(task.possible_match_count || 0),
       candidate_updated_at: String(task.candidate_updated_at || ''),
+      job_kind: String(task.job_kind || ''),
       selected_candidate_id: task.selected_candidate_id,
       possible_match_ids: buildCoverLookupCandidateSnapshot(task),
       updated_albums_count: Array.isArray(task.updated_albums) ? task.updated_albums.length : 0,

@@ -96,7 +96,10 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
         "notification_action_taken": False,
         "notification_completed_at": "2026-10-17T18:00:00+00:00",
         "track_paths": ["C:/Music/Artist/Album/01.flac"],
-        "job_contract": {"provider_state": "q" * 200_000},
+        "job_contract": {
+            "job_kind": "save_remote_selection",
+            "provider_state": "q" * 200_000,
+        },
         "phase_timings_ms": {"lookup": 123},
         "possible_matches": [
             {"id": "front", "art_kind": "cover", "debug": "x" * 200_000},
@@ -128,6 +131,7 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
     assert "possible_matches" not in summary
     assert "track_paths" not in summary
     assert "job_contract" not in summary
+    assert summary["job_kind"] == "save_remote_selection"
     assert "phase_timings_ms" not in summary
     assert summary["album_payload"] == {
         "album_id": 41,

@@ -226,6 +226,11 @@ def summarize_cover_lookup_task_for_list(
         for field in _COVER_LOOKUP_LIST_TASK_FIELDS
         if field in serialized
     }
+    job_contract = serialized.get("job_contract")
+    if isinstance(job_contract, Mapping):
+        job_kind = str(job_contract.get("job_kind") or "").strip()
+        if job_kind:
+            summary["job_kind"] = job_kind
     matches = serialized.get("possible_matches")
     if is_terminal_cover_lookup_task(serialized):
         if not isinstance(matches, list) and "possible_match_count" in serialized:

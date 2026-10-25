@@ -122,9 +122,12 @@ def test_count_notifications_uses_one_filtered_aggregate_query():
     sql, params = count_operations[0]
     assert "count(*) filter ( where" in sql
     assert "source_family" in sql
+    assert "job_kind" in sql
+    assert "save_remote_selection" in sql
     assert params == (
         ["pending", "running"],
         ["completed", "failed", "canceled"],
+        ["pending", "running"],
         ["cover_lookup_notifications", "runtime_cover_lookup_notifications_adapter"],
     )
 
@@ -179,6 +182,7 @@ def test_load_notification_summary_page_returns_newest_first_page_and_counts():
     }
     page_sql, page_params = connection.operations[-1]
     assert "offset" not in page_sql
+    assert "job_kind" in page_sql
     assert "order by coalesce(" in page_sql
     assert "ops.cover_lookup_tasks.task_key desc" in page_sql
     assert page_params[-1] == 3

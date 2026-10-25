@@ -46,6 +46,16 @@ export async function seedCoverLookupNotificationHistory() {
     delete from ops.cover_lookup_tasks
     where task_key like '${TASK_PREFIX}%';
   `);
+  const existingCount = Number(await executeFixtureSql(`
+    select count(*)
+    from ops.cover_lookup_tasks tasks
+    join library.libraries libraries on libraries.id = tasks.library_id
+    join app.bootstrap_owners owners on owners.account_id = libraries.owner_account_id
+    where owners.owner_key = 'local-bootstrap-owner'
+      and libraries.name = 'Local Library'
+      and libraries.library_kind = 'local'
+      and tasks.metadata ->> 'source_family' in ('cover_lookup_notifications', 'runtime_cover_lookup_notifications_adapter');
+  `));
   const inserted = Number(await executeFixtureSql(`
     with fixture_library as (
       select libraries.id
@@ -130,6 +140,7 @@ export async function seedCoverLookupNotificationHistory() {
   if (inserted !== NOTIFICATION_HISTORY_SIZE) {
     throw new Error(`Expected ${NOTIFICATION_HISTORY_SIZE} notification rows; inserted ${inserted}.`);
   }
+  return existingCount + inserted;
 }
 
 export async function clearCoverLookupNotificationHistory() {

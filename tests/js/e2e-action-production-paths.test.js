@@ -8,6 +8,64 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.join(__dirname, '..', '..');
 
+test('notification history performance data preserves unowned tasks and uses the full count', () => {
+  const fixture = read('tests/e2e/helpers/coverLookupNotificationHistoryFixture.js');
+  const spec = read('tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js');
+
+  assert.match(fixture, /task_key like '\$\{TASK_PREFIX\}%'/u);
+  assert.doesNotMatch(fixture, /delete from ops\.cover_lookup_tasks tasks\s+using/u);
+  assert.match(
+    fixture,
+    /select count\(\*\)[\s\S]*?metadata ->> 'source_family' in \('cover_lookup_notifications', 'runtime_cover_lookup_notifications_adapter'\);/u,
+  );
+  assert.match(fixture, /return existingCount \+ inserted;/u);
+  assert.match(spec, /const notificationHistorySize = await seedCoverLookupNotificationHistory\(\);/u);
+});
+
+test('scan and cover refresh idle wait includes queued post-scan cover work', async () => {
+  const { AppBarActions } = await import(pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/appBarActions.js'),
+  ).href);
+  const statuses = [
+    {
+      scan_in_progress: false,
+      covers_in_progress: false,
+      pending_cover_refresh_after_scan: true,
+    },
+    {
+      scan_in_progress: false,
+      covers_in_progress: false,
+      pending_cover_refresh_after_scan: false,
+    },
+  ];
+  let reads = 0;
+  const page = {
+    url: () => 'https://album-haven.test/',
+    context: () => ({
+      cookies: async () => [{
+        name: '__Host-album_haven_session',
+        value: 'session',
+        domain: 'album-haven.test',
+        path: '/',
+      }],
+    }),
+    request: {
+      async get() {
+        const status = statuses[Math.min(reads, statuses.length - 1)];
+        reads += 1;
+        return { ok: () => true, json: async () => status };
+      },
+    },
+  };
+
+  const result = await new AppBarActions({ page }).waitForScanAndCoverRefreshIdle({
+    timeout: 3000,
+  });
+
+  assert.equal(reads, 2);
+  assert.equal(result.pending_cover_refresh_after_scan, false);
+});
+
 test('cover cache diagnostics inspect the production unversioned key and exact stored epoch', async () => {
   const { GalleryPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href);
   const productionUrl = 'http://127.0.0.1:4173/cover?path=album-cover&size=480&v=revision';

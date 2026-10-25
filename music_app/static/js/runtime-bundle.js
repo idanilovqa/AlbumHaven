@@ -31953,6 +31953,7 @@ async function confirmManualTagEdit() {
   );
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
+  let failedSavePreservesDraft = false;
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -31979,6 +31980,8 @@ async function confirmManualTagEdit() {
           console.warn('[AlbumHaven][Utilities] Could not persist the failed tag edit in browser history.', historyError);
         }
       }
+      failedSavePreservesDraft = data.failure_stage === 'persistence'
+        && data.edit_outcome === 'failed_rolled_back';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
     const updatedAlbums = Array.isArray(data.updated_albums)
@@ -32118,7 +32121,10 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
-      if (!failedLogHistoryEntryId) {
+      if (
+        !failedLogHistoryEntryId
+        || failedSavePreservesDraft
+      ) {
         restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
       }
     }
@@ -36543,6 +36549,9 @@ class VirtualArtistGrid {
       } finally {
         this._activeRenderRafOwner = previousActiveRenderRafOwner;
       }
+      if (Object.prototype.hasOwnProperty.call(deferredRender, 'measurementAnchor')) {
+        this.stabilizeScrollAfterMeasurement(deferredRender.measurementAnchor);
+      }
     });
   }
 
@@ -37631,6 +37640,12 @@ class VirtualArtistGrid {
 
   render(force = false, options = {}) {
     if (this._albumCardPointerGestureActive || this._albumCardPointerReleaseRaf) {
+      const deferredMeasurementAnchor = Object.prototype.hasOwnProperty.call(
+        this._deferredPointerGestureRender || {},
+        'measurementAnchor',
+      )
+        ? { measurementAnchor: this._deferredPointerGestureRender.measurementAnchor }
+        : {};
       this._deferredPointerGestureRender = {
         force: Boolean(force),
         options: { ...options },
@@ -37639,6 +37654,7 @@ class VirtualArtistGrid {
           || this._deferredPointerGestureRender?.renderRafOwner
           || 0,
         ),
+        ...deferredMeasurementAnchor,
       };
       return;
     }
@@ -38371,7 +38387,11 @@ class VirtualArtistGrid {
         }));
       }
     }
-    this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    if (this._deferredPointerGestureRender) {
+      this._deferredPointerGestureRender.measurementAnchor = preservedAnchor;
+    } else {
+      this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    }
   }
 
   getVisibleBlockRange(section, start, end) {

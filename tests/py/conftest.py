@@ -62,6 +62,19 @@ def _workspace_pytest_temp_root() -> Path:
     return (Path(__file__).resolve().parents[2] / ".tmp").resolve()
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    def comparable(path: Path) -> str:
+        value = os.path.normpath(str(path))
+        if os.name == "nt":
+            if value[:8].casefold() == "\\\\?\\unc\\":
+                value = "\\\\" + value[8:]
+            elif value.startswith("\\\\?\\"):
+                value = value[4:]
+        return os.path.normcase(value)
+
+    return comparable(left) == comparable(right)
+
+
 def _activate_pytest_app_paths(base_temp: Path) -> Path:
     test_root = (base_temp / "app-env").resolve()
     music_dir = (test_root / "music").resolve()
@@ -148,7 +161,7 @@ def _owned_generated_pytest_root(path: Path) -> dict[str, object] | None:
     if path.is_symlink():
         _report_pytest_cleanup("owner-symlink-rejected", path=path)
         return None
-    if path.parent.resolve() != _workspace_pytest_temp_root():
+    if not _same_path(path.parent.resolve(), _workspace_pytest_temp_root()):
         _report_pytest_cleanup("owner-parent-rejected", path=path)
         return None
     try:

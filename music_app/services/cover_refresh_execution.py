@@ -524,6 +524,24 @@ def run_cover_jobs(
                 exc,
             )
 
+    def acknowledge_applied_automatic_improvement(
+        job: dict[str, object], downloaded: bool, detail: Mapping[str, object]
+    ) -> None:
+        if not downloaded or str(detail.get("reason") or "") != "cover_written":
+            return
+        publisher = candidate_publishers.get(id(job))
+        mark_seen = getattr(publisher, "mark_automatic_improvement_seen", None)
+        if not callable(mark_seen):
+            return
+        try:
+            mark_seen()
+        except Exception as exc:
+            logger.warning(
+                "Applied automatic candidate acknowledgement failed album_id=%s error=%r",
+                job.get("album_id"),
+                exc,
+            )
+
     def persist_job_provider_outcomes(job, detail):
         nonlocal provider_outcome_error
         if not config or job.get("album_id") is None:
@@ -817,6 +835,7 @@ def run_cover_jobs(
             return
         settle_candidate_publisher(job, detail)
         apply_job_result(index, job, cover_path, downloaded, detail)
+        acknowledge_applied_automatic_improvement(job, downloaded, detail)
 
     effective_job_workers = max(1, min(int(job_workers or 1), len(jobs) or 1))
     for index, job in enumerate(jobs, start=1):

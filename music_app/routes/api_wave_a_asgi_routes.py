@@ -1392,10 +1392,10 @@ def _with_problem_suggestion_outcomes(result: ResponseValue, proposal_ids: list[
         outcome = "committed"
     elif response.get("proposal_status") == "stale":
         outcome = "stale"
-    elif (response.get("save_task_id") or response.get("save_task_status")) and response.get("save_task_status") != "completed":
-        outcome = "recovery_pending"
     elif response.get("edit_outcome") in {"failed_rolled_back", "recovery_pending"}:
         outcome = response["edit_outcome"]
+    elif (response.get("save_task_id") or response.get("save_task_status")) and response.get("save_task_status") != "completed":
+        outcome = "recovery_pending"
     else:
         outcome = "rejected"
     response["proposal_outcomes"] = [{"id": identifier, "status": outcome}
@@ -1437,6 +1437,9 @@ def _authoritative_edit_tags_response(
         task_log_entry = task.get("log_entry")
         if isinstance(task_log_entry, Mapping):
             failure_response["log_entry"] = dict(task_log_entry)
+        for key in ("failure_stage", "edit_outcome"):
+            if key in task:
+                failure_response[key] = task[key]
         return failure_response, 500
 
     for key in (

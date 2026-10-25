@@ -215,6 +215,8 @@ def test_queue_finalize_save_task_inline_exposes_commit_failure_before_return(tm
     result = save_task_result(task_id)
     assert result["status"] == "failed"
     assert result["error"] == "postgres commit failed"
+    assert result["failure_stage"] == "persistence"
+    assert result["edit_outcome"] == "recovery_pending"
 
 
 def test_finalize_save_task_records_rolled_back_intent_after_verified_compensation(

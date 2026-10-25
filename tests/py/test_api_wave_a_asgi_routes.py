@@ -77,6 +77,29 @@ def _make_asgi_app():
     return asgi_app
 
 
+def test_authoritative_edit_tags_failure_preserves_retry_classification():
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services.save_tasks import create_save_task, update_save_task
+
+    task_id = create_save_task("edit-tags")
+    update_save_task(
+        task_id,
+        status="failed",
+        error="postgres commit failed",
+        failure_stage="persistence",
+        edit_outcome="failed_rolled_back",
+    )
+
+    payload, status = routes._authoritative_edit_tags_response(
+        {"ok": True, "save_task_id": task_id},
+        total_ms=12.5,
+    )
+
+    assert status == 500
+    assert payload["failure_stage"] == "persistence"
+    assert payload["edit_outcome"] == "failed_rolled_back"
+
+
 @pytest.mark.parametrize('scenario', ['foreign', 'stale', 'forged-values', 'revoked-proposal'])
 def test_suggested_tag_apply_revalidates_scoped_target_and_physical_tags_before_io(app, asgi_app, monkeypatch, tmp_path, scenario):
     from music_app.routes import api_wave_a_asgi_routes as routes

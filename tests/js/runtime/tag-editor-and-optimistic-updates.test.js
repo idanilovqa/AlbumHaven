@@ -2692,6 +2692,7 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
     renderView() {},
     showRepairAlert(...args) { alerts.push(args); },
     scheduleBrowserAnimationFrame() {},
+    async prependUtilityLogHistoryEntry() {},
     async fetch() {
       return {
         ok: false,
@@ -2701,6 +2702,9 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
             error: 'Source changed during the tag edit. Retry with the preserved values.',
             save_task_id: 'failed-tag-save',
             save_task_status: 'failed',
+            failure_stage: 'persistence',
+            edit_outcome: 'failed_rolled_back',
+            log_entry: { id: 'tag-edit-failure-41', action: 'Tag edit failed' },
           };
         },
       };
@@ -2756,6 +2760,8 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
             error: 'Permission denied while writing tags.',
             save_task_id: 'failed-tag-save',
             save_task_status: 'failed',
+            failure_stage: 'media_write',
+            edit_outcome: 'failed_rolled_back',
             log_entry: { id: 'tag-edit-failure-42', action: 'Tag edit failed' },
           };
         },

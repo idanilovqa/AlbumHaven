@@ -887,6 +887,7 @@ async function confirmManualTagEdit() {
   );
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
+  let failedSavePreservesDraft = false;
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -913,6 +914,8 @@ async function confirmManualTagEdit() {
           console.warn('[AlbumHaven][Utilities] Could not persist the failed tag edit in browser history.', historyError);
         }
       }
+      failedSavePreservesDraft = data.failure_stage === 'persistence'
+        && data.edit_outcome === 'failed_rolled_back';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
     const updatedAlbums = Array.isArray(data.updated_albums)
@@ -1052,7 +1055,10 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
-      if (!failedLogHistoryEntryId) {
+      if (
+        !failedLogHistoryEntryId
+        || failedSavePreservesDraft
+      ) {
         restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
       }
     }

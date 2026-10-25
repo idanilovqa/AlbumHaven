@@ -137,6 +137,7 @@ class GeneratedPreviewRelocationWorker:
                     if self._on_state is not None:
                         self._on_state(state)
                     return False
+            quiet_sweep_complete = False
             while not self._stop_requested.is_set():
                 items = self._repository.claim_batch(
                     operation_id=operation_id,
@@ -147,10 +148,18 @@ class GeneratedPreviewRelocationWorker:
                     extra={"operation_id": operation_id, "claimed_count": len(items)},
                 )
                 if not items:
+                    if not quiet_sweep_complete:
+                        if self._sync_grace_seconds and self._stop_requested.wait(
+                            self._sync_grace_seconds
+                        ):
+                            return False
+                        quiet_sweep_complete = True
+                        continue
                     state = self._repository.finish_operation(operation_id)
                     if self._on_state is not None:
                         self._on_state(state)
                     return False
+                quiet_sweep_complete = False
                 for item in items:
                     result = _relocate_item(item, operation_id=operation_id)
                     source_to_delete = result.pop("source_to_delete", None)

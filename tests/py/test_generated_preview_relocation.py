@@ -296,6 +296,41 @@ def test_worker_discovers_existing_previews_before_claiming(tmp_path):
     assert target.read_bytes() == content
 
 
+def test_worker_sweeps_previews_published_while_finishing(tmp_path):
+    content = b"late-preview"
+    source = tmp_path / "source.webp"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.webp"
+    late_item = item(source, target, content)
+
+    class LatePublishRepository(FakeRepository):
+        published = False
+
+        def claim_batch(self, *, operation_id, limit):
+            claimed = super().claim_batch(operation_id=operation_id, limit=limit)
+            if not claimed and not self.published:
+                source.write_bytes(content)
+                self.items.append(late_item)
+                self.published = True
+            return claimed
+
+    repository = LatePublishRepository([])
+
+    worker = GeneratedPreviewRelocationWorker(
+        repository,
+        retry_seconds=0.01,
+        sync_grace_seconds=0,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2
+    while not repository.finished and time.monotonic() < deadline:
+        time.sleep(0.01)
+    asyncio.run(worker.stop(timeout_seconds=2))
+
+    assert repository.finished == [repository.operation_id]
+    assert target.read_bytes() == content
+    assert not source.exists()
+
+
 def test_cancellation_during_inventory_discovery_stops_before_claiming():
     repository = FakeRepository([])
 

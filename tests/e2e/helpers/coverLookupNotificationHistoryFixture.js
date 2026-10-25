@@ -101,7 +101,7 @@ export async function seedCoverLookupNotificationHistory() {
             end,
             'album_payload', case
               when series.value = 1 then jsonb_build_object(
-                'id', actionable_album.id,
+                'album_id', actionable_album.id,
                 'key', actionable_album.album_key,
                 'album_key', actionable_album.album_key,
                 'name', actionable_album.title,

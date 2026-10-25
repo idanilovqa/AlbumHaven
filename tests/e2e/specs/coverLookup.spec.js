@@ -421,6 +421,8 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await coverLookupActions.coverLookup.waitForDrawerState(false);
     await expect(coverLookupActions.coverLookup.drawer).toHaveCSS('opacity', '0');
     await coverLookupActions.selectFirstRemoteCoverAndSave();
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.waitForDrawerOpen();
     await coverLookupActions.waitForTaskStatus(actionedTaskTitle, 'Art chosen');
     expect(await coverLookupActions.readTaskElapsed(actionedTaskTitle)).toBe(terminalDuration);
     await coverLookupActions.closeDrawer();
@@ -583,6 +585,9 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect(selectedRemoteCover.sha256).toBeTruthy();
     expect(selectedCoverPath).toBeTruthy();
     expect(selection.immediateCoverState).not.toBeNull();
+    await trackModalActions.close();
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.waitForDrawerOpen();
     await coverLookupActions.waitForTaskStatus(taskTitle, 'Art chosen', { timeout: 120000 });
     await coverLookupActions.releaseLaterProviderFixture();
     const providerEvidence = await coverLookupActions.waitForLaterProviderCancellationEvidence();

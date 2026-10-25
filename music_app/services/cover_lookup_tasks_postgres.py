@@ -673,7 +673,7 @@ def _load_notification_summaries_sql() -> str:
                 'album_payload', case
                     when jsonb_typeof(ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload') = 'object'
                     then jsonb_strip_nulls(jsonb_build_object(
-                        'id', coalesce(
+                        'album_id', coalesce(
                             ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'id',
                             ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album_id'
                         ),
@@ -807,7 +807,7 @@ def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) 
                   ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload'
                 ) = 'object'
                 then jsonb_strip_nulls(jsonb_build_object(
-                  'id', coalesce(
+                  'album_id', coalesce(
                     ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'id',
                     ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album_id'
                   ),

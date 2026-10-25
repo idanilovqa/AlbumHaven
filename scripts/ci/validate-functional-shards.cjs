@@ -486,6 +486,7 @@ function runFunctionalShard(contract, shardName, options = {}) {
         PLAYWRIGHT_PROVIDER_PORT: String(portBase + 2),
         PLAYWRIGHT_BLOB_OUTPUT_FILE: path.join(blobRoot, `${invocationName}.zip`),
       };
+      if (shardName === 'cover-providers-1') childEnv.ALBUM_HAVEN_COVER_REPAIR_MIN_EDGE = '2000';
       for (const key of OWNER_RUNTIME_ENV_KEYS) childEnv[key] = '';
       delete childEnv.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE;
       if (invocation.config === 'playwright.lastfm-auto-timezone.config.js') {

@@ -265,6 +265,7 @@ for (const [failureCode, name] of [
 validatorTest(name, () => {
   const validator = loadValidator();
   const { shard, matrix } = invocationIsolationFixture();
+  shard.name = 'cover-providers-1';
   shard.invocations[0].cases = shard.invocations[0].cases.slice(0, 4);
   const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-functional-shard-'));
   const fixtureWorkRoot = path.join(runnerTemp, 'fixture-work');
@@ -369,6 +370,7 @@ validatorTest(name, () => {
       );
       assert.equal(call.options.env.PLAYWRIGHT_REAL_APP_PORT, '5200');
       assert.equal(call.options.env.PLAYWRIGHT_PROVIDER_PORT, '5202');
+      assert.equal(call.options.env.ALBUM_HAVEN_COVER_REPAIR_MIN_EDGE, '2000');
       for (const key of [
         'MUSIC_DIR',
         'MUSIC_APP_DATA_DIR',

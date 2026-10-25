@@ -266,6 +266,7 @@ def test_postgres_adapter_load_notification_summaries_uses_database_projection()
                         "id": "compact-task",
                         "status": "completed",
                         "album": "Compact Album",
+                        "album_payload": {"album_id": 41, "name": "Compact Album"},
                         "possible_match_count": 37,
                     },
                 },
@@ -278,11 +279,13 @@ def test_postgres_adapter_load_notification_summaries_uses_database_projection()
             "id": "compact-task",
             "status": "completed",
             "album": "Compact Album",
+            "album_payload": {"album_id": 41, "name": "Compact Album"},
             "possible_match_count": 37,
         },
     ]
     summary_sql = connection.operations[-1][0]
     assert "task_summary" in summary_sql
+    assert "'album_id', coalesce(" in summary_sql
     assert "select ops.cover_lookup_tasks.provider_payload," not in summary_sql
     assert "select ops.cover_lookup_tasks.metadata" not in summary_sql
 

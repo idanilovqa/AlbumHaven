@@ -248,7 +248,7 @@ def test_cover_lookup_task_identity_uses_legacy_nested_paths_and_merged_subset()
     )
 
 
-def test_cover_lookup_task_identity_rejects_paths_split_across_other_album():
+def test_cover_lookup_task_identity_follows_stable_id_after_tracks_split():
     from music_app.routes import api_wave_d_asgi_routes as cover_routes
 
     task = {
@@ -256,10 +256,15 @@ def test_cover_lookup_task_identity_rejects_paths_split_across_other_album():
         "album_payload": {"album_id": 92},
     }
 
-    assert not cover_routes._task_matches_album_context(
+    assert cover_routes._task_matches_album_context(
         task,
         track_paths={"disc-1/01.flac", "disc-2/01.flac"},
         album_id=92,
+    )
+    assert not cover_routes._task_matches_album_context(
+        task,
+        track_paths={"disc-1/01.flac", "disc-2/01.flac"},
+        album_id=93,
     )
 
 

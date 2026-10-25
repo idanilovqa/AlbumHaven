@@ -425,15 +425,17 @@ def _task_matches_album_context(
     task_album = task_payload.get("album_payload")
     if not task_track_paths and isinstance(task_album, Mapping):
         task_track_paths = _album_track_paths(task_album)
+    if (
+        album_id is not None
+        and isinstance(task_album, Mapping)
+        and _album_id(task_album) == album_id
+    ):
+        return True
     if task_track_paths and task_track_paths <= track_paths:
         return True
     if task_track_paths & track_paths:
         return False
-    return (
-        album_id is not None
-        and isinstance(task_album, Mapping)
-        and _album_id(task_album) == album_id
-    )
+    return False
 
 
 def _same_cover_lookup_generation(left: object, right: object) -> bool:

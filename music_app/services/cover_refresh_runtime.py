@@ -93,6 +93,7 @@ def build_cover_progress_status(library_state: dict[str, object], *, now=None) -
         remaining = max(0.0, (finished or now) - execution) / completed * (total - completed)
     return {
         "covers_in_progress": covers_in_progress,
+        "covers_cancelable": bool(library_state.get("covers_in_progress")),
         "covers_spotify_quota_exceeded": False if pending_handoff else bool(
             library_state.get("covers_spotify_quota_exceeded")
         ),

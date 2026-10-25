@@ -870,6 +870,7 @@ def _build_bootstrap_payload(
                 "durationMs": float(library_state.get("relation_projection_duration_ms") or 0.0),
             },
             "coversInProgress": is_cover_refresh_busy(library_state),
+            "coversCancelable": bool(library_state.get("covers_in_progress")),
             "partialView": initial_view_partial,
             "startupPreview": {
                 "mode": preview_mode,
@@ -1143,6 +1144,7 @@ async def news_center(request: Request) -> Response:
             "scanMode": str(library_state.get("scan_mode") or "idle"),
             "relationsInProgress": bool(library_state.get("relations_in_progress")),
             "coversInProgress": is_cover_refresh_busy(library_state),
+            "coversCancelable": bool(library_state.get("covers_in_progress")),
             "refreshed": False,
             "statusApiUrl": "/status",
             "startupHydration": {

@@ -343,6 +343,7 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "relations_phase": "Building",
         "relations_source": "local",
         "covers_in_progress": True,
+        "covers_cancelable": False,
         "covers_spotify_quota_exceeded": False,
         "covers_elapsed_seconds": None,
         "covers_estimated_remaining_seconds": None,

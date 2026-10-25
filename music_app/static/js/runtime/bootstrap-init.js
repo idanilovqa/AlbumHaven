@@ -220,6 +220,7 @@ updateStatusIndicator({
   relations_phase: 'Building family artists',
   relations_source: 'local',
   covers_in_progress: Boolean(bootstrap.coversInProgress),
+  covers_cancelable: Boolean(bootstrap.coversCancelable),
   covers_processed: 0,
   covers_completed: 0,
   covers_total: 0,

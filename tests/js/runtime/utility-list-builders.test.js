@@ -6704,6 +6704,7 @@ test('track problem navigation refreshes one stale loaded summary before selecti
   context.loadProblematicAlbumDetail = async (albumKey, force) => {
     detailLoads.push([albumKey, force]);
     refreshedAlbum.detail_loaded = true;
+    return refreshedAlbum;
   };
 
   await context.openUtilityModalForTrack(trackPath);

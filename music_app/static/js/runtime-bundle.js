@@ -359,6 +359,7 @@ const DEFAULT_STATUS_STATE = Object.freeze({
   relations_phase: 'Idle',
   relations_source: 'local',
   covers_in_progress: false,
+  covers_cancelable: false,
   covers_processed: 0,
   covers_completed: 0,
   covers_total: 0,
@@ -1455,6 +1456,7 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
     relations_phase: normalizeRuntimeString(source.relations_phase, base.relations_phase),
     relations_source: normalizeRuntimeString(source.relations_source, base.relations_source),
     covers_in_progress: normalizeRuntimeBoolean(source.covers_in_progress, base.covers_in_progress),
+    covers_cancelable: normalizeRuntimeBoolean(source.covers_cancelable, base.covers_cancelable),
     covers_processed: normalizeRuntimeNumber(source.covers_processed, base.covers_processed),
     covers_completed: normalizeRuntimeNumber(source.covers_completed, normalizeRuntimeNumber(source.covers_processed, base.covers_processed)),
     covers_total: normalizeRuntimeNumber(source.covers_total, base.covers_total),
@@ -1478,6 +1480,7 @@ function normalizeBootstrapPayload(payload, fallbackBootstrap = null) {
       scanMode: 'idle',
       relationsInProgress: false,
     coversInProgress: false,
+  coversCancelable: false,
     partialView: false,
     ...(isRuntimePlainObject(defaults) ? defaults : {}),
     ...(isRuntimePlainObject(fallbackBootstrap) ? fallbackBootstrap : {}),
@@ -1560,6 +1563,7 @@ function normalizeBootstrapPayload(payload, fallbackBootstrap = null) {
     scanMode: normalizeRuntimeString(source.scanMode, base.scanMode),
     relationsInProgress: normalizeRuntimeBoolean(source.relationsInProgress, base.relationsInProgress),
     coversInProgress: normalizeRuntimeBoolean(source.coversInProgress, base.coversInProgress),
+    coversCancelable: normalizeRuntimeBoolean(source.coversCancelable, base.coversCancelable),
     partialView: normalizeRuntimeBoolean(source.partialView, base.partialView),
     startupPreview: {
       ...startupPreviewBase,
@@ -3402,15 +3406,16 @@ function syncStatusContextMenu() {
   if (!fetchOrCancelButton) return menu;
   const scanBusy = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress);
   const coverBusy = Boolean(state.status?.covers_in_progress);
+  const coverCancelable = Boolean(state.status?.covers_cancelable);
   const coverQueued = Boolean(state.status?.pending_cover_refresh_after_scan);
   const initialFullScanBusy = scanBusy && Number(state.status?.album_total || 0) <= 0;
-  if (coverBusy) {
+  if (coverBusy && coverCancelable) {
     syncStatusContextButtonPresentation(fetchOrCancelButton, {
       action: 'cancel-cover-scan',
       label: 'Cancel Album Cover Scan',
       disabled: false,
     });
-  } else if (coverQueued) {
+  } else if (coverBusy || coverQueued) {
     syncStatusContextButtonPresentation(fetchOrCancelButton, {
       action: 'fetch-covers-queued',
       label: 'Fetching Covers Is Queued',
@@ -26352,6 +26357,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
       covers_in_progress: true,
+      covers_cancelable: false,
       covers_phase: 'preparing',
       covers_run_mode: 'manual-bulk',
       covers_outcome: '',
@@ -26397,6 +26403,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         scan_processed: Number(state.status?.scan_processed || 0),
         scan_total: Number(state.status?.scan_total || 0),
         covers_in_progress: false,
+        covers_cancelable: false,
         covers_processed: 0,
         covers_completed: 0,
         covers_spotify_quota_exceeded: false,
@@ -26412,6 +26419,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: true,
+      covers_cancelable: true,
       covers_phase: 'fetching',
       covers_run_mode: 'manual-bulk',
       covers_processed: 0,
@@ -26445,6 +26453,7 @@ async function cancelAlbumCoverScan() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: false,
+      covers_cancelable: false,
       covers_current_folder: '',
       pending_cover_refresh_after_scan: false,
     });
@@ -46064,6 +46073,7 @@ updateStatusIndicator({
   relations_phase: 'Building family artists',
   relations_source: 'local',
   covers_in_progress: Boolean(bootstrap.coversInProgress),
+  covers_cancelable: Boolean(bootstrap.coversCancelable),
   covers_processed: 0,
   covers_completed: 0,
   covers_total: 0,

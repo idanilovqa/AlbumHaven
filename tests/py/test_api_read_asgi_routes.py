@@ -82,6 +82,7 @@ def test_status_payload_keeps_post_scan_cover_handoff_busy():
     })
 
     assert payload["covers_in_progress"] is True
+    assert payload["covers_cancelable"] is False
     assert payload["covers_phase"] == "preparing"
 
 

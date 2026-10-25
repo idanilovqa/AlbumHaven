@@ -197,6 +197,7 @@ for (const queuedAfterIndexing of [false, true]) {
       update(payload);
     };
     const starting = h.ctx.fetchUnsuccessfulAlbumCovers();
+    assert.equal(h.ctx.state.status.covers_cancelable, false);
     h.requests.at(-1).resolve({ ok: true, queued_after_indexing: queuedAfterIndexing, queued_count: 10 });
     await starting;
     assert.equal(published.length, 2);
@@ -206,6 +207,7 @@ for (const queuedAfterIndexing of [false, true]) {
     }
     assert.equal(h.ctx.state.status.covers_completed, 0);
     assert.equal(h.ctx.state.status.covers_total, queuedAfterIndexing ? 0 : 10);
+    assert.equal(h.ctx.state.status.covers_cancelable, !queuedAfterIndexing);
   });
 }
 
@@ -773,6 +775,21 @@ test('cover cancellation rollback cannot replace a newer observed status or capa
   cancelRequest.reject(new Error('Cover cancellation failed')); await cancelling;
   expectBusy(h);
   assert.equal(h.ctx.state.loopCreateAllowed, false);
+});
+
+test('cover cancellation immediately retires cancelability while acknowledgement is pending', async () => {
+  const h = harness();
+  h.ctx.updateStatusIndicator(h.status(false, {
+    covers_in_progress: true,
+    covers_cancelable: true,
+  }));
+
+  const cancelling = h.ctx.cancelAlbumCoverScan();
+
+  assert.equal(h.ctx.state.status.covers_in_progress, false);
+  assert.equal(h.ctx.state.status.covers_cancelable, false);
+  h.requests.at(-1).resolve({ ok: true, cancelled: true });
+  await cancelling;
 });
 
 for (const kind of ['scan', 'covers']) {

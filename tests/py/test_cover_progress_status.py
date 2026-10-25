@@ -46,6 +46,7 @@ def test_post_scan_cover_handoff_projects_one_consistent_preparing_status():
     }, now=300.0)
 
     assert status["covers_in_progress"] is True
+    assert status["covers_cancelable"] is False
     assert status["covers_phase"] == "preparing"
     assert status["covers_elapsed_seconds"] is None
     assert status["covers_estimated_remaining_seconds"] is None
@@ -56,6 +57,12 @@ def test_post_scan_cover_handoff_projects_one_consistent_preparing_status():
     assert status["covers_total"] == 0
     assert status["covers_downloaded"] == 0
     assert status["covers_current_folder"] == ""
+
+
+def test_running_cover_refresh_is_cancelable():
+    status = build_cover_progress_status({"covers_in_progress": True})
+
+    assert status["covers_cancelable"] is True
 
 
 def test_new_run_discards_previous_run_timing():

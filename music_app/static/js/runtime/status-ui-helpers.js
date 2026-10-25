@@ -219,15 +219,16 @@ function syncStatusContextMenu() {
   if (!fetchOrCancelButton) return menu;
   const scanBusy = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress);
   const coverBusy = Boolean(state.status?.covers_in_progress);
+  const coverCancelable = Boolean(state.status?.covers_cancelable);
   const coverQueued = Boolean(state.status?.pending_cover_refresh_after_scan);
   const initialFullScanBusy = scanBusy && Number(state.status?.album_total || 0) <= 0;
-  if (coverBusy) {
+  if (coverBusy && coverCancelable) {
     syncStatusContextButtonPresentation(fetchOrCancelButton, {
       action: 'cancel-cover-scan',
       label: 'Cancel Album Cover Scan',
       disabled: false,
     });
-  } else if (coverQueued) {
+  } else if (coverBusy || coverQueued) {
     syncStatusContextButtonPresentation(fetchOrCancelButton, {
       action: 'fetch-covers-queued',
       label: 'Fetching Covers Is Queued',

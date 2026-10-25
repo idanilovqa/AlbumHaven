@@ -958,6 +958,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
     scan_mode: 'background',
     album_total: 12,
     covers_in_progress: true,
+    covers_cancelable: true,
     pending_cover_refresh_after_scan: false,
   };
   const menu = {
@@ -997,6 +998,12 @@ test('rootFullPayload requests full root albums without changing other browse UR
   context.syncStatusContextMenu();
   assert.equal(menu.primaryButton.mutationCount, primaryMutationCount);
   assert.equal(menu.coverButton.mutationCount, coverMutationCount);
+
+  context.state.status.covers_cancelable = false;
+  context.syncStatusContextMenu();
+  assert.equal(menu.coverButton.textContent, 'Fetching Covers Is Queued');
+  assert.equal(menu.coverButton.disabled, true);
+  assert.equal(menu.coverButton.attrs['data-status-action'], 'fetch-covers-queued');
 }
 
 {

@@ -12282,7 +12282,14 @@ def test_duplicate_source_attachment_defers_pg18_cache_miss_to_global_prewarm(mo
             )
             return Cursor(rows)
 
-    album = {"key": "one", "preview_only": True}
+    album = {
+        "key": "one",
+        "preview_only": False,
+        "tracks": [
+            {"path": "C:\\Music\\Artist\\Original\\CD1\\01.flac"},
+            {"path": "C:\\Music\\Artist\\Complete copy\\CD1\\01.flac"},
+        ],
+    }
     connection = Connection()
     started_at = perf_counter()
     repository._attach_duplicate_sources(
@@ -12296,6 +12303,7 @@ def test_duplicate_source_attachment_defers_pg18_cache_miss_to_global_prewarm(mo
     assert queued == ["duplicate-identities"]
     assert connection.queries == []
     assert "has_duplicate_files" not in album
+    assert album["preview_only"] is True
     assert elapsed_ms < 250, (
         "interactive duplicate projection cache misses must return within 250 ms; "
         f"measured {elapsed_ms:.1f} ms"

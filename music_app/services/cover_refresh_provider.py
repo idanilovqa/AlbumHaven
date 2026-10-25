@@ -967,6 +967,8 @@ def ensure_best_cover_for_folder(
     selected_cover_path: str | None = None,
     logger=None,
 ) -> tuple[Path | None, bool, dict[str, object]]:
+    from music_app.services.library_hydration import find_cover_for_track_folder
+
     effective_logger = logger or _LOGGER
     normalized_cover_selection_origin = str(
         cover_selection_origin or "automatic"
@@ -978,7 +980,7 @@ def ensure_best_cover_for_folder(
     fetch_started_at = time.perf_counter()
     local_cover = (
         validated_selected_cover_path(selected_cover_path)
-        if selected_cover_path else find_cover_image(folder, image_extensions)
+        if selected_cover_path else find_cover_for_track_folder(folder, image_extensions)
     )
     local_area = image_area(local_cover) if local_cover else 0
     local_sharpness = image_sharpness(local_cover) if local_cover else 0.0

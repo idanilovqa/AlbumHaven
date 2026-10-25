@@ -15,6 +15,33 @@ from music_app.services.cover_provider_candidates import CoverCandidate
 from music_app.services.cover_provider_cache import CoverSearchCache
 
 
+def test_disc_folder_lookup_reuses_parent_album_cover(tmp_path):
+    image = pytest.importorskip("PIL.Image")
+    album_folder = tmp_path / "Artist" / "Album"
+    disc_folder = album_folder / "CD1"
+    disc_folder.mkdir(parents=True)
+    cover = album_folder / "cover.png"
+    image.new("RGB", (1600, 1600), "red").save(cover)
+
+    selected, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        disc_folder,
+        "Artist",
+        "Album",
+        None,
+        2001,
+        {".png"},
+        CoverSearchCache(tmp_path / "cover-cache.json"),
+        "AlbumHavenTests/1.0",
+        search_remote_cover_func=lambda **_kwargs: (
+            None,
+            [{"resolver": "_search_apple", "status": "no_candidate"}],
+        ),
+    )
+
+    assert (selected, downloaded) == (cover, False)
+    assert detail["reason"] == "satisfactory_local_cover_present"
+
+
 @pytest.mark.parametrize("location", ["parent", "other"])
 @pytest.mark.parametrize("valid", [True, False, None])
 def test_protected_selected_artwork_outside_folder_is_validated_and_retained(tmp_path, location, valid):

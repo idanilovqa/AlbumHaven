@@ -257,16 +257,20 @@ function Assert-ProvisionPreflight([object]$Contract) {
             throw "PGBIN executable is missing: $name"
         }
     }
-    if ($service.StartType -ne 'Automatic') { Set-Service -Name $ServiceName -StartupType Automatic }
-    if ($service.Status -ne 'Running') { Start-Service -Name $ServiceName }
     $ready = Join-Path $Pgbin 'pg_isready.exe'
-    $deadline = [DateTime]::UtcNow.AddSeconds($Contract.preflight.readinessTimeoutSeconds)
-    do {
-        & $ready -h $HostName -p $Port -q
-        if ($LASTEXITCODE -eq 0) { break }
-        Start-Sleep -Milliseconds 500
-    } while ([DateTime]::UtcNow -lt $deadline)
-    if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL readiness timeout expired.' }
+    & $ready -h $HostName -p $Port -q
+    $alreadyReady = $LASTEXITCODE -eq 0
+    if (-not $alreadyReady) {
+        if ($service.StartType -ne 'Automatic') { Set-Service -Name $ServiceName -StartupType Automatic }
+        if ($service.Status -ne 'Running') { Start-Service -Name $ServiceName }
+        $deadline = [DateTime]::UtcNow.AddSeconds($Contract.preflight.readinessTimeoutSeconds)
+        do {
+            & $ready -h $HostName -p $Port -q
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Milliseconds 500
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL readiness timeout expired.' }
+    }
 
     $psql = Join-Path $Pgbin 'psql.exe'
     $clientVersion = (& $psql --version 2>&1 | Out-String)
@@ -277,6 +281,26 @@ function Assert-ProvisionPreflight([object]$Contract) {
     $serverVersion = (& $psql -X -w -h $HostName -p $Port -U $AdminRole -d postgres -tAc 'show server_version_num' 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $serverVersion -notmatch "^$escapedMajorVersion\d{4}$") {
         throw "PostgreSQL server version is not $ExpectedMajorVersion."
+    }
+
+    $serverIdentity = (& $psql -X -w -h $HostName -p $Port -U $AdminRole -d postgres -F "`t" -tAc "select split_part(pg_read_file('postmaster.pid', 0, 64), E'\n', 1), current_setting('data_directory')" 2>&1 | Out-String).Trim()
+    $identityParts = $serverIdentity -split "`t", 2
+    if ($LASTEXITCODE -ne 0 -or $identityParts.Count -ne 2 -or $identityParts[0] -notmatch '^\d+$') {
+        throw 'PostgreSQL server identity could not be verified.'
+    }
+    $serverProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($identityParts[0])" -ErrorAction Stop
+    $serviceConfig = Get-CimInstance Win32_Service -Filter "Name = '$ServiceName'" -ErrorAction Stop
+    if ($serviceConfig.PathName -notmatch '(?i)(?:^|\s)-D\s+(?:"([^"]+)"|(\S+))') {
+        throw 'PostgreSQL service data directory could not be verified.'
+    }
+    $serviceDataDirectory = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+    $expectedExecutable = [IO.Path]::GetFullPath((Join-Path $Pgbin 'postgres.exe'))
+    $actualExecutable = [IO.Path]::GetFullPath($serverProcess.ExecutablePath)
+    $expectedDataDirectory = [IO.Path]::GetFullPath($serviceDataDirectory)
+    $actualDataDirectory = [IO.Path]::GetFullPath($identityParts[1])
+    if (-not $actualExecutable.Equals($expectedExecutable, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $actualDataDirectory.Equals($expectedDataDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'PostgreSQL server does not match the configured service boundary.'
     }
     return $psql
 }

@@ -705,7 +705,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
-              "case": "FTC-COVERS-007 notification states and bulk clear preserve active work",
+              "case": "FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work",
               "area": "cover-providers"
             },
             {

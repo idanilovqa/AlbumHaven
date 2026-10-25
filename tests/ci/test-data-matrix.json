@@ -1181,7 +1181,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
-    "case": "FTC-COVERS-007 notification states and bulk clear preserve active work",
+    "case": "FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -1194,6 +1194,7 @@
       "media-copy:notification-bulk-clear"
     ],
     "expectedContracts": [
+      "chosen-cover-notifications-cleared",
       "active-work-preserved-on-clear"
     ],
     "mutationOwnership": {
@@ -1224,6 +1225,33 @@
     "mutationOwnership": {
       "databaseIdentity": "case:notification-identity-isolation",
       "filesystemCopy": "media/cases/notification-identity-isolation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:local-cover-deletion"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:local-cover-deletion"
+    ],
+    "expectedContracts": [
+      "foreground-local-cover-deletion",
+      "confirmation-stacks-above-cover-lookup",
+      "deleted-cover-remains-absent-after-reload"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:local-cover-deletion",
+      "filesystemCopy": "media/cases/local-cover-deletion"
     },
     "ownerApproval": "approved"
   },

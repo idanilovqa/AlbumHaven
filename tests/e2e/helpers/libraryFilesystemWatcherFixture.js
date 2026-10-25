@@ -147,7 +147,10 @@ export async function cleanupWatchedAlbumFixture({
   if (originalFailure) throw originalFailure;
 }
 
-async function retag(trackPath, { artist, album, year, title, trackNumber }) {
+async function retag(trackPath, {
+  trackArtist, albumArtist, album, year, title, trackNumber,
+  discTag = '1/1', removeEmbeddedArtwork = false,
+}) {
   await execFileAsync(resolvePlaywrightPython(process.env), [
     '-c', RETAG_SCRIPT, trackPath, trackArtist, albumArtist, album, String(year), title,
     String(trackNumber),
@@ -229,6 +232,10 @@ async function buildWatchedAlbumFixture({
   album = 'Watcher Reconciliation Album',
   albumFolderName = album,
   year = 2004,
+  trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
+  trackArtists = null,
+  discNumbers = null,
+  removeEmbeddedArtwork = false,
   ownedDirectoryName = 'watcher-reconciliation',
 } = {}) {
   const mediaRoot = resolveWatcherFixtureMediaRoot();
@@ -239,13 +246,24 @@ async function buildWatchedAlbumFixture({
     normalizedOwnedDirectoryName,
   );
   if (fs.existsSync(ownedRoot)) fs.rmSync(ownedRoot, { recursive: true });
-  const createAlbum = async ({ album: albumName, year: albumYear, trackTitles }) => {
+  const createAlbum = async ({
+    album: albumName,
+    folderName = albumName,
+    year: albumYear,
+    trackTitles: titles,
+    trackArtist: defaultTrackArtist = trackArtist,
+    trackArtists: albumTrackArtists = null,
+    albumArtist: albumOwner = albumArtist,
+    discNumbers: albumDiscNumbers = discNumbers,
+  }) => {
     const directory = assertOwnedPath(
       mediaRoot,
-      path.join(ownedRoot, artist, albumName),
+      path.join(ownedRoot, artist, folderName),
       normalizedOwnedDirectoryName,
     );
     const createdTracks = [];
+    const normalizedDiscNumbers = titles.map((_, index) => Number(albumDiscNumbers?.[index]) || 1);
+    const discTotal = Math.max(...normalizedDiscNumbers);
     const sourceRoot = fs.mkdtempSync(path.join(path.dirname(mediaRoot), '.watcher-source-'));
     try {
       const source = path.join(sourceRoot, 'source.mp3');
@@ -254,25 +272,34 @@ async function buildWatchedAlbumFixture({
         stagingParent: path.dirname(mediaRoot),
         destination: directory,
         async buildAlbum(stagedAlbum) {
-          for (const [index, title] of trackTitles.entries()) {
+          for (const [index, title] of titles.entries()) {
+            const discNumber = normalizedDiscNumbers[index];
             const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;
+            const relativePath = discTotal > 1
+              ? path.join(`CD${discNumber}`, filename)
+              : filename;
             const destination = assertOwnedPath(
               mediaRoot,
-              path.join(directory, filename),
+              path.join(directory, relativePath),
               normalizedOwnedDirectoryName,
             );
+            const stagedDestination = path.join(stagedAlbum, relativePath);
+            fs.mkdirSync(path.dirname(stagedDestination), { recursive: true });
             await materializeTaggedTrack({
               source,
-              destination: path.join(stagedAlbum, filename),
+              destination: stagedDestination,
               metadata: {
-                artist,
+                trackArtist: albumTrackArtists?.[index] || defaultTrackArtist,
+                albumArtist: albumOwner,
                 album: albumName,
                 year: albumYear,
                 title,
                 trackNumber: index + 1,
+                discTag: `${discNumber}/${discTotal}`,
+                removeEmbeddedArtwork,
               },
             });
-            createdTracks.push({ filename, title, path: destination });
+            createdTracks.push({ filename, title, path: destination, discNumber, discTotal });
           }
         },
       });

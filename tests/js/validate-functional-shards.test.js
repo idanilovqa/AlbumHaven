@@ -1141,6 +1141,19 @@ test('functional workflow pins fixture and toolchain safety before one-worker ex
   assert.doesNotMatch(workflow, /pull_request_target/);
 });
 
+test('functional workflow expands the Windows IPv4 dynamic port range before execution', () => {
+  const { job } = functionalJobSource();
+  const portRangeStep = job.match(
+    /- name:\s*Expand Windows IPv4 dynamic port range[\s\S]*?(?=\n\s+- name:)/i,
+  )?.[0] || '';
+  assert.ok(portRangeStep, 'functional shards require a wider disposable-runner port range');
+  assert.match(
+    portRangeStep,
+    /netsh\s+interface\s+ipv4\s+set\s+dynamicport\s+tcp\s+start=10000\s+num=55535/i,
+  );
+  assert.ok(job.indexOf(portRangeStep) < job.indexOf('- name: Run functional shard'));
+});
+
 test('functional workflow prepares one writable shared fixture before PostgreSQL projection', () => {
   const { job } = functionalJobSource();
   const prepareStep = job.match(

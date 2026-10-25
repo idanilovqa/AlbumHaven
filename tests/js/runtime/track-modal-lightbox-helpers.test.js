@@ -750,6 +750,39 @@ for (const speculative of [false, true]) {
   });
 }
 
+test('inventory mutation refresh rehydrates the album that is still open', async () => {
+  const stale = {
+    key: 'watcher-album',
+    request_key: 'watcher-album',
+    name: 'Watcher Album',
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Old title' }],
+  };
+  const fresh = {
+    ...stale,
+    tracks: [{ path: 'one', title: 'Watcher Retagged Signal' }],
+  };
+  const { context } = loadHelper({
+    initialAlbums: [stale],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, album: fresh }),
+    }),
+  });
+  context.state.modalReleases = [stale];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+  const refreshed = [];
+  context.refreshOpenTrackModalVersionState = (albumKey, album) => {
+    refreshed.push({ albumKey, album });
+  };
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
+  assert.deepEqual(refreshed, [{ albumKey: 'watcher-album', album: fresh }]);
+});
+
 test('in-flight details preserve an optimistic owner across inventory revisions until settlement', async () => {
   const preview = { key: 'owned-album', name: 'Owned Album', preview_only: true, tracks: [] };
   const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };

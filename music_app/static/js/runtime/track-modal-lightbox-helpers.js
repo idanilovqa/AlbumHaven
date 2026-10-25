@@ -502,6 +502,27 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
+async function refreshOpenTrackModalAfterInventoryMutation() {
+  const els = getTrackModalElements();
+  const openAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (!els.overlay || els.overlay.hidden || !openAlbum) return false;
+  const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
+  if (!albumKey) return false;
+  const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
+  const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+  const currentAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (
+    els.overlay.hidden
+    || !currentAlbum
+    || (
+      String(getAlbumRequestKey(currentAlbum) || '').trim() !== albumKey
+      && getTrackModalAlbumVersionKey(currentAlbum) !== albumVersionKey
+    )
+  ) return false;
+  refreshOpenTrackModalVersionState(albumKey, refreshedAlbum);
+  return true;
+}
+
 function queueTrackModalAlbumDetailsPrewarm(albumKey) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return;

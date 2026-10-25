@@ -12906,6 +12906,27 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
+async function refreshOpenTrackModalAfterInventoryMutation() {
+  const els = getTrackModalElements();
+  const openAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (!els.overlay || els.overlay.hidden || !openAlbum) return false;
+  const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
+  if (!albumKey) return false;
+  const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
+  const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+  const currentAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (
+    els.overlay.hidden
+    || !currentAlbum
+    || (
+      String(getAlbumRequestKey(currentAlbum) || '').trim() !== albumKey
+      && getTrackModalAlbumVersionKey(currentAlbum) !== albumVersionKey
+    )
+  ) return false;
+  refreshOpenTrackModalVersionState(albumKey, refreshedAlbum);
+  return true;
+}
+
 function queueTrackModalAlbumDetailsPrewarm(albumKey) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return;
@@ -16485,7 +16506,16 @@ async function fetchAndRender(url, push = true, options = {}) {
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
     applyViewPayload(payloadToApply, responseApplyOptions);
+    const previousAppliedInventoryMutationRevision = Number(
+      state.ui.appliedViewInventoryMutationRevision,
+    );
     const appliedInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    const appliedNewInventoryRevision = Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0
+      && (
+        !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
+        || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
+      );
     if (Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
@@ -16529,6 +16559,13 @@ async function fetchAndRender(url, push = true, options = {}) {
         : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
+    if (appliedNewInventoryRevision
+        && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+      invalidateAllHydratedTrackModalAlbumDetails();
+      if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
+        await refreshOpenTrackModalAfterInventoryMutation();
+      }
+    }
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
     if (responseOwnsModalAlbum && currentModalAlbum === responseModalAlbum
         && typeof refreshOpenTrackModalVersionState === 'function'

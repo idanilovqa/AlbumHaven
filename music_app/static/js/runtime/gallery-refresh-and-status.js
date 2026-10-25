@@ -1545,7 +1545,16 @@ async function fetchAndRender(url, push = true, options = {}) {
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
     applyViewPayload(payloadToApply, responseApplyOptions);
+    const previousAppliedInventoryMutationRevision = Number(
+      state.ui.appliedViewInventoryMutationRevision,
+    );
     const appliedInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    const appliedNewInventoryRevision = Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0
+      && (
+        !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
+        || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
+      );
     if (Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
@@ -1589,6 +1598,13 @@ async function fetchAndRender(url, push = true, options = {}) {
         : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
+    if (appliedNewInventoryRevision
+        && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+      invalidateAllHydratedTrackModalAlbumDetails();
+      if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
+        await refreshOpenTrackModalAfterInventoryMutation();
+      }
+    }
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
     if (responseOwnsModalAlbum && currentModalAlbum === responseModalAlbum
         && typeof refreshOpenTrackModalVersionState === 'function'

@@ -3990,6 +3990,43 @@ test('pollStatus does not reload a foreground view already read at the advanced 
   assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
 });
 
+test('pollStatus refreshes an open Album Details after applying an inventory mutation', async () => {
+  const { context, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.modalReleases = [{ key: 'watcher-album' }];
+  context.state.modalReleaseIndex = 0;
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 12,
+  };
+  let modalRefreshes = 0;
+  context.refreshOpenTrackModalAfterInventoryMutation = async () => {
+    modalRefreshes += 1;
+  };
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+  assert.equal(pendingRequests.length, 2);
+  pendingRequests[1].resolveWith({
+    artist_groups: [],
+    inventory_mutation_revision: 13,
+  });
+  await statusRequest;
+
+  assert.equal(modalRefreshes, 1);
+});
+
 test('pollStatus defers an inventory refresh while a tag edit owns gallery resources', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

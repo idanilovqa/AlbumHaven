@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import music_app.services.cover_lookup_notifications as notification_service
 from music_app.services.cover_lookup_tasks_postgres import (
     CoverLookupTasksPostgresAdapter,
     _task_row,
@@ -58,6 +59,29 @@ def test_cover_lookup_notifications_load_uses_postgres_adapter_and_ignores_file(
 
     assert load_cover_lookup_notifications(config) == [
         {"id": "postgres-task", "status": "completed"}
+    ]
+
+
+def test_cover_lookup_notification_summaries_use_compact_adapter_loader(monkeypatch):
+    class FakeAdapter:
+        def __init__(self, config):
+            pass
+
+        def load_notification_summaries(self):
+            return [{"id": "compact-task", "status": "completed", "possible_match_count": 8}]
+
+        def load_notifications(self):
+            raise AssertionError("full notification payloads must not be loaded for task lists")
+
+    monkeypatch.setattr(notification_service, "CoverLookupTasksPostgresAdapter", FakeAdapter)
+    monkeypatch.setattr(
+        notification_service,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, config: object(),
+    )
+
+    assert notification_service.load_cover_lookup_notification_summaries({}) == [
+        {"id": "compact-task", "status": "completed", "possible_match_count": 8}
     ]
 
 
@@ -214,6 +238,56 @@ def _postgres_adapter(connection):
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@example/test"},
         connect=lambda database_url: connection,
     )
+
+
+def test_postgres_adapter_load_notification_summaries_uses_database_projection():
+    class SummaryCursor(_FakeCursor):
+        def fetchall(self):
+            return self._rows
+
+    class SummaryConnection:
+        def __init__(self):
+            self.operations = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            pass
+
+        def execute(self, sql, params=None):
+            normalized_sql = " ".join(str(sql).lower().split())
+            self.operations.append((normalized_sql, params))
+            if "bootstrap_context_ready" in normalized_sql:
+                return SummaryCursor([{"bootstrap_context_ready": 1}])
+            return SummaryCursor([
+                {
+                    "task_summary": {
+                        "id": "compact-task",
+                        "status": "completed",
+                        "album": "Compact Album",
+                        "album_payload": {"album_id": 41, "name": "Compact Album"},
+                        "possible_match_count": 37,
+                    },
+                },
+            ])
+
+    connection = SummaryConnection()
+
+    assert _postgres_adapter(connection).load_notification_summaries() == [
+        {
+            "id": "compact-task",
+            "status": "completed",
+            "album": "Compact Album",
+            "album_payload": {"album_id": 41, "name": "Compact Album"},
+            "possible_match_count": 37,
+        },
+    ]
+    summary_sql = connection.operations[-1][0]
+    assert "task_summary" in summary_sql
+    assert "'album_id', coalesce(" in summary_sql
+    assert "select ops.cover_lookup_tasks.provider_payload," not in summary_sql
+    assert "select ops.cover_lookup_tasks.metadata" not in summary_sql
 
 
 def test_postgres_adapter_requires_delete_privilege_to_clear_legacy_terminal_notification(

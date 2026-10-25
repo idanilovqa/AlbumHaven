@@ -61,6 +61,60 @@ export class MobilePolishPage extends MobileLayoutPage {
     await expect(this.adminDrawer).not.toBeVisible();
   }
 
+  async readSharedHeaderGeometry(bar, surfaceSelector, leadingSelector) {
+    await expect(bar).toBeVisible();
+    await expect(bar.locator(leadingSelector)).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- compare the same rendered GalleryBar slots across routes.
+    return bar.evaluate((node, selectors) => {
+      const box = element => element.getBoundingClientRect();
+      const surfaceNode = node.closest(selectors.surface);
+      const title = node.querySelector('.gallery-bar__title');
+      const summary = node.querySelector('.gallery-bar__summary');
+      const leading = node.querySelector(selectors.leading);
+      const actions = node.querySelector(':scope > .gallery-bar__actions');
+      const [barBox, surfaceBox, titleBox, summaryBox, leadingBox, actionsBox] =
+        [node, surfaceNode, title, summary, leading, actions].map(box);
+      const titleStyle = getComputedStyle(title), summaryStyle = getComputedStyle(summary);
+      return {
+        surfaceTop: barBox.top - surfaceBox.top,
+        titleTop: titleBox.top - barBox.top,
+        titleLeft: titleBox.left - barBox.left,
+        summaryTop: summaryBox.top - barBox.top,
+        summaryLeft: summaryBox.left - barBox.left,
+        leadingTop: leadingBox.top - barBox.top,
+        leadingLeft: leadingBox.left - barBox.left,
+        actionsTop: actionsBox.top - barBox.top,
+        titleFontSize: titleStyle.fontSize,
+        titleLineHeight: titleStyle.lineHeight,
+        titleWeight: titleStyle.fontWeight,
+        summaryFontSize: summaryStyle.fontSize,
+        summaryLineHeight: summaryStyle.lineHeight,
+      };
+    }, { surface: surfaceSelector, leading: leadingSelector });
+  }
+
+  async readGalleryHeaderGeometry() {
+    return this.readSharedHeaderGeometry(this.mainGalleryBar, '.shell-main-surface', '#mobile-library-button');
+  }
+
+  async expectSharedHeaderGeometry(reference, bar, surfaceSelector, leadingSelector) {
+    const actual = await this.readSharedHeaderGeometry(bar, surfaceSelector, leadingSelector);
+    for (const key of ['surfaceTop', 'titleTop', 'titleLeft', 'summaryTop', 'summaryLeft', 'leadingTop', 'leadingLeft', 'actionsTop']) {
+      expect(actual[key], key).toBeCloseTo(reference[key], 0);
+    }
+    for (const key of ['titleFontSize', 'titleLineHeight', 'titleWeight', 'summaryFontSize', 'summaryLineHeight']) {
+      expect(actual[key], key).toBe(reference[key]);
+    }
+  }
+
+  async expectAdminHeaderMatches(reference) {
+    await this.expectSharedHeaderGeometry(reference, this.accountBar, '.settings-outlet', '.page-gallery-bar__back');
+  }
+
+  async expectGalleryHeaderMatches(reference) {
+    await this.expectSharedHeaderGeometry(reference, this.mainGalleryBar, '.shell-main-surface', '#mobile-library-button');
+  }
+
   async expectHeaderActionsAligned() {
     const controls = this.page.locator('.app-bar--library .toolbar-right > .action-button, .app-bar--library [data-account-menu-trigger], #search-form .search-field-control');
     // parity-check: allow-read-only-measurement-evaluate -- measure actual mobile header button rectangles.

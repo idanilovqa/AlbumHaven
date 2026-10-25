@@ -119,6 +119,16 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
+  if (
+    selectedProblematicMissing
+    && state.utility.selectedProblematicKey
+    && state.utility.problematicFilesComplete === false
+  ) {
+    renderTree('');
+    els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
+    return;
+  }
+
   if (selectedProblematicMissing) {
     const focusedTrackPath = String(state.utility.focusedTrackPath || '');
     const focusedAlbum = focusedTrackPath

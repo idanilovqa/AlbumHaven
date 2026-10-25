@@ -78,6 +78,50 @@ test('non-album tag-editor collections preserve blank track-owned identity field
   assert.equal(values.album, '');
 });
 
+test('collection names roundtrip through initial values and name-only edit payloads', () => {
+  const context = loadHelpers();
+  const track = { path: 'C:/Music/Random/song.mp3', exception_type: 'Custom Collection', custom_collection_name: 'Old name' };
+  const initial = context.getTrackTagInitialValues(track, { tag_editor_collection: true });
+  assert.equal(initial.custom_collection_name, 'Old name');
+  const updates = context.buildChangedTagEditorUpdates({}, [track], {
+    [track.path]: { ...initial, custom_collection_name: 'Road trip' },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(updates)), {
+    [track.path]: { custom_collection_name: 'Road trip' },
+  });
+});
+
+test('exception suggestions come from the currently loaded library scope', () => {
+  const context = loadHelpers();
+  context.state = {
+    view: {
+      non_album_tracks: [
+        { exception_type: 'Archive outtake' },
+        { exception_type: 'Interview' },
+      ],
+    },
+  };
+  assert.deepEqual(Array.from(context.getLibraryExceptionTypeChoices()), [
+    'Interview',
+    'Non-album rarity',
+    'Custom Collection',
+    'Archive outtake',
+  ]);
+  context.state.view.non_album_tracks = [{ exception_type: 'Main-library bootleg' }];
+  assert.ok(!context.getLibraryExceptionTypeChoices().includes('Archive outtake'));
+});
+
+test('name-only edits immediately regroup an existing loose custom collection', () => {
+  const context = loadHelpers();
+  const track = { path: 'C:/Music/Random/song.mp3', album: 'Random', exception_type: 'Custom Collection', custom_collection_name: 'Old name' };
+  context.state = { view: { non_album_tracks: [track] } };
+  const tracks = context.applyTagEditsToNonAlbumView({ tracks: [track] }, {
+    [track.path]: { custom_collection_name: 'Road trip' },
+  });
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].custom_collection_name, 'Road trip');
+});
+
 test('album detail tag editor preserves an explicitly blank track Album', () => {
   const context = loadHelpers();
   const values = context.getTrackTagInitialValues({
@@ -108,6 +152,24 @@ test('blank Album edit immediately adds the track to the Other projection', () =
   assert.equal(tracks[0].path, path);
   assert.equal(tracks[0].album, '');
   assert.equal(tracks[0].exception_type, '');
+});
+
+test('blank Album edit immediately refreshes the Non-album tracks control', () => {
+  const context = loadHelpers();
+  const path = 'C:\\Music\\Artist\\Album\\02 - Track.mp3';
+  let controlSyncs = 0;
+  context.state = { view: { non_album_tracks: [] } };
+  context.updateGalleryMainControls = () => { controlSyncs += 1; };
+
+  context.applyTagEditsToNonAlbumView({
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path, title: 'Track', artist: 'Artist', track_number: 2 }],
+  }, {
+    [path]: { album: '' },
+  });
+
+  assert.equal(controlSyncs, 1);
 });
 
 test('exception-only rarity edit immediately adds the track to the non-album projection', () => {
@@ -872,6 +934,39 @@ test('blanking Album on the only track produces no optimistic gallery album', ()
   });
 
   assert.deepEqual(JSON.parse(JSON.stringify(updatedAlbums)), []);
+});
+
+test('blanking Album retains a strongly inferred numbered track in its source album', () => {
+  const context = loadHelpers();
+  const album = {
+    key: 'artist::numbered album::2009',
+    name: 'Numbered Album',
+    album_artist: 'Artist',
+    year: 2009,
+    tracks: [1, 2, 3].map((number) => ({
+      path: `C:\\Music\\Artist\\Numbered Album\\${String(number).padStart(2, '0')} Track.flac`,
+      album: 'Numbered Album',
+      album_artist: 'Artist',
+      title: `Track ${number}`,
+      track_number: number,
+    })),
+  };
+
+  const updatedAlbums = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
+    [album.tracks[1].path]: { album: '' },
+  });
+
+  assert.equal(updatedAlbums.length, 1);
+  assert.equal(updatedAlbums[0].name, 'Numbered Album');
+  assert.equal(updatedAlbums[0].tracks[1].is_problematic, true);
+  assert.deepEqual(
+    Array.from(updatedAlbums[0].tracks, (track) => [track.title, track.album]),
+    [
+      ['Track 1', 'Numbered Album'],
+      ['Track 2', ''],
+      ['Track 3', 'Numbered Album'],
+    ],
+  );
 });
 
 test('album edit still updates every track when every track is selected', () => {

@@ -170,6 +170,34 @@ def test_asgi_search_reload_preserves_all_artists_hydration(app, monkeypatch, pa
     assert params.get("all_artists") == (["1"] if all_artists in {"1", "true"} else None)
 
 
+@pytest.mark.parametrize("path", ["/", "/bootstrap-data"])
+def test_asgi_root_partial_preview_hydration_requests_complete_bounded_page(app, monkeypatch, path):
+    from music_app.routes import web_asgi
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    asgi_app = _make_asgi_app(app)
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        path,
+        query={
+            "surface": "albums",
+            "all_artists": "1",
+            "gallery_scope": "all",
+            "category": ["main_library", "new_arrivals", "hoard"],
+        },
+    )
+
+    assert status == 200
+    payload = _decode_json(body) if path == "/bootstrap-data" else _extract_bootstrap_payload_from_shell(body)
+    hydration = payload["bootstrap"]["startupHydration"]
+    assert hydration["required"] is True
+    params = parse_qs(urlsplit(hydration["endpoint"]).query)
+    assert params["gallery_page_size"] == ["50"]
+    assert "omit_sidebar" not in params
+    assert hydration["followupEndpoint"] == ""
+
+
 def test_asgi_web_routes_register_natively(asgi_app):
     route_paths = _collect_route_paths(asgi_app)
     for route_path in (
@@ -223,6 +251,60 @@ def test_asgi_bootstrap_keeps_health_responsive_during_database_work(app, monkey
     assert status == 200
     payload = _decode_json(body) if path == "/bootstrap-data" else _extract_bootstrap_payload_from_shell(body)
     assert payload["bootstrap"]["startupHydration"]["endpoint"]
+    assert finished.is_set()
+
+
+@pytest.mark.parametrize("path", ["/", "/news"])
+def test_asgi_html_render_keeps_health_responsive_during_template_preparation(
+    app,
+    monkeypatch,
+    path,
+):
+    from music_app.routes import web_asgi
+    from tests.py.asgi_testing import run_asgi_request_async
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    monkeypatch.setattr(
+        web_asgi,
+        "build_news_payload",
+        lambda **_kwargs: {
+            "shell_layout": {"slots": {"main_content": {"content_kind": "discovery_center_page"}}},
+            "discovery_center": {"page_kind": "discovery_center"},
+        },
+    )
+    asgi_app = _make_asgi_app(app)
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    original_template_response = web_asgi._template_response
+
+    def blocked_template_response(request, context):
+        entered.set()
+        try:
+            release.wait(timeout=2)
+            return original_template_response(request, context)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(web_asgi, "_template_response", blocked_template_response)
+
+    async def exercise():
+        request_task = asyncio.create_task(run_asgi_request_async(asgi_app, "GET", path))
+        try:
+            assert await asyncio.to_thread(entered.wait, 3), "Template preparation did not start"
+            status, _headers, _body = await asyncio.wait_for(
+                run_asgi_request_async(asgi_app, "GET", "/health"), timeout=1,
+            )
+            assert status == 200
+            assert not finished.is_set(), "Health could not respond until template preparation finished"
+        finally:
+            release.set()
+            response = await asyncio.wait_for(request_task, timeout=5)
+        return response
+
+    status, _headers, body = asyncio.run(exercise())
+    assert status == 200
+    assert b"<!doctype html>" in body
     assert finished.is_set()
 
 
@@ -284,6 +366,13 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
                 "payload_tier": "sidebar",
                 "gallery_display_mode": "covers",
             },
+            build_projected_root_sidebar_payload=lambda **_kwargs: {
+                "artists_sidebar": [
+                    {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+                ],
+                "artist_count": 1,
+                "show_all_artists_sidebar_link": True,
+            },
             build_selected_artist_payload=lambda **_kwargs: {
                 "selected_artist": "Broadcast",
                 "selected_artist_family_display_mode": "chronological",
@@ -332,6 +421,76 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
     assert b"Discovery Center" in news_body
 
 
+@pytest.mark.parametrize("requested_tier, expected_tier", [(None, "gallery_summary"), ("full", "full")])
+def test_selected_artist_startup_requests_summary_without_losing_repeated_filters(monkeypatch, requested_tier, expected_tier):
+    from starlette.datastructures import QueryParams
+    from music_app.routes import web_asgi
+
+    captured = []
+    projected = []
+
+    class SummaryRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_selected_artist_payload(self, *, query_params, library_state):
+            captured.append(query_params)
+            return {
+                "selected_artist": "Broadcast",
+                "artist_groups": [
+                    {
+                        "artist": "Broadcast",
+                        "artist_display": "Broadcast",
+                        "albums": [{"key": "album-1"}],
+                    },
+                ],
+                "primary_artist_groups": [
+                    {
+                        "artist": "Broadcast",
+                        "artist_display": "Broadcast",
+                        "albums": [{"key": "album-1"}],
+                    },
+                ],
+            }
+
+        def build_root_startup_preview_payload(self, **_kwargs):
+            raise AssertionError("selected startup must defer the complete root sidebar")
+
+        def build_root_sidebar_payload(self, *, query_params):
+            raise AssertionError("selected startup must not build the full root payload")
+
+        def build_projected_root_sidebar_payload(self, *, query_params):
+            projected.append(query_params)
+            return {
+                "artists_sidebar": [
+                    {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+                    {"artist": "Mono", "artist_display": "Mono", "count": 2},
+                ],
+                "artist_count": 2,
+                "album_count": 3,
+                "show_all_artists_sidebar_link": True,
+            }
+
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", SummaryRepository)
+    params = [("artist", "Broadcast"), ("category", "hoard"), ("category", "main_library")]
+    if requested_tier:
+        params.append(("payload_tier", requested_tier))
+    initial_view, _elapsed_ms = web_asgi._build_postgres_selected_artist_startup_view(
+        config={}, query_args=QueryParams(params), library_state={},
+    )
+    assert captured[0].get("payload_tier") == expected_tier
+    assert captured[0].get("root_sidebar") == "1"
+    assert captured[0].getlist("category") == ["hoard", "main_library"]
+    assert len(captured) == 1
+    assert projected[0].getlist("category") == ["hoard", "main_library"]
+    assert initial_view["selected_artist"] == "Broadcast"
+    assert initial_view["artists_sidebar"] == [
+        {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+        {"artist": "Mono", "artist_display": "Mono", "count": 2},
+    ]
+    assert initial_view["initial_view_partial"] is True
+
+
 def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_distinct(
     app,
     monkeypatch,
@@ -352,22 +511,23 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
         def __init__(self, config):
             self.config = config
 
-        def build_root_sidebar_payload(self, *, query_params=None):
-            payload = web_asgi._build_empty_initial_view(
-                config=self.config,
-                query_raw="",
-                selected_artist="",
-                active_surface="albums",
-            )
-            payload.update(
-                {
-                    "artists_sidebar": full_root_sidebar,
-                    "artist_count": len(full_root_sidebar),
-                    "album_count": 3,
-                    "payload_tier": "sidebar",
-                }
-            )
-            return payload
+        def build_root_startup_preview_payload(
+            self,
+            *,
+            query_params=None,
+            library_state=None,
+            sidebar_only=False,
+        ):
+            raise AssertionError("selected startup must defer the complete root sidebar")
+
+        def build_projected_root_sidebar_payload(self, *, query_params=None):
+            assert not str((query_params or {}).get("q") or "").strip()
+            return {
+                "artists_sidebar": full_root_sidebar,
+                "artist_count": len(full_root_sidebar),
+                "album_count": 6,
+                "show_all_artists_sidebar_link": True,
+            }
 
         def build_selected_artist_payload(self, *, query_params=None, library_state=None):
             query = str((query_params or {}).get("q") or "").strip()
@@ -379,16 +539,26 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             )
             payload.update(
                 {
-                    "artists_sidebar": (
-                        filtered_search_sidebar
+                    **(
+                        {
+                            "artists_sidebar": filtered_search_sidebar,
+                            "artist_count": len(filtered_search_sidebar),
+                        }
                         if query
-                        else [full_root_sidebar[0]]
+                        else {}
                     ),
-                    "artist_count": len(filtered_search_sidebar) if query else 1,
                     "album_count": 1,
                     "payload_tier": "full",
                 }
             )
+            if not query:
+                selected_group = {
+                    "artist": "Broadcast",
+                    "artist_display": "Broadcast",
+                    "albums": [{"key": "album-1"}, {"key": "album-2"}],
+                }
+                payload["artist_groups"] = [selected_group]
+                payload["primary_artist_groups"] = [selected_group]
             if query:
                 payload["search_context"] = {
                     "committed_query": query,
@@ -432,8 +602,10 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
     )
 
     assert (no_query_status, query_status) == (200, 200)
-    no_query_view = _decode_json(no_query_body)["initial_view"]
-    query_view = _decode_json(query_body)["initial_view"]
+    no_query_payload = _decode_json(no_query_body)
+    query_payload = _decode_json(query_body)
+    no_query_view = no_query_payload["initial_view"]
+    query_view = query_payload["initial_view"]
     assert {
         "no_query": {
             "query": no_query_view["query"],
@@ -464,6 +636,15 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             "selected_artist": "Broadcast",
             "artists_sidebar": filtered_search_sidebar,
         },
+    }
+    assert no_query_payload["bootstrap"]["startupHydration"] == {
+        "required": True,
+        "trigger": "after_runtime_boot",
+        "endpoint": "/view-data?surface=albums&root_sidebar=1&artist=Broadcast",
+        "followupEndpoint": "",
+        "embeddedViewPatch": None,
+        "tier": "full",
+        "reason": "preview_requires_full_view_fetch",
     }
 
 
@@ -635,6 +816,38 @@ def test_asgi_refresh_api_preserves_incremental_and_full_rescan_modes(
         {"force": expected_force, "scan_mode": expected_scan_mode},
     ]
     assert asgi_app.state.library_state.get("rescan_ignore_existing_cache") is full_rescan
+
+
+def test_asgi_full_rescan_acknowledges_without_hydrating_legacy_runtime_albums(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "hydrate_library_state_for_config",
+        lambda *args, **kwargs: pytest.fail("full rescan route must not hydrate synchronously"),
+    )
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "start_background_refresh_for_state",
+        lambda *args, **kwargs: True,
+    )
+
+    asgi_app = _make_asgi_app()
+    asgi_app.state.library_state["albums"] = []
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/refresh-api",
+        json_body={"full_rescan": True},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {"ok": True, "full_rescan": True}
 
 
 def test_asgi_refresh_api_rejects_duplicate_full_rescan_without_resetting_active_progress(
@@ -889,7 +1102,6 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
 
     refresh_calls = []
     cancel_calls = []
-    hydrate_calls = []
     selected_view_calls = []
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
 
@@ -959,18 +1171,6 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
         SelectedSearchBrowseRepository,
     )
 
-    def fake_hydrate(library_state, config, *, logger_for_prewarm=None, **kwargs):
-        hydrate_calls.append(
-            {
-                "library_state": library_state,
-                "config": config,
-                "logger_for_prewarm": logger_for_prewarm,
-                "kwargs": kwargs,
-            }
-        )
-        library_state["albums"] = [{"name": "Hydrated"}]
-        return True
-
     def fake_start_background_refresh_for_state(
         library_state,
         config,
@@ -996,7 +1196,6 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
         cancel_calls.append(library_state)
         return True
 
-    monkeypatch.setattr(web_asgi.state_service, "hydrate_library_state_for_config", fake_hydrate)
     monkeypatch.setattr(
         web_asgi.state_service,
         "start_background_refresh_for_state",
@@ -1105,14 +1304,6 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
     assert _decode_json(cancel_body) == {"ok": True, "cancelled": True}
     assert refresh_status == 302
     assert refresh_headers["location"] == "/?refreshed=1&artist=Broadcast&q=Tender+Buttons"
-    assert hydrate_calls == [
-        {
-            "library_state": library_state,
-            "config": asgi_app.state.config,
-            "logger_for_prewarm": asgi_logger,
-            "kwargs": {},
-        }
-    ]
     assert refresh_calls == [
         {
             "library_state": library_state,
@@ -1693,6 +1884,83 @@ def test_root_startup_requests_bounded_first_page_and_preserves_filters(monkeypa
     assert params.getlist("category") == ["local", "missing"]
 
 
+def test_explicit_default_gallery_filters_still_target_root_albums_during_scan():
+    from music_app.routes import web_asgi
+    from starlette.datastructures import QueryParams
+
+    query_params = QueryParams([
+        ("surface", "albums"),
+        ("all_artists", "1"),
+        ("gallery_scope", "all"),
+        ("category", "main_library"),
+        ("category", "hoard"),
+        ("category", "new_arrivals"),
+    ])
+
+    assert web_asgi._request_targets_root_albums_surface(query_params, "", "") is True
+
+
+def test_active_scan_keeps_persisted_root_gallery_in_bootstrap(monkeypatch):
+    from music_app.routes import web_asgi
+    from starlette.datastructures import QueryParams
+
+    query_params = QueryParams([
+        ("surface", "albums"),
+        ("all_artists", "1"),
+        ("gallery_scope", "all"),
+        ("category", "main_library"),
+        ("category", "hoard"),
+        ("category", "new_arrivals"),
+    ])
+    persisted_view = {
+        "artist_groups": [{"artist": "Existing Artist", "albums": [{"name": "Existing Album"}]}],
+        "primary_artist_groups": [],
+        "family_artist_groups": [],
+        "artists_sidebar": [{"artist": "Existing Artist", "count": 1}],
+        "album_count": 14398,
+        "artist_count": 6240,
+        "query": "",
+        "selected_artist": "",
+        "related_filter_artists": [],
+        "primary_filter_active": False,
+        "selected_artist_family_display_mode": "grouped",
+        "gallery_scope": "all",
+        "gallery_display_mode": "cards",
+        "gallery_scale_percent": 100,
+        "visible_library_categories": ["main_library", "hoard", "new_arrivals"],
+        "initial_view_partial": False,
+    }
+    monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    monkeypatch.setattr(
+        web_asgi,
+        "_build_postgres_root_startup_view",
+        lambda **_kwargs: (persisted_view, None, 1.0),
+    )
+
+    payload, _, startup_preview = web_asgi._build_bootstrap_payload(
+        query_args=query_params,
+        config={"MUSIC_DIR": "C:/Music", "APP_NAME": "Album Haven"},
+        logger=None,
+        library_state={
+            "scan_in_progress": True,
+            "scan_phase": "metadata",
+            "covers_in_progress": True,
+        },
+        query_raw="",
+        selected_artist="",
+        refreshed=False,
+        request_started_epoch_ms=1,
+    )
+
+    assert payload["initial_view"]["album_count"] == 14398
+    assert payload["initial_view"]["artist_count"] == 6240
+    assert payload["bootstrap"]["scanInProgress"] is True
+    assert payload["bootstrap"]["coversInProgress"] is True
+    assert payload["bootstrap"]["coversCancelable"] is True
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "full_view"
+    assert startup_preview["mode"] == "full_view"
+
+
 def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):
     from music_app.routes import web_asgi
     from starlette.datastructures import QueryParams
@@ -1707,3 +1975,92 @@ def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):
     assert captured["query_params"].get("gallery_page_size") is None
     assert captured["query_params"].get("surface") == "home"
     assert initial["initial_view_partial"] is True
+
+
+def test_index_logs_actual_bootstrap_counts(app, monkeypatch):
+    from music_app.routes import web_asgi
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    build = web_asgi._build_postgres_root_startup_view
+
+    def populated(**kwargs):
+        initial, patch, elapsed = build(**kwargs)
+        initial.update(album_count=14673, artist_count=6345)
+        return initial, patch, elapsed
+
+    events = []
+    monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", populated)
+    monkeypatch.setattr(web_asgi, "log_app_event",
+                        lambda _config, _logger, action, **fields: events.append((action, fields)))
+    status, _, _ = _run_asgi_request(_make_asgi_app(app), "GET", "/")
+    assert status == 200
+    event = next(fields for action, fields in events if action == "Index request completed")
+    assert event["album_count"] == 14673
+    assert event["artist_count"] == 6345
+    assert event["template_response_bytes"] > 0
+    for name in ("template_worker_wait_ms", "template_work_elapsed_ms",
+                 "template_thread_cpu_ms", "template_asset_hash_ms",
+                 "template_context_ms", "template_render_ms"):
+        assert isinstance(event[name], (float, int))
+        assert event[name] >= 0
+    assert event["template_elapsed_ms"] + 0.02 >= (
+        event["template_worker_wait_ms"] + event["template_work_elapsed_ms"])
+
+def test_pending_gallery_bootstrap_renders_bounded_preview_and_hydrates_without_scan(app, monkeypatch):
+    from music_app.routes import web_asgi
+
+    original_builder = web_asgi._build_postgres_root_startup_view
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", original_builder)
+    calls = []
+
+    class PendingRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_root_startup_preview_payload(
+            self, *, query_params, library_state, bounded_gallery_only=False,
+            queue_projection_refresh=True,
+        ):
+            calls.append((
+                query_params.get("gallery_page_size"),
+                bounded_gallery_only,
+                queue_projection_refresh,
+            ))
+            if query_params.get("gallery_page_size") is not None:
+                raise web_asgi.GalleryProjectionPending("not ready")
+            return {
+                "artist_groups": [{
+                    "artist": "Preview Artist",
+                    "artist_display": "Preview Artist",
+                    "albums": [{"key": "preview-album", "name": "Preview Album", "tracks": []}],
+                    "sections": [],
+                }],
+                "primary_artist_groups": [],
+                "family_artist_groups": [],
+                "artists_sidebar": [{
+                    "artist": "Preview Artist",
+                    "artist_display": "Preview Artist",
+                    "count": 1,
+                }],
+                "artist_count": 1,
+                "album_count": 1,
+                "initial_view_partial": True,
+            }
+
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", PendingRepository)
+    monkeypatch.setattr(web_asgi.state_service, "start_background_refresh_for_state",
+                        lambda *_a, **_k: pytest.fail("pending projection started a scan"))
+    asgi_app = _make_asgi_app(app)
+    status, _, body = _run_asgi_request(asgi_app, "GET", "/")
+    assert status == 200
+    payload = _extract_bootstrap_payload_from_shell(body)
+    assert calls == [("8", False, False), (None, True, True)]
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
+    assert payload["initial_view"]["artist_groups"][0]["artist"] == "Preview Artist"
+    hydration = payload["bootstrap"]["startupHydration"]
+    assert hydration["required"] is True
+    assert "payload_tier=sidebar" in hydration["endpoint"]
+    assert "gallery_page_size=50" in hydration["followupEndpoint"]
+    assert asgi_app.state.library_state["cold_scan_pending"] is False
+    assert asgi_app.state.library_state["cold_scan_handoff_status"] == "idle"

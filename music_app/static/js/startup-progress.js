@@ -13,6 +13,18 @@
   let animationStartPercent = 0;
   const animationDurationMs = 700;
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+  const markFirstVisibleFeedback = () => {
+    const queue = Array.isArray(window.__ALBUM_HAVEN_STARTUP_MARKS__)
+      ? window.__ALBUM_HAVEN_STARTUP_MARKS__
+      : [];
+    if (queue.some((entry) => entry?.name === 'startup_ui_feedback_visible')) return;
+    queue.push({
+      name: 'startup_ui_feedback_visible',
+      atMs: Number(window.performance?.now?.() ?? Date.now()),
+      detail: {},
+    });
+    window.__ALBUM_HAVEN_STARTUP_MARKS__ = queue;
+  };
   const hide = () => {
     root.hidden = true;
     previousInert.forEach((value, element) => { element.inert = value; });
@@ -47,6 +59,7 @@
     animationStartPercent = percent;
     animationStartedAt = 0;
     root.hidden = false;
+    markFirstVisibleFeedback();
     for (const element of document.body.children) {
       if (element === root) continue;
       if (!previousInert.has(element)) previousInert.set(element, element.inert);
@@ -62,9 +75,12 @@
     show,
     finish() {
       if (completed) return;
-      show(100);
       completed = true;
-      if (reducedMotion || percent === 100) finishHide();
+      targetPercent = 100;
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      animationFrame = 0;
+      render(100);
+      finishHide();
     },
     fail() {
       if (completed || root.hidden) return;

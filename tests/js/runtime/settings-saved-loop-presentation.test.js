@@ -21,7 +21,8 @@ function setup({ realGrouping = false } = {}) {
     renderPlaybackControlCluster: () => '<div data-playback-control-cluster></div>',
     document: { querySelectorAll: () => [], body: { classList: { add() {}, remove() {} } }, getElementById: () => ({ hidden: true }) },
     handleLibrarySettingsClick: () => false,
-    renderUtilityModalContent() {}, showToast() {}, console,
+    renderUtilityModalContent() {}, showToast() {},
+    getTagEditorElements: () => ({ form: null }), console,
   };
   vm.createContext(context);
   for (const name of ['button-component', 'navigation-tree']) {
@@ -31,6 +32,7 @@ function setup({ realGrouping = false } = {}) {
   for (const name of ['utility-loop-playback', 'player-and-waveform', 'utility-list-builders', 'bootstrap-utility-event-handlers', 'utility-loaders-and-cover-lookup', 'tag-editor-and-optimistic-updates']) {
     vm.runInContext(read(name), context);
   }
+  context.closeTagEditorExceptionMenu = () => {};
   if (!realGrouping) context.groupUtilityLoops = () => [group(context)];
   return context;
 }

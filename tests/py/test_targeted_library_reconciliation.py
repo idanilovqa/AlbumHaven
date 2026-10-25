@@ -695,6 +695,36 @@ def test_targeted_reconciler_ignores_non_media_file_events(tmp_path):
     assert repository.calls == []
 
 
+def test_targeted_reconciler_does_not_invalidate_after_noop_deletion(tmp_path):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedReconciliationResult,
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "Music"
+    root.mkdir()
+    callbacks = []
+    repository = SimpleNamespace(
+        persist_targeted_inventory_mutation=lambda **_kwargs: {
+            "inventory_mutation_revision": 0,
+            "affected_album_keys": [],
+        }
+    )
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": {".png"}},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root}],
+        after_commit=callbacks.append,
+    )
+
+    result = reconciler.reconcile(
+        _request(deleted_subtrees=(root / "Artist" / "Album" / "art.png",))
+    )
+
+    assert result == TargetedReconciliationResult(0, ())
+    assert callbacks == []
+
+
 def test_targeted_reconciler_rejects_destructive_work_for_unhealthy_root(tmp_path):
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,

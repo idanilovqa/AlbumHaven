@@ -6,10 +6,18 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable
+from contextlib import contextmanager
 from html import unescape
+
+import requests
 
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_provider_availability import provider_availability
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverDeadlineExceeded,
+    AutomaticCoverSearchFailed,
+    remaining_automatic_cover_seconds,
+)
 from music_app.services.cover_provider_candidates import (
     CoverCandidate,
     dedupe_cover_candidates,
@@ -24,6 +32,19 @@ except ImportError:
 _LOGGER = logging.getLogger(__name__)
 _YTMUSIC_CLIENT_LOCK = threading.Lock()
 _YTMUSIC_CLIENT: object | bool | None = None
+
+
+class _AutomaticCoverSession(requests.Session):
+    def request(self, method, url, **kwargs):
+        requested_timeout = float(kwargs.get("timeout") or 15.0)
+        kwargs["timeout"] = remaining_automatic_cover_seconds(min(requested_timeout, 15.0))
+        return super().request(method, url, **kwargs)
+
+
+@contextmanager
+def automatic_youtube_music_client():
+    with _AutomaticCoverSession() as session:
+        yield YTMusic(requests_session=session) if YTMusic is not None else None
 
 ClientGetter = Callable[..., object | None]
 DedupeCandidates = Callable[[list[CoverCandidate]], list[CoverCandidate]]
@@ -157,6 +178,8 @@ def search_youtube_music_candidates(
     year: int | None,
     user_agent: str,
     *,
+    automatic: bool = False,
+    max_queries: int | None = None,
     client_getter: ClientGetter | None = None,
     build_query_variants: QueryVariants,
     match_score: MatchScore,
@@ -200,10 +223,12 @@ def search_youtube_music_candidates(
             native_artist=artist,
             native_album=album,
         )
-        for query_text, enforce_year, query_mode in queries:
+        for query_text, enforce_year, query_mode in (queries[:1] if automatic else queries):
             normalized_query = " ".join(str(query_text or "").split()).strip()
             if not normalized_query or normalized_query in seen_queries:
                 continue
+            if max_queries is not None and len(seen_queries) >= max_queries:
+                return dedupe_candidates(candidates)
             seen_queries.add(normalized_query)
             _emit(
                 log_event,
@@ -224,7 +249,25 @@ def search_youtube_music_candidates(
                     limit=10,
                     ignore_spelling=True,
                 ) or []
+            except (TimeoutError, requests.Timeout) as exc:
+                if automatic:
+                    raise AutomaticCoverDeadlineExceeded() from exc
+                _emit(
+                    log_event,
+                    active_logger,
+                    "YouTube Music search failed",
+                    artist=artist,
+                    album=album,
+                    year=year,
+                    query=normalized_query,
+                    query_mode=query_mode,
+                    reason=type(exc).__name__,
+                    detail=str(exc),
+                )
+                continue
             except Exception as exc:
+                if automatic:
+                    raise AutomaticCoverSearchFailed() from exc
                 _emit(
                     log_event,
                     active_logger,
@@ -322,6 +365,8 @@ def search_youtube_music_candidates(
                     selected_urls=[str(item.url or "") for item in probed_candidates[:5]],
                 )
                 candidates.extend(probed_candidates)
+                if automatic and probed_candidates:
+                    return dedupe_candidates(candidates)
             else:
                 _emit(
                     log_event,

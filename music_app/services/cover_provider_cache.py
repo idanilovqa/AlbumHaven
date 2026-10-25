@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import tempfile
 import threading
 import time
 import unicodedata
@@ -114,12 +116,28 @@ class CoverSearchCache:
         with self._lock:
             if not self._dirty:
                 return
+            temporary_path: Path | None = None
             try:
                 self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-                self.cache_path.write_text(json.dumps(self._payload, indent=2), encoding="utf-8")
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.cache_path.parent,
+                    prefix=f".{self.cache_path.name}.", suffix=".tmp", delete=False,
+                ) as temporary_file:
+                    temporary_path = Path(temporary_file.name)
+                    temporary_file.write(json.dumps(self._payload, indent=2))
+                    temporary_file.flush()
+                    os.fsync(temporary_file.fileno())
+                os.replace(temporary_path, self.cache_path)
+                temporary_path = None
             except PermissionError as exc:
                 self._log_permission_error("write", exc)
                 return
+            finally:
+                if temporary_path is not None:
+                    try:
+                        temporary_path.unlink(missing_ok=True)
+                    except PermissionError as exc:
+                        self._log_permission_error("cleanup", exc)
             self._dirty = False
 
 

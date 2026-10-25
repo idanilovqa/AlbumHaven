@@ -15,6 +15,10 @@ export class AppBarActions {
     await this.appBar.waitForVisible(this.appBar.toolbar, { timeout: options.timeout || 30000 });
   }
 
+  async openLibraryHome() {
+    await this.appBar.brand.click({ noWaitAfter: true });
+  }
+
   async openStatusMenu(options = {}) {
     const timeout = options.timeout || 10000;
     await expect.poll(async () => {
@@ -222,7 +226,11 @@ export class AppBarActions {
         throw new Error(`Status request failed with HTTP ${response.status()}.`);
       }
       lastStatus = await response.json();
-      return Boolean(lastStatus.scan_in_progress || lastStatus.covers_in_progress);
+      return Boolean(
+        lastStatus.scan_in_progress
+        || lastStatus.covers_in_progress
+        || lastStatus.pending_cover_refresh_after_scan
+      );
     }, {
       message: () => (
         'Expected the production scan and automatic cover refresh to become idle. '

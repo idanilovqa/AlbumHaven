@@ -15,6 +15,14 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverDeadlineExceeded,
+    AutomaticCoverSearchFailed,
+    classify_automatic_provider_failure,
+    automatic_cover_budget_active,
+    remaining_automatic_cover_seconds,
+)
+
 try:
     import certifi
 except ImportError:
@@ -129,8 +137,9 @@ def _http_get_bytes(
         headers=headers,
     )
     ssl_context = _http_ssl_context()
+    request_timeout = remaining_automatic_cover_seconds(15.0)
     try:
-        with urllib.request.urlopen(request, timeout=15, context=ssl_context) as response:
+        with urllib.request.urlopen(request, timeout=request_timeout, context=ssl_context) as response:
             _HTTP_TRACE_LOCAL.last_url = str(getattr(response, "url", url) or url)
             payload = response.read()
             elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -195,6 +204,19 @@ def _http_get_bytes(
                 rate_limit_remaining=rate_limit_remaining,
                 rate_limit_total=rate_limit_total,
             )
+        status = int(getattr(exc, "code", 0) or 0)
+        apple_api_request = service == "apple" and context.startswith((
+            "search:", "artist-search:", "artist-id-search:", "artist-lookup:",
+        ))
+        # API failures and denied requests cannot establish a no-match result.
+        # Discovery pages and alternate artwork sizes may legitimately be absent.
+        if automatic_cover_budget_active() and (
+            status in (401, 403, 429)
+            or status >= 500
+            or (apple_api_request and 400 <= status < 500)
+        ):
+            failure = classify_automatic_provider_failure(status, provider=service)
+            raise AutomaticCoverSearchFailed(**failure) from exc
         return None
     except urllib.error.URLError as exc:
         elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -225,8 +247,18 @@ def _http_get_bytes(
                 reason=str(reason),
                 timeout=bool(is_timeout),
             )
+        if is_timeout and automatic_cover_budget_active():
+            raise AutomaticCoverDeadlineExceeded() from exc
+        if automatic_cover_budget_active():
+            failure = classify_automatic_provider_failure(None, provider=service)
+            raise AutomaticCoverSearchFailed(**failure) from exc
         return None
     except Exception as exc:
+        if isinstance(exc, TimeoutError) and automatic_cover_budget_active():
+            raise AutomaticCoverDeadlineExceeded() from exc
+        if automatic_cover_budget_active():
+            failure = classify_automatic_provider_failure(None, provider=service)
+            raise AutomaticCoverSearchFailed(**failure) from exc
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         if service == "apple":
             append_trace(
@@ -291,7 +323,7 @@ def _http_get_json(
         musicbrainz_kwargs = {
             "context": context,
             "extra_headers": extra_headers,
-            "timeout": 15.0,
+            "timeout": remaining_automatic_cover_seconds(15.0),
         }
         if callable(should_cancel):
             musicbrainz_kwargs["should_cancel"] = should_cancel
@@ -321,6 +353,9 @@ def _http_get_json(
             blocked_reason=str(meta.get("blocked_reason") or ""),
             retry_after_seconds=float(meta.get("retry_after_seconds") or 0.0),
         )
+        if automatic_cover_budget_active() and meta.get("status") != "http_404":
+            remaining_automatic_cover_seconds(float("inf"))
+            raise AutomaticCoverSearchFailed()
         return None
 
     attempts = 2 if service == "discogs" else 1
@@ -333,9 +368,13 @@ def _http_get_json(
             context=context,
             extra_headers=extra_headers,
         )
+        if payload == b"" and automatic_cover_budget_active():
+            raise AutomaticCoverSearchFailed()
         if payload:
             try:
                 decoded = json.loads(payload.decode("utf-8"))
+                if automatic_cover_budget_active() and not isinstance(decoded, dict):
+                    raise AutomaticCoverSearchFailed()
                 if service == "deezer":
                     data_items = decoded.get("data") if isinstance(decoded, dict) else None
                     emit_app_event(
@@ -353,7 +392,11 @@ def _http_get_json(
                         has_error=isinstance(decoded, dict) and bool(decoded.get("error")),
                         error=decoded.get("error") if isinstance(decoded, dict) else None,
                     )
+                    if automatic_cover_budget_active() and decoded.get("error"):
+                        raise AutomaticCoverSearchFailed()
                 return decoded if isinstance(decoded, dict) else None
+            except AutomaticCoverSearchFailed:
+                raise
             except Exception as exc:
                 _log_verbose(
                     active_logger,
@@ -376,6 +419,8 @@ def _http_get_json(
                         error_type=type(exc).__name__,
                         error=str(exc),
                     )
+                if automatic_cover_budget_active():
+                    raise AutomaticCoverSearchFailed() from exc
                 return None
         if service == "deezer":
             emit_app_event(
@@ -422,6 +467,7 @@ def _http_get_json_via_curl(
             url=url,
         )
         return None
+    request_timeout = remaining_automatic_cover_seconds(25.0)
     try:
         completed = subprocess.run(
             [
@@ -430,7 +476,7 @@ def _http_get_json_via_curl(
                 "--show-error",
                 "--location",
                 "--max-time",
-                "20",
+                f"{min(20.0, request_timeout):g}",
                 "--header",
                 f"User-Agent: {user_agent}",
                 "--header",
@@ -440,7 +486,7 @@ def _http_get_json_via_curl(
             capture_output=True,
             text=True,
             check=False,
-            timeout=25,
+            timeout=request_timeout,
             creationflags=_NO_WINDOW_CREATION_FLAGS,
         )
     except Exception as exc:
@@ -502,6 +548,7 @@ def _http_get_json_via_subprocess(
 ) -> dict | None:
     active_logger = logger or _DEFAULT_LOGGER
     emit_app_event = app_event_logger or _noop_app_event_logger
+    request_timeout = remaining_automatic_cover_seconds(30.0)
     helper_code = r"""
 import json, ssl, sys, urllib.request
 try:
@@ -516,17 +563,17 @@ if certifi is not None:
     context = ssl.create_default_context(cafile=certifi.where())
 else:
     context = ssl.create_default_context()
-with urllib.request.urlopen(req, timeout=20, context=context) as resp:
+with urllib.request.urlopen(req, timeout=float(sys.argv[3]), context=context) as resp:
     payload = json.load(resp)
 print(json.dumps(payload))
 """
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", helper_code, str(url or ""), str(user_agent or "")],
+            [sys.executable, "-c", helper_code, str(url or ""), str(user_agent or ""), f"{min(20.0, request_timeout):g}"],
             capture_output=True,
             text=True,
             check=False,
-            timeout=30,
+            timeout=request_timeout,
             creationflags=_NO_WINDOW_CREATION_FLAGS,
         )
     except Exception as exc:

@@ -70,7 +70,7 @@ def render():
     environment = Environment(loader=FileSystemLoader(templates), autoescape=select_autoescape())
 
     def render_template(name="index.html", *, administrator=True):
-        actions = AllowedActions(("accounts.read",) if administrator else ())
+        actions = AllowedActions(("accounts.read", "accounts.create") if administrator else ())
         initial_view = {
             "gallery_scope": "local",
             "gallery_display_mode": "rows",
@@ -186,7 +186,7 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
         "studio", "ep", "live", "demo", "compilation", "single",
     ]
     selected = [choice.attrs["data-gallery-album-type"] for choice in choices if choice.attrs.get("aria-pressed") == "true"]
-    assert selected == ["studio", "ep"]
+    assert selected == ["studio", "ep", "compilation"]
     choices_by_type = {choice.attrs["data-gallery-album-type"]: choice for choice in choices}
     for release_type in ("studio", "ep", "live", "demo", "compilation", "single"):
         assert "disabled" in choices_by_type[release_type].attrs
@@ -209,6 +209,9 @@ def test_library_actions_retain_handlers_and_server_filtered_admin_entry(render,
         assert "ui-button--icon" in classes
         assert "ui-button--medium" in classes
     assert notifications.attrs["data-toggle-cover-lookup-drawer"] == "1"
+    hover_icon = notifications.one("img", **{"class": "cover-lookup-drawer-glyph-hover"})
+    assert "src" not in hover_icon.attrs
+    assert hover_icon.attrs["data-src"].endswith("/static/images/cover-lookup-notification-icon.png")
     assert status.attrs["aria-label"] == "Library status"
     assert "data-account-menu-trigger" in settings.attrs
     assert controls.index(notifications) < controls.index(status) < controls.index(settings)
@@ -232,6 +235,12 @@ def test_settings_shell_owns_bar_above_navigation_with_no_duplicate_sidebar_bran
     assert not navigation.find_all("img"), "Settings must not repeat the logo in its sidebar"
     assert not bar.find_all("form", id="search-form"), "Settings leaves optional library search empty"
     assert ("hidden" in host.attrs) == (template == "index.html")
+
+
+def test_admin_members_shared_gallery_bar_renders_its_add_user_action(render):
+    bar = render("admin-members.html").one(**{"data-gallery-bar-instance": "page"})
+    add_user = bar.one("a", href="/admin/accounts/new")
+    assert add_user.one("span", **{"class": "ui-button__content"}).text.strip() == "Add user"
 
 
 def test_hosted_settings_keeps_bottom_player_outside_both_switchable_shells(render):

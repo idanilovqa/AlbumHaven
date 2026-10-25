@@ -11,6 +11,11 @@ import sys
 from threading import Event, Lock
 from typing import Protocol
 
+from music_app.services.generated_preview_storage import is_managed_preview_path
+from music_app.services.library_watch_suppression import (
+    is_library_watch_event_suppressed,
+)
+
 
 class LibraryEventKind(str, Enum):
     CREATED = "created"
@@ -141,6 +146,28 @@ def publish_watchdog_event(
     root_definitions = tuple(dict(root) for root in roots)
     observed_at = clock()
     source_path = Path(getattr(event, "src_path", "")).resolve(strict=False)
+    destination_value = getattr(event, "dest_path", None)
+    destination_path = (
+        Path(destination_value).resolve(strict=False) if destination_value else None
+    )
+    if is_library_watch_event_suppressed(source_path) or (
+        destination_path is not None
+        and is_library_watch_event_suppressed(destination_path)
+    ):
+        return
+
+    def is_cover_transaction_artifact(path: Path | None) -> bool:
+        if path is None:
+            return False
+        name = path.name.casefold()
+        return name.startswith(".cover.jpg.") and name.endswith(".tmp")
+
+    if is_cover_transaction_artifact(source_path):
+        if kind is not LibraryEventKind.MOVED or destination_path is None:
+            return
+        source_path = destination_path
+        kind = LibraryEventKind.CREATED
+        destination_path = None
     if kind in {
         LibraryEventKind.DELETED,
         LibraryEventKind.MOVED,
@@ -171,22 +198,15 @@ def publish_watchdog_event(
         return
     normalized = normalize_library_event(
         kind,
-        getattr(event, "src_path", ""),
-        destination=getattr(event, "dest_path", None),
+        source_path,
+        destination=destination_path,
         roots=root_definitions,
         observed_at=observed_at,
         is_directory=bool(getattr(event, "is_directory", False)),
     )
     if normalized is not None:
         def is_derived_cover(path: Path) -> bool:
-            root = _root_for_path(path, _resolved_roots(root_definitions))
-            if root is None:
-                return False
-            parts = path.relative_to(root[1]).parts
-            return any(
-                Path(*parts[index:index + 2]) == Path(".album-haven", "cover_variants")
-                for index in range(len(parts) - 1)
-            )
+            return is_managed_preview_path(path)
 
         source_derived = is_derived_cover(normalized.path)
         if normalized.kind is LibraryEventKind.MOVED and normalized.destination is not None:

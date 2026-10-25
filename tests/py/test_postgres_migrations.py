@@ -33,6 +33,33 @@ MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION = (
 ARTIST_SEARCH_PROJECTION_MIGRATION = (
     MIGRATIONS_DIR / "0084_create_local_artist_search_projection.sql"
 )
+TARGETED_ARTIST_SEARCH_PATCH_MIGRATION = (
+    MIGRATIONS_DIR / "0090_patch_local_artist_search_projection.sql"
+)
+GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION = (
+    MIGRATIONS_DIR / "0089_allow_gallery_projection_featured_kind.sql"
+)
+GALLERY_PROJECTION_ARTIST_LOOKUP_MIGRATION = (
+    MIGRATIONS_DIR / "0091_add_gallery_projection_artist_lookup_indexes.sql"
+)
+LOCALE_INDEPENDENT_SEARCH_PREFILTER_MIGRATION = (
+    MIGRATIONS_DIR / "0092_add_locale_independent_search_prefilter.sql"
+)
+DUPLICATE_IDENTITY_LOOKUP_MIGRATION = (
+    MIGRATIONS_DIR / "0093_add_duplicate_identity_lookup_index.sql"
+)
+NONBLOCKING_GALLERY_PUBLICATION_MIGRATION = (
+    MIGRATIONS_DIR / "0094_stage_gallery_projection_publication.sql"
+)
+ROOT_PREVIEW_ARTIST_ORDER_MIGRATION = (
+    MIGRATIONS_DIR / "0095_add_root_preview_artist_order_index.sql"
+)
+GENERATED_PREVIEW_STORAGE_MIGRATION = (
+    MIGRATIONS_DIR / "0096_create_generated_preview_storage.sql"
+)
+GENERATED_PREVIEW_STORAGE_CONSTRAINT_REPAIR_MIGRATION = (
+    MIGRATIONS_DIR / "0097_repair_generated_preview_inventory_path_constraint.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -438,8 +465,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-47:] == [
-        "0040_repair_ignored_repairs_delete_grant.sql",
+    assert migration_names[-58:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -486,7 +512,89 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0084_create_local_artist_search_projection.sql",
         "0085_add_stale_track_file_candidate_index.sql",
         "0086_create_root_gallery_projection.sql",
+        "0087_library_source_indicators.sql",
+        "0088_add_active_physical_parent_index.sql",
+        "0089_allow_gallery_projection_featured_kind.sql",
+        "0090_patch_local_artist_search_projection.sql",
+        "0091_add_gallery_projection_artist_lookup_indexes.sql",
+        "0092_add_locale_independent_search_prefilter.sql",
+        "0093_add_duplicate_identity_lookup_index.sql",
+        "0094_stage_gallery_projection_publication.sql",
+        "0095_add_root_preview_artist_order_index.sql",
+        "0096_create_generated_preview_storage.sql",
+        "0097_repair_generated_preview_inventory_path_constraint.sql",
+        "0098_track_generated_preview_current_path.sql",
     ]
+
+
+def test_gallery_projection_artist_lookup_migration_indexes_anchor_and_boundary_queries():
+    sql = _normalized_sql(
+        GALLERY_PROJECTION_ARTIST_LOOKUP_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert (
+        "on library.gallery_projection_occurrences "
+        "(library_id, scope_key, (payload ->> 'artist_name'), ordinal)"
+    ) in sql
+    assert (
+        "on library.gallery_projection_occurrences "
+        "(library_id, scope_key, (payload ->> 'artist_id'), ordinal)"
+    ) in sql
+
+
+def test_locale_independent_search_prefilter_migration_adds_fixed_utf8_indexes():
+    sql = _normalized_sql(
+        LOCALE_INDEPENDENT_SEARCH_PREFILTER_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create or replace function library.search_utf8_hex(value text)" in sql
+    assert "immutable parallel safe strict" in sql
+    assert "convert_to(value, 'utf8')" in sql
+    assert "encode(" in sql
+    assert "local_tracks_search_utf8_hex_trgm_idx" in sql
+    assert "local_track_files_search_utf8_hex_trgm_idx" in sql
+    assert "library.search_utf8_hex(lower(btrim(coalesce(title, ''))))" in sql
+    assert "library.search_utf8_hex(lower(coalesce(private_path, '')))" in sql
+
+
+def test_duplicate_identity_lookup_migration_adds_exact_unicode_index():
+    sql = _normalized_sql(
+        DUPLICATE_IDENTITY_LOOKUP_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create or replace function library.duplicate_identity_text(value text)" in sql
+    assert "current_setting('server_version_num')::integer >= 180000" in sql
+    assert "normalize(casefold(value collate \"und-x-icu\"), nfc)" in sql
+    assert "normalize(lower(value collate \"und-x-icu\"), nfc)" in sql
+    assert "regexp_replace(" in sql
+    assert "'[[:space:]]+', ' ', 'g'" in sql
+    assert "create or replace function library.duplicate_identity_year(value text)" in sql
+    assert "normalize(btrim(value), nfkc)" in sql
+    assert (
+        "revoke all on function library.duplicate_identity_text(text) from public"
+        in sql
+    )
+    assert (
+        "revoke all on function library.duplicate_identity_year(text) from public"
+        in sql
+    )
+    for role in ("album_haven_app", "album_haven_migrator"):
+        assert (
+            f"grant execute on function library.duplicate_identity_text(text) to {role}"
+            in sql
+        )
+        assert (
+            f"grant execute on function library.duplicate_identity_year(text) to {role}"
+            in sql
+        )
+    assert (
+        "create index if not exists local_track_files_active_duplicate_identity_idx"
+        in sql
+    )
+    assert "library.duplicate_identity_text(scan_file_album_artist)" in sql
+    assert "library.duplicate_identity_text(scan_file_album)" in sql
+    assert "library.duplicate_identity_year(scan_file_year)" in sql
+    assert "where scan_cache_stale is false" in sql
 
 
 def test_album_raw_artist_search_index_matches_search_preview_expression():
@@ -500,6 +608,99 @@ def test_album_raw_artist_search_index_matches_search_preview_expression():
     assert "local_albums_normalized_raw_artists_trgm_idx" in sql
     assert "lower(btrim(coalesce(metadata ->> 'artists', '')))" in sql
     assert "gin_trgm_ops" in sql
+
+
+def test_gallery_projection_featured_role_migration_extends_field_allowlist():
+    assert GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION.is_file()
+    sql = _normalized_sql(
+        GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert (
+        "create or replace function library.replace_gallery_projection(" in sql
+    )
+    assert "security definer set search_path = pg_catalog" in sql
+    occurrence_fields = re.search(
+        r"jsonb_object_keys\(item\) field where field not in \(([^)]*)\)",
+        sql,
+    )
+    assert occurrence_fields is not None
+    assert "'featured_kind'" in occurrence_fields.group(1)
+
+
+def test_gallery_projection_publication_stages_rows_before_locking_source_state():
+    assert NONBLOCKING_GALLERY_PUBLICATION_MIGRATION.is_file()
+    sql = _normalized_sql(
+        NONBLOCKING_GALLERY_PUBLICATION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    stage_position = sql.index("insert into library.gallery_projection_occurrences")
+    state_lock_position = sql.index(
+        "from library.gallery_projection_state where library_id = target_library_id for update"
+    )
+    assert stage_position < state_lock_position
+    assert "pg_advisory_xact_lock" not in sql
+    assert "target_scope_key, content_revision" in sql
+    assert "revision = excluded.revision" in sql
+    assert "drop index if exists library.gallery_projection_occurrences_artist_name_ordinal_idx" in sql
+    assert "drop index if exists library.gallery_projection_occurrences_artist_id_ordinal_idx" in sql
+    assert (
+        "(library_id, scope_key, revision, (payload ->> 'artist_name'), ordinal)"
+    ) in sql
+    assert (
+        "(library_id, scope_key, revision, (payload ->> 'artist_id'), ordinal)"
+    ) in sql
+
+
+def test_root_preview_artist_order_migration_matches_startup_query():
+    sql = _normalized_sql(
+        ROOT_PREVIEW_ARTIST_ORDER_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create index if not exists local_artists_library_root_preview_order_idx" in sql
+    assert "on library.local_artists (" in sql
+    assert "library_id," in sql
+    assert "lower(coalesce(nullif(sort_name, ''), name))," in sql
+    assert "coalesce(nullif(sort_name, ''), name)," in sql
+    assert "lower(name)," in sql
+    assert "name" in sql
+    assert "include (id)" in sql
+
+
+def test_generated_preview_storage_migration_is_durable_and_least_privileged():
+    sql = _normalized_sql(
+        GENERATED_PREVIEW_STORAGE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    for table in (
+        "app.generated_preview_storage",
+        "app.generated_preview_inventory",
+        "app.generated_preview_relocation_items",
+    ):
+        assert _qualified_table_pattern(table).search(sql)
+    assert "storage_key smallint primary key" in sql
+    assert "check (storage_key = 1)" in sql
+    assert "revision bigint not null default 0" in sql
+    assert "managed_relative_path text not null unique" in sql
+    assert "expected_sha256 text not null" in sql
+    assert "foreign key (operation_id)" not in sql
+    assert "unique (operation_id, inventory_id)" in sql
+    assert "grant select, insert, update, delete on table" in sql
+    assert "to album_haven_app" in sql
+    assert "album_haven_readonly" not in sql
+    assert "c:\\users\\rendref" not in sql
+
+
+def test_generated_preview_inventory_path_repair_accepts_canonical_extensions():
+    assert GENERATED_PREVIEW_STORAGE_CONSTRAINT_REPAIR_MIGRATION.is_file()
+    sql = _normalized_sql(
+        GENERATED_PREVIEW_STORAGE_CONSTRAINT_REPAIR_MIGRATION.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "drop constraint if exists generated_preview_inventory_relative_path_check" in sql
+    assert r"managed_relative_path ~ '^v1/cover_variants/[0-9a-f]{2}/[0-9a-f]+\.[a-z0-9]+$'" in sql
 
 
 def test_album_raw_artist_search_index_verifier_checks_the_complete_definition():
@@ -565,6 +766,28 @@ def test_artist_search_projection_migration_is_keyed_and_runtime_read_only():
     assert "projection_source_fingerprint !~ '^[0-9a-f]{64}$'" in sql
     assert "'nan'::double precision" in sql
     assert "'infinity'::double precision" in sql
+
+
+def test_targeted_artist_search_patch_migration_is_bounded_and_runtime_safe():
+    sql = _normalized_sql(
+        TARGETED_ARTIST_SEARCH_PATCH_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create or replace function library.patch_local_artist_search_projection" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "cardinality(affected_normalized_keys) > 256" in sql
+    assert "jsonb_array_length(projection_rows) > 256" in sql
+    assert "pg_column_size(projection_rows) > 1048576" in sql
+    assert "normalized_artist_key = any(affected_normalized_keys)" in sql
+    assert "on conflict (library_id, normalized_artist_key) do update" in sql
+    assert "revoke all on function library.patch_local_artist_search_projection" in sql
+    assert "grant execute on function library.patch_local_artist_search_projection" in sql
+    assert "grant insert" not in sql
+    assert "grant update" not in sql
+    assert "grant delete" not in sql
+    assert "drop table" not in sql
+    assert "drop function library.replace_local_artist_search_projection" not in sql
 
 
 def test_docked_compact_player_regular_style_migration_is_additive_and_default_off():

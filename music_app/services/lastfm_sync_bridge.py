@@ -108,10 +108,15 @@ def record_playback_session_complete(
                 except LastfmError as exc:
                     error = str(exc)
                     reauthentication_required = exc.reauthentication_required
-                    retryable = bool(exc.reauthentication_required or (
-                        exc.retryable and exc.error_kind == "provider_error"
-                        and exc.code is not None
-                    ))
+                    retryable = bool(
+                        exc.reauthentication_required
+                        or (exc.retryable and exc.error_kind == "configuration_error")
+                        or (
+                            exc.retryable
+                            and exc.error_kind == "provider_error"
+                            and exc.code is not None
+                        )
+                    )
                     submission_state = "not_sent" if retryable else "uncertain"
                 stored = update_listen_history_entry(config, stored["id"], {
                     "scrobbled": scrobbled, "scrobble_error": error, "scrobble_retryable": retryable,

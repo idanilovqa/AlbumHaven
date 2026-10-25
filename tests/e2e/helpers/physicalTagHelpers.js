@@ -55,9 +55,14 @@ for track_path in sorted(album_dir.glob("*.mp3")):
 print(json.dumps(records, sort_keys=True))
 `;
 
-async function runGeneratedMp3TagScript({ artist, album, script }) {
+async function runGeneratedMp3TagScript({ artist, album, script, allowedProfiles }) {
+  const mediaRoot = resolveWritableFixtureMediaRoot(process.env, { allowedProfiles });
+  const preparedMediaRoot = process.env.ALBUM_HAVEN_FIXTURE_PROFILE === 'synthetic-large-library'
+    && !String(process.env.ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT || '').trim()
+    ? path.join(mediaRoot, 'writable')
+    : mediaRoot;
   const albumDirectory = path.join(
-    resolveWritableFixtureMediaRoot(process.env),
+    preparedMediaRoot,
     artist,
     album,
   );
@@ -69,18 +74,20 @@ async function runGeneratedMp3TagScript({ artist, album, script }) {
   return JSON.parse(stdout);
 }
 
-export async function readGeneratedMp3AlbumTags({ artist, album }) {
+export async function readGeneratedMp3AlbumTags({ artist, album, allowedProfiles }) {
   return runGeneratedMp3TagScript({
     artist,
     album,
+    allowedProfiles,
     script: READ_ALBUM_TAGS_SCRIPT,
   });
 }
 
-export async function readGeneratedMp3TagSnapshots({ artist, album }) {
+export async function readGeneratedMp3TagSnapshots({ artist, album, allowedProfiles }) {
   return runGeneratedMp3TagScript({
     artist,
     album,
+    allowedProfiles,
     script: READ_COMPLETE_TAG_SNAPSHOTS_SCRIPT,
   });
 }

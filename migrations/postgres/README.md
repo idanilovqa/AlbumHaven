@@ -1,5 +1,44 @@
 # Postgres Migrations
 
+## User-action provenance
+
+Migrations and backfills must never invent a user action from existing data.
+An existing cover path or remote URL does not prove that a user selected it in
+the app. Migration 0041's blanket `cover_selection_origin = 'user'` assignment
+is a historical error, not a precedent. Do not rewrite that migration or its
+ledger checksum. Correct proven inherited contamination with an additive,
+auditable repair. Existing flags cannot distinguish actual historical selections
+from migration backfills. The owner authorized replacing undersized legacy covers
+regardless of those flags: the next repair run requires both dimensions to meet
+2000 pixels, then the automatic minimum returns to 1200. New explicit in-app
+selection provenance retains manual protection. Never reset all user-cover
+ownership flags as a repair shortcut; guard each replacement against concurrent
+manual selections.
+
+`0088_add_active_physical_parent_index.sql` adds a nonunique partial expression
+index for active files grouped by root and normalized immediate parent. It
+changes no catalog rows or media. Existing large databases should prebuild the
+same exact index with `CREATE INDEX CONCURRENTLY` in autocommit before ordinary
+migration application; never run concurrent index creation inside the migration
+transaction. Verify the exact target, index definition, validity and readiness
+before rollout. A failed concurrent build requires investigation and removal of
+only the exact invalid index before retry. Application rollback can retain this
+additive index; optional later removal uses `DROP INDEX CONCURRENTLY` after
+checking rollout dependencies. Do not rewrite migration ledger history.
+
+`0087_library_source_indicators.sql` is the byte-identical canonical name for
+the historical `0080_library_source_indicators.sql` collision. The only accepted
+alias checksum is `e1a292e50a08e4043d2ce3ceda13b87ad90462deb898590c147bab492a01b5e1`.
+Isolated/demo migration readers resolve this alias in memory, without replaying
+SQL or changing historical ledger rows. Other unknown identities and checksum
+conflicts remain errors. Fresh databases record the canonical filename.
+
+Existing sandbox deployments require the checksum-aware deployment controller
+before using this checkout. Keep that controller during rollback to older
+checkouts; its reverse alias is independent of the selected source. The alias
+does not authorize rollback across other missing migrations, ledger rewriting,
+or automatic reconciliation of incomplete production history.
+
 This directory contains repo-owned Postgres SQL migrations for Album Haven.
 
 Migration `0065_native_player_component_provenance.sql` permits an optional
@@ -188,21 +227,38 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0085` are unreleased branch migrations. Their presence in a
+`0081` through `0091` are unreleased branch migrations. Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order
 before starting the matching application version. Run `0083` outside an
 explicit transaction because it uses `CREATE INDEX CONCURRENTLY`; record its
 ledger entry only after PostgreSQL reports the index valid. Apply `0084`
 transactionally, then let normal relation readiness publish the first matching
-artist-search projection.
+artist-search projection. Migrations `0087` and `0088` add library-source
+indicator storage and the active physical-parent lookup index respectively.
+Migration `0091_add_gallery_projection_artist_lookup_indexes.sql` adds
+library/scope/artist/ordinal indexes for anchored root-gallery lookup and
+artist-boundary reads without changing projection rows or runtime privileges.
+Apply `0091` transactionally during a controlled migration window because its
+ordinary index builds can briefly block projection writes; reads remain
+available.
+
+`0092_add_locale_independent_search_prefilter.sql` adds an immutable UTF-8 hex
+normalizer and two ordinary GIN trigram indexes for track-title and private-path
+search. Apply it transactionally during a controlled migration window: reads
+remain available, but the index builds briefly block writes to
+`library.local_tracks` and `library.local_track_files`. Roll back the matching
+application query first, then drop the two indexes and finally drop
+`library.search_utf8_hex(text)`.
 
 Rollback is migration-specific. Revoke the `0081` delete grant only after the
 root-setting writer is rolled back. Restore the `0063` missing-album function to
 undo `0082`; confirmed deletions are not reversible, and restoring `0063`
 intentionally makes subsequent removals mark relation data stale. Drop the
-`0083` index concurrently; search stays correct on the slower scan path. Roll
-back the projection-reading application code before dropping the `0084`
+`0083` index concurrently; search stays correct on the slower scan path. Drop
+both `0091` indexes to roll back that migration; anchored lookup remains
+correct on the slower scan path. Roll back the projection-reading application
+code before dropping the `0084`
 function and table, preventing a relation-ready process from querying an absent
 table. Keep the live-SQL fallback for absent, stale, or incompatible projection
 readiness throughout rollout and rollback.

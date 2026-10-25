@@ -148,6 +148,129 @@ def test_functional_core_preloaded_fixture_accepts_exact_media_directory(
     assert isolatedLibraryApp.configure_preloaded_fixture() == media_root.resolve()
 
 
+def test_preloaded_fixture_persists_its_exact_media_root(tmp_path, monkeypatch):
+    from music_app.services import library_roots
+
+    media_root = (tmp_path / "fixture" / "media").resolve()
+    writable_root = (tmp_path / "session" / "edit-tags-writable").resolve()
+    recorded = {}
+    executed = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            executed.append((sql, params))
+            return SimpleNamespace(fetchone=lambda: (1,))
+
+    def save(config, payload):
+        recorded["config"] = config
+        recorded["payload"] = payload
+
+    monkeypatch.setattr(library_roots, "save_library_root_settings", save)
+    monkeypatch.setattr(
+        library_roots,
+        "load_library_root_settings",
+        lambda _config: {
+            "main_library_roots": [
+                {"id": "functional-core-root", "path": "C:/old", "layout_mode": "artist"},
+                {
+                    "id": "edit-tags-writable-root",
+                    "path": str(writable_root),
+                    "layout_mode": "artist",
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        library_roots,
+        "library_root_cache_identity",
+        lambda _config: "current-root-identity",
+    )
+    rebased = []
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "rebase_preloaded_fixture_paths",
+        lambda database_url, root: rebased.append((database_url, root)),
+    )
+    isolatedLibraryApp.persist_preloaded_fixture_library_root(
+        "postgresql://fixture",
+        media_root,
+        connect=lambda _database_url: Connection(),
+    )
+
+    assert recorded["config"]["ALBUM_HAVEN_APP_DATABASE_URL"] == "postgresql://fixture"
+    assert recorded["config"]["MUSIC_DIR"] == media_root
+    assert recorded["config"]["PERSISTENCE_BACKENDS"]["library_roots"] == "postgres"
+    assert rebased == [("postgresql://fixture", media_root)]
+    assert recorded["payload"] == {
+        "main_library_roots": [
+            {
+                "id": "functional-core-root",
+                "path": str(media_root),
+                "layout_mode": "artist",
+            },
+            {
+                "id": "edit-tags-writable-root",
+                "path": str(writable_root),
+                "layout_mode": "artist",
+            },
+        ]
+    }
+    assert len(executed) == 1
+    assert "library_root_identity" in executed[0][0]
+    assert executed[0][1] == {"root_identity": "current-root-identity"}
+
+
+def test_preloaded_fixture_rebases_persisted_track_and_cover_paths(tmp_path):
+    old_root = (tmp_path / "old" / "media").resolve()
+    new_root = (tmp_path / "new" / "media").resolve()
+    track_path = old_root / "Artist" / "Album" / "song.mp3"
+
+    class Result:
+        def fetchone(self):
+            return (str(track_path), "Artist/Album/song.mp3")
+
+    class Connection:
+        def __init__(self):
+            self.operations = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def execute(self, statement, params=None):
+            self.operations.append((" ".join(str(statement).split()), params))
+            return Result()
+
+    connection = Connection()
+    isolatedLibraryApp.rebase_preloaded_fixture_paths(
+        "postgresql://fixture",
+        new_root,
+        connect=lambda _url: connection,
+    )
+
+    assert len(connection.operations) == 4
+    assert "select private_path, relative_path" in connection.operations[0][0].lower()
+    assert "left(private_path" not in connection.operations[0][0].lower()
+    assert "update library.local_track_files" in connection.operations[1][0].lower()
+    assert "private_path" in connection.operations[1][0].lower()
+    assert "left(private_path" in connection.operations[1][0].lower()
+    assert "metadata" in connection.operations[2][0].lower()
+    assert "runtime_scan_cache" in connection.operations[2][0].lower()
+    assert "update library.local_albums" in connection.operations[3][0].lower()
+    assert "left(cover_path" in connection.operations[3][0].lower()
+    for _statement, params in connection.operations[1:]:
+        assert params["old_root"] == str(old_root)
+        assert params["new_root"] == str(new_root)
+
+
 def test_functional_core_seeds_only_the_normal_negative_cover_cache(tmp_path):
     cache_path = tmp_path / "app-data" / "cover-search-cache.json"
     coverless_rows = [
@@ -435,6 +558,8 @@ def test_fixture_profile_mode_preserves_released_and_generated_boundaries(
     [
         ("", True),
         ("functional-core", True),
+        ("synthetic-large-library", True),
+        ("utility-problematic-files", False),
         ("playback-media", False),
         ("scan-library", False),
     ],
@@ -448,6 +573,107 @@ def test_generated_performance_profiles_skip_unrelated_provider_storage_policy_s
         )
         is expected
     )
+
+
+@pytest.mark.parametrize(
+    ("fixture_profile", "expected_target"),
+    [
+        ("functional-core", ("Mastodon", "Crack The Skye", 2009)),
+        (
+            "synthetic-large-library",
+            (
+                isolatedLibraryApp.DDT_STUDIO_RECORDS_FIXTURE_ARTIST,
+                isolatedLibraryApp.DDT_REMIXES_FIXTURE_ALBUM,
+                isolatedLibraryApp.DDT_REMIXES_FIXTURE_YEAR,
+            ),
+        ),
+    ],
+)
+def test_provider_storage_policy_seed_gates_the_owned_performance_album(
+    monkeypatch,
+    fixture_profile,
+    expected_target,
+):
+    recorded = {}
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def execute(self, sql, params):
+            recorded["sql"] = " ".join(str(sql).split())
+            recorded["params"] = params
+            return SimpleNamespace(rowcount=1)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _database_url: FakeConnection()),
+    )
+
+    isolatedLibraryApp.persist_provider_storage_policy_candidates(
+        "postgresql://fixture",
+        4175,
+        {"cover_id": "provider-storage-policy-cover"},
+        fixture_profile=fixture_profile,
+    )
+
+    candidates = json.loads(recorded["params"][0])
+    assert {
+        (candidate["artist"], candidate["album"], candidate["year"])
+        for candidate in candidates
+    } == {expected_target}
+    assert recorded["params"][1] == candidates[0]["id"]
+    assert recorded["params"][2:] == expected_target
+
+
+def test_provider_storage_policy_seed_targets_only_the_synthetic_fixture_album(monkeypatch):
+    recorded = {}
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def execute(self, sql, params):
+            recorded["sql"] = " ".join(str(sql).split())
+            recorded["params"] = params
+            return SimpleNamespace(rowcount=1)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _database_url: FakeConnection()),
+    )
+
+    isolatedLibraryApp.persist_provider_storage_policy_candidates(
+        "postgresql://fixture",
+        4175,
+        {"cover_id": "provider-storage-policy-cover"},
+        fixture_profile="synthetic-large-library",
+    )
+
+    assert recorded["params"][2:] == (
+        isolatedLibraryApp.DDT_STUDIO_RECORDS_FIXTURE_ARTIST,
+        isolatedLibraryApp.DDT_REMIXES_FIXTURE_ALBUM,
+        isolatedLibraryApp.DDT_REMIXES_FIXTURE_YEAR,
+    )
+    candidates = json.loads(recorded["params"][0])
+    assert {
+        (candidate["artist"], candidate["album"], candidate["year"])
+        for candidate in candidates
+    } == {
+        (
+            isolatedLibraryApp.DDT_STUDIO_RECORDS_FIXTURE_ARTIST,
+            isolatedLibraryApp.DDT_REMIXES_FIXTURE_ALBUM,
+            isolatedLibraryApp.DDT_REMIXES_FIXTURE_YEAR,
+        )
+    }
 
 
 def test_preloaded_fixture_profiles_use_normal_postgres_rows_and_bypass_runtime_shaping():
@@ -467,6 +693,8 @@ def test_preloaded_fixture_profiles_use_normal_postgres_rows_and_bypass_runtime_
     assert "fixture_media_root = library_root if is_preloaded_fixture else None" in main_source
     assert 'if fixture_profile == "functional-core":' in main_source
     assert "seed_functional_cover_search_cache(" in main_source
+    assert "fixture_profile=fixture_profile" in main_source
+    assert 'os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET")' not in main_source
     assert "if not is_preloaded_fixture and not reuse_state:" in main_source
     assert "if database_preparation_started and not preserve_on_shutdown:" in main_source
 
@@ -1040,6 +1268,7 @@ def test_reset_ownership_excludes_migration_owned_seed_and_reference_tables():
         {"schemaname": "app", "tablename": "client_surface_classes"},
         {"schemaname": "app", "tablename": "deployment_mode_rules"},
         {"schemaname": "app", "tablename": "e2e_problematic_file_fixture_seeds"},
+        {"schemaname": "app", "tablename": "generated_preview_storage"},
         {"schemaname": "ops", "tablename": "schema_migrations"},
         {"schemaname": "library", "tablename": "local_tracks"},
     ]
@@ -1531,7 +1760,7 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
     monkeypatch.setattr(
         isolatedLibraryApp,
         "persist_provider_storage_policy_candidates",
-        lambda *_args: events.append("provider-candidates.persist"),
+        lambda *_args, **_kwargs: events.append("provider-candidates.persist"),
     )
     monkeypatch.setattr(
         isolatedLibraryApp,
@@ -1583,9 +1812,9 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             "lock.acquire",
             "database.prepare",
             "database.persist",
-            "provider-candidates.persist",
             "rating-track.materialize",
             "lastfm.timezone.seed",
+            "provider-candidates.persist",
             "provider.create",
             "provider.start",
             "server.run",
@@ -1749,7 +1978,7 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     monkeypatch.setattr(
         isolatedLibraryApp,
         "persist_provider_storage_policy_candidates",
-        lambda *_args: events.append("provider-candidates.persist"),
+        lambda *_args, **_kwargs: events.append("provider-candidates.persist"),
     )
     monkeypatch.setattr(
         isolatedLibraryApp,
@@ -1809,6 +2038,7 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
         assert events == [
             "covers.reuse",
             "lock.acquire",
+            "provider-candidates.persist",
             "provider.create",
             "provider.start",
             "server.run",
@@ -1823,9 +2053,9 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "lock.acquire",
             "database.prepare",
             "database.persist",
-            "provider-candidates.persist",
             "rating-track.materialize",
             "lastfm.timezone.seed",
+            "provider-candidates.persist",
             "provider.create",
             "provider.start",
             "server.run",
@@ -2322,6 +2552,7 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
                 "featured_kind": "featured_member",
                 "track_file_id": index,
                 "library_root_id": "isolated-main-root",
+                "root_kind": "main_library",
                 "root_path": str(relation_root),
                 "relative_path": str(
                     Path(str(entry["path"])).relative_to(relation_root)
@@ -3154,6 +3385,7 @@ def test_isolated_fixture_seeds_alias_parity_rows_and_nested_family_paths(tmp_pa
             "owner_artist_name": artist,
             "member_artist_name": artist,
             "library_root_id": "isolated-main-root",
+            "root_kind": "main_library",
             "root_path": str(relation_root),
             "relative_path": str(track_path.relative_to(relation_root)),
             "private_path": str(track_path),

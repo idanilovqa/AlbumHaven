@@ -19,6 +19,7 @@ class FakeSnapshotRepository:
         self.accept_publications = accept_publications
         self.publish_attempts = 0
         self.finish_attempts = 0
+        self.mark_seen_attempts = 0
 
     def get_for_album_context(self, *, album_id):
         if self.snapshot is None or self.snapshot["album_id"] != album_id:
@@ -102,6 +103,15 @@ class FakeSnapshotRepository:
         self.snapshot["automatic_improvement_revision"] += 1
         self.snapshot["updated_at"] = "2026-08-03T12:00:01.500000+00:00"
         return True
+
+    def mark_seen(self, *, album_id):
+        self.mark_seen_attempts += 1
+        if self.snapshot is None or self.snapshot["album_id"] != album_id:
+            return None
+        self.snapshot["seen_automatic_improvement_revision"] = self.snapshot[
+            "automatic_improvement_revision"
+        ]
+        return deepcopy(self.snapshot)
 
 
 def existing_snapshot():
@@ -452,6 +462,16 @@ def test_automatic_improvement_can_advance_after_candidate_payload_was_published
         repository.snapshot["seen_automatic_improvement_revision"]
         == seen_before_improvement
     )
+
+
+def test_applied_automatic_improvement_marks_the_album_snapshot_seen():
+    repository = FakeSnapshotRepository(existing_snapshot())
+    publisher = publisher_for(repository, search_kind="automatic")
+
+    result = publisher.mark_automatic_improvement_seen()
+
+    assert result["seen_automatic_improvement_revision"] == 2
+    assert repository.mark_seen_attempts == 1
 
 
 def test_automatic_improvement_marks_the_exact_qualifying_candidate():

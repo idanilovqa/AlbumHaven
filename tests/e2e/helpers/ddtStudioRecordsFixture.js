@@ -17,6 +17,9 @@ const ALBUM = 'Студийные записи';
 const TRACK_COUNT = 16;
 const TOUCHED_TRACKS = new Set([1, 2, 3, 4]);
 const YEARLESS_TRACKS = new Set([9, 10, 11, 16]);
+const TYPO_TRACKS = new Set([5, 6, 7, 8, 12]);
+const TYPO_ARTIST = 'Ovderhead';
+const TYPO_ALBUM = 'Telepathic Minds';
 const RESET_SQL_PATH = fileURLToPath(
   new URL('./ddtStudioRecordsFixtureReset.sql', import.meta.url),
 );
@@ -26,19 +29,26 @@ import json
 import sys
 from pathlib import Path
 
-from mutagen.id3 import ID3, TALB, TDRC, TRCK
+from mutagen.id3 import ID3, TALB, TDRC, TRCK, TPE1, TPE2
 
 album_dir = Path(sys.argv[1]).resolve(strict=True)
+media_root = album_dir.parent.parent
 fixture = json.loads(sys.argv[2])
 expected = {
     row["filename"]: row
     for row in fixture
 }
-actual = {
-    track_path.name: track_path
-    for track_path in album_dir.glob("*.mp3")
-}
-if set(actual) != set(expected):
+typo_dir = media_root / "Ovderhead" / "Telepathic Minds"
+owned_dirs = (album_dir, typo_dir)
+actual = {}
+for filename in expected:
+    matches = [directory / filename for directory in owned_dirs if (directory / filename).is_file()]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Studio Records reset requires exactly one owned copy of {filename}."
+        )
+    actual[filename] = matches[0]
+if sum(1 for directory in owned_dirs for _ in directory.glob("*.mp3")) != len(expected):
     raise RuntimeError(
         "Studio Records reset requires exactly the 16 expected generated MP3 files."
     )
@@ -47,6 +57,10 @@ records = []
 for filename in sorted(expected):
     row = expected[filename]
     track_path = actual[filename]
+    destination = media_root / row["artist"] / row["album"] / filename
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if track_path != destination:
+        track_path = track_path.replace(destination)
     tags = ID3(track_path)
     if tags.getall("TXXX:Album Edition"):
         raise RuntimeError(
@@ -54,6 +68,10 @@ for filename in sorted(expected):
         )
     tags.delall("TALB")
     tags.add(TALB(encoding=3, text=[row["album"]]))
+    tags.delall("TPE1")
+    tags.add(TPE1(encoding=3, text=[row["artist"]]))
+    tags.delall("TPE2")
+    tags.add(TPE2(encoding=3, text=[row["album_artist"]]))
     tags.delall("TDRC")
     tags.delall("TRCK")
     if row["year"] is not None:
@@ -71,7 +89,7 @@ for filename in sorted(expected):
 print(json.dumps(records, ensure_ascii=True))
 `;
 
-function expectedFixtureRows() {
+function expectedFixtureRows({ typoArtistAlbum = false } = {}) {
   return Array.from({ length: TRACK_COUNT }, (_, index) => {
     const trackNumber = index + 1;
     const year = TOUCHED_TRACKS.has(trackNumber)
@@ -79,9 +97,12 @@ function expectedFixtureRows() {
       : YEARLESS_TRACKS.has(trackNumber)
         ? null
         : 1999;
+    const isTypoAlbum = typoArtistAlbum && TYPO_TRACKS.has(trackNumber);
     return {
       filename: `${String(trackNumber).padStart(2, '0')}. Студийная запись ${trackNumber}.mp3`,
-      album: ALBUM,
+      artist: isTypoAlbum ? TYPO_ARTIST : ARTIST,
+      album_artist: isTypoAlbum ? TYPO_ARTIST : ARTIST,
+      album: isTypoAlbum ? TYPO_ALBUM : ALBUM,
       track_number: trackNumber,
       year,
       release_date: year === null ? null : `${year}-01-01`,
@@ -90,7 +111,13 @@ function expectedFixtureRows() {
 }
 
 function resolveFixtureAlbumDirectory(environment) {
-  const mediaRoot = resolveWritableFixtureMediaRoot(environment);
+  const resolvedMediaRoot = resolveWritableFixtureMediaRoot(environment, {
+    allowedProfiles: ['functional-core', 'synthetic-large-library'],
+  });
+  const mediaRoot = environment.ALBUM_HAVEN_FIXTURE_PROFILE === 'synthetic-large-library'
+    && !String(environment.ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT || '').trim()
+    ? path.resolve(resolvedMediaRoot, 'writable')
+    : resolvedMediaRoot;
   const albumDirectory = path.resolve(mediaRoot, ARTIST, ALBUM);
   const relativePath = path.relative(mediaRoot, albumDirectory);
   if (
@@ -137,13 +164,20 @@ export async function restoreDdtStudioRecordsFixture(
     execFileAsync = execFileAsyncDefault,
     platform = process.platform,
     pythonCommand = resolvePlaywrightPython(env),
+    typoArtistAlbum = false,
   } = {},
 ) {
   const albumDirectory = resolveFixtureAlbumDirectory(env);
+  const fixtureRoot = path.dirname(path.dirname(albumDirectory));
   const { databaseTarget, password } = resolvePsqlConnection(env);
   const { stdout: physicalStdout } = await execFileAsync(
     pythonCommand,
-    ['-c', RESTORE_PHYSICAL_TAGS_SCRIPT, albumDirectory, JSON.stringify(expectedFixtureRows())],
+    [
+      '-c',
+      RESTORE_PHYSICAL_TAGS_SCRIPT,
+      albumDirectory,
+      JSON.stringify(expectedFixtureRows({ typoArtistAlbum })),
+    ],
     { encoding: 'utf8', windowsHide: true },
   );
   const physicalRows = JSON.parse(String(physicalStdout || '').trim() || '[]');
@@ -162,6 +196,7 @@ export async function restoreDdtStudioRecordsFixture(
       JSON.stringify(physicalRows),
       'utf8',
     ).toString('base64')}`,
+    `--variable=fixture_root_b64=${Buffer.from(fixtureRoot, 'utf8').toString('base64')}`,
     `--file=${RESET_SQL_PATH}`,
   ];
   const childEnv = {
@@ -181,8 +216,12 @@ export async function restoreDdtStudioRecordsFixture(
     result.album_rows !== 1
     || result.track_rows !== TRACK_COUNT
     || result.track_file_rows !== TRACK_COUNT
+    || result.fixture_root_rows !== 1
+    || result.track_file_root_rows !== TRACK_COUNT
     || result.album_edition_rows !== 0
     || result.file_edition_rows !== 0
+    || Number(result.typo_album_rows || 0) !== (typoArtistAlbum ? 1 : 0)
+    || Number(result.typo_membership_rows || 0) !== (typoArtistAlbum ? 1 : 0)
   ) {
     throw new Error(`Studio Records Postgres reset was incomplete: ${JSON.stringify(result)}`);
   }

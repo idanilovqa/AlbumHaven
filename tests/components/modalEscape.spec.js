@@ -21,7 +21,7 @@ test.beforeEach(async ({ page }) => {
   for (const file of ['runtime/base-layout.css', 'runtime/track-modal-and-lightbox.css', 'runtime/utilities.css']) {
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css', file) });
   }
-  for (const file of ['markup-format-helpers.js', 'modal-and-overlay-helpers.js', 'utility-loaders-and-cover-lookup.js', 'tag-editor-and-optimistic-updates.js', 'track-modal-lightbox-helpers.js', 'browser-dialog-helpers.js']) {
+  for (const file of ['markup-format-helpers.js', 'modal-and-overlay-helpers.js', 'album-artbox.js', 'utility-loaders-and-cover-lookup.js', 'tag-editor-and-optimistic-updates.js', 'track-modal-lightbox-helpers.js', 'browser-dialog-helpers.js']) {
     await page.addScriptTag({ path: path.join(root, 'music_app/static/js/runtime', file) });
   }
   await page.evaluate(() => {

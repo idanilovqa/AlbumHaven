@@ -73,6 +73,7 @@
       this.playing = false;
       this.startupBufferFrames = 1;
       this.underruns = 0;
+      this.rebuffering = false;
       this.outgoingCaptureLeft = new Float32Array(MAX_BOUNDARY_CAPTURE_FRAMES);
       this.outgoingCaptureRight = new Float32Array(MAX_BOUNDARY_CAPTURE_FRAMES);
       this.outgoingCaptureCount = 0;
@@ -105,6 +106,7 @@
       this.timelineFrame = timelineStartFrame;
       this.playing = false;
       this.underruns = 0;
+      this.rebuffering = false;
       this.outgoingCaptureCount = 0;
       this.outgoingCaptureWrite = 0;
       this.loopActive = false;
@@ -526,7 +528,22 @@
       if (!this.playing || !this.configured) return true;
       if (!this.current.firstFrameReported && !this.current.eos
           && this.current.bufferedFrames < this.startupBufferFrames) return true;
-
+      if (this.rebuffering) {
+        const refillReady = this.current.bufferedFrames >= this.startupBufferFrames
+          || this.current.eos;
+        if (!refillReady) {
+          this.renderedFrames += left.length;
+          return true;
+        }
+        this.rebuffering = false;
+        this.port.postMessage({
+          type: 'buffering-end',
+          generation: this.generation,
+          streamId: this.current.streamId,
+          role: 'current',
+          timelineFrame: this.timelineFrame,
+        });
+      }
       let firstConsumedRing = null;
       let firstConsumedStreamId = null;
       let firstConsumedRole = 'current';
@@ -539,6 +556,7 @@
       let secondConsumedAudible = false;
       let secondConsumedEvidence = null;
       let pendingPlaybackNotification = null;
+      let pendingBufferingStart = false;
       const appendConsumedEvidence = (evidence, leftSample, rightSample) => {
         const result = evidence || {
           finiteSamples: 0, nonZeroSamples: 0, peakSample: 0, samples: [],
@@ -736,6 +754,8 @@
           const missingFrames = left.length - outputFrame;
           if (this.current.firstFrameReported) {
             this.underruns += 1;
+            this.rebuffering = true;
+            pendingBufferingStart = true;
             pendingPlaybackNotification = {
               type: 'underrun',
               generation: this.generation,
@@ -829,7 +849,15 @@
       }
       // Credit this block before a terminal or interruption event closes its listen segment.
       if (pendingPlaybackNotification) this.port.postMessage(pendingPlaybackNotification);
-      if (this.current?.firstFrameReported && outputFrame > 0) {
+      if (pendingBufferingStart) {
+        this.port.postMessage({
+          type: 'buffering-start',
+          generation: this.generation,
+          streamId: this.current.streamId,
+          role: 'current',
+          timelineFrame: this.timelineFrame,
+        });
+      }      if (this.current?.firstFrameReported && outputFrame > 0) {
         this.port.postMessage({
           type: 'position',
           generation: this.generation,

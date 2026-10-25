@@ -3,9 +3,11 @@ import { expect, test } from '../support/performanceFixtures.js';
 import {
   buildBenchmarkValidationPayload,
   evaluateAllArtistsLocalBenchmark,
+  expectTimingBudget,
   evaluateSearchAllArtistsLocalBenchmark,
   expectPostgresLibraryBrowseTelemetry,
   measureActionTime,
+  performanceTimingBudget,
   samplePeakMemory,
   logBenchmarkTimingResults,
 } from '../helpers/index.js';
@@ -34,6 +36,13 @@ const SEARCH_CASE_ID = 'FTC-SEARCH-NAV-003A';
 const LONG_REAL_APP_ROOT_WARM_TIMEOUT_MS = 240000;
 const LONG_REAL_APP_TEST_TIMEOUT_MS = 420000;
 const SEARCH_QUERY = 'Ария';
+const ALBUM_DETAILS_BUDGETS = Object.freeze(Object.fromEntries([
+  'albumDetailsShellMs',
+  'albumDetailsOpenMs',
+  'albumDetailsCoverMs',
+].map((key) => [key, Object.freeze(
+  performanceTimingBudget(`all-artists-local-managed-chrome.${key}`),
+)])));
 const ARIA_VITALIY_DIRECT_URL = `/?surface=albums&artist=${encodeURIComponent('Ария')}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&related_artist=${encodeURIComponent('Виталий Дубинин')}`;
 const SEARCH_EXPECTED = Object.freeze({
   primary: 'Ария',
@@ -99,6 +108,14 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
         startup.fullVisibleAllArtistsCount,
         'Expected the All artists badge to match the fully hydrated sidebar count on startup.',
       ).toBe(startup.fullSidebarCount);
+      expect(
+        startup.fullSidebarCount,
+        'Expected Artist Tree hydration to continue beyond the initial 50-artist boundary.',
+      ).toBeGreaterThan(startup.continuationBoundaryIndex);
+      expect(
+        startup.firstContinuationArtist,
+        'Expected a reachable Artist Tree artist immediately beyond the initial 50-artist boundary.',
+      ).not.toBe('');
       await allArtistsLocalReport.recordTimingCheckpoint({
         key: 'startup-first-albums',
         label: 'Initial All Artists first albums ready',
@@ -153,52 +170,45 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
     });
 
     let selectedArtistRequestLifecycle = null;
-    const { selectedArtistSelectionMs, selectedArtistGalleryMs } = await stepLogger.step('Measure the selected artist tree selection and gallery readiness', async () => {
-      let selectionMs = 0;
-      let galleryMs = 0;
+  const { selectedArtistSelectionMs, selectedArtistGalleryMs, selectedArtistCoversMs } = await stepLogger.step('Measure the selected artist tree selection and gallery readiness', async () => {
+    let selectedArtistSelectionMs = 0;
+    let selectedArtistGalleryMs = 0;
+    let selectedArtistCoversMs = 0;
       const lifecycle = await runWithSelectedArtistRequestLifecycle(
         page,
         galleryActions,
         navigationPanelActions,
         selectedArtistName,
         async () => {
-          selectionMs = await measureActionTime(
-            async () => {
-              await selectSidebarArtistAtAndVerify(
-                navigationPanelActions,
-                selectedArtistIndex,
-                selectedArtistName,
-              );
-            },
-            async () => {
-              await navigationPanelActions.waitForSidebarSelection(selectedArtistName, { timeout: 60000 });
-            },
+        const selectedArtistStartedAt = performance.now();
+        await selectSidebarArtistAtAndVerify(
+          navigationPanelActions,
+          selectedArtistIndex,
+          selectedArtistName,
           );
-
-          galleryMs = await measureActionTime(
-            async () => {},
-            async () => {
-              await galleryActions.waitForSelectedArtistGallery(selectedArtistName, { timeout: 60000 });
-              await galleryActions.waitForVisibleGalleryCoversLoaded({
-                minimumCount: 1,
-                timeout: 60000,
-              });
-            },
-          );
+        await navigationPanelActions.waitForSidebarSelection(selectedArtistName, { timeout: 60000 });
+        selectedArtistSelectionMs = performance.now() - selectedArtistStartedAt;
+        await galleryActions.waitForSelectedArtistGallery(selectedArtistName, { timeout: 60000 });
+        selectedArtistGalleryMs = performance.now() - selectedArtistStartedAt;
+        await galleryActions.waitForVisibleGalleryCoversLoaded({
+          minimumCount: 1,
+          timeout: 60000,
+        });
+        selectedArtistCoversMs = performance.now() - selectedArtistStartedAt;
         },
       );
       selectedArtistRequestLifecycle = lifecycle;
       testArtifacts.queueJsonAttachment('selected-artist-request-lifecycle', lifecycle);
       allArtistsLocalReport.recordTextCheckpoint({
         key: 'selected-artist-request-lifecycle',
-        label: `Artist[10] "${selectedArtistName}" request lifecycle`,
+      label: `Artist[${selectedArtistIndex + 1}] "${selectedArtistName}" request lifecycle`,
         valueText: summarizeSelectedArtistRequestLifecycle(lifecycle),
         details: lifecycle,
       });
       await allArtistsLocalReport.recordTimingCheckpoint({
         key: 'selected-artist-selection-visible',
-        label: `Artist[10] "${selectedArtistName}" tree selection visible`,
-        timingMs: selectionMs,
+      label: `Artist[${selectedArtistIndex + 1}] "${selectedArtistName}" tree selection visible`,
+      timingMs: selectedArtistSelectionMs,
         details: {
           phase: 'selected_artist',
           selectedArtistIndex: selectedArtistIndex + 1,
@@ -207,18 +217,29 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       });
       await allArtistsLocalReport.recordTimingCheckpoint({
         key: 'selected-artist-gallery-ready',
-        label: `Artist[10] "${selectedArtistName}" gallery ready`,
-        timingMs: galleryMs,
+      label: `Artist[${selectedArtistIndex + 1}] "${selectedArtistName}" gallery ready`,
+      timingMs: selectedArtistGalleryMs,
         details: {
           phase: 'selected_artist',
           selectedArtistIndex: selectedArtistIndex + 1,
           selectedArtistName,
         },
       });
-      return {
-        selectedArtistSelectionMs: selectionMs,
-        selectedArtistGalleryMs: galleryMs,
-      };
+    await allArtistsLocalReport.recordTimingCheckpoint({
+      key: 'selected-artist-visible-covers',
+      label: `Artist[${selectedArtistIndex + 1}] "${selectedArtistName}" visible covers decoded`,
+      timingMs: selectedArtistCoversMs,
+      details: {
+        phase: 'selected_artist',
+        selectedArtistIndex: selectedArtistIndex + 1,
+        selectedArtistName,
+      },
+    });
+    return {
+      selectedArtistSelectionMs,
+      selectedArtistGalleryMs,
+      selectedArtistCoversMs,
+    };
     });
     const selectedArtistBrowseTelemetry = await readBrowseTelemetry(page);
     await stepLogger.step('Assert the selected-artist round-trip stayed on the Postgres browse seam', async () => {
@@ -349,19 +370,21 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
     stepLogger.note(`Using visible album button index ${stableVisibleIndex} for the modal round-trip`, 2);
 
     const {
+      albumDetailsShellMs,
       albumDetailsOpenMs,
+      albumDetailsCoverMs,
       albumDetailsCloseMs,
       trackModalSummary,
       finalMemory,
     } = await stepLogger.step('Open one visible album details modal, verify it, and close it cleanly', async () => {
-      const openMs = await measureActionTime(
-        async () => {
-          await galleryActions.clickAlbumDetailsAt(stableVisibleIndex);
-        },
-        async () => {
-          await trackModalActions.waitForReady({ timeout: 60000 });
-        },
-      );
+      const openedAt = performance.now();
+      await galleryActions.clickAlbumDetailsAt(stableVisibleIndex);
+      await expect(trackModalActions.trackModal.dialog).toBeVisible({ timeout: 60000 });
+      const shellMs = performance.now() - openedAt;
+      await trackModalActions.waitForReady({ timeout: 60000 });
+      const openMs = performance.now() - openedAt;
+      await trackModalActions.waitForDetailedCoverImageCheckpoint({ timeout: 60000 });
+      const coverMs = performance.now() - openedAt;
       await allArtistsLocalReport.recordTimingCheckpoint({
         key: 'album-details-open',
         label: 'Album details opened',
@@ -370,6 +393,18 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
           phase: 'album_details',
           stableVisibleIndex,
         },
+      });
+      await allArtistsLocalReport.recordTimingCheckpoint({
+        key: 'album-details-shell',
+        label: 'Album details shell visible',
+        timingMs: shellMs,
+        details: { phase: 'album_details', stableVisibleIndex },
+      });
+      await allArtistsLocalReport.recordTimingCheckpoint({
+        key: 'album-details-cover',
+        label: 'Album details decoded cover visible',
+        timingMs: coverMs,
+        details: { phase: 'album_details', stableVisibleIndex },
       });
 
       const summary = await trackModalActions.readSummary();
@@ -409,12 +444,26 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       expect(summary.trackRows, 'Expected the album details modal tracklist to render.').toBeGreaterThan(0);
 
       return {
+        albumDetailsShellMs: shellMs,
         albumDetailsOpenMs: openMs,
+        albumDetailsCoverMs: coverMs,
         albumDetailsCloseMs: closeMs,
         trackModalSummary: summary,
         finalMemory: memory,
       };
     });
+
+    for (const [key, label, timingMs] of [
+      ['albumDetailsShellMs', 'Album details shell visible', albumDetailsShellMs],
+      ['albumDetailsOpenMs', 'Album details content ready', albumDetailsOpenMs],
+      ['albumDetailsCoverMs', 'Album details decoded cover visible', albumDetailsCoverMs],
+    ]) {
+      allArtistsLocalReport.recordTerminalTimingOutcome(
+        ALBUM_DETAILS_BUDGETS[key].metricId,
+        key,
+        expectTimingBudget(expect.soft, timingMs, ALBUM_DETAILS_BUDGETS[key], label),
+      );
+    }
 
     const metricsPayload = {
       startupSidebarHydration,
@@ -424,6 +473,7 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       selectedArtistName,
       selectedArtistSelectionMs,
       selectedArtistGalleryMs,
+      selectedArtistCoversMs,
       allArtistsSelectionMs,
       allArtistsFirstAlbumsMs,
       allArtistsCoversMs,
@@ -433,7 +483,9 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       jumpScrollMemory,
       jumpScrollCoversReadyMs,
       stableVisibleIndex,
+      albumDetailsShellMs,
       albumDetailsOpenMs,
+      albumDetailsCoverMs,
       albumDetailsCloseMs,
       trackModalSummary,
       finalMemory,
@@ -650,11 +702,11 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
           await searchToolbarActions.search(SEARCH_QUERY);
         },
         async () => {
-          await searchToolbarActions.waitForQuery(SEARCH_QUERY, { timeout: 60000 });
           await navigationPanelActions.waitForSidebarSelection(SEARCH_EXPECTED.primary, { timeout: 60000 });
         },
       )
     ));
+    await searchToolbarActions.waitForQuery(SEARCH_QUERY, { timeout: 60000 });
     await searchAllArtistsLocalReport.recordTimingCheckpoint({
       key: 'search-auto-selection',
       label: 'Search auto-selected Ария in the filtered tree',

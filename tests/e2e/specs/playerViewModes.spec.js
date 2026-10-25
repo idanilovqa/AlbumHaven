@@ -50,6 +50,10 @@ test('FTC-ARTIST-TREE-001 folding reflows the virtual gallery without losing bro
     await expect.poll(async () => (await galleryActions.galleryPage.readArtistTreeReflowCheckpoint()).columns)
       .toBe(before.columns + 1);
     const after = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint(before);
+    await testInfo.attach('artist-tree-gain-reflow.json', {
+      body: JSON.stringify({ before, after }, null, 2),
+      contentType: 'application/json',
+    });
     expect(after.anchorKey).toBe(before.anchorKey);
     expect(after.anchorCardKey).toBe(before.anchorCardKey);
     expect(after.anchorTrigger).toBe(before.anchorTrigger);

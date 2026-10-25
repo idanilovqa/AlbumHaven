@@ -10,6 +10,17 @@ from music_app.services import lastfm
 from music_app.services.lastfm import LastfmError, LastfmSession
 
 
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_missing_server_credentials_are_safe_to_retry_after_configuration_repair(
+    allow_lastfm_loopback_transport,
+):
+    with pytest.raises(LastfmError) as caught:
+        lastfm._post_lastfm({}, "track.scrobble", {})
+
+    assert caught.value.retryable is True
+    assert caught.value.error_kind == "configuration_error"
+
+
 @pytest.fixture
 def fixture_owned_lastfm_provider():
     responses: list[tuple[int, bytes]] = []

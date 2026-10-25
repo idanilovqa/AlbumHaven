@@ -210,13 +210,25 @@ async def _resolve_album_payload_context(
     normalized_album = _album_with_context_tracks(album)
     if not _album_track_paths(normalized_album):
         album_id = _album_id(normalized_album)
-        if album_id is not None:
-            refreshed_album = await run_in_threadpool(
-                PostgresLibraryBrowseRepository(config).build_album_detail_payload_by_id,
-                album_id,
+        album_key = str(
+            normalized_album.get("_persisted_album_key")
+            or normalized_album.get("key")
+            or normalized_album.get("album_ref")
+            or ""
+        ).strip() or None
+        if album_id is not None or album_key is not None:
+            track_context = await run_in_threadpool(
+                AlbumCoverCandidateSnapshotRepository(config).resolve_album_track_context,
+                album_id=album_id,
+                album_key=album_key,
             )
-            if isinstance(refreshed_album, Mapping):
-                normalized_album = _album_with_context_tracks(refreshed_album)
+            if isinstance(track_context, Mapping):
+                normalized_album["id"] = track_context.get("album_id")
+                normalized_album["tracks"] = [
+                    {"path": path}
+                    for path in list(track_context.get("track_paths") or [])
+                    if str(path or "").strip()
+                ]
     return normalized_album, resolve_album_context(config, normalized_album)
 
 

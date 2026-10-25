@@ -833,9 +833,8 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     track_path.write_bytes(b"track")
     hydrated_album_ids = []
 
-    def build_album_detail(_self, album_id):
-        hydrated_album_ids.append(album_id)
-        return {**_album_payload(track_path), "id": album_id}
+    def build_album_detail(*_args, **_kwargs):
+        raise AssertionError("Cover Lookup must not build the global album-detail projection")
 
     monkeypatch.setattr(
         PostgresLibraryBrowseRepository,
@@ -852,6 +851,15 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     class FakeRepository:
         def __init__(self, _config):
             pass
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            hydrated_album_ids.append(album_id)
+            assert album_key is None or album_key == "test artist::test album"
+            return {
+                "album_id": 41,
+                "album_key": "test artist::test album",
+                "track_paths": [str(track_path)],
+            }
 
         def resolve_album_id_for_track_paths(self, *, track_paths):
             assert track_paths == {str(track_path)}
@@ -880,8 +888,26 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
 
     assert status == 200
     assert _decode_json(body)["album_root"] == str(track_path.parent)
-    assert hydrated_album_ids == [41]
-    assert snapshot_reads == [41]
+
+    key_status, _key_headers, key_body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={
+            "album": {
+                "key": "test artist::test album",
+                "name": "Test Album",
+                "album_artist": "Test Artist",
+                "year": 2001,
+                "edition": "",
+            }
+        },
+    )
+
+    assert key_status == 200
+    assert _decode_json(key_body)["album_root"] == str(track_path.parent)
+    assert hydrated_album_ids == [41, None]
+    assert snapshot_reads == [41, 41]
 
 
 def test_asgi_cover_lookup_save_remote_rehydrates_compact_notification_album(
@@ -898,13 +924,21 @@ def test_asgi_cover_lookup_save_remote_rehydrates_compact_notification_album(
     hydrated_album_ids: list[int] = []
     queued_calls: list[tuple[object, ...]] = []
 
-    def build_album_detail(_self, album_id):
-        hydrated_album_ids.append(album_id)
-        return {**_album_payload(track_path), "id": album_id}
+    def build_album_detail(*_args, **_kwargs):
+        raise AssertionError("Cover Lookup must not build the global album-detail projection")
 
     class FakeSnapshotRepository:
         def __init__(self, _config):
             pass
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            hydrated_album_ids.append(album_id)
+            assert album_key is None
+            return {
+                "album_id": 41,
+                "album_key": "test artist::test album",
+                "track_paths": [str(track_path)],
+            }
 
         def resolve_album_id_for_track_paths(self, *, track_paths):
             assert track_paths == {str(track_path)}

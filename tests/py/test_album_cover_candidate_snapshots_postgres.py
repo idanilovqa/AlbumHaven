@@ -188,6 +188,52 @@ def test_resolve_album_id_for_track_paths_allows_stale_copy_when_active_copy_rem
     assert "bool_or(resolved_tracks.scan_cache_stale is false)" in normalized_sql
 
 
+def test_resolve_album_track_context_uses_exact_scoped_album_identity():
+    connection = FakeConnection(
+        [
+            FakeCursor(
+                row={
+                    "album_id": 41,
+                    "album_key": "artist::album",
+                    "track_paths": ["C:/Music/A/one.flac", "C:/Music/A/two.flac"],
+                }
+            )
+        ]
+    )
+
+    context = repository_for(connection).resolve_album_track_context(
+        album_id=41,
+        album_key="artist::album",
+    )
+
+    assert context == {
+        "album_id": 41,
+        "album_key": "artist::album",
+        "track_paths": ["C:/Music/A/one.flac", "C:/Music/A/two.flac"],
+    }
+    sql, params = connection.calls[0]
+    normalized_sql = " ".join(sql.lower().split())
+    assert params == {"album_id": 41, "album_key": "artist::album"}
+    assert "from app.bootstrap_owners" in normalized_sql
+    assert "limit 1 ), selected_album as" in normalized_sql
+    assert "albums.id = %(album_id)s::bigint" in normalized_sql
+    assert "albums.album_key = %(album_key)s::text" in normalized_sql
+    assert "having count(*) = 1" in normalized_sql
+    assert "files.scan_cache_stale is false" in normalized_sql
+
+
+def test_resolve_album_track_context_fails_closed_without_active_tracks():
+    connection = FakeConnection([FakeCursor(row=None)])
+
+    assert (
+        repository_for(connection).resolve_album_track_context(
+            album_id=None,
+            album_key="missing::album",
+        )
+        is None
+    )
+
+
 def test_snapshot_read_qualifies_every_returned_column():
     connection = FakeConnection([FakeCursor(row=snapshot_row())])
 

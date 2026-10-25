@@ -48,6 +48,21 @@ def _adapter(connection):
     )
 
 
+def test_notification_rows_keep_the_authoritative_album_key():
+    row = cover_lookup_tasks_postgres._task_row(
+        {
+            "id": "lookup-task",
+            "artist": "Artist",
+            "album": "Album",
+            "year": 2026,
+            "album_payload": {"key": "artist::album::year::2026"},
+        },
+        source_index=0,
+    )
+
+    assert row["album_key"] == "artist::album::year::2026"
+
+
 def test_adapter_uses_prewarmed_default_pool_when_connector_not_injected(monkeypatch):
     database_url = "postgresql://example/test"
     connection = _Connection(
@@ -277,3 +292,64 @@ def test_notification_summary_page_items_omit_tracks_and_local_paths():
     assert "'album_id', coalesce(" in page_sql
     assert "album_payload' -> 'id'" in page_sql
     assert "album_payload' -> 'album_id'" in page_sql
+
+
+def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_candidate_preview():
+    row = _row("angels", "2026-10-17T18:00:00+00:00")
+    row["task_summary"].update(
+        {
+            "current_user_cover_path": "C:/Music/Black Obelisk/Angels/selected.jpg",
+            "current_user_cover_revision": "current-user-revision",
+            "best_candidate_preview_url": "https://images.example/angels-best.jpg",
+        }
+    )
+    connection = _Connection(
+        count_rows=[{"total_count": 1, "active_count": 0, "finished_count": 1}],
+        page_rows=[row],
+    )
+
+    page = _adapter(connection).load_notification_summary_page(
+        limit=50, cursor=None, active_only=False
+    )
+
+    item = page["items"][0]
+    assert "current_user_cover_path" not in item
+    assert "current_user_cover_revision" not in item
+    assert item["current_user_cover_preview_url"] == (
+        "/cover?path=C%3A/Music/Black%20Obelisk/Angels/selected.jpg"
+        "&size=480&v=current-user-revision"
+    )
+    assert item["best_candidate_preview_url"] == (
+        "https://images.example/angels-best.jpg"
+    )
+    page_sql = connection.operations[-1][0]
+    assert "left join library.local_albums as current_album_by_id" in page_sql
+    assert "current_album_by_id.id = identity.album_id" in page_sql
+    assert "identity.album_key is null or current_album_by_id.album_key = identity.album_key" in page_sql
+    assert "left join library.local_albums as current_album_by_key" in page_sql
+    assert "current_album_by_key.album_key = identity.album_key" in page_sql
+    assert "identity.album_id is null" in page_sql
+    assert "current_album.metadata ->> 'cover_selection_origin' = 'user'" in page_sql
+    assert "as identity(album_id, album_key)" in page_sql
+    assert "album_payload' ->> 'key'" in page_sql
+    assert "from library.local_albums as album" not in page_sql
+    assert "with ordinality as candidates(candidate, ordinal)" in page_sql
+
+
+def test_unpaged_notification_summaries_do_not_expose_current_user_cover_paths():
+    row = _row("revelations", "2026-10-17T18:00:00+00:00")
+    row["task_summary"].update(
+        {
+            "current_user_cover_path": "C:/Music/Susanne/Revelations/selected.jpg",
+            "current_user_cover_revision": "revelations-user-revision",
+        }
+    )
+    connection = _Connection(page_rows=[row])
+
+    items = _adapter(connection).load_notification_summaries()
+
+    assert "current_user_cover_path" not in items[0]
+    assert "current_user_cover_revision" not in items[0]
+    assert items[0]["current_user_cover_preview_url"].endswith(
+        "&v=revelations-user-revision"
+    )

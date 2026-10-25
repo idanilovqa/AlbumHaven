@@ -1500,9 +1500,32 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const albumTitle = String(task?.album || '').trim() || 'Unknown album';
     const albumByline = [task?.artist || '', task?.year || ''].filter(Boolean).join(' · ');
     const openLabel = `Open Cover Look Up: ${albumTitle}${albumByline ? ` — ${albumByline}` : ''}`;
-    const coverUrl = typeof buildAlbumDisplayCoverUrl === 'function'
-      ? String(buildAlbumDisplayCoverUrl(task?.album_payload || {}) || '').trim()
+    const albumPayload = task?.album_payload || {};
+    const payloadUserCoverUrl = String(albumPayload?.cover_selection_origin || '').trim().toLowerCase() === 'user'
+      && typeof buildAlbumDisplayCoverUrl === 'function'
+      ? String(buildAlbumDisplayCoverUrl(albumPayload) || '').trim()
       : '';
+    const currentUserCoverUrl = String(task?.current_user_cover_preview_url || '').trim()
+      || payloadUserCoverUrl;
+    const possibleMatches = Array.isArray(task?.possible_matches) ? task.possible_matches : [];
+    const bestCandidateId = String(task?.best_candidate_id || '').trim();
+    const bestCandidate = possibleMatches.find((candidate) => (
+      String(candidate?.id || '').trim() === bestCandidateId
+      && String(candidate?.art_kind || 'cover').trim() === 'cover'
+    )) || possibleMatches.find((candidate) => (
+      String(candidate?.art_kind || 'cover').trim() === 'cover'
+    ));
+    const bestCandidatePreviewUrl = String(
+      task?.best_candidate_preview_url
+      || bestCandidate?.thumbnail_url
+      || bestCandidate?.preview_url
+      || bestCandidate?.url
+      || '',
+    ).trim();
+    const coverUrl = currentUserCoverUrl || buildRemoteCoverLookupImageUrl(
+      bestCandidatePreviewUrl,
+      bestCandidateId || bestCandidate?.id || '',
+    );
     const coverMarkup = coverUrl
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';

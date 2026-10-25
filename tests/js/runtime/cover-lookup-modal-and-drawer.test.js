@@ -81,7 +81,8 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
     buildAlbumDisplayCoverUrl: () => '/images/notification-cover.jpg',
   });
   context.state.coverLookup.tasks = [{
-    id: 'thumbnail-task', status: 'completed', artist: 'Artist', album: 'Album', album_payload: {},
+    id: 'thumbnail-task', status: 'completed', artist: 'Artist', album: 'Album',
+    current_user_cover_preview_url: '/images/notification-cover.jpg',
   }];
 
   context.renderCoverLookupDrawer();
@@ -90,6 +91,49 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
     bodyElement.innerHTML,
     /class="cover-lookup-task-cover"[^>]*loading="lazy"[^>]*decoding="async"/,
   );
+});
+
+require('node:test')('notification thumbnails prefer the current user cover over stale lookup artwork', () => {
+  const { context, bodyElement } = createDrawerHarness({
+    buildAlbumDisplayCoverUrl: () => '/images/stale-lookup-cover.jpg',
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'angels-task',
+    status: 'completed',
+    artist: 'Чёрный Обелиск',
+    album: 'Ангелы',
+    album_payload: { cover_preview_url: '/images/stale-lookup-cover.jpg' },
+    current_user_cover_preview_url: '/cover?album=angels&v=user-selection',
+    best_candidate_preview_url: 'https://images.example/angels-candidate.jpg',
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, /src="\/cover\?album=angels&v=user-selection"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /stale-lookup-cover|angels-candidate/);
+});
+
+require('node:test')('notification thumbnails show the best candidate when no user cover exists', () => {
+  const { context, bodyElement } = createDrawerHarness({
+    buildAlbumDisplayCoverUrl: () => '/images/automatic-or-stale-cover.jpg',
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'revelations-task',
+    status: 'completed',
+    artist: 'Susanne Sundfør',
+    album: 'Revelations of Divine Love',
+    album_payload: { cover_preview_url: '/images/automatic-or-stale-cover.jpg' },
+    best_candidate_id: 'revelations-best',
+    best_candidate_preview_url: 'https://images.example/revelations-best.jpg',
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(
+    bodyElement.innerHTML,
+    /src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages.example%2Frevelations-best.jpg&key=revelations-best"/,
+  );
+  assert.doesNotMatch(bodyElement.innerHTML, /automatic-or-stale-cover|is-placeholder/);
 });
 
 require('node:test')('cover updates preserve unrelated pathless notification artwork', () => {

@@ -65,7 +65,10 @@ class CoverLookupTasksPostgresAdapter:
             rows = list(
                 connection.execute(_load_notification_summaries_sql()).fetchall()
             )
-        summaries = [_notification_summary_from_row(row) for row in rows]
+        summaries = [
+            _compact_notification_summary(_notification_summary_from_row(row))
+            for row in rows
+        ]
         return [
             summary
             for summary in summaries
@@ -359,6 +362,17 @@ def _decode_notification_cursor(cursor: str) -> tuple[str, str]:
 
 def _compact_notification_summary(summary: dict[str, object]) -> dict[str, object]:
     compact = dict(summary)
+    current_user_cover_path = compact.pop("current_user_cover_path", None)
+    current_user_cover_revision = compact.pop("current_user_cover_revision", None)
+    if current_user_cover_path:
+        from music_app.services.startup_bootstrap import build_startup_cover_url
+
+        compact["current_user_cover_preview_url"] = build_startup_cover_url(
+            {
+                "cover_path": current_user_cover_path,
+                "cover_revision": current_user_cover_revision,
+            }
+        )
     for key in (
         "track_paths",
         "selected_cover_private_path",
@@ -427,6 +441,9 @@ def _provider_payload(payload: dict[str, object]) -> dict[str, object]:
 def _album_key(payload: dict[str, object]) -> str | None:
     album_payload = payload.get("album_payload")
     album_payload_dict = album_payload if isinstance(album_payload, dict) else {}
+    authoritative_key = _text(album_payload_dict.get("key"))
+    if authoritative_key:
+        return authoritative_key
     artist = _text(
         payload.get("artist")
         or payload.get("album_artist")
@@ -627,7 +644,7 @@ def _load_notifications_sql() -> str:
 def _load_notification_summaries_sql() -> str:
     return (
         _bootstrap_context_sql()
-        + """
+        + f"""
         select jsonb_strip_nulls(
             jsonb_build_object(
                 'type', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'type',
@@ -675,6 +692,36 @@ def _load_notification_summaries_sql() -> str:
                     ) as candidate
                     where coalesce(candidate ->> 'art_kind', 'cover') = 'cover'
                 ),
+                'current_user_cover_path', case
+                    when current_album.metadata ->> 'cover_selection_origin' = 'user'
+                    then current_album.cover_path
+                    else null
+                end,
+                'current_user_cover_revision', case
+                    when current_album.metadata ->> 'cover_selection_origin' = 'user'
+                    then current_album.metadata ->> 'cover_revision'
+                    else null
+                end,
+                'best_candidate_preview_url', (
+                    select coalesce(
+                        nullif(candidate ->> 'thumbnail_url', ''),
+                        nullif(candidate ->> 'preview_url', ''),
+                        nullif(candidate ->> 'url', '')
+                    )
+                    from jsonb_array_elements(
+                        coalesce(
+                            ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'possible_matches',
+                            ops.cover_lookup_tasks.provider_payload -> 'possible_matches',
+                            '[]'::jsonb
+                        )
+                    ) with ordinality as candidates(candidate, ordinal)
+                    where coalesce(candidate ->> 'art_kind', 'cover') = 'cover'
+                    order by case
+                        when candidate ->> 'id' = ops.cover_lookup_tasks.metadata -> 'source_payload' ->> 'best_candidate_id'
+                        then 0 else 1
+                    end, ordinal
+                    limit 1
+                ),
                 'album_payload', case
                     when jsonb_typeof(ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload') = 'object'
                     then jsonb_strip_nulls(jsonb_build_object(
@@ -715,6 +762,7 @@ def _load_notification_summaries_sql() -> str:
         from ops.cover_lookup_tasks
         join bootstrap_context
           on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
+        {_current_notification_album_joins_sql()}
         where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
         order by
             coalesce(ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
@@ -807,6 +855,36 @@ def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) 
                 ) as candidate
                 where coalesce(candidate ->> 'art_kind', 'cover') = 'cover'
               ),
+              'current_user_cover_path', case
+                when current_album.metadata ->> 'cover_selection_origin' = 'user'
+                then current_album.cover_path
+                else null
+              end,
+              'current_user_cover_revision', case
+                when current_album.metadata ->> 'cover_selection_origin' = 'user'
+                then current_album.metadata ->> 'cover_revision'
+                else null
+              end,
+              'best_candidate_preview_url', (
+                select coalesce(
+                  nullif(candidate ->> 'thumbnail_url', ''),
+                  nullif(candidate ->> 'preview_url', ''),
+                  nullif(candidate ->> 'url', '')
+                )
+                from jsonb_array_elements(
+                  coalesce(
+                    ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'possible_matches',
+                    ops.cover_lookup_tasks.provider_payload -> 'possible_matches',
+                    '[]'::jsonb
+                  )
+                ) with ordinality as candidates(candidate, ordinal)
+                where coalesce(candidate ->> 'art_kind', 'cover') = 'cover'
+                order by case
+                  when candidate ->> 'id' = ops.cover_lookup_tasks.metadata -> 'source_payload' ->> 'best_candidate_id'
+                  then 0 else 1
+                end, ordinal
+                limit 1
+              ),
               'album_payload', case
                 when jsonb_typeof(
                   ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload'
@@ -844,6 +922,7 @@ def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) 
         from ops.cover_lookup_tasks
         join bootstrap_context
           on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
+        {_current_notification_album_joins_sql()}
         where {where_sql}
         order by
           coalesce(
@@ -854,6 +933,43 @@ def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) 
         limit %s;
         """
     )
+
+
+def _current_notification_album_joins_sql() -> str:
+    return """
+        cross join lateral (
+          select
+            case
+              when coalesce(
+                ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'album_id',
+                ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'id',
+                ''
+              ) ~ '^[1-9][0-9]*$'
+              then coalesce(
+                ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'album_id',
+                ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'id'
+              )::bigint
+              else null
+            end,
+            nullif(
+              ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'key',
+              ''
+            )
+        ) as identity(album_id, album_key)
+        left join library.local_albums as current_album_by_id
+          on current_album_by_id.library_id = ops.cover_lookup_tasks.library_id
+         and current_album_by_id.id = identity.album_id
+         and (identity.album_key is null or current_album_by_id.album_key = identity.album_key)
+        left join library.local_albums as current_album_by_key
+          on identity.album_id is null
+         and current_album_by_key.library_id = ops.cover_lookup_tasks.library_id
+         and current_album_by_key.album_key = identity.album_key
+        cross join lateral (
+          select
+            coalesce(current_album_by_id.cover_path, current_album_by_key.cover_path),
+            coalesce(current_album_by_id.metadata, current_album_by_key.metadata)
+        ) as current_album(cover_path, metadata)
+    """
 
 
 def _delete_removed_notifications_sql() -> str:

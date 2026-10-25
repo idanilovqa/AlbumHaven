@@ -304,6 +304,8 @@ def build_track_row_payload(
         "track_number": safe_int(_field(track, "track_number", None)),
         "disc_number": safe_int(_field(track, "disc_number", None)),
         "disc_number_raw": _field(track, "disc_number_raw", None),
+        "total_discs": safe_int(_field(track, "total_discs", None)),
+        "disc_subtitle": _field(track, "disc_subtitle", None),
         "title": display_title,
         "secondary_artist": secondary_artist,
         "title_display": build_track_title_display_payload(),

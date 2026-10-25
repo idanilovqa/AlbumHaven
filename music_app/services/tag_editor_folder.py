@@ -18,6 +18,8 @@ _EDITABLE_PHYSICAL_FIELDS = {
     "year",
     "track_number",
     "disc_number",
+    "total_discs",
+    "disc_subtitle",
     "edition",
     "album_rating",
 }

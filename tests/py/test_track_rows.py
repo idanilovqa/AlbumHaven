@@ -20,6 +20,8 @@ def test_build_track_row_payload_returns_server_owned_album_detail_shape():
         track_number=1,
         disc_number=1,
         disc_number_raw="1",
+        total_discs=2,
+        disc_subtitle="Main Programme",
         artist="Guest Singer",
         album_artist="Artist One",
         duration_seconds=245,
@@ -31,6 +33,8 @@ def test_build_track_row_payload_returns_server_owned_album_detail_shape():
         "track_number": 1,
         "disc_number": 1,
         "disc_number_raw": "1",
+        "total_discs": 2,
+        "disc_subtitle": "Main Programme",
         "title": "Track One",
         "secondary_artist": "Guest Singer",
         "title_display": {
@@ -808,6 +812,8 @@ def test_build_playlist_track_row_payload_wraps_shared_track_row_contract():
         "track_number": 3,
         "disc_number": 1,
         "disc_number_raw": "1",
+        "total_discs": None,
+        "disc_subtitle": None,
         "title": "Track Three",
         "secondary_artist": "Guest Singer",
         "title_display": {
@@ -897,6 +903,8 @@ def test_build_playlist_track_rows_supports_object_backed_entries():
             "track_number": 7,
             "disc_number": 2,
             "disc_number_raw": "2",
+            "total_discs": None,
+            "disc_subtitle": None,
             "title": "Track Seven",
             "secondary_artist": None,
             "title_display": {

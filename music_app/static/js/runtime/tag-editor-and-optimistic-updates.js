@@ -2175,7 +2175,10 @@ function getTrackDiscLabel(track) {
 }
 
 function isBonusDiscTrack(track) {
-  const rawDisc = String((track && track.disc_number_raw) || '').trim();
+  const rawDisc = [track?.disc_number_raw, track?.disc_subtitle]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ');
   if (!rawDisc) return false;
   return /\b(bonus|extra|extras|instrumental|instrumentals|demo|demos|outtake|outtakes|rarity|rarities|interview|alternate version|alternate take)\b/i.test(rawDisc);
 }
@@ -2218,11 +2221,13 @@ function groupAlbumTracks(tracks) {
         key,
         discNumber: effectiveDisc,
         discLabel: key === 'single' ? '' : key,
+        discSubtitle: '',
         isBonus: false,
         tracks: [],
       });
     }
     const group = groups.get(key);
+    group.discSubtitle ||= String(track?.disc_subtitle || '').trim();
     group.isBonus = group.isBonus || isBonusDiscTrack(track);
     group.tracks.push(track);
   });
@@ -2248,6 +2253,7 @@ function groupAlbumTracks(tracks) {
     groups: orderedKeys.map((key) => ({
       discNumber: groups.get(key).discNumber,
       discLabel: groups.get(key).discLabel,
+      discSubtitle: groups.get(key).discSubtitle,
       isBonus: Boolean(groups.get(key).isBonus),
       tracks: groups.get(key).tracks,
     })),
@@ -2276,10 +2282,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discLabel = `CD ${group.discNumber}`;
     }
     discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
-    if (group.isBonus) {
-      discLabel = group.discSubtitle || (discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD');
-    } else if (group.discSubtitle) {
-      discLabel = `${discLabel} • ${group.discSubtitle}`;
+    if (group.discSubtitle) {
+      discLabel = discLabel ? `${discLabel} • ${group.discSubtitle}` : group.discSubtitle;
+    } else if (group.isBonus) {
+      discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }
     const componentTracks = group.tracks.map((track, index) => {
       const src = `/track?path=${encodeURIComponent(track.path)}`;

@@ -450,6 +450,58 @@ def test_handle_edit_tags_request_does_not_require_flask_context(config):
     assert queued_payloads and queued_payloads[0]["config"] is config
 
 
+def test_handle_edit_tags_request_writes_separate_disc_total_and_title(config):
+    track_path = str((config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve())
+    requested = {"disc_number": "2", "total_discs": "2", "disc_subtitle": "Bonus"}
+    media_writes = []
+
+    result = handle_edit_tags_request(
+        album={
+            "name": "Album",
+            "album_artist": "Artist",
+            "tracks": [{"path": track_path}],
+        },
+        updates={track_path: requested},
+        requested_track_paths={track_path},
+        config=config,
+        logger=_logger_stub(),
+        get_state=lambda: {
+            "file_cache": {
+                track_path: {
+                    "path": track_path,
+                    "album": "Album",
+                    "album_artist": "Artist",
+                    "disc_number": 1,
+                    "total_discs": 1,
+                    "disc_subtitle": "",
+                }
+            },
+            "separate_release_keys": set(),
+        },
+        create_save_task=lambda _kind: "task-edit-tags",
+        queue_finalize_save_task=lambda **_kwargs: None,
+        apply_repairs_worker=lambda raw_path, repairs: (
+            media_writes.append((raw_path, dict(repairs))) or (raw_path, True, list(repairs))
+        ),
+        update_cache_entry_after_repairs=lambda path, entry, repairs: {
+            **entry,
+            **repairs,
+            "path": str(path),
+        },
+        build_affected_album_dicts=lambda *_args, **_kwargs: [],
+        load_separate_release_keys=lambda _config: set(),
+        normalize_exception_value=lambda value: str(value or "").strip(),
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        structural_edit_fields=set(),
+        edit_write_workers=1,
+        save_track_exception_override=lambda *_args: None,
+    )
+
+    assert result["ok"] is True
+    assert media_writes == [(track_path, requested)]
+
+
 def test_mixed_media_and_exception_failure_compensates_media_before_returning(
     config,
 ):

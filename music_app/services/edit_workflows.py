@@ -49,6 +49,8 @@ _ALLOWED_TAG_EDIT_FIELDS = {
     "year",
     "track_number",
     "disc_number",
+    "total_discs",
+    "disc_subtitle",
     "edition",
     "album_rating",
     "exception_type",

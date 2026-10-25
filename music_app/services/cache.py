@@ -36,7 +36,7 @@ def _cache_rebase_comparison_value(key: str, value: object) -> object:
         return normalize_exception_value(value)
     if key == "custom_collection_name" and value is not _MISSING_CACHE_FIELD:
         return str(value or "").strip()
-    if key in {"year", "track_number", "disc_number"} and value is not _MISSING_CACHE_FIELD:
+    if key in {"year", "track_number", "disc_number", "total_discs"} and value is not _MISSING_CACHE_FIELD:
         return str(value or "").strip()
     return value
 
@@ -56,7 +56,8 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "path": str(entry["path"]), "mtime": entry["mtime"], "size": entry["size"],
         "album": entry["album"], "album_artist": entry["album_artist"], "title": entry["title"],
         "genre": entry.get("genre"),
-        "track_number": entry["track_number"], "disc_number": entry["disc_number"], "disc_number_raw": entry.get("disc_number_raw"), "artist": entry["artist"],
+        "track_number": entry["track_number"], "disc_number": entry["disc_number"], "disc_number_raw": entry.get("disc_number_raw"),
+        "total_discs": entry.get("total_discs"), "disc_subtitle": entry.get("disc_subtitle"), "artist": entry["artist"],
         "duration_seconds": entry["duration_seconds"], "cover_path": entry.get("cover_path"),
         "cover_revision": entry.get("cover_revision"),
         "local_cover_width": entry.get("local_cover_width"), "local_cover_height": entry.get("local_cover_height"),
@@ -85,7 +86,8 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "album": str(entry.get("album") or "") if "album" in entry else "Unknown Album", "album_artist": entry.get("album_artist") or "Unknown Artist",
         "genre": entry.get("genre"),
         "title": entry.get("title") or Path(str(entry["path"])).stem, "track_number": entry.get("track_number"),
-        "disc_number": entry.get("disc_number"), "disc_number_raw": entry.get("disc_number_raw"), "artist": entry.get("artist"),
+        "disc_number": entry.get("disc_number"), "disc_number_raw": entry.get("disc_number_raw"),
+        "total_discs": entry.get("total_discs"), "disc_subtitle": entry.get("disc_subtitle"), "artist": entry.get("artist"),
         "duration_seconds": entry.get("duration_seconds"), "cover_path": entry.get("cover_path"),
         "cover_revision": entry.get("cover_revision"),
         "local_cover_width": entry.get("local_cover_width"), "local_cover_height": entry.get("local_cover_height"),

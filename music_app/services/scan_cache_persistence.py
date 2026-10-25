@@ -93,7 +93,7 @@ _TARGETED_STRUCTURAL_EDIT_FIELD_SETS = {
     frozenset({"year"}),
 }
 _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
-    {"title", "genre", "track_number", "disc_number"}
+    {"title", "genre", "track_number", "disc_number", "total_discs", "disc_subtitle"}
 )
 class ScanCachePublicationSuperseded(RuntimeError):
     """Raised when a newer inventory mutation makes a prepared scan stale."""

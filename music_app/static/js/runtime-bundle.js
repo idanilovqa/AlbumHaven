@@ -27591,6 +27591,8 @@ function getTrackTagInitialValues(track, album) {
     year: String(track?.year ?? album?.year ?? ''),
     track_number: String(track?.track_number ?? ''),
     disc_number: String(track?.disc_number ?? ''),
+    total_discs: String(track?.total_discs ?? ''),
+    disc_subtitle: String(track?.disc_subtitle || ''),
     exception_type: String(track?.exception_type || ''),
     custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
@@ -27683,7 +27685,7 @@ function applyTagEditsToNonAlbumView(album, updates) {
 
 function normalizeCommittedTrackTagValues(values) {
   const nextValues = { ...(values || {}) };
-  ['year', 'track_number', 'disc_number', 'album_rating'].forEach((field) => {
+  ['year', 'track_number', 'disc_number', 'total_discs', 'album_rating'].forEach((field) => {
     if (Object.prototype.hasOwnProperty.call(nextValues, field)) {
       nextValues[field] = parseOptionalInteger(nextValues[field]);
     }
@@ -27995,12 +27997,21 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       };
     }
     const hasYearEdit = Object.prototype.hasOwnProperty.call(edits, 'year');
+    const hasDiscNumberEdit = Object.prototype.hasOwnProperty.call(edits, 'disc_number');
+    const hasTotalDiscsEdit = Object.prototype.hasOwnProperty.call(edits, 'total_discs');
+    const discNumber = hasDiscNumberEdit ? parseOptionalInteger(edits.disc_number) : track.disc_number;
+    const totalDiscs = hasTotalDiscsEdit ? parseOptionalInteger(edits.total_discs) : track.total_discs;
     return {
       ...track,
       ...edits,
       year: hasYearEdit ? parseOptionalInteger(edits.year) : parseOptionalInteger(track?.year ?? album?.year),
       track_number: Object.prototype.hasOwnProperty.call(edits, 'track_number') ? parseOptionalInteger(edits.track_number) : track.track_number,
-      disc_number: Object.prototype.hasOwnProperty.call(edits, 'disc_number') ? parseOptionalInteger(edits.disc_number) : track.disc_number,
+      disc_number: discNumber,
+      disc_number_raw: hasDiscNumberEdit || hasTotalDiscsEdit
+        ? `${discNumber ?? ''}${totalDiscs == null ? '' : `/${totalDiscs}`}`
+        : track.disc_number_raw,
+      total_discs: totalDiscs,
+      disc_subtitle: Object.prototype.hasOwnProperty.call(edits, 'disc_subtitle') ? String(edits.disc_subtitle || '').trim() : track.disc_subtitle,
       album_rating: Object.prototype.hasOwnProperty.call(edits, 'album_rating') ? parseOptionalInteger(edits.album_rating) : track.album_rating,
       edition: Object.prototype.hasOwnProperty.call(edits, 'edition')
         ? String(edits.edition || '').trim()
@@ -33695,7 +33706,10 @@ function getTrackDiscLabel(track) {
 }
 
 function isBonusDiscTrack(track) {
-  const rawDisc = String((track && track.disc_number_raw) || '').trim();
+  const rawDisc = [track?.disc_number_raw, track?.disc_subtitle]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ');
   if (!rawDisc) return false;
   return /\b(bonus|extra|extras|instrumental|instrumentals|demo|demos|outtake|outtakes|rarity|rarities|interview|alternate version|alternate take)\b/i.test(rawDisc);
 }
@@ -33738,11 +33752,13 @@ function groupAlbumTracks(tracks) {
         key,
         discNumber: effectiveDisc,
         discLabel: key === 'single' ? '' : key,
+        discSubtitle: '',
         isBonus: false,
         tracks: [],
       });
     }
     const group = groups.get(key);
+    group.discSubtitle ||= String(track?.disc_subtitle || '').trim();
     group.isBonus = group.isBonus || isBonusDiscTrack(track);
     group.tracks.push(track);
   });
@@ -33768,6 +33784,7 @@ function groupAlbumTracks(tracks) {
     groups: orderedKeys.map((key) => ({
       discNumber: groups.get(key).discNumber,
       discLabel: groups.get(key).discLabel,
+      discSubtitle: groups.get(key).discSubtitle,
       isBonus: Boolean(groups.get(key).isBonus),
       tracks: groups.get(key).tracks,
     })),
@@ -33796,10 +33813,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discLabel = `CD ${group.discNumber}`;
     }
     discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
-    if (group.isBonus) {
-      discLabel = group.discSubtitle || (discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD');
-    } else if (group.discSubtitle) {
-      discLabel = `${discLabel} • ${group.discSubtitle}`;
+    if (group.discSubtitle) {
+      discLabel = discLabel ? `${discLabel} • ${group.discSubtitle}` : group.discSubtitle;
+    } else if (group.isBonus) {
+      discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }
     const componentTracks = group.tracks.map((track, index) => {
       const src = `/track?path=${encodeURIComponent(track.path)}`;

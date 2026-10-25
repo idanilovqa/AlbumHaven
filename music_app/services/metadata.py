@@ -27,7 +27,7 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 3
+FILE_METADATA_SCHEMA_VERSION = 4
 
 if EasyID3 is not None:
     EasyID3.RegisterTXXXKey("albumrating", "Album Rating")
@@ -618,7 +618,10 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     genre = first_tag(tags, ["genre", "tcon", "\xa9gen"])
     track_number = safe_int(first_tag(tags, ["tracknumber", "track number", "track", "trck"]))
     disc_number_raw = first_tag(tags, ["discnumber", "disc number", "tpos"]) or first_custom_tag(tags, ["discnumber", "disc number", "tpos"])
-    disc_number = safe_int(disc_number_raw)
+    disc_value, _, total_discs_value = str(disc_number_raw or "").partition("/")
+    disc_number = safe_int(disc_value)
+    total_discs = safe_int(total_discs_value)
+    disc_subtitle = first_tag(tags, ["discsubtitle", "disc subtitle", "disctitle", "disc title", "tsst"]) or first_custom_tag(tags, ["discsubtitle", "disc subtitle", "disctitle", "disc title", "tsst"])
     duration_seconds = safe_int(tags.get("duration_seconds"))
     year = extract_year(tags)
     release_date = extract_release_date(tags)
@@ -629,7 +632,8 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
         "path": str(path), "mtime": stat.st_mtime, "size": stat.st_size,
         "album": album_name, "album_artist": album_artist, "title": track_title,
         "genre": genre,
-        "track_number": track_number, "disc_number": disc_number, "disc_number_raw": disc_number_raw, "artist": track_artist,
+        "track_number": track_number, "disc_number": disc_number, "disc_number_raw": disc_number_raw,
+        "total_discs": total_discs, "disc_subtitle": disc_subtitle or None, "artist": track_artist,
         "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_rating": album_rating,
         "exception_type": exception_type or None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,

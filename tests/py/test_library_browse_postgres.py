@@ -654,6 +654,30 @@ def test_postgres_selected_full_and_preview_payloads_use_owned_precedence():
     )[0]["artist_relationship"] == "owned"
 
 
+def test_selected_artist_album_payload_preserves_disc_total_and_subtitle():
+    from music_app.services import library_browse_postgres as browse
+
+    row = _browse_album_row(
+        artist="Sherlock",
+        album_id=84,
+        album_key="sherlock-bonus",
+        title="Sherlock",
+    )
+    row["disc_number"] = 2
+    row["file_entry"] = {
+        "disc_number_raw": "2/2",
+        "total_discs": 2,
+        "disc_subtitle": "Bonus",
+    }
+
+    track = browse._selected_artist_album_payloads([row], "Sherlock")[0]["tracks"][0]
+
+    assert track["disc_number"] == 2
+    assert track["disc_number_raw"] == "2/2"
+    assert track["total_discs"] == 2
+    assert track["disc_subtitle"] == "Bonus"
+
+
 def test_postgres_featured_track_artist_remains_featured_with_member_relation():
     from music_app.services import library_browse_postgres as browse
 
@@ -3068,6 +3092,8 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
                 "cover_revision": None,
                 "disc_number": 1,
                 "disc_number_raw": None,
+            "total_discs": None,
+            "disc_subtitle": None,
             "track_number": 1,
             "duration_seconds": 215,
             "duration_display": "3m 35s",
@@ -11083,6 +11109,27 @@ def test_current_membership_classification_clears_a_stale_persisted_problem():
     assert _problematic_file_entry_from_row(row)["local_album_membership_problem"] is None
     row.pop("local_album_membership_problem")
     assert _problematic_file_entry_from_row(row)["local_album_membership_problem"] == "Duplicate track outside album folder"
+
+
+def test_problematic_file_entry_preserves_disc_total_and_subtitle():
+    from music_app.services.library_browse_postgres import _problematic_file_entry_from_row
+
+    row = {
+        "file_private_path": "Sherlock/Album/bonus.flac",
+        "disc_number": 2,
+        "file_entry": {
+            "disc_number_raw": "2/2",
+            "total_discs": 2,
+            "disc_subtitle": "Bonus",
+        },
+    }
+
+    entry = _problematic_file_entry_from_row(row)
+
+    assert entry["disc_number"] == 2
+    assert entry["disc_number_raw"] == "2/2"
+    assert entry["total_discs"] == 2
+    assert entry["disc_subtitle"] == "Bonus"
 
 
 def test_postgres_library_browse_builds_problematic_files_projection_from_rows():

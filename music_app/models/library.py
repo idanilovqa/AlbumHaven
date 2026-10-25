@@ -9,6 +9,8 @@ class Track:
     track_number: int | None = None
     disc_number: int | None = None
     disc_number_raw: str | None = None
+    total_discs: int | None = None
+    disc_subtitle: str | None = None
     artist: str | None = None
     album: str | None = None
     album_artist: str | None = None

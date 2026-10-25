@@ -124,6 +124,35 @@ def test_mixed_random_folder_duplicate_does_not_join_real_album_or_replace_its_c
     assert {track.disc_number for track in album.tracks} == {1, 2}
 
 
+def test_disc_total_and_title_survive_album_projection(tmp_path):
+    path = str(tmp_path / "Artist" / "Album" / "CD2" / "01 Bonus.mp3")
+    entries = {
+        path: {
+            **_entry(
+                path=path,
+                title="Bonus Track",
+                artist="Artist",
+                album_artist="Artist",
+                album="Album",
+                track_number=1,
+            ),
+            "disc_number": 2,
+            "disc_number_raw": "2/2",
+            "total_discs": 2,
+            "disc_subtitle": "Bonus",
+        }
+    }
+
+    album = build_albums_from_file_cache(entries)[0]
+    track = album.tracks[0]
+    payload_track = album_to_dict(album)["tracks"][0]
+
+    assert track.total_discs == 2
+    assert track.disc_subtitle == "Bonus"
+    assert payload_track["total_discs"] == 2
+    assert payload_track["disc_subtitle"] == "Bonus"
+
+
 def test_partial_orphan_album_source_is_excluded_but_complete_copies_and_editions_remain(tmp_path):
     entries = {}
     expected_primary = set()

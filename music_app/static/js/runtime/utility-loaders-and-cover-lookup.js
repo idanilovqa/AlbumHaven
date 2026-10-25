@@ -1745,6 +1745,8 @@ function getTrackTagInitialValues(track, album) {
     year: String(track?.year ?? album?.year ?? ''),
     track_number: String(track?.track_number ?? ''),
     disc_number: String(track?.disc_number ?? ''),
+    total_discs: String(track?.total_discs ?? ''),
+    disc_subtitle: String(track?.disc_subtitle || ''),
     exception_type: String(track?.exception_type || ''),
     custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
@@ -1837,7 +1839,7 @@ function applyTagEditsToNonAlbumView(album, updates) {
 
 function normalizeCommittedTrackTagValues(values) {
   const nextValues = { ...(values || {}) };
-  ['year', 'track_number', 'disc_number', 'album_rating'].forEach((field) => {
+  ['year', 'track_number', 'disc_number', 'total_discs', 'album_rating'].forEach((field) => {
     if (Object.prototype.hasOwnProperty.call(nextValues, field)) {
       nextValues[field] = parseOptionalInteger(nextValues[field]);
     }
@@ -2149,12 +2151,21 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       };
     }
     const hasYearEdit = Object.prototype.hasOwnProperty.call(edits, 'year');
+    const hasDiscNumberEdit = Object.prototype.hasOwnProperty.call(edits, 'disc_number');
+    const hasTotalDiscsEdit = Object.prototype.hasOwnProperty.call(edits, 'total_discs');
+    const discNumber = hasDiscNumberEdit ? parseOptionalInteger(edits.disc_number) : track.disc_number;
+    const totalDiscs = hasTotalDiscsEdit ? parseOptionalInteger(edits.total_discs) : track.total_discs;
     return {
       ...track,
       ...edits,
       year: hasYearEdit ? parseOptionalInteger(edits.year) : parseOptionalInteger(track?.year ?? album?.year),
       track_number: Object.prototype.hasOwnProperty.call(edits, 'track_number') ? parseOptionalInteger(edits.track_number) : track.track_number,
-      disc_number: Object.prototype.hasOwnProperty.call(edits, 'disc_number') ? parseOptionalInteger(edits.disc_number) : track.disc_number,
+      disc_number: discNumber,
+      disc_number_raw: hasDiscNumberEdit || hasTotalDiscsEdit
+        ? `${discNumber ?? ''}${totalDiscs == null ? '' : `/${totalDiscs}`}`
+        : track.disc_number_raw,
+      total_discs: totalDiscs,
+      disc_subtitle: Object.prototype.hasOwnProperty.call(edits, 'disc_subtitle') ? String(edits.disc_subtitle || '').trim() : track.disc_subtitle,
       album_rating: Object.prototype.hasOwnProperty.call(edits, 'album_rating') ? parseOptionalInteger(edits.album_rating) : track.album_rating,
       edition: Object.prototype.hasOwnProperty.call(edits, 'edition')
         ? String(edits.edition || '').trim()

@@ -109,6 +109,11 @@ const primaryModalsTemplate = fs.readFileSync(path.join(
   'primary-modals.html',
 ), 'utf8');
 
+test('Edit Tags exposes separate total-disc and disc-title fields', () => {
+  assert.match(primaryModalsTemplate, /data-tag-field="total_discs"/);
+  assert.match(primaryModalsTemplate, /data-tag-field="disc_subtitle"/);
+});
+
 function loadHelper(albums, overrides = {}) {
   const context = {
     console,
@@ -912,6 +917,46 @@ test('Album Details keeps an inferred ordinary CD1 and numeric CD2 out of bonus 
       { discLabel: 'CD2', isBonus: false },
     ],
   );
+});
+
+test('Album Details labels a numeric bonus medium from its separate disc title', () => {
+  let renderedConfig = null;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '',
+    formatLoopTime: () => '',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) {
+      renderedConfig = config;
+      return '<div>table</div>';
+    },
+  });
+  const tracks = [
+    {
+      path: 'C:\\Music\\Artist\\Album\\CD2\\01 - Bonus.mp3',
+      title: 'Bonus Track',
+      disc_number: 2,
+      disc_number_raw: '2/2',
+      total_discs: 2,
+      disc_subtitle: 'Bonus',
+      track_number: 1,
+    },
+  ];
+  const grouped = context.groupAlbumTracks(tracks);
+
+  assert.deepEqual(
+    Array.from(grouped.groups, (group) => ({
+      discLabel: group.discLabel,
+      discSubtitle: group.discSubtitle,
+      isBonus: group.isBonus,
+    })),
+    [{ discLabel: 'CD2', discSubtitle: 'Bonus', isBonus: true }],
+  );
+  context.buildTrackListHtml(tracks);
+  assert.equal(renderedConfig.groups[0].discLabel, 'CD 2 • Bonus');
 });
 
 test('Album Details treats an explicit raw bonus-disc label as bonus evidence', () => {

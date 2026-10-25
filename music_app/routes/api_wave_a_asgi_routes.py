@@ -206,6 +206,8 @@ _MEDIA_TAG_EDIT_FIELDS = {
     "year",
     "track_number",
     "disc_number",
+    "total_discs",
+    "disc_subtitle",
     "edition",
     "album_rating",
 }
@@ -214,6 +216,8 @@ _TARGETED_INVENTORY_EDIT_FIELDS = {
     "genre",
     "track_number",
     "disc_number",
+    "total_discs",
+    "disc_subtitle",
 }
 _SELECTED_POSTGRES_MEDIA_WRITE_REFRESH_FIELDS = _STRUCTURAL_EDIT_FIELDS | _MEDIA_TAG_EDIT_FIELDS
 

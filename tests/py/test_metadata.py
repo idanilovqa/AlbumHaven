@@ -36,6 +36,28 @@ def test_track_and_disc_subtitles_do_not_split_album_editions(monkeypatch, tmp_p
     assert len(albums[0].tracks) == 2
 
 
+def test_scan_reads_separate_disc_total_and_title(monkeypatch, tmp_path):
+    path = tmp_path / "bonus.mp3"
+    path.touch()
+    tags = {
+        "album": ["Fixture Album"],
+        "albumartist": ["Fixture Artist"],
+        "artist": ["Fixture Artist"],
+        "title": ["Bonus Track"],
+        "tracknumber": ["1/3"],
+        "TPOS": ["2/2"],
+        "TSST": ["Bonus"],
+    }
+    monkeypatch.setattr(metadata, "MutagenFile", lambda _path: SimpleNamespace(tags=tags))
+
+    entry = metadata.read_metadata_for_file(path)
+
+    assert entry["disc_number"] == 2
+    assert entry["disc_number_raw"] == "2/2"
+    assert entry["total_discs"] == 2
+    assert entry["disc_subtitle"] == "Bonus"
+
+
 @pytest.mark.parametrize(
     ("album_artist", "album_name", "track_frames"),
     [
@@ -137,8 +159,10 @@ def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, 
         ({"metadata_schema_version": 1}, False),
         ({"metadata_schema_version": 2}, False),
         ({"metadata_schema_version": 2, "release_date": None}, False),
-        ({"metadata_schema_version": 3, "release_date": None}, True),
-        ({"metadata_schema_version": 3, "release_date": "2004-07-16"}, True),
+        ({"metadata_schema_version": 3, "release_date": None}, False),
+        ({"metadata_schema_version": 3, "release_date": "2004-07-16"}, False),
+        ({"metadata_schema_version": 4, "release_date": None}, True),
+        ({"metadata_schema_version": 4, "release_date": "2004-07-16"}, True),
     ],
 )
 def test_file_metadata_schema_is_current_requires_exact_non_bool_version(
@@ -582,7 +606,7 @@ def test_read_metadata_for_generated_mp3_parses_real_id3_album_rating_txxx(
     assert parsed["album_artist"] == "Christopher Tin"
     assert parsed["genre"] == "Classical Crossover"
     assert parsed["album_rating"] == 9
-    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 3
+    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 4
 
 def test_read_editable_tag_values_returns_exact_blanks_and_requested_fields(monkeypatch):
     audio = {

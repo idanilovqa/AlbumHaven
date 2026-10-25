@@ -3207,12 +3207,14 @@ test('terminal tag-edit failure waits for the failure notification before readin
       error: 'permission denied for table ignored_versions',
       save_task_id: 'failed-save-task',
       save_task_status: 'failed',
+      failure_stage: 'persistence',
+      edit_outcome: 'failed_rolled_back',
     },
     response: { status: () => 500 },
     timeout: 1000,
   });
 
-  assert.ok(events.includes('to.be.hidden'));
+  assert.ok(events.includes('to.be.visible'));
   assert.ok(events.includes('to.have.text'));
   assert.equal(result.alertText, 'permission denied table ignored_versions');
 });

@@ -79,6 +79,70 @@
   color: var(--muted);
   font-size: 0.84rem;
 }
+@media (max-width: 900px) {
+  .cover-lookup-modal.is-mobile-sheet {
+    align-items: flex-end;
+    bottom: 0;
+    z-index: 4550;
+    padding: 0;
+  }
+  .cover-lookup-modal.is-mobile-sheet > .cover-lookup-modal-dialog {
+    width: 100%;
+    height: min(88dvh, 940px);
+    max-height: min(88dvh, 940px);
+    border-radius: 18px 18px 0 0;
+    transform: translateY(var(--cover-lookup-sheet-drag-y, 0));
+  }
+  .cover-lookup-modal.is-mobile-sheet .cover-lookup-modal-header {
+    position: relative;
+    padding-top: 28px;
+    touch-action: none;
+  }
+  .cover-lookup-modal.is-mobile-sheet .cover-lookup-modal-header::before {
+    content: '';
+    position: absolute;
+    top: 9px;
+    left: 50%;
+    width: 42px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--muted);
+    opacity: 0.65;
+    transform: translateX(-50%);
+  }
+  .cover-lookup-modal.is-mobile-sheet .cover-lookup-modal-body {
+    padding: 12px;
+  }
+  .cover-lookup-modal.is-mobile-sheet .cover-lookup-gallery {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .cover-lookup-modal.is-mobile-sheet :is(.cover-lookup-art-card, .cover-lookup-art-card-shell) {
+    min-width: 0;
+    width: 100%;
+    max-width: none;
+  }
+  .cover-lookup-modal.is-mobile-sheet .cover-lookup-modal-actions {
+    position: relative;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    gap: 8px;
+  }
+  .cover-lookup-modal.is-mobile-sheet .cover-lookup-modal-status:not(:has([role='alert'], .on-page-alert, [data-on-page-alert])) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .cover-lookup-modal.is-mobile-sheet #cover-lookup-search-hint {
+    display: none;
+  }
+}
+@media (max-width: 900px) and (prefers-reduced-motion: no-preference) {
+  .cover-lookup-modal.is-mobile-sheet > .cover-lookup-modal-dialog {
+    transition: transform 120ms ease-out;
+  }
+}
 .cover-lookup-section {
   display: grid;
   gap: 12px;

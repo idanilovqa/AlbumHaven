@@ -1176,6 +1176,55 @@ export class CoverLookupActions {
     await this.coverLookup.taskOpenButtonById(taskId).click();
   }
 
+  async scrollDrawerToEnd() {
+    return this.coverLookup.drawerBody.evaluate((body) => {
+      body.scrollTop = body.scrollHeight;
+      return body.scrollTop;
+    });
+  }
+
+  async readDrawerScrollTop() {
+    return this.coverLookup.drawerBody.evaluate((body) => body.scrollTop);
+  }
+
+  async expectNotificationMobileSheet() {
+    await expect(this.coverLookup.mobileSheet).toBeVisible();
+    await expect(this.coverLookup.mobilePage).toHaveCount(0);
+    await expect(this.coverLookup.drawer).toBeVisible();
+    const stacking = await this.coverLookup.mobileSheet.evaluate((sheet) => {
+      const dialog = sheet.querySelector('.cover-lookup-modal-dialog');
+      const drawer = document.getElementById('cover-lookup-drawer');
+      const sheetBox = dialog?.getBoundingClientRect();
+      return {
+        bottomGap: sheetBox ? Math.abs(window.innerHeight - sheetBox.bottom) : Number.POSITIVE_INFINITY,
+        sheetZ: Number.parseInt(getComputedStyle(sheet).zIndex, 10) || 0,
+        drawerZ: drawer ? Number.parseInt(getComputedStyle(drawer).zIndex, 10) || 0 : 0,
+      };
+    });
+    expect(stacking.bottomGap).toBeLessThanOrEqual(1);
+    expect(stacking.sheetZ).toBeGreaterThan(stacking.drawerZ);
+  }
+
+  async swipeNotificationMobileSheetDown() {
+    const box = await this.coverLookup.modalHeader.boundingBox();
+    if (!box) throw new Error('Cover Lookup mobile sheet header is not visible.');
+    const session = await this.coverLookup.page.context().newCDPSession(this.coverLookup.page);
+    const point = (offset) => [{ x: box.x + box.width / 2, y: box.y + Math.min(24, box.height / 2) + offset, id: 0 }];
+    try {
+      await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(0) });
+      for (let step = 1; step <= 12; step += 1) {
+        await session.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: point(160 * step / 12),
+        });
+      }
+      await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } finally {
+      await session.detach();
+    }
+    await this.coverLookup.waitForHidden(this.coverLookup.modal);
+  }
+
   async openTaskWithKeyboard(taskTitle, key = 'Enter') {
     const opener = this.coverLookup.taskOpenButtonByTitle(taskTitle);
     await opener.focus();

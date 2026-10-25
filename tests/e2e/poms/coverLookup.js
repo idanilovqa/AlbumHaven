@@ -5,8 +5,10 @@ export class CoverLookup extends BasePage {
     super(page, testInfo);
     this.modal = page.locator(this.modalSelector);
     this.mobilePage = page.locator('#cover-lookup-modal.is-mobile-page');
+    this.mobileSheet = page.locator('#cover-lookup-modal.is-mobile-sheet');
     this.mobileBackButton = page.locator('#mobile-back-button');
     this.modalDialog = page.locator(this.modalDialogSelector);
+    this.modalHeader = this.modal.locator('.cover-lookup-modal-header');
     this.modalBody = page.locator(this.modalBodySelector);
     this.modalSubtitle = page.locator(this.modalSubtitleSelector);
     this.modalStatus = page.locator(this.modalStatusSelector);

@@ -87,6 +87,130 @@ test('opening Cover Lookup starts one gallery request without loading notificati
   assert.equal(galleryRequestCount, 1);
 });
 
+test('notification Cover Lookup uses a sheet on mobile without presenting a mobile page', async () => {
+  class TestButton {}
+  const classes = new Set();
+  const overlay = {
+    hidden: true,
+    classList: {
+      add: value => classes.add(value),
+      remove: value => classes.delete(value),
+      contains: value => classes.has(value),
+      toggle(value, enabled) { if (enabled) classes.add(value); else classes.delete(value); },
+    },
+    querySelector: () => null,
+  };
+  let mobilePagePresentations = 0;
+  const context = {
+    window: { innerWidth: 390 },
+    state: { coverLookup: { tasks: [], modal: { pastedImages: [] } } },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    buildTrackPathSignature: () => '',
+    sanitizeCoverLookupPossibleMatches: () => [],
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.presentMobileCoverLookupPage = () => { mobilePagePresentations += 1; };
+  context.renderCoverLookupModal = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+
+  await context.openCoverLookupModal({ name: 'Album' }, { mobileSheet: true });
+
+  assert.equal(mobilePagePresentations, 0);
+  assert.equal(classes.has('is-mobile-sheet'), true);
+  context.closeCoverLookupModal();
+  assert.equal(classes.has('is-mobile-sheet'), false);
+});
+
+test('ordinary mobile Cover Lookup keeps the existing mobile-page presentation', async () => {
+  class TestButton {}
+  const classes = new Set();
+  const overlay = {
+    hidden: true,
+    classList: {
+      add: value => classes.add(value),
+      remove: value => classes.delete(value),
+      contains: value => classes.has(value),
+      toggle(value, enabled) { if (enabled) classes.add(value); else classes.delete(value); },
+    },
+    querySelector: () => null,
+  };
+  let mobilePagePresentations = 0;
+  const context = {
+    window: { innerWidth: 390 },
+    state: { coverLookup: { tasks: [], modal: { pastedImages: [] } } },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    buildTrackPathSignature: () => '',
+    sanitizeCoverLookupPossibleMatches: () => [],
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.presentMobileCoverLookupPage = () => { mobilePagePresentations += 1; };
+  context.renderCoverLookupModal = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+
+  await context.openCoverLookupModal({ name: 'Album' });
+
+  assert.equal(mobilePagePresentations, 1);
+  assert.equal(classes.has('is-mobile-sheet'), false);
+});
+
+test('mobile sheet swipe dismisses only after a downward threshold', () => {
+  const listeners = {};
+  const properties = new Map();
+  const header = {
+    dataset: {},
+    addEventListener(type, handler) { listeners[type] = handler; },
+  };
+  const overlay = {
+    classList: { contains: value => value === 'is-mobile-sheet' },
+    querySelector: () => header,
+    style: {
+      setProperty(name, value) { properties.set(name, value); },
+      removeProperty(name) { properties.delete(name); },
+    },
+  };
+  const context = { window: {}, document: { getElementById: () => null }, state: { coverLookup: { modal: {} } }, console };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  let closeCount = 0;
+  context.closeCoverLookupModal = () => { closeCount += 1; };
+  context.bindCoverLookupMobileSheetSwipe(overlay);
+
+  const touch = (x, y) => ({ clientX: x, clientY: y });
+  listeners.touchstart({ touches: [touch(20, 20)] });
+  listeners.touchmove({ touches: [touch(22, 70)], preventDefault() {} });
+  listeners.touchend();
+  assert.equal(closeCount, 0);
+
+  listeners.touchstart({ touches: [touch(20, 20)] });
+  listeners.touchmove({ touches: [touch(22, 110)], preventDefault() {} });
+  listeners.touchmove({ touches: [touch(140, 110)], preventDefault() {} });
+  listeners.touchend();
+  assert.equal(closeCount, 0);
+
+  listeners.touchstart({ touches: [touch(20, 20)] });
+  listeners.touchmove({ touches: [touch(22, 120)], preventDefault() {} });
+  assert.equal(properties.get('--cover-lookup-sheet-drag-y'), '100px');
+  listeners.touchend();
+  assert.equal(closeCount, 1);
+  assert.equal(properties.has('--cover-lookup-sheet-drag-y'), false);
+});
+
 test('opening a persisted notification renders its candidates while gallery refresh is pending', async () => {
   class TestButton {
     constructor() {

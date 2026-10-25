@@ -317,6 +317,25 @@ test('breakpoint promotion retains open surfaces and puts an album above Setting
   assert.deepEqual(calls, []);
 });
 
+test('breakpoint promotion leaves a notification Cover Lookup sheet above its drawer', () => {
+  const calls = [];
+  const nodes = Object.fromEntries(['track-modal', 'utility-modal', 'cover-lookup-modal', 'non-album-modal'].map(id => [id, {
+    hidden: id !== 'cover-lookup-modal',
+    classList: { contains: name => id === 'cover-lookup-modal' && name === 'is-mobile-sheet' },
+  }]));
+  const context = load('mobile-navigation.js', {
+    window: { innerWidth: 390 },
+    document: { getElementById: id => nodes[id] },
+    state: { coverLookup: { modal: { album: { name: 'Album' } } } },
+  });
+  context.mobilePageDescriptor = kind => ({ kind });
+  context.presentMobilePage = descriptor => calls.push(descriptor);
+
+  context.promoteVisibleMobileDialogs();
+
+  assert.deepEqual(calls, []);
+});
+
 test('utility detail pushes its index parent and Back preserves the Forward entry', () => {
   const writes = [], movements = [];
   const outlet = { scrollTop: 120 }, modal = { dataset: {} };

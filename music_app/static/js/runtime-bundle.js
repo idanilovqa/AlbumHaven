@@ -28508,6 +28508,48 @@ coverLookupDrawerButton?.addEventListener?.('focus', () => {
 const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
 const COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS = 2000;
+const COVER_LOOKUP_SHEET_DISMISS_DISTANCE = 72;
+
+function isCoverLookupMobileSheet(overlay) {
+  return Boolean(overlay?.classList?.contains?.('is-mobile-sheet'));
+}
+
+function bindCoverLookupMobileSheetSwipe(overlay) {
+  const header = overlay?.querySelector?.('.cover-lookup-modal-header');
+  if (!header || header.dataset.coverLookupSheetSwipeBound === '1') return;
+  header.dataset.coverLookupSheetSwipeBound = '1';
+  let startX = 0;
+  let startY = 0;
+  let dragY = 0;
+  const reset = () => {
+    dragY = 0;
+    overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
+  };
+  header.addEventListener('touchstart', (event) => {
+    if (!isCoverLookupMobileSheet(overlay) || event.touches.length !== 1) return;
+    startX = event.touches[0].clientX;
+    startY = event.touches[0].clientY;
+    dragY = 0;
+  }, { passive: true });
+  header.addEventListener('touchmove', (event) => {
+    if (!isCoverLookupMobileSheet(overlay) || event.touches.length !== 1) return;
+    const dx = event.touches[0].clientX - startX;
+    const dy = Math.max(0, event.touches[0].clientY - startY);
+    if (dy <= Math.abs(dx)) {
+      reset();
+      return;
+    }
+    dragY = dy;
+    overlay.style?.setProperty?.('--cover-lookup-sheet-drag-y', `${dy}px`);
+    event.preventDefault();
+  }, { passive: false });
+  header.addEventListener('touchend', () => {
+    const dismiss = isCoverLookupMobileSheet(overlay) && dragY >= COVER_LOOKUP_SHEET_DISMISS_DISTANCE;
+    reset();
+    if (dismiss) closeCoverLookupModal();
+  });
+  header.addEventListener('touchcancel', reset);
+}
 
 function revokeCoverLookupPastedImageUrls() {
   const items = [
@@ -30822,9 +30864,16 @@ async function refreshCoverLookupGallery(showLoading = true) {
 async function openCoverLookupModal(album, options = {}) {
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.lookup')) return;
   coverLookupModalSession += 1;
-  if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();
   if (!els.overlay || !album) return;
+  const mobileSheet = Boolean(options.mobileSheet) && (
+    typeof usesMobilePageLayout === 'function'
+      ? usesMobilePageLayout()
+      : Number(window.innerWidth || 0) > 0 && Number(window.innerWidth) <= 900
+  );
+  els.overlay.classList?.toggle?.('is-mobile-sheet', mobileSheet);
+  if (!mobileSheet && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
+  if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
   const requestedTaskId = String(options.taskId || '');
   const matchingTask = (state.coverLookup.tasks || []).find((task) => (
     requestedTaskId
@@ -30873,10 +30922,13 @@ async function openCoverLookupModal(album, options = {}) {
 function closeCoverLookupModal() {
   coverLookupGalleryRequest += 1;
   coverLookupModalSession += 1;
-  if (typeof dismissMobilePage === 'function' && dismissMobilePage('cover-lookup')) return;
   const els = getCoverLookupModalElements();
   if (!els.overlay) return;
+  const mobileSheet = isCoverLookupMobileSheet(els.overlay);
+  if (!mobileSheet && typeof dismissMobilePage === 'function' && dismissMobilePage('cover-lookup')) return;
   els.overlay.hidden = true;
+  els.overlay.classList?.remove?.('is-mobile-sheet');
+  els.overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
@@ -41717,7 +41769,7 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
     if (task?.album_payload) {
-      openCoverLookupModal(task.album_payload, { taskId });
+      openCoverLookupModal(task.album_payload, { taskId, mobileSheet: true });
     }
     return;
   }
@@ -45578,7 +45630,10 @@ function promoteVisibleMobileDialogs() {
   // Capture visibility before moving surfaces: presenting a child hides its parent.
   const visible = kinds.filter(kind => {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
-    return element && !element.hidden && !mobilePageState.originals.has(kind);
+    return element
+      && !element.hidden
+      && !(kind === 'cover-lookup' && element.classList.contains('is-mobile-sheet'))
+      && !mobilePageState.originals.has(kind);
   });
   for (const kind of visible) {
     if (kind === 'utilities' && !mobileUtilityTabAllowed(state.utility.activeTab)) {

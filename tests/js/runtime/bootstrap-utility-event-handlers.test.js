@@ -1054,9 +1054,9 @@ test('opening a cover lookup task keeps the drawer open behind the task modal', 
   context.renderCoverLookupDrawer = () => {
     transitions.push(`render:${context.state.coverLookup.drawerOpen}`);
   };
-  context.openCoverLookupModal = (album, options) => {
+    context.openCoverLookupModal = (album, options) => {
     transitions.push(
-      `open:${context.state.coverLookup.drawerOpen}:${album.artist}:${album.album}:${options.taskId}`,
+        `open:${context.state.coverLookup.drawerOpen}:${album.artist}:${album.album}:${options.taskId}:${options.mobileSheet}`,
     );
   };
   const taskButton = createElement({
@@ -1072,7 +1072,7 @@ test('opening a cover lookup task keeps the drawer open behind the task modal', 
   assert.equal(wasPrevented(), true);
   assert.equal(context.state.coverLookup.drawerOpen, true);
   assert.deepEqual(transitions, [
-    'open:true:Metallica:Kill Em All:cover-task-12',
+      'open:true:Metallica:Kill Em All:cover-task-12:true',
   ]);
 });
 

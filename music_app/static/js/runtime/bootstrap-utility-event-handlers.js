@@ -794,7 +794,7 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
     if (task?.album_payload) {
-      openCoverLookupModal(task.album_payload, { taskId });
+      openCoverLookupModal(task.album_payload, { taskId, mobileSheet: true });
     }
     return;
   }

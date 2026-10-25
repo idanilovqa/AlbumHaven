@@ -657,6 +657,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
 test('FTC-COVERS-036 notification cards keep independent album identity after cover save', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
+  page,
   trackModalActions,
 }, testInfo) => {
   testInfo.setTimeout(240000);
@@ -695,6 +696,9 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
 
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const drawerScrollTop = await coverLookupActions.scrollDrawerToEnd();
+  expect(drawerScrollTop).toBeGreaterThan(0);
   const readCards = async () => Object.fromEntries(await Promise.all(
     notifications.map(async ({ taskId }) => [
       taskId,
@@ -705,8 +709,8 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   expect(new Set(Object.values(before).map((evidence) => evidence.taskId)).size).toBe(3);
   expect(new Set(Object.values(before).map((evidence) => evidence.imageSrc)).size).toBe(3);
 
-  const verifyCardDestinations = async () => {
-    for (const { taskId, identity } of notifications) {
+  const verifyCardDestinations = async ({ swipeFirst = false } = {}) => {
+    for (const [index, { taskId, identity }] of notifications.entries()) {
       expect(before[taskId]).toMatchObject({
         taskId,
         title: identity.album,
@@ -714,22 +718,28 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
       });
       await coverLookupActions.openTaskById(taskId);
       await coverLookupActions.waitForModalReady();
+      await coverLookupActions.expectNotificationMobileSheet();
+      expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
       await expect(coverLookupActions.coverLookup.modalSubtitle).toHaveText([
         identity.artist,
         identity.album,
         identity.year,
       ].filter(Boolean).join(' - '));
-      await coverLookupActions.closeModal();
+      if (swipeFirst && index === 0) await coverLookupActions.swipeNotificationMobileSheetDown();
+      else await coverLookupActions.closeModal();
       await coverLookupActions.waitForDrawerOpen();
+      expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
     }
   };
 
-  await verifyCardDestinations();
+  await verifyCardDestinations({ swipeFirst: true });
   const selected = notifications.at(-1);
   await coverLookupActions.openTaskById(selected.taskId);
   await coverLookupActions.waitForModalReady();
   await coverLookupActions.waitForModalResultsReady();
   await coverLookupActions.selectFirstRemoteCoverAndSave();
+  await coverLookupActions.waitForDrawerOpen();
+  expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
   await coverLookupActions.waitForTaskStatusById(selected.taskId, 'Art chosen');
 
   const afterSave = await readCards();

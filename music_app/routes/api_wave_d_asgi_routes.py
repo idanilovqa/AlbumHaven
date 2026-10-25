@@ -5,6 +5,7 @@ from music_app.services.log_history import history_scope_for_request
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
+from threading import Event
 from time import perf_counter
 from uuid import UUID
 
@@ -71,7 +72,7 @@ from music_app.services.repair_previews import (
     find_problematic_album_by_track_paths as find_problematic_album_by_track_paths_in_state,
 )
 from music_app.services.save_tasks import (
-    acquire_structural_tag_edit_reservation_async,
+    acquire_structural_tag_edit_reservation,
     latest_structural_tag_edit_destination,
     structural_tag_edit_resource_keys,
 )
@@ -540,7 +541,17 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     manual_urls = _clean_string_list(payload.get("manual_urls"))
     if manual_urls and client_surface_from_request(request) == "tv":
         return _json_response(({"ok": False, "error": "Manual cover links are unavailable on TV."}, 403))
-    requested_track_paths = _album_track_paths(album)
+    queued_album = album or {}
+    album_context = resolve_album_context(config, queued_album)
+    if album_context is None and _album_id(queued_album) is None:
+        return _json_response(
+            ({"ok": False, "error": "Album does not contain any tracks"}, 400)
+        )
+    requested_track_paths = (
+        album_context.track_paths
+        if album_context is not None
+        else _album_track_paths(queued_album)
+    )
     reservation_resource_keys = structural_tag_edit_resource_keys(
         str((album or {}).get("key") or (album or {}).get("album_ref") or ""),
         requested_track_paths,
@@ -548,57 +559,66 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     reconciliation_started_at = (
         perf_counter() - _STRUCTURAL_RECONCILIATION_LOOKBACK_SECONDS
     )
-    reservation = await acquire_structural_tag_edit_reservation_async(
-        reservation_resource_keys
-    )
-    queued_album = album or {}
-    try:
-        album_context = resolve_album_context(config, queued_album)
-        album_id = _album_id(queued_album)
-        if album_id is not None:
-            repository = PostgresLibraryBrowseRepository(config)
-            reconciliation = latest_structural_tag_edit_destination(
-                reservation_resource_keys,
-                completed_after_monotonic=reconciliation_started_at,
-            )
-            destination_album_id = int(
-                (reconciliation or {}).get("destination_album_id") or 0
-            )
-            refreshed_album = await run_in_threadpool(
-                repository.build_album_detail_payload_by_id,
-                destination_album_id or album_id,
-            )
-            if refreshed_album is not None:
-                queued_album = _album_with_context_tracks(refreshed_album)
-                album_context = resolve_album_context(config, queued_album)
-            elif destination_album_id > 0:
-                album_context = None
-            if album_context is None and requested_track_paths:
-                current_albums = await run_in_threadpool(
-                    repository.build_album_payloads_by_track_paths,
-                    requested_track_paths,
+    def prepare_cover_lookup(
+        current_album: dict[str, object],
+        current_track_paths: set[str],
+        cancel_event: Event,
+    ) -> tuple[dict[str, object], set[str]]:
+        reservation = acquire_structural_tag_edit_reservation(
+            reservation_resource_keys,
+            cancel_event=cancel_event,
+        )
+        if reservation is None:
+            return current_album, current_track_paths
+        prepared_album = current_album
+        try:
+            album_context = resolve_album_context(config, prepared_album)
+            album_id = _album_id(prepared_album)
+            if album_id is not None:
+                repository = PostgresLibraryBrowseRepository(config)
+                reconciliation = latest_structural_tag_edit_destination(
+                    reservation_resource_keys,
+                    completed_after_monotonic=reconciliation_started_at,
                 )
-                for current_album in current_albums:
-                    candidate = _album_with_context_tracks(current_album)
-                    candidate_context = resolve_album_context(config, candidate)
-                    if (
-                        candidate_context is not None
-                        and requested_track_paths <= candidate_context.track_paths
-                    ):
-                        queued_album = candidate
-                        album_context = candidate_context
-                        break
-    finally:
-        reservation.release()
-    if album_context is None:
-        return _json_response(({"ok": False, "error": "Album does not contain any tracks"}, 400))
+                destination_album_id = int(
+                    (reconciliation or {}).get("destination_album_id") or 0
+                )
+                refreshed_album = repository.build_album_detail_payload_by_id(
+                    destination_album_id or album_id
+                )
+                if refreshed_album is not None:
+                    prepared_album = _album_with_context_tracks(refreshed_album)
+                    album_context = resolve_album_context(config, prepared_album)
+                elif destination_album_id > 0:
+                    album_context = None
+                if album_context is None and current_track_paths:
+                    current_albums = repository.build_album_payloads_by_track_paths(
+                        current_track_paths
+                    )
+                    for refreshed_album in current_albums:
+                        candidate = _album_with_context_tracks(refreshed_album)
+                        candidate_context = resolve_album_context(config, candidate)
+                        if (
+                            candidate_context is not None
+                            and current_track_paths <= candidate_context.track_paths
+                        ):
+                            prepared_album = candidate
+                            album_context = candidate_context
+                            break
+        finally:
+            reservation.release()
+        if album_context is None:
+            raise ValueError("Album does not contain any tracks")
+        return prepared_album, album_context.track_paths
+
     task_id = queue_cover_lookup_task(
         queued_album,
-        album_context.track_paths,
+        requested_track_paths,
         manual_urls,
         config=config,
         logger=logger,
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+        prepare=prepare_cover_lookup,
     )
     log_app_event(
         config,

@@ -3668,7 +3668,8 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
         def release(self):
             events.append("released")
 
-    async def acquire_reservation(resource_keys):
+    def acquire_reservation(resource_keys, *, cancel_event=None):
+        assert cancel_event is not None
         events.append(("acquired", resource_keys))
         return Reservation()
 
@@ -3683,13 +3684,15 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
         events.append(("reconciled", resource_keys, completed_after_monotonic))
         return {"destination_album_id": 24674}
 
-    def queue_lookup(queued_album, track_paths, manual_urls, **_kwargs):
-        events.append(("queued", queued_album, track_paths, manual_urls))
+    def queue_lookup(queued_album, track_paths, manual_urls, **kwargs):
+        events.append(
+            ("queued", queued_album, track_paths, manual_urls, kwargs.get("prepare"))
+        )
         return "task-1"
 
     monkeypatch.setattr(
         asgi_routes,
-        "acquire_structural_tag_edit_reservation_async",
+        "acquire_structural_tag_edit_reservation",
         acquire_reservation,
         raising=False,
     )
@@ -3728,7 +3731,17 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
 
     assert status == 200
     assert _decode_json(body)["ok"] is True
-    acquired = events[0]
+    assert [event[0] if isinstance(event, tuple) else event for event in events] == [
+        "queued"
+    ]
+    queued = events[0]
+    assert queued[1] == album
+    assert queued[2] == (set() if compact_request else {str(stale_path)})
+    assert callable(queued[4])
+
+    prepared_album, prepared_paths = queued[4](queued[1], queued[2], Event())
+
+    acquired = events[1]
     assert acquired[0] == "acquired"
     assert "album:ovderhead::telepathic minds" in acquired[1]
     stale_path_key = next(iter(asgi_routes.structural_tag_edit_resource_keys(
@@ -3736,14 +3749,13 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
         {str(stale_path)},
     )))
     assert (stale_path_key in acquired[1]) is not compact_request
-    assert events[1][0] == "reconciled"
-    assert events[1][1] == acquired[1]
-    assert events[1][2] > 0
-    assert events[2] == ("refreshed", 24674, None)
-    assert events[3] == "released"
-    assert events[4][0] == "queued"
-    assert events[4][1]["album_artist"] == "Overhead"
-    assert events[4][2] == {str(current_path)}
+    assert events[2][0] == "reconciled"
+    assert events[2][1] == acquired[1]
+    assert events[2][2] > 0
+    assert events[3] == ("refreshed", 24674, None)
+    assert events[4] == "released"
+    assert prepared_album["album_artist"] == "Overhead"
+    assert prepared_paths == {str(current_path)}
 
 
 def test_cover_lookup_reconciliation_uses_inline_album_detail_track_rows():
@@ -3806,16 +3818,17 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
             assert track_paths == {str(track_path)}
             return [current_album]
 
-    async def acquire_reservation(_resource_keys):
+    def acquire_reservation(_resource_keys, *, cancel_event=None):
+        assert cancel_event is not None
         return Reservation()
 
-    def queue_lookup(album, track_paths, _manual_urls, **_kwargs):
-        queued.append((album, track_paths))
+    def queue_lookup(album, track_paths, _manual_urls, **kwargs):
+        queued.append((album, track_paths, kwargs.get("prepare")))
         return "task-1"
 
     monkeypatch.setattr(
         asgi_routes,
-        "acquire_structural_tag_edit_reservation_async",
+        "acquire_structural_tag_edit_reservation",
         acquire_reservation,
     )
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
@@ -3845,5 +3858,15 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
     )
 
     assert status == 200, body
-    assert queued[0][0]["album_artist"] == "Overhead"
+    assert queued[0][0] == source_album
     assert queued[0][1] == {str(track_path)}
+    assert callable(queued[0][2])
+
+    prepared_album, prepared_paths = queued[0][2](
+        queued[0][0],
+        queued[0][1],
+        Event(),
+    )
+
+    assert prepared_album["album_artist"] == "Overhead"
+    assert prepared_paths == {str(track_path)}

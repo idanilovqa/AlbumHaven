@@ -173,14 +173,22 @@ class StructuralTagEditReservationManager:
     def acquire(
         self,
         resource_keys: set[str] | frozenset[str],
-    ) -> StructuralTagEditReservation:
+        *,
+        cancel_event: Event | None = None,
+    ) -> StructuralTagEditReservation | None:
         granted = Event()
         waiter = self._register(resource_keys, granted.set)
         try:
-            granted.wait()
+            while not granted.wait(timeout=0.1):
+                if cancel_event is not None and cancel_event.is_set():
+                    self._cancel_waiter(waiter)
+                    return None
         except BaseException:
             self._cancel_waiter(waiter)
             raise
+        if cancel_event is not None and cancel_event.is_set():
+            self._cancel_waiter(waiter)
+            return None
         return StructuralTagEditReservation(self, waiter.resource_keys)
 
     async def acquire_async(
@@ -245,8 +253,13 @@ def structural_tag_edit_resource_keys(
 
 def acquire_structural_tag_edit_reservation(
     resource_keys: set[str],
-) -> StructuralTagEditReservation:
-    return _STRUCTURAL_TAG_EDIT_RESERVATIONS.acquire(resource_keys)
+    *,
+    cancel_event: Event | None = None,
+) -> StructuralTagEditReservation | None:
+    return _STRUCTURAL_TAG_EDIT_RESERVATIONS.acquire(
+        resource_keys,
+        cancel_event=cancel_event,
+    )
 
 
 async def acquire_structural_tag_edit_reservation_async(

@@ -479,13 +479,27 @@ def create_asgi_app():
             runtime.config,
             logger=runtime.logger,
         )
-        _app.state.cover_preview_backfill.start()
         _app.state.generated_preview_relocation = None
         if preview_storage_repository is not None:
+            preview_relocation_active: bool | None = None
+
             def update_preview_storage_policy(state) -> None:
+                nonlocal preview_relocation_active
                 policy = preview_storage_policy_from_mapping(state)
                 _app.state.generated_preview_storage_policy = policy
                 runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = policy
+                relocation_active = str(state.get("operation_state") or "idle") in {
+                    "queued",
+                    "running",
+                    "cancel_requested",
+                }
+                if relocation_active == preview_relocation_active:
+                    return
+                if relocation_active:
+                    _app.state.cover_preview_backfill.stop()
+                else:
+                    _app.state.cover_preview_backfill.start()
+                preview_relocation_active = relocation_active
 
             _app.state.generated_preview_relocation = GeneratedPreviewRelocationWorker(
                 preview_storage_repository,
@@ -495,7 +509,10 @@ def create_asgi_app():
                     _app.state.cover_preview_backfill.inventory_existing_previews
                 ),
             )
+            update_preview_storage_policy(preview_storage_state or {})
             _app.state.generated_preview_relocation.start()
+        else:
+            _app.state.cover_preview_backfill.start()
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -518,14 +535,14 @@ def create_asgi_app():
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
                 (
-                    "cover preview backfill",
-                    _app.state.cover_preview_backfill.stop,
-                ),
-                (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop
                     if _app.state.generated_preview_relocation is not None
                     else lambda: None,
+                ),
+                (
+                    "cover preview backfill",
+                    _app.state.cover_preview_backfill.stop,
                 ),
                 (
                     "library warmup",

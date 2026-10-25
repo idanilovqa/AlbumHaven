@@ -2154,6 +2154,44 @@ def test_async_reservation_cancellation_preserves_fifo_and_releases_grant():
         blocker.release()
 
 
+def test_sync_reservation_cancellation_removes_waiter_and_releases_worker():
+    manager = save_tasks_module.StructuralTagEditReservationManager()
+    blocker = manager.acquire({"path:shared.mp3"})
+    cancel_event = Event()
+    acquired = []
+    errors = []
+
+    def acquire_cancellable():
+        try:
+            acquired.append(
+                manager.acquire(
+                    {"path:shared.mp3"},
+                    cancel_event=cancel_event,
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    waiter = Thread(target=acquire_cancellable, daemon=True)
+    waiter.start()
+    for _attempt in range(100):
+        if manager._waiting:
+            break
+        waiter.join(timeout=0.01)
+    assert manager._waiting
+
+    cancel_event.set()
+    waiter.join(timeout=1.0)
+
+    assert not waiter.is_alive()
+    assert errors == []
+    assert acquired == [None]
+    assert manager._waiting == []
+    blocker.release()
+    replacement = manager.acquire({"path:shared.mp3"})
+    replacement.release()
+
+
 def test_regular_finalizer_holds_reservation_through_durable_and_live_state(
     tmp_path,
 ):

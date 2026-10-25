@@ -420,6 +420,130 @@ def test_queue_cover_lookup_task_registers_background_future(config, logger, lib
     assert calls["registered"] == ("task-123", "fake-future")
 
 
+@pytest.mark.parametrize("cancel_during_preparation", [False, True])
+def test_queue_cover_lookup_task_defers_album_preparation_to_worker(
+    config, logger, monkeypatch, tmp_path: Path, cancel_during_preparation
+):
+    calls: dict[str, object] = {}
+    source_album = _album_payload(tmp_path / "stale.mp3")
+    current_album = {**source_album, "album_artist": "Current Artist"}
+    current_paths = {str(tmp_path / "current.mp3")}
+
+    class FakeExecutor:
+        def submit(self, fn, *args):
+            calls["submitted"] = (fn, args)
+            return "fake-future"
+
+    monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", FakeExecutor())
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "create_cover_lookup_task",
+        lambda *_args, **_kwargs: ("task-deferred", Event()),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "register_cover_lookup_future",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "_update_candidate_lookup_task",
+        lambda task_id, **changes: calls.setdefault(
+            "task_update", (task_id, changes)
+        ),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "_run_cover_lookup_job",
+        lambda runtime_job: calls.setdefault("runtime_job", runtime_job),
+    )
+
+    def prepare(_album, _paths, cancel_event):
+        calls["prepared"] = True
+        if cancel_during_preparation:
+            cancel_event.set()
+        return current_album, current_paths
+
+    task_id = cover_lookup_runtime.queue_cover_lookup_task(
+        source_album,
+        {str(tmp_path / "stale.mp3")},
+        config=config,
+        logger=logger,
+        prepare=prepare,
+    )
+
+    assert task_id == "task-deferred"
+    assert "prepared" not in calls
+    worker, worker_args = calls["submitted"]
+    worker(*worker_args)
+    assert calls["prepared"] is True
+    if cancel_during_preparation:
+        assert "runtime_job" not in calls
+        assert "task_update" not in calls
+        return
+    assert calls["runtime_job"].album == current_album
+    assert calls["runtime_job"].requested_track_paths == current_paths
+    task_id, task_update = calls["task_update"]
+    assert task_id == "task-deferred"
+    assert task_update["artist"] == "Current Artist"
+    assert task_update["album_payload"] == current_album
+    assert task_update["track_paths"] == sorted(current_paths)
+
+
+def test_queue_cover_lookup_task_reports_deferred_preparation_failure(
+    config, logger, monkeypatch, tmp_path: Path
+):
+    calls: dict[str, object] = {}
+
+    class FakeExecutor:
+        def submit(self, fn, *args):
+            calls["submitted"] = (fn, args)
+            return "fake-future"
+
+    monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", FakeExecutor())
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "create_cover_lookup_task",
+        lambda *_args, **_kwargs: ("task-deferred", object()),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "register_cover_lookup_future",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "_update_candidate_lookup_task",
+        lambda task_id, **changes: calls.setdefault(
+            "task_update", (task_id, changes)
+        ),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "_run_cover_lookup_job",
+        lambda _runtime_job: pytest.fail("provider lookup must not run"),
+    )
+
+    def fail_preparation(_album, _paths, _cancel_event):
+        raise ValueError("Album does not contain any tracks")
+
+    cover_lookup_runtime.queue_cover_lookup_task(
+        _album_payload(tmp_path / "stale.mp3"),
+        {str(tmp_path / "stale.mp3")},
+        config=config,
+        logger=logger,
+        prepare=fail_preparation,
+    )
+
+    worker, worker_args = calls["submitted"]
+    worker(*worker_args)
+    task_id, task_update = calls["task_update"]
+    assert task_id == "task-deferred"
+    assert task_update["status"] == "failed"
+    assert task_update["progress"] == 100
+    assert task_update["message"] == "Album does not contain any tracks"
+
+
 def test_run_cover_lookup_job_starts_provider_deadline_inside_worker(monkeypatch):
     captured: dict[str, object] = {}
     runtime_job = SimpleNamespace(

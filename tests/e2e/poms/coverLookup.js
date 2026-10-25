@@ -15,6 +15,7 @@ export class CoverLookup extends BasePage {
     this.modalActions = page.locator(this.modalActionsSelector);
     this.findBetterButton = page.locator(this.findBetterButtonSelector);
     this.saveRemoteButton = page.locator(this.saveRemoteButtonSelector);
+    this.cancelButton = this.modal.getByRole('button', { name: 'Cancel', exact: true });
     this.manualUrlInput = page.locator(this.manualUrlInputSelector);
     this.manualExtractButton = page.locator(this.manualExtractButtonSelector);
     this.addImageButton = this.modal.getByRole('button', { name: 'Add image', exact: true });

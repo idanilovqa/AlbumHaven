@@ -60,6 +60,13 @@ test('Cover Look Up puts its full-search action and description in the footer', 
   assert.match(footer, /id="cover-lookup-search-hint">Runs a full cover art search/);
 });
 
+test('Cover Look Up keeps search and save actions on one desktop footer row', () => {
+  const css = read('music_app/static/css/runtime/cover-lookup-modal.css');
+
+  assert.match(css, /\.cover-lookup-modal-actions\s*\{[^}]*flex-wrap:\s*nowrap[^}]*align-items:\s*flex-start/s);
+  assert.match(css, /\.cover-lookup-modal-status\s*\{[^}]*min-width:\s*0/s);
+});
+
 test('Album Details supplies mock-approved cover actions to AlbumArtbox', () => {
   const renderer = read('music_app/static/js/runtime/tag-editor-and-optimistic-updates.js');
   const css = read('music_app/static/css/runtime/track-modal-and-lightbox.css');

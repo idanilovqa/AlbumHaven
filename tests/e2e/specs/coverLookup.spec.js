@@ -841,7 +841,20 @@ test('FTC-COVERS-035 persisted notification candidates remain visible and save a
       restarted.coverLookupActions.coverLookup.remoteCoverCardById(candidateId),
     ).toBeVisible();
 
-    const saved = await restarted.coverLookupActions.selectRemoteCandidateByIdAndSave(candidateId);
+      await restarted.coverLookupActions.selectRemoteCandidateById(candidateId);
+      const [findBetterBox, cancelBox, saveBox] = await Promise.all([
+        restarted.coverLookupActions.coverLookup.findBetterButton.boundingBox(),
+        restarted.coverLookupActions.coverLookup.cancelButton.boundingBox(),
+        restarted.coverLookupActions.coverLookup.saveRemoteButton.boundingBox(),
+      ]);
+      expect(findBetterBox).not.toBeNull();
+      expect(cancelBox).not.toBeNull();
+      expect(saveBox).not.toBeNull();
+      expect(Math.abs(cancelBox.y - findBetterBox.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(saveBox.y - findBetterBox.y)).toBeLessThanOrEqual(1);
+      expect(cancelBox.x).toBeGreaterThan(findBetterBox.x + findBetterBox.width);
+      expect(saveBox.x).toBeGreaterThan(cancelBox.x + cancelBox.width);
+      const saved = await restarted.coverLookupActions.saveSelectedRemoteCandidate();
     expect(saved.requestPayload.candidate_id).toBe(candidateId);
     await restarted.coverLookupActions.waitForTaskStatusById(taskId, 'Art chosen', {
       timeout: 120_000,

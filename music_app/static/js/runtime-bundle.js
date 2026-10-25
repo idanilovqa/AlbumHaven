@@ -32113,7 +32113,9 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
-      restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
+      if (!failedLogHistoryEntryId) {
+        restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
+      }
     }
     showRepairAlert(
       failedSaveTaskError || 'Failed to edit tags.',

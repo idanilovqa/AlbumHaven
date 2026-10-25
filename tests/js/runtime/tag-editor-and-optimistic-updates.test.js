@@ -2721,6 +2721,55 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
   );
 });
 
+test('manual tag edit keeps the editor closed after a logged physical write failure', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Track.flac';
+  const album = {
+    key: 'artist::album::2000',
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album' }],
+  };
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { album: 'Failed Rename' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert() {},
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return {
+        ok: false,
+        async json() {
+          return {
+            ok: false,
+            error: 'Permission denied while writing tags.',
+            save_task_id: 'failed-tag-save',
+            save_task_status: 'failed',
+            log_entry: { id: 'tag-edit-failure-42', action: 'Tag edit failed' },
+          };
+        },
+      };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(closedModal.hidden, true);
+});
+
 test('failed tag save does not replace a newer tag editor session', () => {
   const originalDraft = { album: { key: 'original' }, sessionMutationClaim: null };
   const newerDraft = { album: { key: 'newer' }, sessionMutationClaim: null };

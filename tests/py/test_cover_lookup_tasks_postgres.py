@@ -392,3 +392,22 @@ def test_unpaged_notification_summaries_do_not_expose_current_user_cover_paths()
     assert items[0]["current_user_cover_preview_url"].endswith(
         "&v=revelations-user-revision"
     )
+def test_terminal_notification_queries_exclude_albums_without_current_files():
+    from music_app.services import cover_lookup_tasks_postgres as repository
+
+    joins = repository._current_notification_album_joins_sql()
+    queries = (
+        repository._load_notification_summaries_sql(),
+        repository._count_notifications_sql(),
+        repository._load_notification_summary_page_sql(
+            has_cursor=False,
+            active_only=False,
+        ),
+    )
+
+    assert "scan_cache_stale is false" in joins
+    assert "has_active_tracks" in joins
+    for query in queries:
+        assert "current_album.has_active_tracks" in query
+        assert "status in ('pending', 'running')" in query
+

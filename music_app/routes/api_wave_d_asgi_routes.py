@@ -58,6 +58,7 @@ from music_app.services.cover_refresh_runtime import (
     start_manual_cover_refresh_request,
 )
 from music_app.services.cover_workflow import (
+    CoverAlbumContext,
     begin_local_image_promotion,
     complete_local_image_promotion,
     cover_revision_for_path,
@@ -205,6 +206,26 @@ def _album_with_context_tracks(album: Mapping[str, object]) -> JsonDict:
     return normalized_album
 
 
+def _resolve_distributed_album_context(
+    config: Mapping[str, object],
+    album: Mapping[str, object],
+) -> CoverAlbumContext | None:
+    track_paths = _album_track_paths(album)
+    if len(track_paths) < 2:
+        return None
+    contexts = [
+        resolve_album_context(config, {"tracks": [{"path": path}]})
+        for path in sorted(track_paths)
+    ]
+    if any(context is None for context in contexts):
+        return None
+    # One validated physical source owns file writes; the logical album keeps all tracks.
+    return CoverAlbumContext(
+        album_root=contexts[0].album_root,
+        track_paths=track_paths,
+    )
+
+
 async def _resolve_album_payload_context(
     config: Mapping[str, object],
     album: Mapping[str, object],
@@ -218,6 +239,9 @@ async def _resolve_album_payload_context(
         for path in (fallback_track_paths or set())
         if str(path or "").strip()
     }
+    resolved_context = resolve_album_context(config, normalized_album)
+    if resolved_context is not None:
+        return normalized_album, resolved_context
     if fallback_paths and not _album_track_paths(normalized_album):
         album_id = await run_in_threadpool(
             repository.resolve_album_id_for_track_paths,
@@ -238,28 +262,38 @@ async def _resolve_album_payload_context(
                     for path in list(track_context.get("track_paths") or [])
                     if str(path or "").strip()
                 ]
-    if not _album_track_paths(normalized_album):
-        album_id = _album_id(normalized_album)
-        album_key = str(
-            normalized_album.get("_persisted_album_key")
-            or normalized_album.get("key")
-            or normalized_album.get("album_ref")
-            or ""
-        ).strip() or None
-        if album_id is not None or album_key is not None:
-            track_context = await run_in_threadpool(
-                repository.resolve_album_track_context,
-                album_id=album_id,
-                album_key=album_key,
-            )
-            if isinstance(track_context, Mapping):
-                normalized_album["id"] = track_context.get("album_id")
-                normalized_album["tracks"] = [
-                    {"path": path}
-                    for path in list(track_context.get("track_paths") or [])
-                    if str(path or "").strip()
-                ]
-    return normalized_album, resolve_album_context(config, normalized_album)
+                resolved_context = (
+                    resolve_album_context(config, normalized_album)
+                    or _resolve_distributed_album_context(config, normalized_album)
+                )
+                if resolved_context is not None:
+                    return normalized_album, resolved_context
+    album_id = _album_id(normalized_album)
+    album_key = str(
+        normalized_album.get("_persisted_album_key")
+        or normalized_album.get("key")
+        or normalized_album.get("album_ref")
+        or ""
+    ).strip() or None
+    if album_id is not None or album_key is not None:
+        track_context = await run_in_threadpool(
+            repository.resolve_album_track_context,
+            album_id=album_id,
+            album_key=album_key,
+        )
+        if isinstance(track_context, Mapping):
+            normalized_album["id"] = track_context.get("album_id")
+            normalized_album["album_id"] = track_context.get("album_id")
+            normalized_album["key"] = track_context.get("album_key")
+            normalized_album["tracks"] = [
+                {"path": path}
+                for path in list(track_context.get("track_paths") or [])
+                if str(path or "").strip()
+            ]
+    return normalized_album, (
+        resolve_album_context(config, normalized_album)
+        or _resolve_distributed_album_context(config, normalized_album)
+    )
 
 
 def _require_album_track_paths(
@@ -381,15 +415,25 @@ def _task_matches_album_context(
     task_payload: Mapping[str, object],
     *,
     track_paths: set[str],
+    album_id: int | None = None,
 ) -> bool:
     task_track_paths = {
         str(path or "").strip()
         for path in list(task_payload.get("track_paths") or [])
         if str(path or "").strip()
     }
-    if task_track_paths != track_paths:
+    task_album = task_payload.get("album_payload")
+    if not task_track_paths and isinstance(task_album, Mapping):
+        task_track_paths = _album_track_paths(task_album)
+    if task_track_paths and task_track_paths <= track_paths:
+        return True
+    if task_track_paths & track_paths:
         return False
-    return True
+    return (
+        album_id is not None
+        and isinstance(task_album, Mapping)
+        and _album_id(task_album) == album_id
+    )
 
 
 def _same_cover_lookup_generation(left: object, right: object) -> bool:
@@ -540,6 +584,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     if task_payload and not _task_matches_album_context(
         task_payload,
         track_paths=album_context.track_paths,
+        album_id=album_id,
     ):
         return _json_response(
             ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)
@@ -1198,6 +1243,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         if not _task_matches_album_context(
             task_payload,
             track_paths=album_context.track_paths,
+            album_id=album_id,
         ):
             return _json_response(
                 ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)

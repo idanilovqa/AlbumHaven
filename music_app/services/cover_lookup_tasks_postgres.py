@@ -803,6 +803,7 @@ def _load_notification_summaries_sql() -> str:
           on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
         {_current_notification_album_joins_sql()}
         where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
+          and {_actionable_notification_predicate_sql()}
         order by
             coalesce(ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
             ops.cover_lookup_tasks.task_key desc;
@@ -813,7 +814,7 @@ def _load_notification_summaries_sql() -> str:
 def _count_notifications_sql() -> str:
     return (
         _bootstrap_context_sql()
-        + """
+        + f"""
         select
           count(*)::int as total_count,
           count(*) filter (
@@ -835,14 +836,17 @@ def _count_notifications_sql() -> str:
         from ops.cover_lookup_tasks
         join bootstrap_context
           on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
-        where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[]);
+        {_current_notification_album_joins_sql()}
+        where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
+          and {_actionable_notification_predicate_sql()};
         """
     )
 
 
 def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) -> str:
     filters = [
-        "ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])"
+        "ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])",
+        _actionable_notification_predicate_sql(),
     ]
     if active_only:
         filters.append("ops.cover_lookup_tasks.status = any(%s::text[])")
@@ -1016,10 +1020,26 @@ def _current_notification_album_joins_sql() -> str:
          and current_album_by_key.album_key = identity.album_key
         cross join lateral (
           select
+            coalesce(current_album_by_id.id, current_album_by_key.id),
             coalesce(current_album_by_id.cover_path, current_album_by_key.cover_path),
-            coalesce(current_album_by_id.metadata, current_album_by_key.metadata)
-        ) as current_album(cover_path, metadata)
+            coalesce(current_album_by_id.metadata, current_album_by_key.metadata),
+            exists (
+              select 1
+              from library.local_tracks as current_track
+              join library.local_track_files as current_file
+                on current_file.track_id = current_track.id
+               and current_file.scan_cache_stale is false
+              where current_track.album_id = coalesce(
+                current_album_by_id.id,
+                current_album_by_key.id
+              )
+            )
+        ) as current_album(album_id, cover_path, metadata, has_active_tracks)
     """
+
+
+def _actionable_notification_predicate_sql() -> str:
+    return "(ops.cover_lookup_tasks.status in ('pending', 'running') or current_album.has_active_tracks)"
 
 
 def _delete_removed_notifications_sql() -> str:

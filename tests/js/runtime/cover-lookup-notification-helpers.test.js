@@ -143,8 +143,10 @@ function loadHelper(overrides = {}) {
 }
 
 ;(async () => {
+  const selectedCoverUrl = '/cover?album=selected&v=2';
   const { context, fetchCalls } = loadHelper({
     buildTrackPathSignature: (album) => (album?.tracks || []).map((track) => String(track.path || '')).sort().join('::'),
+    buildAlbumDisplayCoverUrl: () => selectedCoverUrl,
   });
   context.state.coverLookup.tasks = [
     {
@@ -171,6 +173,7 @@ function loadHelper(overrides = {}) {
 
   const tasks = JSON.parse(JSON.stringify(context.state.coverLookup.tasks));
   assert.equal(tasks[0].notification_action_taken, true);
+  assert.equal(tasks[0].current_user_cover_preview_url, selectedCoverUrl);
   assert.equal(Boolean(tasks[1].notification_action_taken), false);
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/task/failed-task/mark-action-taken');

@@ -2180,6 +2180,7 @@ async function loadCoverLookupTasks(options = {}) {
       album: task.album,
       year: task.year,
       notification_action_taken: Boolean(task.notification_action_taken),
+      current_user_cover_preview_url: String(task.current_user_cover_preview_url || ''),
       possible_match_count: Number(task.possible_match_count || 0),
       candidate_updated_at: String(task.candidate_updated_at || ''),
       job_kind: String(task.job_kind || ''),
@@ -2705,7 +2706,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     if (taskId) {
-      markCoverLookupTaskActionTaken(taskId, album);
+      markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
       renderCoverLookupDrawer();
     }
     if (ownsModal()) closeCoverLookupModal();
@@ -3005,7 +3006,7 @@ async function savePastedCoverFromLookup(imageId) {
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     if (taskId) {
-      markCoverLookupTaskActionTaken(taskId, album);
+      markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
       renderCoverLookupDrawer();
     }
   } catch (error) {

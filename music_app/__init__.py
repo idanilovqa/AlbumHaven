@@ -593,7 +593,7 @@ def create_asgi_app():
                     runtime.library_state,
                     runtime.config,
                     runtime.logger,
-                    set(result.active_track_paths),
+                    set(result.new_track_paths),
                     affected_album_keys=result.affected_album_keys,
                 )
 

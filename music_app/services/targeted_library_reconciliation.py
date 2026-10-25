@@ -26,6 +26,7 @@ class TargetedReconciliationResult:
     affected_album_keys: tuple[str, ...]
     health: str = "healthy"
     active_track_paths: tuple[str, ...] = ()
+    new_track_paths: tuple[str, ...] = ()
 
 
 class TargetedLibraryReconciler:
@@ -298,6 +299,16 @@ class TargetedLibraryReconciler:
                     )
                 ),
                 active_track_paths=tuple(sorted(active_entries, key=str.casefold)),
+                new_track_paths=tuple(
+                    sorted(
+                        {
+                            str(path)
+                            for path in persisted.get("new_track_paths", ())
+                            if str(path)
+                        },
+                        key=str.casefold,
+                    )
+                ),
             )
             if self._after_commit is not None and result.revision:
                 self._after_commit(result)

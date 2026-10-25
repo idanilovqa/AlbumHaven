@@ -294,6 +294,7 @@ class PostgresScanCacheAdapter:
             for path, entry in active_file_entries.items()
             if str(path).strip() and isinstance(entry, dict)
         }
+        incoming_track_paths = set(file_cache)
         stale_by_root: dict[str, dict[str, set[str]]] = {
             normalized_root_id: {
                 "paths": {str(path) for path in deleted_paths if str(path)},
@@ -346,6 +347,30 @@ class PostgresScanCacheAdapter:
                     {"active_paths": sorted(file_cache)},
                 ).fetchall()
             ]
+            existing_track_paths = {
+                str(row.get("private_path") or "").strip()
+                for row in existing_memberships
+                if str(row.get("private_path") or "").strip()
+            }
+            move_destination_paths: set[str] = set()
+            for move in moves:
+                destination_path = str(move.get("destination_path") or "").strip()
+                if not destination_path:
+                    continue
+                if move.get("is_directory"):
+                    destination = Path(destination_path)
+                    move_destination_paths.update(
+                        path
+                        for path in incoming_track_paths
+                        if Path(path) == destination
+                        or Path(path).is_relative_to(destination)
+                    )
+                else:
+                    move_destination_paths.add(destination_path)
+            new_track_paths = sorted(
+                incoming_track_paths - existing_track_paths - move_destination_paths,
+                key=str.casefold,
+            )
             # A watcher batch is not a complete physical album. Compare against
             # its persisted source siblings before classifying partial copies.
             from music_app.services.album_local_membership import physical_album_root, physical_album_root_sql
@@ -440,6 +465,7 @@ class PostgresScanCacheAdapter:
                 return {
                     "inventory_mutation_revision": 0,
                     "affected_album_keys": [],
+                    "new_track_paths": new_track_paths,
                 }
             # A logical album can span different containers and configured
             # roots. Replace scan-owned credits using all its retained active
@@ -554,6 +580,7 @@ class PostgresScanCacheAdapter:
         return {
             "inventory_mutation_revision": revision,
             "affected_album_keys": sorted(affected_album_keys),
+            "new_track_paths": new_track_paths,
         }
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:

@@ -213,11 +213,17 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
     class TargetedConnection(FakeConnection):
+        def __init__(self, *, existing_memberships=None):
+            super().__init__()
+            self.existing_memberships = existing_memberships
+
         def execute(self, sql, params=None):
             cursor = super().execute(sql, params)
             normalized = _normalized_sql(sql)
             if "from library.separate_releases" in normalized:
                 return FakeCursor([{"release_key": "artist::new album"}])
+            if "as album_owner_key" in normalized and self.existing_memberships is not None:
+                return FakeCursor(self.existing_memberships)
             if "as album_owner_key" in normalized:
                 return FakeCursor([{
                     "private_path": active_path, "album_key": "artist::new album",
@@ -291,6 +297,7 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     assert result == {
         "inventory_mutation_revision": 7,
         "affected_album_keys": ["artist::new album", "artist::old album"],
+        "new_track_paths": [],
     }
     assert observed_separate_release_keys == [{"artist::new album"}, {"artist::new album"}]
     normalized_calls = [_normalized_sql(sql) for sql, _ in connection.executed]
@@ -318,6 +325,63 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     )
     assert featured_sync_params["affected_album_keys"] == ["artist::new album"]
     assert connection.exit_exc_type is None
+
+    unseen_connection = TargetedConnection(existing_memberships=[])
+    unseen_adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: unseen_connection,
+        build_albums=build_albums,
+    )
+    unseen_result = unseen_adapter.persist_targeted_inventory_mutation(
+        root_id="main",
+        active_file_entries={
+            active_path: {
+                "path": active_path,
+                "album": "New Album",
+                "album_artist": "Artist",
+                "artist": "Artist",
+                "title": "Track",
+                "track_number": 1,
+                "disc_number": 1,
+                "duration_seconds": 120,
+                "mtime": 1.0,
+                "size": 123,
+                "library_root_id": "main",
+                "library_root_category": "main-library",
+            }
+        },
+    )
+    assert unseen_result["new_track_paths"] == [active_path]
+
+    moved_directory_result = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: TargetedConnection(existing_memberships=[]),
+        build_albums=build_albums,
+    ).persist_targeted_inventory_mutation(
+        root_id="main",
+        active_file_entries={active_path: {
+            "path": active_path,
+            "album": "New Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "Track",
+            "track_number": 1,
+            "disc_number": 1,
+            "duration_seconds": 120,
+            "mtime": 1.0,
+            "size": 123,
+            "library_root_id": "main",
+            "library_root_category": "main-library",
+        }},
+        moves=({
+            "source_path": "C:/Music/Artist/Old Album",
+            "destination_path": "C:/Music/Artist/New Album",
+            "source_root_id": "main",
+            "destination_root_id": "main",
+            "is_directory": True,
+        },),
+    )
+    assert moved_directory_result["new_track_paths"] == []
 
 
 def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artists(
@@ -352,6 +416,7 @@ def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artis
     assert result == {
         "inventory_mutation_revision": 8,
         "affected_album_keys": ["artist::surviving album"],
+        "new_track_paths": [],
     }
     featured_sync_params = next(
         params
@@ -383,6 +448,7 @@ def test_noop_targeted_subtree_deletion_does_not_advance_inventory_revision(
     assert result == {
         "inventory_mutation_revision": 0,
         "affected_album_keys": [],
+        "new_track_paths": [],
     }
     assert not any(
         "update library.libraries" in _normalized_sql(sql)

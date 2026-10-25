@@ -87,6 +87,7 @@ function mergeCoverLookupTasksWithNotifications(tasks) {
 function markCoverLookupTaskActionTaken(taskId, album = null) {
   const normalizedId = String(taskId || '').trim();
   const albumSignature = album ? buildTrackPathSignature(album) : '';
+  const selectedCoverUrl = album ? String(buildAlbumDisplayCoverUrl(album) || '').trim() : '';
   const matchingTaskIds = [];
   state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
     if (!isCoverLookupTaskCompleted(task)) return task;
@@ -95,6 +96,7 @@ function markCoverLookupTaskActionTaken(taskId, album = null) {
     const taskAlbumMatches = albumSignature && taskAlbumSignature && taskAlbumSignature === albumSignature;
     if (!taskIdMatches && !taskAlbumMatches) return task;
     const nextTask = normalizeCoverLookupNotificationTask(task, { actionTaken: true }) || task;
+    if (selectedCoverUrl) nextTask.current_user_cover_preview_url = selectedCoverUrl;
     matchingTaskIds.push(String(nextTask?.id || '').trim());
     return nextTask;
   });

@@ -16,6 +16,7 @@ class RecordingRepository:
         return {
             "inventory_mutation_revision": 12,
             "affected_album_keys": ["broadcast::tender buttons"],
+            "new_track_paths": list(kwargs["active_file_entries"]),
         }
 
 
@@ -137,6 +138,7 @@ def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     assert result.revision == 12
     assert result.affected_album_keys == ("broadcast::tender buttons",)
     assert result.active_track_paths == (str(requested),)
+    assert result.new_track_paths == (str(requested),)
     assert repository.calls[0]["root_id"] == "main"
     entries = repository.calls[0]["active_file_entries"]
     assert list(entries) == [str(requested)]

@@ -4313,3 +4313,41 @@ require('node:test')('only the first service cover preview receives eager browse
   assert.equal((bodyElement.innerHTML.match(/loading="eager" fetchpriority="high"/g) || []).length, 1);
   assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
 });
+
+require('node:test')('notification polling rerenders when the selected user cover preview changes', async () => {
+  let previewUrl = '/cover?album=temple&v=before';
+  let renderCount = 0;
+  const context = loadHelper({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        tasks: [{
+          id: 'temple-task',
+          status: 'completed',
+          artist: 'Тампль',
+          album: 'Премьера на Зиланте 2000',
+          notification_action_taken: true,
+          current_user_cover_preview_url: previewUrl,
+        }],
+      }),
+    }),
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    updateCoverLookupNotificationCounts: () => {},
+    applyCoverLookupTaskUpdates: () => {},
+    stopCoverLookupPollingIfIdle: () => {},
+  });
+  context.state.coverLookup.tasks = [];
+  context.state.coverLookup.modal = { taskId: '' };
+  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+
+  await context.loadCoverLookupTasks({ toast: false });
+  const initialRenderCount = renderCount;
+  assert.ok(initialRenderCount > 0);
+
+  previewUrl = '/cover?album=temple&v=selected';
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(context.state.coverLookup.tasks[0].current_user_cover_preview_url, previewUrl);
+  assert.equal(renderCount, initialRenderCount + 1);
+});

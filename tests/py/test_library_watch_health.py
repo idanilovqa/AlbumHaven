@@ -867,7 +867,11 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
                 result = SimpleNamespace(
                     revision=12,
                     affected_album_keys=("artist::new album",),
-                    active_track_paths=("C:/Destination/01.flac",),
+                    active_track_paths=(
+                        "C:/Existing Album/01.flac",
+                        "C:/Destination/01.flac",
+                    ),
+                    new_track_paths=("C:/Destination/01.flac",),
                     health="healthy",
                 )
                 self.after_commit(result)

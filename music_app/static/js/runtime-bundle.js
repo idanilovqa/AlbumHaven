@@ -16874,10 +16874,15 @@ function resumeScanPageGalleryCoverLoads() {
 
 function openScanPage() {
   if (!state.ui.scanPageReturnContext) {
+    const galleryScroll = document.getElementById('albums-scroll');
     state.ui.scanPageReturnContext = {
       view: JSON.parse(JSON.stringify(state.view || {})),
       searchDraftQuery: String(state.ui.searchDraftQuery ?? state.view?.query ?? ''),
       url: typeof window !== 'undefined' ? String(window.location?.href || '') : '',
+      galleryScrollPosition: galleryScroll ? {
+        scrollTop: Number(galleryScroll.scrollTop || 0),
+        scrollLeft: Number(galleryScroll.scrollLeft || 0),
+      } : null,
     };
   }
   suspendScanPageGalleryCoverLoads();
@@ -16982,7 +16987,16 @@ function closeScanPage() {
   if (retainedGalleryCardsRemainMounted) {
     renderView({ preserveMountedGallery: true });
   } else {
-    renderView();
+    renderView(returnContext.galleryScrollPosition ? {
+      preserveScroll: true,
+      preserveAbsoluteScroll: true,
+      absoluteScrollPosition: returnContext.galleryScrollPosition,
+    } : undefined);
+  }
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (galleryScroll && returnContext.galleryScrollPosition) {
+    galleryScroll.scrollTop = returnContext.galleryScrollPosition.scrollTop;
+    galleryScroll.scrollLeft = returnContext.galleryScrollPosition.scrollLeft;
   }
   resumeScanPageGalleryCoverLoads();
 }
@@ -18183,7 +18197,14 @@ async function downloadUtilityLogHistory() {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
   anchor.href = url; anchor.download = `album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
 }
 
 function openUtilityLogHistoryQuery(exportAfter = false) {

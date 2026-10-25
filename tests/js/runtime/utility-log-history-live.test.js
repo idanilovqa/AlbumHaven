@@ -159,6 +159,28 @@ test('actual download owner cannot create a file from a prior library export', a
   await assert.rejects(() => pending); assert.deepEqual(created, []);
 });
 
+test('actual download owner attaches its link until the browser accepts the download', async () => {
+  const h = setup(); await h.context.loadUtilityLogHistory();
+  const events = [];
+  const anchor = {
+    click() { events.push('click'); },
+    remove() { events.push('remove'); },
+  };
+  h.context.URL = {
+    createObjectURL: () => { events.push('create'); return 'blob:owned'; },
+    revokeObjectURL: () => events.push('revoke'),
+  };
+  h.context.Blob = class {};
+  h.context.document = {
+    body: { appendChild(node) { assert.equal(node, anchor); events.push('append'); } },
+    createElement: () => anchor,
+  };
+
+  await h.context.downloadUtilityLogHistory();
+
+  assert.deepEqual(events, ['create', 'append', 'click', 'remove', 'revoke']);
+});
+
 test('period query uses the SearchInput anchored variant of the shared form owner', async () => {
   const h = setup(); await h.context.loadUtilityLogHistory();
   const anchor = {}; h.context.getUtilityModalElements = () => ({ problemFilterButton: anchor });

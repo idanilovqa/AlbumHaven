@@ -5535,6 +5535,30 @@ test('closeScanPage retains mounted gallery nodes when Back restores the same ac
   );
 });
 
+test('closeScanPage restores the gallery scroll captured before opening Library Status', () => {
+  const { context, artistGroups } = createContext();
+  const galleryScroll = { scrollTop: 488, scrollLeft: 17 };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => (
+    id === 'albums-scroll' ? galleryScroll : getElementById(id)
+  );
+  context.state.view = {
+    ...context.state.view,
+    artist_groups: [{ artist: 'Rarity Artist', albums: [{ key: 'rarity::album' }] }],
+  };
+  artistGroups.querySelectorAll = selector => (
+    selector === '.album-card' ? [{ dataset: { albumKey: 'rarity::album' } }] : []
+  );
+
+  context.openScanPage();
+  galleryScroll.scrollTop = 0;
+  galleryScroll.scrollLeft = 0;
+  context.closeScanPage();
+
+  assert.equal(galleryScroll.scrollTop, 488);
+  assert.equal(galleryScroll.scrollLeft, 17);
+});
+
 test('closeScanPage rejects a structurally blank in-flight gallery and restores the retained usable view', () => {
   const { context, searchInput } = createContext();
   vm.runInContext(viewValueHelperSource, context, { filename: viewValueHelperPath });

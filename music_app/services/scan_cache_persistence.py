@@ -68,6 +68,10 @@ ScanCacheSnapshot = tuple[dict[str, dict[str, object]], float, dict[str, object]
 _LOGGER = logging.getLogger(__name__)
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _SOURCE = "runtime_scan_cache"
+_SYNCHRONIZED_FEATURED_ARTIST_SOURCES = [
+    _SOURCE,
+    "repair_featured_artist_backfill",
+]
 _PIPELINE_BATCH_SIZE = 1_000
 _MISSING_STRUCTURAL_VALUE = object()
 _ALBUM_COVER_AUTHORITY_FIELDS = (
@@ -562,7 +566,7 @@ class PostgresScanCacheAdapter:
                             for row in featured_artist_rows
                         ]
                     ),
-                    "source": _SOURCE,
+                    "synchronized_sources": _SYNCHRONIZED_FEATURED_ARTIST_SOURCES,
                 },
             )
             revision_row = _first_row(
@@ -1776,7 +1780,7 @@ class PostgresScanCacheAdapter:
                             for row in featured_artist_rows
                         ]
                     ),
-                    "source": _SOURCE,
+                    "synchronized_sources": _SYNCHRONIZED_FEATURED_ARTIST_SOURCES,
                 },
             )
             _execute_set_based_batches(
@@ -6066,7 +6070,8 @@ def _synchronize_local_album_featured_artists_sql() -> str:
         delete from library.local_album_featured_artists
         using bootstrap_context
         where library.local_album_featured_artists.library_id = bootstrap_context.library_id
-          and library.local_album_featured_artists.metadata ->> 'source' = %(source)s
+          and library.local_album_featured_artists.metadata ->> 'source'
+              = any(%(synchronized_sources)s::text[])
           and not exists (
             select 1
             from current_featured_rows
@@ -6314,7 +6319,8 @@ def _synchronize_targeted_local_album_featured_artists_sql() -> str:
         using bootstrap_context, affected_albums
         where library.local_album_featured_artists.library_id = bootstrap_context.library_id
           and library.local_album_featured_artists.album_id = affected_albums.album_id
-          and library.local_album_featured_artists.metadata ->> 'source' = %(source)s
+          and library.local_album_featured_artists.metadata ->> 'source'
+              = any(%(synchronized_sources)s::text[])
           and not exists (
             select 1 from current_featured_rows
             where current_featured_rows.album_id = library.local_album_featured_artists.album_id

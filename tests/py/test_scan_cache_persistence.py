@@ -196,16 +196,28 @@ def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
     ) in normalized_sql
 
 
-def test_targeted_featured_artist_sync_is_scoped_to_affected_scan_owned_albums():
+def test_featured_artist_sync_reconciles_only_current_and_legacy_generated_rows():
     from music_app.services import scan_cache_persistence
 
-    normalized_sql = _normalized_sql(
+    for sql in (
+        scan_cache_persistence._synchronize_local_album_featured_artists_sql(),
+        scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql(),
+    ):
+        normalized_sql = _normalized_sql(sql)
+        assert "metadata ->> 'source' = any(%(synchronized_sources)s::text[])" in normalized_sql
+        assert "metadata ->> 'source' = %(source)s" not in normalized_sql
+        assert "not exists" in normalized_sql
+
+    targeted_sql = _normalized_sql(
         scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql()
     )
-    assert "unnest(%(affected_album_keys)s::text[])" in normalized_sql
-    assert "album_id = affected_albums.album_id" in normalized_sql
-    assert "metadata ->> 'source' = %(source)s" in normalized_sql
-    assert "not exists" in normalized_sql
+    assert "unnest(%(affected_album_keys)s::text[])" in targeted_sql
+    assert "album_id = affected_albums.album_id" in targeted_sql
+
+    assert scan_cache_persistence._SYNCHRONIZED_FEATURED_ARTIST_SOURCES == [
+        "runtime_scan_cache",
+        "repair_featured_artist_backfill",
+    ]
 
 
 def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(monkeypatch):
@@ -324,6 +336,10 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
         if "delete from library.local_album_featured_artists" in _normalized_sql(sql)
     )
     assert featured_sync_params["affected_album_keys"] == ["artist::new album"]
+    assert featured_sync_params["synchronized_sources"] == [
+        "runtime_scan_cache",
+        "repair_featured_artist_backfill",
+    ]
     assert connection.exit_exc_type is None
 
     unseen_connection = TargetedConnection(existing_memberships=[])
@@ -2304,7 +2320,10 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
         for sql, params in connection.executed
         if "delete from library.local_album_featured_artists" in sql
     )
-    assert synchronize_params["source"] == "runtime_scan_cache"
+    assert synchronize_params["synchronized_sources"] == [
+        "runtime_scan_cache",
+        "repair_featured_artist_backfill",
+    ]
     assert synchronize_params["current_featured_rows"] == [
         {
             "album_key": "broadcast::tender buttons",

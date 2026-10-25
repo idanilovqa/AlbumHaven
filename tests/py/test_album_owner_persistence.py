@@ -323,6 +323,36 @@ def test_unanimous_dominant_owner_keeps_one_off_guest_album_non_compilation(
     }
 
 
+def test_stale_compilation_flag_does_not_override_unanimous_album_owner(
+    monkeypatch,
+):
+    album, rows = _published_rows(
+        monkeypatch,
+        album="Owner-Led Guest Album",
+        album_artist="Album Owner",
+        track_artists=("Album Owner", "Album Owner", "Guest Artist"),
+        is_compilation=True,
+    )
+
+    _artist_rows, album_rows, featured_rows, track_rows, _track_file_rows = rows
+
+    assert album.album_artist == "Album Owner"
+    assert album.is_compilation is False
+    assert album_rows[0]["metadata"]["is_compilation"] is False
+    assert {
+        row["artist_key"]
+        for row in featured_rows
+        if row["featured_kind"] == "owner"
+    } == {"album owner"}
+    assert not [
+        row for row in featured_rows if row["featured_kind"] == "featured_member"
+    ]
+    assert {row["artist_key"] for row in track_rows} == {
+        "album owner",
+        "guest artist",
+    }
+
+
 @pytest.mark.parametrize(
     "track_artist",
     [

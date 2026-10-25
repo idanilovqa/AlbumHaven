@@ -281,7 +281,7 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     def compilation_state(inferred_state: bool) -> bool:
         if persisted_compilation_state is None:
             return inferred_state
-        return persisted_compilation_state
+        return inferred_state and persisted_compilation_state
 
     album_artist_values = [
         _normalize_display_artist_name(entry.get("album_artist")).strip()

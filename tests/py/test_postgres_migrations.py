@@ -379,6 +379,104 @@ def test_0109_only_redefines_the_hardened_scan_intent_sync_contract():
         assert progress_field not in sql
 
 
+@pytest.mark.parametrize("publication", ["full_scan", "targeted_reconciliation"])
+@pytest.mark.parametrize("inventory_helper", [False, True])
+def test_cover_consistency_replaces_existing_scan_publication_signatures(
+    publication, inventory_helper
+):
+    public_name = f"library.publish_claimed_{publication}"
+    name = public_name + ("_inventory_0106" if inventory_helper else "")
+    replacement = _cover_consistency_function_sql(name)
+    baseline = _watcher_function_sql(public_name)
+    assert replacement.split(") returns", 1)[0] == baseline.split(") returns", 1)[0]
+    assert f"drop function {public_name}(" not in _cover_consistency_sql()
+    if not inventory_helper:
+        assert replacement.split("language", 1)[0] == baseline.split("language", 1)[0]
+
+
+@pytest.mark.parametrize("publication", ["full_scan", "targeted_reconciliation"])
+def test_cover_consistency_scan_inventory_helpers_do_not_write_cover_authority(publication):
+    body = _cover_consistency_function_sql(
+        f"library.publish_claimed_{publication}_inventory_0106"
+    ).split("$$;", 1)[0]
+    assert "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))" in "".join(body.split())
+    album_inserts = re.findall(r"insert into library\.local_albums\s*\((.*?)\)", body)
+    assert album_inserts, "inventory helper must retain album publication"
+    assert all("cover_path" not in columns for columns in album_inserts)
+    assert not re.search(r"\bcover_path\s*=", body)
+    stripped_arrays = re.findall(r"-\s*array\[(.*?)\]", body)
+    assert stripped_arrays, "inventory metadata must remove cover authority keys"
+    stripped_keys = " ".join(stripped_arrays)
+    for key in (
+        "cover_path", "cover_revision", "cover_selection_origin", "remote_cover_url",
+        "remote_cover_thumbnail_url", "remote_cover_source", "remote_cover_source_label",
+        "remote_cover_album_url", "remote_cover_width", "remote_cover_height",
+    ):
+        assert f"'{key}'" in stripped_keys, f"missing stripped cover metadata key {key}"
+    assert "scan_cache" in body and "file_entry" in body
+    assert "inventory_mutation_revision" in body
+    if publication == "targeted_reconciliation":
+        assert "targeted_album_key_map" in body
+        assert "watcher_generation_participants" in body
+        assert "source_root_ref" in body
+
+
+@pytest.mark.parametrize("publication", ["full_scan", "targeted_reconciliation"])
+def test_cover_consistency_scan_observations_precede_watcher_completion(publication):
+    body = _cover_consistency_function_sql(f"library.publish_claimed_{publication}").split("$$;", 1)[0]
+    assert "intent.captured_cover_mutation_revision" in body
+    for fence in (
+        "job.attempt_count = p_attempt", "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token", "job.lease_expires_at > pg_catalog.clock_timestamp()",
+        "library.watcher_repairs", "library.watcher_lanes", "for update",
+    ):
+        assert fence in body
+    helper = body.index(f"library.publish_claimed_{publication}_inventory_0106(")
+    apply = body.index("library.apply_scanned_cover_observations(")
+    assert helper < apply
+    assert "if coalesce(v_publication.publication_won, false) then" in body[helper:apply]
+    assert body.count("library.apply_scanned_cover_observations(") == 1
+    if publication == "full_scan":
+        assert apply < body.index("library.complete_watcher_repair_internal(")
+    else:
+        assert apply < body.index("library.retire_claimed_targeted_reconciliation_vacated_albums(")
+        assert apply < body.index("library.complete_watcher_generation(")
+        assert "pg_temp.targeted_album_key_map" in body
+        assert "intent.publication_attempt" in body
+        assert "intent.committed_inventory_revision" in body
+
+
+def test_cover_consistency_worker_startup_preserves_baseline_and_watcher_contracts():
+    body = _cover_consistency_function_sql("ops.validate_durable_worker_startup").split("$$;", 1)[0]
+    baseline = _watcher_function_sql("ops.validate_durable_worker_startup")
+    signatures = re.findall(r"'((?:library|ops)\.[^']+\([^']*\))'", baseline)
+    assert len(signatures) == 9
+    for signature in signatures:
+        assert f"'{signature}'" in body
+    for boundary in (
+        "ops.validate_durable_worker_startup_baseline_0105(p_registered_kinds)",
+        "to_regprocedure(required.signature)", "has_function_privilege(",
+        "session_user", "'execute'", "return false", "exception when others",
+    ):
+        assert boundary in body
+
+
+@pytest.mark.parametrize("signature", [
+    "ops.load_claimed_cover_finalization(bigint,integer,text,text,timestamptz)",
+    "ops.advance_claimed_cover_finalization(bigint,bigint,integer,text,text,bigint,text,timestamptz)",
+    "ops.retry_claimed_cover_finalization(bigint,integer,text,text,timestamptz,text,timestamptz)",
+    "ops.requeue_expired_cover_finalization(timestamptz)",
+    "ops.reconcile_stale_job_leases(timestamptz,integer)",
+])
+def test_cover_consistency_worker_startup_requires_finalization_functions_and_grants(signature):
+    body = _cover_consistency_function_sql("ops.validate_durable_worker_startup").split("$$;", 1)[0]
+    assert f"'{signature}'" in body or f"'{signature.replace('timestamptz', 'timestamp with time zone')}'" in body
+    sql = _cover_consistency_sql().replace(", ", ",")
+    for role in ("public", "album_haven_app", "album_haven_readonly"):
+        assert f"revoke all on function {signature} from {role}" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" in sql
+
+
 def test_0110_is_the_exact_ordered_successor_to_0109():
     migration_names = sorted(
         path.name
@@ -420,7 +518,10 @@ def test_cover_consistency_migration_is_additive_and_least_privilege():
     assert "from album_haven_app" in sql
     assert "from album_haven_worker" in sql
     assert "persist_authorized_structural_tag_edit_noncover" in sql
-    assert "drop table" not in sql
+    drops = re.findall(r"\bdrop\s+table\s+(?:if\s+exists\s+)?([^;]+);", sql)
+    for drop in drops:
+        targets = re.sub(r"\s+(?:cascade|restrict)\s*$", "", drop).split(",")
+        assert all(re.fullmatch(r"pg_temp\.[a-z_][a-z_0-9]*", target.strip()) for target in targets), drop
 
 
 def test_cover_consistency_migration_preserves_job_limits_and_durable_digest():
@@ -481,14 +582,15 @@ def test_cover_consistency_migration_revokes_every_new_public_execution_surface(
 
 def test_cover_consistency_migration_fences_scan_publication():
     sql = _cover_consistency_sql()
+    compact_sql = "".join(sql.split())
 
     assert "captured_cover_mutation_revision" in sql
     lock = "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))"
-    assert lock in sql
-    assert sql.count(f"perform {lock};") >= 4
+    assert lock in compact_sql
+    assert compact_sql.count(f"perform{lock};") >= 4
     assert (
         "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'),"
-        not in sql
+        not in compact_sql
     )
     assert "expected_cover_mutation_revision" in sql
     assert "cover_publication_stale" in sql
@@ -523,9 +625,10 @@ def test_cover_consistency_migration_captures_revision_at_every_intent_table_bou
 
     # Keep creator coverage: the trigger is the common boundary for direct and
     # nested creators, but every effective creator must still insert an intent.
-    full_creator = _cover_consistency_function_sql(
-        "library.create_full_scan_intent"
-    )
+    baseline_sql = _normalized_sql(scan_job_intents_sql())
+    full_creator = baseline_sql.split(
+        "create or replace function library.create_full_scan_intent(", 1
+    )[1].split(" $$;", 1)[0]
     assert "insert into library.full_scan_intents" in full_creator
 
     creator_insert_counts = {
@@ -537,7 +640,15 @@ def test_cover_consistency_migration_captures_revision_at_every_intent_table_bou
         "library.reconcile_due_watcher_generations": 1,
     }
     for function_name, insert_count in creator_insert_counts.items():
-        body = _cover_consistency_function_sql(function_name)
+        source = (
+            baseline_sql
+            if function_name == "library.create_targeted_reconciliation_intent"
+            else _watcher_recovery_sql()
+        )
+        body = source.split(f"create or replace function {function_name}(", 1)[1].split(
+            " $$;", 1
+        )[0]
+        assert f"create or replace function {function_name}(" not in sql
         assert body.count(
             "insert into library.targeted_reconciliation_intents"
         ) == insert_count

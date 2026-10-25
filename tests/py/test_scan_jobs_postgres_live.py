@@ -359,6 +359,55 @@ def test_live_full_scan_rolls_back_domain_record_when_job_creation_fails(
         ).fetchone()["count"] == 0
 
 
+@pytest.mark.parametrize("kind", ["full_scan", "targeted_reconciliation"])
+def test_live_scan_creators_capture_cover_revision_at_intent_insert(live_scan_database, kind):
+    setup_url, runtime_url, _ = live_scan_database
+    suffix = f"cover-capture-{kind}"
+    account_id, library_id = _seed_scope(setup_url, suffix)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "insert into library.cover_mutation_state (library_id, cover_mutation_revision) "
+            "values (%s, 13) on conflict (library_id) do update "
+            "set cover_mutation_revision = excluded.cover_mutation_revision",
+            (library_id,),
+        )
+    repository = _scan_repository(runtime_url)
+    if kind == "full_scan":
+        result = repository.enqueue_full_scan(**_full_scan_arguments(account_id, library_id, suffix))
+    else:
+        result = repository.enqueue_targeted_reconciliation(
+            library_id=library_id,
+            request=TargetedReconciliationRequest(
+                root_id="root-a",
+                paths=frozenset({Path(rf"C:\private\scan-jobs-{suffix}\a\capture.flac")}),
+            ),
+            producer_request_key=suffix,
+            deployment_mode="self_hosted_private_web",
+            client_surface="library_watcher",
+            scheduled_at=datetime.now(timezone.utc),
+        )
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute(
+            f"select captured_cover_mutation_revision from library.{kind}_intents where id = %s",
+            (result.intent_id,),
+        ).fetchone()["captured_cover_mutation_revision"] == 13
+        if kind == "targeted_reconciliation":
+            # Imported history may carry an explicit older capture; INSERT must preserve it.
+            preserved = connection.execute(
+                "insert into library.targeted_reconciliation_intents "
+                "(library_id, primary_root_id, producer_request_key, request_digest, "
+                "deployment_mode, client_surface, accepted_at, state, completed_at, "
+                "captured_cover_mutation_revision, accepted_primary_root_path) "
+                "select library_id, primary_root_id, producer_request_key || '-history', "
+                "request_digest, deployment_mode, client_surface, accepted_at, "
+                "'succeeded', clock_timestamp(), 7, accepted_primary_root_path "
+                "from library.targeted_reconciliation_intents where id = %s "
+                "returning captured_cover_mutation_revision",
+                (result.intent_id,),
+            ).fetchone()
+            assert preserved["captured_cover_mutation_revision"] == 7
+
+
 def test_live_concurrent_full_scan_requests_converge_on_one_intent_and_job(
     live_scan_database,
 ):
@@ -1545,6 +1594,240 @@ def test_live_claim_fence_publishes_once_for_the_exact_attempt(
             "select publication_attempt from library.targeted_reconciliation_intents where id = %s",
             (accepted.intent_id,),
         ).fetchone()["publication_attempt"] == claimed.attempt
+
+
+@pytest.mark.parametrize("kind", ["full_scan", "targeted_reconciliation"])
+@pytest.mark.parametrize("stale_cover", [False, True])
+def test_live_scan_cover_observation_fence_and_replay(live_scan_database, kind, stale_cover):
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = f"cover-fence-{kind}-{stale_cover}"
+    account_id, library_id = _seed_scope(setup_url, suffix)
+    private_path = rf"C:\private\scan-jobs-{suffix}\a\Artist\Album\01.flac"
+    old_cover = {"cover_path": "selected.jpg", "cover_revision": "selected",
+                 "cover_selection_origin": "user"}
+    observed_cover = {"cover_path": "observed.jpg", "cover_revision": "observed",
+                      "cover_selection_origin": "automatic"}
+    later_cover = {"cover_path": "later.jpg", "cover_revision": "later",
+                   "cover_selection_origin": "user"}
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update app.bootstrap_owners set account_id = %s where owner_key = 'local-bootstrap-owner'",
+            (account_id,),
+        )
+        connection.execute(
+            "update library.libraries set name = 'Local Library' where id = %s", (library_id,),
+        )
+        artist_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name) "
+            "values (%s, 'artist', 'Artist') returning id", (library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums "
+            "(library_id, artist_id, album_key, title, release_year, cover_path, metadata) "
+            "values (%s, %s, 'artist::album', 'Album', 2026, %s, %s::jsonb) returning id",
+            (library_id, artist_id, old_cover["cover_path"], json.dumps(old_cover)),
+        ).fetchone()["id"]
+        track_id = connection.execute(
+            "insert into library.local_tracks "
+            "(library_id, album_id, artist_id, track_key, title) "
+            "values (%s, %s, %s, 'artist::album::01', 'Before') returning id",
+            (library_id, album_id, artist_id),
+        ).fetchone()["id"]
+        file_id = connection.execute(
+            "insert into library.local_track_files (track_id, private_path, metadata) "
+            "values (%s, %s, %s::jsonb) returning id",
+            (track_id, private_path, json.dumps({"scan_cache": {
+                "source": "scan_cache", "stale": False,
+                "file_entry": {"path": private_path, **old_cover},
+            }})),
+        ).fetchone()["id"]
+        connection.execute(
+            "insert into library.cover_mutation_state (library_id, cover_mutation_revision) "
+            "values (%s, 0) on conflict (library_id) do update set cover_mutation_revision = 0",
+            (library_id,),
+        )
+    runtime = _scan_repository(runtime_url)
+    if kind == "full_scan":
+        arguments = _full_scan_arguments(account_id, library_id, suffix)
+        arguments["scheduled_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+        accepted = runtime.enqueue_full_scan(**arguments)
+    else:
+        accepted = runtime.enqueue_targeted_reconciliation(
+            library_id=library_id,
+            request=TargetedReconciliationRequest(root_id="root-a", paths=frozenset({Path(private_path)})),
+            producer_request_key=suffix, deployment_mode="self_hosted_private_web",
+            client_surface="library_watcher",
+            scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+    claim = PostgresJobRepository(
+        database_url=worker_url, connect_to_database=isolatedPostgres._connect,
+    ).claim(worker_id=f"{suffix}-worker", now=datetime.now(timezone.utc), lease_seconds=300)
+    assert claim is not None and claim.job_id == accepted.job_id
+    repository = _scan_repository(worker_url)
+    if kind == "full_scan":
+        intent = repository.load_claimed_full_scan(
+            job_id=claim.job_id, worker_id=claim.worker_id, lease_token=claim.lease_token,
+        )
+        assert intent is not None
+    if stale_cover:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "update library.cover_mutation_state set cover_mutation_revision = 1 where library_id = %s",
+                (library_id,),
+            )
+    inventory = {
+        "artists": [{"artist_key": "artist", "name": "Artist", "sort_name": "Artist", "metadata": {}}],
+        "albums": [{"artist_key": "artist", "album_key": "artist::album", "title": "Album",
+                    "release_year": 2026, "cover_path": observed_cover["cover_path"],
+                    "metadata": {**observed_cover, "noncover_marker": "published"}}],
+        "featured_artists": [],
+        "tracks": [{"album_key": "artist::album", "artist_key": "artist",
+                    "track_key": "artist::album::01", "title": "After", "disc_number": 1,
+                    "track_number": 1, "duration_seconds": 180, "metadata": {}}],
+        "track_files": [{"track_key": "artist::album::01", "private_path": private_path,
+                         "relative_path": r"Artist\Album\01.flac", "file_size_bytes": 1024,
+                         "modified_at_epoch": 1788710400.0,
+                         "metadata": {"scan_cache": {"source": "scan_cache", "stale": False,
+                                                    "file_entry": {"path": private_path, **observed_cover}}}}],
+    }
+
+    def publish():
+        arguments = dict(claim=claim, intent_id=accepted.intent_id, inventory=inventory,
+                         now=datetime.now(timezone.utc))
+        if kind == "full_scan":
+            return repository.publish_claimed_full_scan(
+                **arguments, expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+                observed_root_ids=intent.root_ids,
+            )
+        return repository.publish_claimed_targeted_reconciliation(**arguments, stale_scopes=())
+
+    first = publish()
+    assert first["publication_won"] is True
+    assert first["cover_publication_stale"] is stale_cover
+    assert first["cover_mutation_revision"] == 1
+    expected = old_cover if stale_cover else observed_cover
+    with isolatedPostgres._connect(setup_url) as connection:
+        album = connection.execute(
+            "select cover_path, metadata from library.local_albums where id = %s", (album_id,),
+        ).fetchone()
+        assert album["cover_path"] == expected["cover_path"]
+        assert {key: album["metadata"][key] for key in ("cover_revision", "cover_selection_origin")} == {
+            key: expected[key] for key in ("cover_revision", "cover_selection_origin")
+        }
+        assert album["metadata"]["noncover_marker"] == "published"
+        assert connection.execute(
+            "select title from library.local_tracks where id = %s", (track_id,),
+        ).fetchone()["title"] == "After"
+        entry = connection.execute(
+            "select metadata #> '{scan_cache,file_entry}' as entry "
+            "from library.local_track_files where id = %s", (file_id,),
+        ).fetchone()["entry"]
+        assert {key: entry[key] for key in expected} == expected
+        connection.execute(
+            "update library.local_albums set cover_path = %s, metadata = metadata || %s::jsonb where id = %s",
+            (later_cover["cover_path"], json.dumps(later_cover), album_id),
+        )
+        connection.execute(
+            "update library.local_track_files set metadata = jsonb_set(metadata, '{scan_cache,file_entry}', "
+            "(metadata #> '{scan_cache,file_entry}') || %s::jsonb) where id = %s",
+            (json.dumps(later_cover), file_id),
+        )
+        connection.execute(
+            "update library.cover_mutation_state set cover_mutation_revision = 9 where library_id = %s",
+            (library_id,),
+        )
+    replay = publish()
+    for field in ("inventory_mutation_revision", "cover_publication_stale", "cover_mutation_revision"):
+        assert replay[field] == first[field]
+    with isolatedPostgres._connect(setup_url) as connection:
+        album = connection.execute(
+            "select cover_path, metadata from library.local_albums where id = %s", (album_id,),
+        ).fetchone()
+        assert album["cover_path"] == later_cover["cover_path"]
+        assert all(album["metadata"][key] == value for key, value in later_cover.items())
+        entry = connection.execute(
+            "select metadata #> '{scan_cache,file_entry}' as entry "
+            "from library.local_track_files where id = %s", (file_id,),
+        ).fetchone()["entry"]
+        assert all(entry[key] == value for key, value in later_cover.items())
+        assert connection.execute(
+            "select cover_mutation_revision from library.cover_mutation_state where library_id = %s",
+            (library_id,),
+        ).fetchone()["cover_mutation_revision"] == 9
+
+
+@pytest.mark.parametrize("initial_metadata", [{}, {"unrelated": {"preserve": True}}])
+def test_live_internal_scan_observation_populates_missing_parent(live_scan_database, initial_metadata):
+    setup_url, _, _ = live_scan_database
+    suffix = "observation-parent-" + ("empty" if not initial_metadata else "metadata")
+    _, library_id = _seed_scope(setup_url, suffix)
+    private_path = rf"C:\private\scan-jobs-{suffix}\a\01.flac"
+    cover = {"cover_path": "observed.jpg", "cover_revision": "observed",
+             "cover_selection_origin": "automatic"}
+    # Internal helper contract: runtime roles intentionally cannot execute this boundary.
+    with isolatedPostgres._connect(setup_url) as connection:
+        artist_id = connection.execute(
+            "insert into library.local_artists(library_id,artist_key,name) "
+            "values(%s,'artist','Artist') returning id", (library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums(library_id,artist_id,album_key,title) "
+            "values(%s,%s,'album','Album') returning id", (library_id, artist_id),
+        ).fetchone()["id"]
+        track_id = connection.execute(
+            "insert into library.local_tracks(library_id,album_id,artist_id,track_key,title) "
+            "values(%s,%s,%s,'track','Track') returning id", (library_id, album_id, artist_id),
+        ).fetchone()["id"]
+        file_id = connection.execute(
+            "insert into library.local_track_files(track_id,library_root_id,private_path,metadata) "
+            "select %s,id,%s,%s::jsonb from library.library_roots "
+            "where library_id=%s and metadata->>'root_id'='root-a' returning id",
+            (track_id, private_path, json.dumps(initial_metadata), library_id),
+        ).fetchone()["id"]
+        connection.execute(
+            "insert into library.cover_mutation_state(library_id,cover_mutation_revision) "
+            "values(%s,0) on conflict(library_id) do update set cover_mutation_revision=0",
+            (library_id,),
+        )
+        observation = [{"album_id": album_id, "cover_path": cover["cover_path"],
+                        "cover_state": {key: value for key, value in cover.items() if key != "cover_path"},
+                        "track_paths": [private_path]}]
+        result = connection.execute(
+            "select * from library.apply_scanned_cover_observations(%s,0,%s::jsonb,now())",
+            (library_id, json.dumps(observation)),
+        ).fetchone()
+        assert result["cover_publication_stale"] is False
+        assert result["cover_mutation_revision"] == 1
+        metadata = connection.execute(
+            "select metadata from library.local_track_files where id=%s", (file_id,),
+        ).fetchone()["metadata"]
+        assert all(metadata[key] == value for key, value in initial_metadata.items())
+        entry = metadata["scan_cache"]["file_entry"]
+        assert {key: entry[key] for key in cover} == cover
+
+
+def test_live_scan_observation_null_capture_is_stale(live_scan_database):
+    setup_url, _, _ = live_scan_database
+    _, library_id = _seed_scope(setup_url, "cover-null-capture")
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "insert into library.cover_mutation_state (library_id, cover_mutation_revision) "
+            "values (%s, 13) on conflict (library_id) do update set cover_mutation_revision = 13",
+            (library_id,),
+        )
+        result = connection.execute(
+            "select * from library.apply_scanned_cover_observations(%s, null, '[]'::jsonb, now())",
+            (library_id,),
+        ).fetchone()
+        assert result == {
+            "cover_publication_stale": True,
+            "cover_mutation_revision": 13,
+            "changed_album_count": 0,
+        }
+        assert connection.execute(
+            "select cover_mutation_revision from library.cover_mutation_state where library_id = %s",
+            (library_id,),
+        ).fetchone()["cover_mutation_revision"] == 13
 
 
 def test_live_claimed_publication_commits_inventory_revision_exactly_once(

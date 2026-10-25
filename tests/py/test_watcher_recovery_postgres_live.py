@@ -1567,6 +1567,53 @@ def test_worker_startup_preflight_requires_live_watcher_functions_and_grants(
     assert row["valid"] is True
 
 
+def test_watcher_successor_capture_preserves_completed_cover_revision(live_watcher_database):
+    scope = live_watcher_database
+    repository = _repository(scope.app_url)
+    now = datetime.now(timezone.utc)
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "insert into library.cover_mutation_state (library_id, cover_mutation_revision) "
+            "values (%s, 13) on conflict (library_id) do update "
+            "set cover_mutation_revision = excluded.cover_mutation_revision",
+            (scope.library_id,),
+        )
+    first = repository.accept_event(
+        library_id=scope.library_id, event=_created(scope, "root-a", "capture-first.flac"),
+        accepted_at=now,
+    )
+    _publish_watcher_generation(
+        scope, first.generation_id, now=now, worker_id="cover-capture-worker",
+    )
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        completed = connection.execute(
+            "select captured_cover_mutation_revision, watcher_completed_at "
+            "from library.targeted_reconciliation_intents where id = %s",
+            (first.generation_id,),
+        ).fetchone()
+        assert completed["captured_cover_mutation_revision"] == 13
+        assert completed["watcher_completed_at"] is not None
+        connection.execute(
+            "update library.cover_mutation_state set cover_mutation_revision = 29 where library_id = %s",
+            (scope.library_id,),
+        )
+    second = repository.accept_event(
+        library_id=scope.library_id, event=_created(scope, "root-a", "capture-second.flac"),
+        accepted_at=now + timedelta(seconds=1),
+    )
+    assert second.generation_id != first.generation_id
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(
+            "select captured_cover_mutation_revision from library.targeted_reconciliation_intents where id = %s",
+            (second.generation_id,),
+        ).fetchone()["captured_cover_mutation_revision"] == 29
+        assert connection.execute(
+            "select captured_cover_mutation_revision, watcher_completed_at "
+            "from library.targeted_reconciliation_intents where id = %s",
+            (first.generation_id,),
+        ).fetchone() == completed
+
+
 def test_same_root_events_coalesce_into_one_durable_successor(live_watcher_database):
     scope = live_watcher_database
     repository = _repository(scope.app_url)

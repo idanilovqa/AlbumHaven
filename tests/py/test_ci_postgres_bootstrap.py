@@ -14,6 +14,45 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP_PATH = REPO_ROOT / "scripts" / "ci" / "bootstrap-windows-postgres.ps1"
 
 
+def test_running_postgres_preflight_does_not_control_windows_service():
+    executable = shutil.which("pwsh") or shutil.which("powershell")
+    if executable is None:
+        pytest.skip("PowerShell required for Windows Postgres bootstrap contract")
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    '__BOOTSTRAP__', [ref]$tokens, [ref]$errors)
+$function = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Assert-ProvisionPreflight'
+}, $true)
+Invoke-Expression $function.Extent.Text
+function Get-Service { throw 'Unexpected service inspection' }
+function Set-Service { throw 'Unexpected service configuration' }
+function Start-Service { throw 'Unexpected service startup' }
+function Join-Path { param($Path, $ChildPath) return $ChildPath }
+function Test-Path { return $true }
+function pg_isready.exe { $global:LASTEXITCODE = 0 }
+function psql.exe {
+    $global:LASTEXITCODE = 0
+    if ($args -contains '--version') { return 'psql (PostgreSQL) 18.4' }
+    return '180004'
+}
+$Pgbin = 'unused'; $HostName = 'localhost'; $Port = 5432
+$AdminRole = 'postgres'; $ExpectedMajorVersion = '18'
+$ServiceName = 'postgresql-x64-18'
+$requiredExecutables = @('postgres.exe', 'psql.exe', 'pg_isready.exe')
+$result = Assert-ProvisionPreflight @{preflight=@{readinessTimeoutSeconds=1}}
+if ($result -ne 'psql.exe') { throw 'Missing validated client path' }
+""".replace("__BOOTSTRAP__", str(BOOTSTRAP_PATH).replace("'", "''"))
+    result = subprocess.run(
+        [executable, "-NoProfile", "-Command", script],
+        capture_output=True, encoding="utf-8", check=False, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def _run_contract(tmp_path: Path) -> subprocess.CompletedProcess[str]:
     executable = shutil.which("pwsh") or shutil.which("powershell")
     if executable is None:

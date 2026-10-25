@@ -3366,15 +3366,15 @@ test('watchSaveTask rejects a stale partial-year split projection before applyin
     updated_albums: [finalizedDestination],
     inventory_mutation_revision: 3,
   };
-  let saveTaskPollCount = 0;
-  context.fetch = async () => {
-    saveTaskPollCount += 1;
-    return ({
-    ok: true,
-    async json() {
-        return terminalPayload;
-    },
-    });
+  let saveTaskStatusPollCount = 0;
+  let committedRevisionStatusReadCount = 0;
+  context.fetch = async (url) => {
+    if (url === '/status') {
+      committedRevisionStatusReadCount += 1;
+      return { ok: true, json: async () => ({ inventory_mutation_revision: 3 }) };
+    }
+    if (url.startsWith('/utilities/save-task/')) saveTaskStatusPollCount += 1;
+    return { ok: true, json: async () => terminalPayload };
   };
   context.waitForBrowserTimeout = async () => {};
   context.getAlbumRequestKey = (album) => String(album?.request_key || album?.key || '');
@@ -3395,7 +3395,8 @@ test('watchSaveTask rejects a stale partial-year split projection before applyin
   });
 
   assert.equal(refreshCalls.length, 2);
-  assert.equal(saveTaskPollCount, 0);
+  assert.equal(saveTaskStatusPollCount, 0);
+  assert.equal(committedRevisionStatusReadCount, 2);
   assert.equal(refreshCalls[0][2].preserveGalleryOptionsMenu, true);
   assert.equal(refreshCalls[1][2].preserveGalleryOptionsMenu, true);
   assert.deepEqual(
@@ -3435,6 +3436,7 @@ test('watchSaveTask waits for a canonical structural projection before replacing
     }],
   };
   const readyPayload = {
+    inventory_mutation_revision: 41,
     artist_groups: [{
       artist: 'Merge Artist',
       albums: [{ ...optimisticTarget, tracks: [], track_paths: [], track_count_preview: 16 }],

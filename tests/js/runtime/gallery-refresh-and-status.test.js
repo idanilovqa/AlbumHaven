@@ -3758,10 +3758,11 @@ test('opening Library Status supersedes an idle poll blocked on foreground cover
   context.openScanPage();
 
   assert.equal(context.state.ui.scanPageCoverLoadSuspensionToken, 41);
-  assert.equal(scheduled.length, 1);
-  assert.equal(scheduled[0].delayMs, 0);
+  assert.equal(scheduled.length, 2);
+  assert.equal(scheduled[0].delayMs, 1200);
+  assert.equal(scheduled[1].delayMs, 0);
 
-  const visibleStatusPoll = scheduled[0].callback();
+  const visibleStatusPoll = scheduled[1].callback();
   assert.equal(pendingRequests.length, 1);
   assert.equal(pendingRequests[0].url, '/status');
   pendingRequests[0].resolveWith({
@@ -3779,6 +3780,7 @@ test('opening Library Status supersedes an idle poll blocked on foreground cover
   assert.equal(calls.updateStatusIndicator.length, 1);
   assert.equal(context.state.status.scan_phase, 'library-status-visible');
   assert.equal(scheduled.length, scheduledAfterVisibleResponse);
+  assert.deepEqual(calls.clearedTimeouts, [1]);
 });
 
 test('Library Status pollStatus bypasses foreground cover deferral for acknowledged repair warnings', async () => {
@@ -7861,6 +7863,7 @@ test('bounded root refresh validates the assembled payload after collecting load
   await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
   assertBoundedRootRefreshUnapplied(f);
   await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+  await resolveBoundedRootRefreshEndpoint(f, 3);
   assert.equal(await request, true);
   assert.deepEqual(guardPayloadSizes, [150]);
   assert.equal(f.calls.applyViewPayload.length, 1);

@@ -1333,6 +1333,22 @@ def test_0119_mark_dirty_is_one_app_only_security_definer_boundary():
         assert f"'{reason}'" in sql
 
 
+def test_0123_normalizes_crlf_before_splicing_mark_dirty_source():
+    migration = (
+        MIGRATIONS_DIR / "0123_preserve_newer_watcher_incident_presentation.sql"
+    )
+    sql = " ".join(migration.read_text(encoding="utf-8").lower().split())
+    splice = sql.split("select pg_catalog.pg_get_functiondef(", 1)[1]
+    first_strpos = splice.index("pg_catalog.strpos(")
+
+    for variable in ("function_definition", "original_clause", "monotonic_clause"):
+        normalizer = (
+            f"{variable} := pg_catalog.replace({variable}, e'\\r\\n', e'\\n')"
+        )
+        assert normalizer in splice
+        assert splice.index(normalizer) < first_strpos
+
+
 def test_0123_mark_dirty_preserves_newer_incident_presentation():
     migration = MIGRATIONS_DIR / "0123_preserve_newer_watcher_incident_presentation.sql"
     assert migration.is_file()
@@ -1347,6 +1363,20 @@ def test_0123_mark_dirty_preserves_newer_incident_presentation():
         "last_seen_at = greatest( library.watcher_incidents.last_seen_at, "
         "excluded.last_seen_at )"
     ) in sql
+
+
+def test_0124_normalizes_crlf_before_splicing_worker_preflight_source():
+    migration = MIGRATIONS_DIR / "0124_close_worker_preflight_cover_contract.sql"
+    sql = " ".join(migration.read_text(encoding="utf-8").lower().split())
+    splice = sql.split("select pg_catalog.pg_get_functiondef(", 1)[1]
+    first_strpos = splice.index("pg_catalog.strpos(")
+
+    for variable in ("function_definition", "previous_clause", "current_clause"):
+        normalizer = (
+            f"{variable} := pg_catalog.replace({variable}, e'\\r\\n', e'\\n')"
+        )
+        assert normalizer in splice
+        assert splice.index(normalizer) < first_strpos
 
 
 def test_0124_worker_preflight_requires_current_cover_worker_boundaries():

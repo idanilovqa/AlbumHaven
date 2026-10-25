@@ -16414,15 +16414,10 @@ async function fetchAndRender(url, push = true, options = {}) {
         ...data,
         gallery_page: retainRootGalleryAnchorMetadata(retainedRootGalleryPage, data.gallery_page),
       };
-      const ownsRefresh = () => {
-        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
-          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
-        try {
-          return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
-        } catch (_error) {
-          return false;
-        }
-      };
+      const ownsRefresh = () => (
+        requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+        && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      );
       data = await collectRootGalleryRefresh(
         data, apiUrl, rootRefreshCoverage, controller, ownsRefresh,
         retainedStartArtist, retainedEndArtist, retainedArtists, firstPageRevisionRestarted,

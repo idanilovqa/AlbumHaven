@@ -1,7 +1,7 @@
 do $migration$
 declare
   function_definition text;
-  original_clause constant text := $fragment$
+  original_clause text := $fragment$
     reason_code = excluded.reason_code,
     occurrence_count = library.watcher_incidents.occurrence_count + 1,
     accepted_sequence = greatest(
@@ -14,7 +14,7 @@ declare
     ),
     last_seen_at = excluded.last_seen_at
 $fragment$;
-  monotonic_clause constant text := $fragment$
+  monotonic_clause text := $fragment$
     reason_code = case
       when excluded.last_seen_at >= library.watcher_incidents.last_seen_at
         then excluded.reason_code
@@ -40,6 +40,8 @@ begin
          )
     into function_definition;
   function_definition := pg_catalog.replace(function_definition, E'\r\n', E'\n');
+  original_clause := pg_catalog.replace(original_clause, E'\r\n', E'\n');
+  monotonic_clause := pg_catalog.replace(monotonic_clause, E'\r\n', E'\n');
   if pg_catalog.strpos(function_definition, monotonic_clause) > 0 then
     return;
   end if;

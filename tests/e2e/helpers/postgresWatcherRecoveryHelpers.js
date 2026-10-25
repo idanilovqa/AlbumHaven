@@ -326,9 +326,7 @@ export async function waitForWatcherRecoverySnapshot(predicate, options = {}) {
         const serializedDiagnostic = JSON.stringify(sanitizedDiagnostic);
         error.watcherRecoveryDiagnostic = sanitizedDiagnostic;
         error.message += `\nWATCHER_RECOVERY_DIAGNOSTIC=${serializedDiagnostic}`;
-      } catch {
-        // Diagnostics must never mask the original polling failure.
-      }
+      } catch { throw error; }
     }
     throw error;
   }

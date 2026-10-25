@@ -28620,7 +28620,7 @@ async function addPastedImageToCoverLookup(file) {
       ? state.coverLookup.modal.manualImageAttachments : []),
     nextItem,
   ];
-  state.coverLookup.modal.statusText = 'Image ready to extract.';
+  state.coverLookup.modal.statusText = '';
   state.coverLookup.modal.statusTone = 'neutral';
   renderCoverLookupModal();
   return true;
@@ -31394,11 +31394,9 @@ async function addRemoteCoverLinksFromLookup() {
   const attachmentCount = Array.isArray(state.coverLookup.modal.manualImageAttachments)
     ? state.coverLookup.modal.manualImageAttachments.length : 0;
   if (!album || (!urls.length && !attachmentCount)) return;
-  const extractedImageCount = extractCoverLookupPendingAttachments();
+  extractCoverLookupPendingAttachments();
   if (!urls.length) {
-    state.coverLookup.modal.statusText = extractedImageCount === 1
-      ? 'Image extracted.'
-      : `${extractedImageCount} images extracted.`;
+    state.coverLookup.modal.statusText = '';
     state.coverLookup.modal.statusTone = 'neutral';
     renderCoverLookupModal();
     return;

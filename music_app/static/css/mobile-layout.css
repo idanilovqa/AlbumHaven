@@ -227,7 +227,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .cover-lookup-modal-body { display: block; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 16px; }
   .is-mobile-page .cover-lookup-modal-body > * { min-width: 0; max-width: 100%; }
   .is-mobile-page .cover-lookup-modal-actions { flex: 0 0 auto; padding: 12px 0; background: var(--appearance-main-surface, var(--bg)); }
-  .is-mobile-page #cover-lookup-search-hint, .is-mobile-page .cover-lookup-manual-add, .is-mobile-page .cover-lookup-results[data-search-started="false"] { display: none; }
+  .is-mobile-page .cover-lookup-manual-add, .is-mobile-page .cover-lookup-results[data-search-started="false"] { display: none; }
   .is-mobile-page .cover-lookup-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .is-mobile-page :is(.cover-lookup-art-card, .cover-lookup-art-card-shell) { min-width: 0; width: 100%; max-width: none; }
   /* One persistent transport: presentation changes only, no new audio element. */
@@ -727,7 +727,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
     grid-template-rows: auto; flex-wrap: nowrap; box-shadow: none;
   }
   /* Save/error announcements stay in the accessibility tree, not a second footer row. */
-  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert], .on-page-alert, [role="alert"])), #cover-lookup-search-hint) {
+  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert], .on-page-alert, [role="alert"]))) {
     position: absolute; width: 1px; height: 1px; min-height: 0;
     padding: 0; margin: -1px; border: 0; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap;

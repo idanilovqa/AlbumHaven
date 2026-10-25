@@ -7,6 +7,10 @@ const vm = require('node:vm');
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const sourcePath = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'cover-lookup-modal-and-drawer.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const template = fs.readFileSync(
+  path.join(repoRoot, 'music_app', 'templates', 'partials', 'primary-modals.html'),
+  'utf8',
+);
 const css = fs.readFileSync(
   path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'cover-lookup-modal.css'),
   'utf8',
@@ -33,6 +37,8 @@ test('cover source entry is compact, supports picker and drop, and omits redunda
   assert.match(source, /data-cover-lookup-drop-zone/);
   assert.match(source, /rows="1"/);
   assert.doesNotMatch(source, /Find Better Art will also use anything pasted here/);
+  assert.doesNotMatch(source, /Image ready to extract\.|Image extracted\.|images extracted\./);
+  assert.doesNotMatch(template, /cover-lookup-search-hint|Runs a full cover art search/);
 });
 
 test('cover picker can select the same file again after staged-file removal', () => {

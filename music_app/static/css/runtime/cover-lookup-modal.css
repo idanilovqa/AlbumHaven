@@ -46,11 +46,6 @@
   gap: 5px;
   flex: 0 0 auto;
 }
-#cover-lookup-search-hint {
-  color: var(--muted);
-  font-size: 0.74rem;
-  text-align: center;
-}
 .cover-lookup-modal-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -133,9 +128,6 @@
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
-  }
-  .cover-lookup-modal.is-mobile-sheet #cover-lookup-search-hint {
-    display: none;
   }
 }
 @media (max-width: 900px) and (prefers-reduced-motion: no-preference) {

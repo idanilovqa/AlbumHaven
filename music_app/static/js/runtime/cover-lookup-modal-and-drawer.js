@@ -2054,7 +2054,7 @@ function renderCoverLookupModal() {
           <button class="cover-lookup-manual-open" type="button" data-choose-cover-lookup-files="1" aria-label="Add image" ${manualInputDisabledAttr}><span aria-hidden="true">+</span><span>Add image</span></button>
         </div>
         <div class="cover-lookup-manual-actions">
-          <button class="button cover-lookup-manual-submit" type="button" data-add-cover-lookup-remote="1" ${manualSearchDisabledAttr}>Extract images</button>
+          <button class="button ui-button ui-button--medium cover-lookup-manual-submit" type="button" data-add-cover-lookup-remote="1" ${manualSearchDisabledAttr}>Extract images</button>
         </div>
         </div>
       </section>

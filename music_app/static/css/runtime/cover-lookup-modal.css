@@ -365,10 +365,6 @@
   box-shadow: none !important;
   background: transparent !important;
 }
-.cover-lookup-manual-submit {
-  min-width: 168px;
-  min-height: 42px;
-}
 .cover-lookup-manual-submit:disabled,
 #cover-lookup-find-better-button:disabled,
 #cover-lookup-save-remote-button:disabled {

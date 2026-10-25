@@ -46,7 +46,12 @@ test('manual search keeps opened images in the composer until extraction', () =>
   assert.match(source, /data-cover-lookup-pending-attachment/);
   assert.match(source, /manualImageAttachments/);
   assert.doesNotMatch(source, />Choose images</);
-  assert.match(source, /Extract images<\/button>/);
+  assert.match(
+    source,
+    /class="button ui-button ui-button--medium cover-lookup-manual-submit"[^>]*>Extract images<\/button>/,
+  );
+  const submit = cssRule('.cover-lookup-manual-submit');
+  assert.doesNotMatch(submit, /min-(?:width|height):/);
   assert.doesNotMatch(source, /state\.coverLookup\.modal\.pendingPastedImageId\s*=\s*nextItem\.id/);
 });
 

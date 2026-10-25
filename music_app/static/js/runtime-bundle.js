@@ -30175,7 +30175,6 @@ async function clearCoverLookupTaskNotification(taskId) {
     await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
-    showToast('Notification cleared.', 'success', 2200);
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear notification.', error);
@@ -30982,8 +30981,8 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.disabled = true;
   }
   renderCoverLookupModal();
-  ensureCoverLookupPolling();
   await refreshCoverLookupGallery(!cachedCandidates.length);
+  if (!els.overlay.hidden) ensureCoverLookupPolling();
 }
 
 function closeCoverLookupModal() {

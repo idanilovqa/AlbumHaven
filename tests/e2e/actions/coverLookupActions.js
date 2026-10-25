@@ -1139,6 +1139,10 @@ export class CoverLookupActions {
 
   async clearTaskAndExpectImmediateRemoval(taskTitle, options = {}) {
     const timeout = options.timeout || 30000;
+    const countsPromise = this.coverLookup.page.waitForResponse((response) => (
+      response.request().method() === 'GET'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/tasks/counts'
+    ), { timeout });
     const responsePromise = this.coverLookup.page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && new URL(response.url()).pathname.includes('/utilities/cover-lookup/task/')
@@ -1154,6 +1158,14 @@ export class CoverLookupActions {
       );
     }
     await expect(this.coverLookup.taskCardByTitle(taskTitle)).toBeHidden({ timeout });
+    await countsPromise;
+    // parity-check: allow-read-only-measurement-evaluate -- settle the clear response's next paint before proving no toast was rendered
+    await this.coverLookup.page.locator('body').evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    await expect(
+      this.coverLookup.page.locator(this.coverLookup.toastSelector).filter({ hasText: 'Notification cleared.' }),
+    ).toHaveCount(0);
   }
 
   async waitForTaskActive(taskTitle, options = {}) {

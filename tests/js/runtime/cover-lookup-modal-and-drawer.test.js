@@ -3942,6 +3942,64 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   process.exitCode = 1;
 });
 
+require('node:test')('successfully clearing one notification is silent', async () => {
+  const toastCalls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => ({
+      ok: true,
+      json: async () => String(url).endsWith('/counts')
+        ? { ok: true, total_count: 0, active_count: 0, finished_count: 0 }
+        : { ok: true, tasks: [] },
+    }),
+    showToast: (...args) => toastCalls.push(args),
+  });
+  context.state.coverLookup.tasks = [{ id: 'cleared-task', status: 'completed' }];
+
+  await context.clearCoverLookupTaskNotification('cleared-task');
+
+  assert.deepEqual(toastCalls, []);
+});
+
+require('node:test')('initial cover gallery load finishes before task polling starts', async () => {
+  class TestButton {}
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const saveButton = new TestButton();
+  const order = [];
+  let finishGallery;
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': saveButton,
+      }[id] || null),
+    },
+    showToast: () => {},
+  });
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = () => new Promise((resolve) => {
+    order.push('gallery');
+    finishGallery = resolve;
+  });
+  context.ensureCoverLookupPolling = () => order.push('poll');
+
+  const opening = context.openCoverLookupModal({ tracks: [{ path: 'C:/music/01.flac' }] });
+  await Promise.resolve();
+  assert.deepEqual(order, ['gallery']);
+  finishGallery();
+  await opening;
+  assert.deepEqual(order, ['gallery', 'poll']);
+
+  order.length = 0;
+  const closedBeforeReady = context.openCoverLookupModal({ tracks: [{ path: 'C:/music/02.flac' }] });
+  await Promise.resolve();
+  overlay.hidden = true;
+  finishGallery();
+  await closedBeforeReady;
+  assert.deepEqual(order, ['gallery']);
+});
+
 
 {
   const { install } = require('../../../music_app/static/js/capability-ui.js');

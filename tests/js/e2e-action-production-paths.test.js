@@ -1223,7 +1223,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   assert.match(coverLookupFixtureData, /notificationActioned[\s\S]*notificationFailed[\s\S]*cancelClear[\s\S]*notificationActive/);
   assert.match(
     coverLookup,
-    /waitForTaskStatus\(actionedTaskTitle, \/\^\(\?:\\d\+ \)\?covers found\$\/u\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearFinishedTasksAndPreserveActive\([\s\S]*\[actionedTaskTitle, noResultTaskTitle, failedTaskTitle\],[\s\S]*activeTaskTitle[\s\S]*reloadAndOpenDrawer\(\)[\s\S]*waitForTaskActive\(activeTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(actionedTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(noResultTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(failedTaskTitle\)/,
+    /waitForTaskStatus\(actionedTaskTitle, \/\^\(\?:\\d\+ \)\?covers found\$\/u\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearFinishedTasksAndPreserveActive\([\s\S]*\[actionedTaskTitle\],[\s\S]*activeTaskTitle[\s\S]*reloadAndOpenDrawer\(\)[\s\S]*waitForTaskActive\(activeTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(actionedTaskTitle\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearTaskAndExpectImmediateRemoval\(noResultTaskTitle\)[\s\S]*clearTaskAndExpectImmediateRemoval\(failedTaskTitle\)/,
   );
   assert.match(
     coverLookupActions,

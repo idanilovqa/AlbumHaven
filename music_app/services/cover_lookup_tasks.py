@@ -177,6 +177,24 @@ def is_terminal_cover_lookup_task(task_payload: dict[str, object] | None) -> boo
     return status in _TERMINAL_COVER_LOOKUP_STATUSES
 
 
+def _is_actioned_cover_lookup_notification(task_payload: Mapping[str, object] | None) -> bool:
+    if not is_terminal_cover_lookup_task(dict(task_payload or {})):
+        return False
+    if bool((task_payload or {}).get("notification_action_taken")):
+        return True
+    job_contract = (task_payload or {}).get("job_contract")
+    job_kind = str(
+        (task_payload or {}).get("job_kind")
+        or (job_contract.get("job_kind") if isinstance(job_contract, Mapping) else "")
+        or ""
+    ).strip()
+    return (
+        str((task_payload or {}).get("status") or "").strip().casefold() == "completed"
+        and str((task_payload or {}).get("result_kind") or "").strip() == "cover-updated"
+        and job_kind == "save_remote_selection"
+    )
+
+
 def _interrupt_stale_cover_lookup_task(
     task_payload: dict[str, object],
     *,
@@ -918,6 +936,7 @@ def clear_completed_cover_lookup_tasks(
     task_ids: list[str] | None = None,
     *,
     config: Mapping[str, object] | None = None,
+    actioned_only: bool = False,
 ) -> int:
     normalized_task_ids = {
         str(task_id or "").strip()
@@ -934,13 +953,24 @@ def clear_completed_cover_lookup_tasks(
             status = str((task or {}).get("status") or "").strip().casefold()
             if status not in _TERMINAL_COVER_LOOKUP_STATUSES:
                 continue
+            if actioned_only and not _is_actioned_cover_lookup_notification(task):
+                continue
             removed_task_ids.append(task_id)
             _COVER_LOOKUP_TASKS.pop(task_id, None)
             _COVER_LOOKUP_TASK_REVISIONS[task_id] = _COVER_LOOKUP_TASK_REVISIONS.get(task_id, 0) + 1
     for task_id in removed_task_ids:
         _COVER_LOOKUP_CANCEL_EVENTS.pop(task_id, None)
+    persisted_task_ids = normalized_task_ids
+    if actioned_only and config is not None:
+        persisted_task_ids = {
+            str(item.get("id") or "").strip()
+            for item in load_cover_lookup_notifications(config)
+            if str(item.get("id") or "").strip()
+            and (not normalized_task_ids or str(item.get("id") or "").strip() in normalized_task_ids)
+            and _is_actioned_cover_lookup_notification(item)
+        }
     persisted_removed_ids = _remove_cover_lookup_notification_tasks(
-        set(removed_task_ids) | normalized_task_ids,
+        set(removed_task_ids) | persisted_task_ids,
         config=config,
     )
     cleared_task_ids = set(removed_task_ids) | persisted_removed_ids

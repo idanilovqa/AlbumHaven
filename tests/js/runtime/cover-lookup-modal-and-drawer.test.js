@@ -918,6 +918,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     });
     context.state.coverLookup.tasks = [{
       id: 'rollback-task', status: 'completed', artist: 'Artist', album: 'Restored Album',
+      notification_action_taken: true,
     }];
     context.renderCoverLookupDrawer();
     context.hasActiveCoverLookupDrawerAction = () => true;
@@ -3035,8 +3036,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.renderCoverLookupDrawer();
 
   assert.equal(clearElement.hidden, false);
-  assert.equal(clearElement.disabled, false);
-  assert.equal(clearElement.attributes['aria-disabled'], 'false');
+  assert.equal(clearElement.disabled, true);
+  assert.equal(clearElement.attributes['aria-disabled'], 'true');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -3075,7 +3076,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.state.coverLookup.tasks = [{
     id: 'completed-task',
     status: 'completed',
-    notification_action_taken: false,
+    notification_action_taken: true,
   }];
 
   await context.clearCompletedCoverLookupTasks();
@@ -3108,10 +3109,12 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       notification_action_taken: false,
     },
     {
-      id: 'failed-task',
-      status: 'failed',
-      artist: 'Failed Artist',
-      album: 'Failed Album',
+      id: 'selected-cover-task',
+      status: 'completed',
+      result_kind: 'cover-updated',
+      job_kind: 'save_remote_selection',
+      artist: 'Selected Artist',
+      album: 'Selected Album',
       notification_action_taken: true,
     },
     {
@@ -3143,14 +3146,14 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/tasks/clear-completed');
-  assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
-    task_ids: ['completed-no-result-task', 'failed-task', 'canceled-task'],
-  });
+  assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {});
   assert.deepEqual(
     context.state.coverLookup.tasks.map((task) => task.id),
-    ['active-provider-task', 'pending-provider-task'],
+    ['completed-no-result-task', 'canceled-task', 'active-provider-task', 'pending-provider-task'],
   );
-  assert.doesNotMatch(bodyElement.innerHTML, /No Result Album|Failed Album|Canceled Album/);
+  assert.doesNotMatch(bodyElement.innerHTML, /Selected Album/);
+  assert.match(bodyElement.innerHTML, /No Result Album/);
+  assert.match(bodyElement.innerHTML, /Canceled Album/);
   assert.match(bodyElement.innerHTML, /Still Searching/);
   assert.match(bodyElement.innerHTML, /Waiting To Search/);
 
@@ -3158,7 +3161,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     ok: true,
     json: async () => ({
       ok: true,
-      removed_count: 3,
+      removed_count: 1,
       tasks: context.state.coverLookup.tasks,
     }),
   });

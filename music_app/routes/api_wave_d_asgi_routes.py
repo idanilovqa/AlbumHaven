@@ -417,7 +417,11 @@ async def utilities_cover_lookup_tasks_clear_completed(request: Request) -> JSON
     raw_task_ids = payload.get("task_ids") if isinstance(payload, dict) else None
     task_ids = _clean_string_list(raw_task_ids) if isinstance(raw_task_ids, list) else None
     config = _app_config(request)
-    removed_count = clear_completed_cover_lookup_tasks(task_ids, config=config)
+    removed_count = clear_completed_cover_lookup_tasks(
+        task_ids,
+        config=config,
+        actioned_only=True,
+    )
     return JSONResponse(
         {
             "ok": True,

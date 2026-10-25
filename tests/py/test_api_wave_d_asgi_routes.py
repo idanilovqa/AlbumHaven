@@ -458,8 +458,10 @@ def test_asgi_cover_lookup_task_list_mark_clear_and_cancel(app):
     track_path.write_bytes(b"track")
     reset_cover_lookup_runtime_state()
     completed_id, _ = cover_lookup_tasks.create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
+    unreviewed_id, _ = cover_lookup_tasks.create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
     cancel_id, _ = cover_lookup_tasks.create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
     cover_lookup_tasks.update_cover_lookup_task(completed_id, status="completed")
+    cover_lookup_tasks.update_cover_lookup_task(unreviewed_id, status="completed")
 
     asgi_app = _make_wave_d_app(app)
     list_status, _list_headers, list_body = _run_asgi_request(asgi_app, "GET", "/utilities/cover-lookup/tasks")
@@ -473,7 +475,7 @@ def test_asgi_cover_lookup_task_list_mark_clear_and_cancel(app):
         asgi_app,
         "POST",
         "/utilities/cover-lookup/tasks/clear-completed",
-        json_body={"task_ids": [completed_id]},
+        json_body={},
     )
     cancel_status, _cancel_headers, cancel_body = _run_asgi_request(
         asgi_app,
@@ -487,6 +489,7 @@ def test_asgi_cover_lookup_task_list_mark_clear_and_cancel(app):
     assert _decode_json(mark_body)["task"]["notification_action_taken"] is True
     assert clear_status == 200
     assert _decode_json(clear_body)["removed_count"] == 1
+    assert unreviewed_id in {item["id"] for item in _decode_json(clear_body)["tasks"]}
     assert cancel_status == 200
     canceled = _decode_json(cancel_body)["task"]
     assert canceled["id"] == cancel_id

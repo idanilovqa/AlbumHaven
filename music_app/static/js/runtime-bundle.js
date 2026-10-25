@@ -29256,6 +29256,17 @@ function isCompletedCoverLookupTask(task) {
   return ['completed', 'failed', 'canceled'].includes(String(task?.status || ''));
 }
 
+function isActionedCoverLookupNotification(task) {
+  return isCompletedCoverLookupTask(task) && (
+    Boolean(task?.notification_action_taken)
+    || (
+      String(task?.status || '') === 'completed'
+      && String(task?.result_kind || '') === 'cover-updated'
+      && String(task?.job_kind || '') === 'save_remote_selection'
+    )
+  );
+}
+
 function isCoverLookupSavePending(task) {
   return ['pending', 'running'].includes(String(task?.status || ''))
     && String(task?.job_kind || '') === 'save_remote_selection';
@@ -29885,6 +29896,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const loadedTerminalCount = tasks.filter((task) => (
     isCompletedCoverLookupTask(task) || isCoverLookupSavePending(task)
   )).length;
+  const loadedActionedCount = tasks.filter((task) => isActionedCoverLookupNotification(task)).length;
   const counts = state.coverLookup.notificationCounts;
   const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
   const activeCount = hasAuthoritativeCounts
@@ -29908,8 +29920,8 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
     clearButton.hidden = false;
-    clearButton.disabled = terminalCount <= 0;
-    clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
+    clearButton.disabled = loadedActionedCount <= 0;
+    clearButton.setAttribute?.('aria-disabled', String(loadedActionedCount <= 0));
   }
   if (!state.coverLookup.drawerOpen) {
     body.innerHTML = '';
@@ -30096,7 +30108,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
 async function clearCompletedCoverLookupTasks() {
   const previousTasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks.slice() : [];
   const terminalTaskIds = previousTasks
-    .filter((task) => isCompletedCoverLookupTask(task))
+    .filter((task) => isActionedCoverLookupNotification(task))
     .map((task) => String(task?.id || '').trim())
     .filter(Boolean);
   if (!terminalTaskIds.length) {
@@ -30115,7 +30127,7 @@ async function clearCompletedCoverLookupTasks() {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ task_ids: terminalTaskIds }),
+      body: JSON.stringify({}),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {

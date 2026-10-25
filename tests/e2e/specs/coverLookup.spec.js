@@ -440,7 +440,7 @@ test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', { 
   });
 });
 
-test('FTC-COVERS-007 notification states and bulk clear preserve active work', { tag: '@area:cover-providers' }, async ({
+test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -629,19 +629,23 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await coverLookupActions.waitForTaskActive(activeTaskTitle);
     await coverLookupActions.waitForLaterProviderFixtureBlocked();
     const clearResult = await coverLookupActions.clearFinishedTasksAndPreserveActive(
-      [actionedTaskTitle, noResultTaskTitle, failedTaskTitle],
+      [actionedTaskTitle],
       activeTaskTitle,
     );
-    expect(clearResult.requestedTaskCount).toBe(3);
-    expect(clearResult.removedCount).toBe(3);
+    expect(clearResult.requestedTaskCount).toBe(0);
+    expect(clearResult.removedCount).toBe(1);
+    await coverLookupActions.waitForTaskStatus(noResultTaskTitle, 'No covers found');
+    await coverLookupActions.waitForTaskStatus(failedTaskTitle, 'Lookup failed');
   });
 
-  await stepLogger.step('Reload with only active work, then cancel and clear it', async () => {
+  await stepLogger.step('Reload with unresolved and active work, then clear each explicitly', async () => {
     await coverLookupActions.reloadAndOpenDrawer();
     await coverLookupActions.waitForTaskActive(activeTaskTitle);
     await coverLookupActions.expectTaskHiddenImmediately(actionedTaskTitle);
-    await coverLookupActions.expectTaskHiddenImmediately(noResultTaskTitle);
-    await coverLookupActions.expectTaskHiddenImmediately(failedTaskTitle);
+    await coverLookupActions.waitForTaskStatus(noResultTaskTitle, 'No covers found');
+    await coverLookupActions.waitForTaskStatus(failedTaskTitle, 'Lookup failed');
+    await coverLookupActions.clearTaskAndExpectImmediateRemoval(noResultTaskTitle);
+    await coverLookupActions.clearTaskAndExpectImmediateRemoval(failedTaskTitle);
     await coverLookupActions.cancelTask(activeTaskTitle);
     await coverLookupActions.releaseLaterProviderFixture();
     await coverLookupActions.waitForTaskStatus(activeTaskTitle, 'Canceled');

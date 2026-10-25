@@ -810,6 +810,12 @@ class PostgresScanJobRepository:
                 if payload.get("inventory_mutation_revision") is not None
                 else None
             ),
+            "cover_publication_stale": bool(
+                payload.get("cover_publication_stale")
+            ),
+            "cover_mutation_revision": int(
+                payload.get("cover_mutation_revision") or 0
+            ),
         }
 
     def publish_claimed_full_scan_preview(

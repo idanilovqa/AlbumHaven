@@ -22,6 +22,7 @@ declare
   current_revision bigint;
   resolved_count bigint;
   resolved_tracks bigint;
+  ineligible_tracks boolean;
   projected_album jsonb;
   restore_result record;
   surviving_album_id bigint;
@@ -130,31 +131,33 @@ begin
   where tracks.library_id = requested_library_id
     and files.private_path = any(requested_track_paths)
     and files.scan_cache_stale is false;
+  select exists (
+    select 1
+    from library.local_tracks as tracks
+    join library.local_track_files as files on files.track_id = tracks.id
+    join jsonb_to_recordset(requested_input_rows) as incoming(
+      private_path text, file_entry jsonb
+    ) on incoming.private_path = files.private_path
+    where tracks.library_id = requested_library_id
+      and files.scan_cache_stale is false
+      and (
+        (nullif(btrim(files.metadata #>> '{scan_cache,file_entry,album}'), '') is not null
+         and nullif(btrim(files.metadata #>> '{scan_cache,file_entry,exception_type}'), '') is null)
+        or lower(btrim(coalesce((
+          coalesce(files.metadata #> '{scan_cache,file_entry}', '{}'::jsonb)
+            || incoming.file_entry
+        ) ->> 'album', ''))) <> lower(btrim(projected_album ->> 'title'))
+        or nullif(btrim((
+          coalesce(files.metadata #> '{scan_cache,file_entry}', '{}'::jsonb)
+            || incoming.file_entry
+        ) ->> 'exception_type'), '') is not null
+      )
+  ) into ineligible_tracks;
   if resolved_count <> cardinality(requested_track_paths)
      or resolved_tracks <> cardinality(requested_track_paths)
-     or exists (
-       select 1
-       from library.local_tracks as tracks
-       join library.local_track_files as files on files.track_id = tracks.id
-       join jsonb_to_recordset(requested_input_rows) as incoming(
-         private_path text, file_entry jsonb
-       ) on incoming.private_path = files.private_path
-       where tracks.library_id = requested_library_id
-         and files.scan_cache_stale is false
-         and (
-           (nullif(btrim(files.metadata #>> '{scan_cache,file_entry,album}'), '') is not null
-            and nullif(btrim(files.metadata #>> '{scan_cache,file_entry,exception_type}'), '') is null)
-           or lower(btrim(coalesce((
-             coalesce(files.metadata #> '{scan_cache,file_entry}', '{}'::jsonb)
-               || incoming.file_entry
-           ) ->> 'album', ''))) <> lower(btrim(projected_album ->> 'title'))
-           or nullif(btrim((
-             coalesce(files.metadata #> '{scan_cache,file_entry}', '{}'::jsonb)
-               || incoming.file_entry
-           ) ->> 'exception_type'), '') is not null
-         )
-     ) then
-    raise exception 'Album restoration must resolve eligible selected tracks'
+     or ineligible_tracks then
+    raise exception 'Album restoration must resolve eligible selected tracks (resolved %, tracks %, expected %, ineligible %)',
+      resolved_count, resolved_tracks, cardinality(requested_track_paths), ineligible_tracks
       using errcode = '22023';
   end if;
 
@@ -1024,7 +1027,7 @@ set search_path = pg_catalog, library, app, ops, pg_temp
 as $$
 declare
   canonical record;
-  cover_keys constant text[] := array['cover_validation_path', 'cover_validation_mtime_ns', 'cover_validation_size', 'cover_path', 'cover_revision', 'cover_selection_origin', 'local_cover_width', 'local_cover_height', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'];
+  cover_keys constant text[] := array['cover_validation_path', 'cover_validation_mtime_ns', 'cover_validation_size', 'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'];
 begin
   perform pg_advisory_xact_lock(
     hashtext('album-haven:local-inventory-publication')
@@ -2107,6 +2110,10 @@ begin
     on checkpoint.job_id = job.id
    and checkpoint.task_id = requested_task_id
    and checkpoint.artifact_sha256 = recover_cover_mutation.artifact_sha256
+  join library.library_roots as root
+    on root.id = checkpoint.library_root_id
+   and root.library_id = requested_library_id
+   and root.is_active is true
   join ops.cover_lookup_tasks as task
     on task.id = checkpoint.task_id
    and task.library_id = requested_library_id
@@ -3041,7 +3048,7 @@ declare
   updated_albums bigint;
   mutation_result record;
   forbidden_cover_fields constant text[] := array[
-    'cover_path', 'cover_revision', 'cover_selection_origin',
+    'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
     'local_cover_width', 'local_cover_height', 'cover_validation_path',
     'cover_validation_mtime_ns', 'cover_validation_size',
     'remote_cover_url', 'remote_cover_thumbnail_url',
@@ -3049,7 +3056,9 @@ declare
     'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'
   ];
   allowed_file_entry_keys constant text[] := array[
-    'album', 'year', 'release_date', 'exception_type', 'mtime', 'size'
+    'album', 'year', 'release_date', 'exception_type', 'mtime', 'size',
+    'artist', 'album_artist', 'artists', 'is_compilation', 'featured_artists',
+    'custom_collection_name', 'path'
   ];
   allowed_artist_metadata_keys constant text[] := array[
     'album_artist', 'artists', 'is_compilation', 'featured_artists'
@@ -3073,7 +3082,7 @@ begin
     raise exception 'structural tag edit input is invalid' using errcode = '22023';
   end if;
   if coalesce(cardinality(changed_field_names), 0) = 0
-     or not (changed_field_names <@ array['album','year','exception_type']::text[])
+     or not (changed_field_names <@ array['album','year','exception_type','artist','album_artist','custom_collection_name']::text[])
      or array_position(changed_field_names, null) is not null
      or changed_field_names && forbidden_cover_fields
      or jsonb_typeof(destination_state -> 'destination_artist_metadata')
@@ -3083,10 +3092,17 @@ begin
      or exists (
        select 1 from jsonb_array_elements(input_rows) as item(value)
        where jsonb_typeof(item.value) is distinct from 'object'
-          or item.value - array['private_path','file_entry'] <> '{}'::jsonb
+          or item.value - array['private_path','file_entry','track_artist_key','track_artist_name'] <> '{}'::jsonb
           or jsonb_typeof(item.value -> 'private_path') is distinct from 'string'
           or nullif(btrim(item.value ->> 'private_path'), '') is null
-          or jsonb_typeof(item.value -> 'file_entry') is distinct from 'object'
+           or (item.value ? 'track_artist_key') <> (item.value ? 'track_artist_name')
+           or (item.value ? 'track_artist_key' and (
+             jsonb_typeof(item.value -> 'track_artist_key') is distinct from 'string'
+             or nullif(btrim(item.value ->> 'track_artist_key'), '') is null
+             or jsonb_typeof(item.value -> 'track_artist_name') is distinct from 'string'
+             or nullif(btrim(item.value ->> 'track_artist_name'), '') is null
+           ))
+           or jsonb_typeof(item.value -> 'file_entry') is distinct from 'object'
           or (item.value -> 'file_entry') - allowed_file_entry_keys <> '{}'::jsonb
           or not ((item.value ->> 'private_path') = any(requested_track_paths))
      ) then
@@ -3125,15 +3141,24 @@ with bootstrap_context as materialized (
           from unnest(requested_track_paths::text[]) as input_path
         ),
         input_rows as materialized (
-          select incoming.private_path, incoming.file_entry
+          select incoming.private_path,
+                 incoming.track_artist_key,
+                 incoming.track_artist_name,
+                 incoming.file_entry
           from jsonb_to_recordset(input_rows::jsonb)
-            as incoming(private_path text, file_entry jsonb)
+            as incoming(
+              private_path text,
+              track_artist_key text,
+              track_artist_name text,
+              file_entry jsonb
+            )
         ),
         selected_track_files as materialized (
           select
             library.local_track_files.id as track_file_id,
             library.local_tracks.id as track_id,
             library.local_tracks.album_id as source_album_id,
+            input_rows.track_artist_key,
             input_rows.file_entry
           from bootstrap_context
           join library.local_track_files on true
@@ -3297,7 +3322,7 @@ with bootstrap_context as materialized (
             (
               coalesce(locked_album_scope.metadata, '{}'::jsonb)
               - array[
-                'cover_path', 'cover_revision', 'cover_selection_origin',
+                'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
                 'remote_cover_url', 'remote_cover_thumbnail_url',
                 'remote_cover_source', 'remote_cover_source_label',
                 'remote_cover_album_url', 'remote_cover_width',
@@ -3326,6 +3351,16 @@ with bootstrap_context as materialized (
             and selection_scope.input_path_count <= (
                   select count(*) from source_album_track_files
                 )
+        ),
+        retained_source_album as materialized (
+          select id, album_key
+          from validated_source_album
+          where album_key = (destination_state ->> 'destination_album_key')
+            and not coalesce((destination_state ->> 'updates_release_year')::boolean, false)::boolean
+            and (select selection_scope.input_path_count from selection_scope) < (
+                  select count(*) from source_album_track_files
+                )
+            and not exists (select 1 from existing_destination_album)
         ),
         marked_partial_source_album as (
           update library.local_albums
@@ -3396,9 +3431,45 @@ with bootstrap_context as materialized (
             and not exists (select 1 from existing_destination_album)
           returning app.album_ratings.id
         ),
+        inserted_destination_artist as (
+          insert into library.local_artists (
+            library_id, artist_key, name, sort_name, metadata
+          )
+          select validated_source_album.library_id,
+                 (destination_state ->> 'destination_artist_key'), (destination_state ->> 'destination_artist_name'),
+                 lower((destination_state ->> 'destination_artist_name')),
+                 jsonb_build_object('source', (destination_state ->> 'source')::text)
+          from validated_source_album
+          on conflict (library_id, artist_key) do update
+            set last_seen_at = observed_at
+          returning library.local_artists.id, library.local_artists.artist_key
+        ),
+        inserted_track_artists as (
+          insert into library.local_artists (
+            library_id, artist_key, name, sort_name, metadata
+          )
+          select distinct
+                 validated_source_album.library_id,
+                 input_rows.track_artist_key,
+                 input_rows.track_artist_name,
+                 lower(input_rows.track_artist_name),
+                 jsonb_build_object('source', (destination_state ->> 'source')::text)
+          from validated_source_album
+          cross join input_rows
+          where input_rows.track_artist_key <> (destination_state ->> 'destination_artist_key')
+          on conflict (library_id, artist_key) do update
+            set last_seen_at = observed_at
+          returning library.local_artists.id, library.local_artists.artist_key
+        ),
+        resolved_track_artists as materialized (
+          select id, artist_key from inserted_destination_artist
+          union all
+          select id, artist_key from inserted_track_artists
+        ),
         renamed_source_album as (
           update library.local_albums
-          set album_key = case
+          set artist_id = (select id from inserted_destination_artist),
+              album_key = case
                 when coalesce((destination_state ->> 'destination_is_explicit_separate')::boolean, false)::boolean
                 then validated_source_album.album_key
                 else (destination_state ->> 'destination_album_key')
@@ -3429,7 +3500,7 @@ with bootstrap_context as materialized (
                          true
                        )
                   else library.local_albums.metadata
-                end
+                end || coalesce(destination_state -> 'destination_artist_metadata', '{}'::jsonb)::jsonb
         ,
               last_seen_at = observed_at
           from validated_source_album
@@ -3440,22 +3511,20 @@ with bootstrap_context as materialized (
             and not exists (select 1 from existing_destination_album)
           returning library.local_albums.id, library.local_albums.album_key
         ),
-        inserted_destination_artist as (
-          insert into library.local_artists (
-            library_id, artist_key, name, sort_name, metadata
-          )
-          select validated_source_album.library_id,
-                 (destination_state ->> 'destination_artist_key'), (destination_state ->> 'destination_artist_name'),
-                 lower((destination_state ->> 'destination_artist_name')),
-                 jsonb_build_object('source', (destination_state ->> 'source')::text)
-          from validated_source_album
-          where (select selection_scope.input_path_count from selection_scope) < (
-                  select count(*) from source_album_track_files
-                )
-            and not exists (select 1 from existing_destination_album)
-          on conflict (library_id, artist_key) do update
-            set last_seen_at = observed_at
-          returning library.local_artists.id
+        updated_renamed_album_owner as (
+          update library.local_album_featured_artists
+          set artist_id = (select id from inserted_destination_artist),
+              last_seen_at = observed_at
+          from renamed_source_album
+          join validated_source_album
+            on validated_source_album.id = renamed_source_album.id
+          where library.local_album_featured_artists.album_id =
+                renamed_source_album.id
+            and library.local_album_featured_artists.featured_kind = 'owner'
+            and library.local_album_featured_artists.artist_id =
+                validated_source_album.artist_id
+            and exists (select 1 from inserted_destination_artist)
+          returning library.local_album_featured_artists.id
         ),
         inserted_destination_album as (
           insert into library.local_albums (
@@ -3488,6 +3557,7 @@ with bootstrap_context as materialized (
                   select count(*) from source_album_track_files
                 )
             and not exists (select 1 from existing_destination_album)
+            and not exists (select 1 from retained_source_album)
           returning library.local_albums.id, library.local_albums.album_key
         ),
         destination_album as materialized (
@@ -3506,6 +3576,9 @@ with bootstrap_context as materialized (
             inserted_destination_album.id,
             inserted_destination_album.album_key
           from inserted_destination_album
+          union all
+          select retained_source_album.id, retained_source_album.album_key
+          from retained_source_album
         ),
         inserted_separate_release as (
           insert into library.separate_releases (
@@ -3599,6 +3672,10 @@ with bootstrap_context as materialized (
         updated_tracks as (
           update library.local_tracks
           set album_id = (select destination_album.id from destination_album),
+              artist_id = coalesce((
+                select resolved_track_artists.id from resolved_track_artists
+                where resolved_track_artists.artist_key = selected_track_files.track_artist_key
+              ), library.local_tracks.artist_id),
               metadata = coalesce(library.local_tracks.metadata, '{}'::jsonb)
                 || case
                      when selected_track_files.file_entry ? 'album'
@@ -3617,7 +3694,11 @@ with bootstrap_context as materialized (
         ),
         updated_track_files as (
           update library.local_track_files
-          set metadata = jsonb_set(
+          set private_path = coalesce(
+                nullif(selected_track_files.file_entry ->> 'path', ''),
+                library.local_track_files.private_path
+              ),
+              metadata = jsonb_set(
                 coalesce(library.local_track_files.metadata, '{}'::jsonb),
                 '{scan_cache}',
                 coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)
@@ -3748,15 +3829,24 @@ with bootstrap_context as materialized (
           from unnest(requested_track_paths::text[]) as input_path
         ),
         input_rows as materialized (
-          select incoming.private_path, incoming.file_entry
+          select incoming.private_path,
+                 incoming.track_artist_key,
+                 incoming.track_artist_name,
+                 incoming.file_entry
           from jsonb_to_recordset(input_rows::jsonb)
-            as incoming(private_path text, file_entry jsonb)
+            as incoming(
+              private_path text,
+              track_artist_key text,
+              track_artist_name text,
+              file_entry jsonb
+            )
         ),
         selected_track_files as materialized (
           select
             library.local_track_files.id as track_file_id,
             library.local_tracks.id as track_id,
             library.local_tracks.album_id as source_album_id,
+            input_rows.track_artist_key,
             input_rows.file_entry
           from bootstrap_context
           join library.local_track_files on true
@@ -3920,7 +4010,7 @@ with bootstrap_context as materialized (
             (
               coalesce(locked_album_scope.metadata, '{}'::jsonb)
               - array[
-                'cover_path', 'cover_revision', 'cover_selection_origin',
+                'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
                 'remote_cover_url', 'remote_cover_thumbnail_url',
                 'remote_cover_source', 'remote_cover_source_label',
                 'remote_cover_album_url', 'remote_cover_width',
@@ -3949,6 +4039,16 @@ with bootstrap_context as materialized (
             and selection_scope.input_path_count <= (
                   select count(*) from source_album_track_files
                 )
+        ),
+        retained_source_album as materialized (
+          select id, album_key
+          from validated_source_album
+          where album_key = (destination_state ->> 'destination_album_key')
+            and not coalesce((destination_state ->> 'updates_release_year')::boolean, false)::boolean
+            and (select selection_scope.input_path_count from selection_scope) < (
+                  select count(*) from source_album_track_files
+                )
+            and not exists (select 1 from existing_destination_album)
         ),
         marked_partial_source_album as (
           update library.local_albums
@@ -4019,9 +4119,45 @@ with bootstrap_context as materialized (
             and not exists (select 1 from existing_destination_album)
           returning app.album_ratings.id
         ),
+        inserted_destination_artist as (
+          insert into library.local_artists (
+            library_id, artist_key, name, sort_name, metadata
+          )
+          select validated_source_album.library_id,
+                 (destination_state ->> 'destination_artist_key'), (destination_state ->> 'destination_artist_name'),
+                 lower((destination_state ->> 'destination_artist_name')),
+                 jsonb_build_object('source', (destination_state ->> 'source')::text)
+          from validated_source_album
+          on conflict (library_id, artist_key) do update
+            set last_seen_at = observed_at
+          returning library.local_artists.id, library.local_artists.artist_key
+        ),
+        inserted_track_artists as (
+          insert into library.local_artists (
+            library_id, artist_key, name, sort_name, metadata
+          )
+          select distinct
+                 validated_source_album.library_id,
+                 input_rows.track_artist_key,
+                 input_rows.track_artist_name,
+                 lower(input_rows.track_artist_name),
+                 jsonb_build_object('source', (destination_state ->> 'source')::text)
+          from validated_source_album
+          cross join input_rows
+          where input_rows.track_artist_key <> (destination_state ->> 'destination_artist_key')
+          on conflict (library_id, artist_key) do update
+            set last_seen_at = observed_at
+          returning library.local_artists.id, library.local_artists.artist_key
+        ),
+        resolved_track_artists as materialized (
+          select id, artist_key from inserted_destination_artist
+          union all
+          select id, artist_key from inserted_track_artists
+        ),
         renamed_source_album as (
           update library.local_albums
-          set album_key = case
+          set artist_id = (select id from inserted_destination_artist),
+              album_key = case
                 when coalesce((destination_state ->> 'destination_is_explicit_separate')::boolean, false)::boolean
                 then validated_source_album.album_key
                 else (destination_state ->> 'destination_album_key')
@@ -4052,7 +4188,7 @@ with bootstrap_context as materialized (
                          true
                        )
                   else library.local_albums.metadata
-                end
+                end || coalesce(destination_state -> 'destination_artist_metadata', '{}'::jsonb)::jsonb
     ,
               last_seen_at = observed_at
           from validated_source_album
@@ -4063,22 +4199,20 @@ with bootstrap_context as materialized (
             and not exists (select 1 from existing_destination_album)
           returning library.local_albums.id, library.local_albums.album_key
         ),
-        inserted_destination_artist as (
-          insert into library.local_artists (
-            library_id, artist_key, name, sort_name, metadata
-          )
-          select validated_source_album.library_id,
-                 (destination_state ->> 'destination_artist_key'), (destination_state ->> 'destination_artist_name'),
-                 lower((destination_state ->> 'destination_artist_name')),
-                 jsonb_build_object('source', (destination_state ->> 'source')::text)
-          from validated_source_album
-          where (select selection_scope.input_path_count from selection_scope) < (
-                  select count(*) from source_album_track_files
-                )
-            and not exists (select 1 from existing_destination_album)
-          on conflict (library_id, artist_key) do update
-            set last_seen_at = observed_at
-          returning library.local_artists.id
+        updated_renamed_album_owner as (
+          update library.local_album_featured_artists
+          set artist_id = (select id from inserted_destination_artist),
+              last_seen_at = observed_at
+          from renamed_source_album
+          join validated_source_album
+            on validated_source_album.id = renamed_source_album.id
+          where library.local_album_featured_artists.album_id =
+                renamed_source_album.id
+            and library.local_album_featured_artists.featured_kind = 'owner'
+            and library.local_album_featured_artists.artist_id =
+                validated_source_album.artist_id
+            and exists (select 1 from inserted_destination_artist)
+          returning library.local_album_featured_artists.id
         ),
         inserted_destination_album as (
           insert into library.local_albums (
@@ -4119,6 +4253,7 @@ with bootstrap_context as materialized (
                   select count(*) from source_album_track_files
                 )
             and not exists (select 1 from existing_destination_album)
+            and not exists (select 1 from retained_source_album)
           returning library.local_albums.id, library.local_albums.album_key
         ),
         destination_album as materialized (
@@ -4137,6 +4272,9 @@ with bootstrap_context as materialized (
             inserted_destination_album.id,
             inserted_destination_album.album_key
           from inserted_destination_album
+          union all
+          select retained_source_album.id, retained_source_album.album_key
+          from retained_source_album
         ),
         inserted_separate_release as (
           insert into library.separate_releases (
@@ -4230,6 +4368,10 @@ with bootstrap_context as materialized (
         updated_tracks as (
           update library.local_tracks
           set album_id = (select destination_album.id from destination_album),
+              artist_id = coalesce((
+                select resolved_track_artists.id from resolved_track_artists
+                where resolved_track_artists.artist_key = selected_track_files.track_artist_key
+              ), library.local_tracks.artist_id),
               metadata = coalesce(library.local_tracks.metadata, '{}'::jsonb)
                 || case
                      when selected_track_files.file_entry ? 'album'
@@ -4248,7 +4390,11 @@ with bootstrap_context as materialized (
         ),
         updated_track_files as (
           update library.local_track_files
-          set metadata = jsonb_set(
+          set private_path = coalesce(
+                nullif(selected_track_files.file_entry ->> 'path', ''),
+                library.local_track_files.private_path
+              ),
+              metadata = jsonb_set(
                 coalesce(library.local_track_files.metadata, '{}'::jsonb),
                 '{scan_cache}',
                 coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)
@@ -5015,7 +5161,7 @@ begin
   insert into library.local_albums
     (library_id, artist_id, album_key, title, release_year, metadata)
   select claimed_library_id, artist.id, input.album_key, input.title,
-         input.release_year, coalesce(input.metadata, '{}'::jsonb) - array['cover_path', 'cover_revision', 'cover_selection_origin', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[]
+         input.release_year, coalesce(input.metadata, '{}'::jsonb) - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[]
     from jsonb_to_recordset(coalesce(p_inventory -> 'albums', '[]'::jsonb))
       as input(artist_key text, album_key text, title text, release_year integer,
                cover_path text, metadata jsonb)
@@ -5075,7 +5221,7 @@ begin
          to_timestamp(input.modified_at_epoch),
          case when input.metadata #> '{scan_cache,file_entry}' is not null
            then jsonb_set(input.metadata, '{scan_cache,file_entry}',
-             (input.metadata #> '{scan_cache,file_entry}') - array['cover_path', 'cover_revision', 'cover_selection_origin', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
+             (input.metadata #> '{scan_cache,file_entry}') - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
            else input.metadata end
     from jsonb_to_recordset(coalesce(p_inventory -> 'track_files', '[]'::jsonb))
       as input(track_key text, private_path text, relative_path text,
@@ -5099,7 +5245,7 @@ begin
               from jsonb_each(coalesce(
                 library.local_track_files.metadata #> '{scan_cache,file_entry}', '{}'::jsonb
               )) as entry(key, value)
-              where entry.key = any(array['cover_path', 'cover_revision', 'cover_selection_origin', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
+              where entry.key = any(array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
             ), '{}'::jsonb))
         ) #- '{scan_cache,stale_marked_at}';
 
@@ -5649,7 +5795,7 @@ begin
     library_id, artist_id, album_key, title, release_year, metadata
   )
   select claimed_library_id, artist.id, album_map.target_album_key, input.title,
-         input.release_year, coalesce(input.metadata, '{}'::jsonb) - array['cover_path', 'cover_revision', 'cover_selection_origin', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[]
+         input.release_year, coalesce(input.metadata, '{}'::jsonb) - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[]
     from jsonb_to_recordset(coalesce(p_inventory -> 'albums', '[]'::jsonb))
       as input(artist_key text, album_key text, title text, release_year integer,
                cover_path text, metadata jsonb)
@@ -5726,7 +5872,7 @@ begin
          to_timestamp(input.modified_at_epoch),
          case when input.metadata #> '{scan_cache,file_entry}' is not null
            then jsonb_set(input.metadata, '{scan_cache,file_entry}',
-             (input.metadata #> '{scan_cache,file_entry}') - array['cover_path', 'cover_revision', 'cover_selection_origin', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
+             (input.metadata #> '{scan_cache,file_entry}') - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
            else input.metadata end
     from jsonb_to_recordset(coalesce(p_inventory -> 'track_files', '[]'::jsonb))
       as input(track_key text, private_path text, relative_path text,
@@ -5753,7 +5899,7 @@ begin
               from jsonb_each(coalesce(
                 library.local_track_files.metadata #> '{scan_cache,file_entry}', '{}'::jsonb
               )) as entry(key, value)
-              where entry.key = any(array['cover_path', 'cover_revision', 'cover_selection_origin', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
+              where entry.key = any(array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
             ), '{}'::jsonb))
         ) #- '{scan_cache,stale_marked_at}';
 
@@ -5982,6 +6128,7 @@ begin
       'cover_state', jsonb_strip_nulls(jsonb_build_object(
         'cover_revision', submitted_album.metadata -> 'cover_revision',
         'cover_selection_origin', submitted_album.metadata -> 'cover_selection_origin',
+        'cover_selection_provenance', submitted_album.metadata -> 'cover_selection_provenance',
         'remote_cover_url', submitted_album.metadata -> 'remote_cover_url',
         'remote_cover_thumbnail_url', submitted_album.metadata -> 'remote_cover_thumbnail_url',
         'remote_cover_source', submitted_album.metadata -> 'remote_cover_source',
@@ -6166,6 +6313,7 @@ begin
       'cover_state', jsonb_strip_nulls(jsonb_build_object(
         'cover_revision', submitted_album.metadata -> 'cover_revision',
         'cover_selection_origin', submitted_album.metadata -> 'cover_selection_origin',
+        'cover_selection_provenance', submitted_album.metadata -> 'cover_selection_provenance',
         'remote_cover_url', submitted_album.metadata -> 'remote_cover_url',
         'remote_cover_thumbnail_url', submitted_album.metadata -> 'remote_cover_thumbnail_url',
         'remote_cover_source', submitted_album.metadata -> 'remote_cover_source',

@@ -1,0 +1,16 @@
+{
+  "id": "library-provenance-v001",
+  "status": "in_review",
+  "entrypoint": "index.html",
+  "version": "v001",
+  "variants": [
+    { "id": "A", "label": "Subtle tint", "recommended": true },
+    { "id": "B", "label": "Stronger tint", "recommended": false }
+  ],
+  "approval": null,
+  "production_implementation_approved": false,
+  "reference": "../../../screens/utilities-refactor/v001/references/stored-library-desktop.jpg",
+  "data": "synthetic",
+  "verification": "Main-agent browser review: A/B dark Cards and A light Covers inspected; source action opens duplicate sample with all three locations; selector label association repaired and verified. This is mockup evidence only, not product acceptance. Narrow and touch verification pending.",
+  "screenshots": ["screenshots/a-dark-cards.png", "screenshots/b-dark-cards.png", "screenshots/a-light-covers.png"]
+}

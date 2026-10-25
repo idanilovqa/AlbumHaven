@@ -33,14 +33,14 @@ def _actor(*, bootstrap=False, grants=(), state=ActorState.ACTIVE):
     )
 
 
-def _context(actor, action="library.read", *, library_id=23):
+def _context(actor, action="library.read", *, library_id=23, surface="private_web"):
     return PolicyContext.build(
         actor=actor,
         action=action,
         library_id=library_id,
         deployment_mode="self_hosted",
         request_origin=RequestOrigin("network", "privacy-key"),
-        client_surface_class="private_web",
+        client_surface_class=surface,
     )
 
 
@@ -75,6 +75,50 @@ def test_system_admin_is_never_available_as_an_ordinary_grant():
 
     assert result.decision.allowed is False
     assert result.decision.reason_code == "bootstrap_only"
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "system.preview_storage.read",
+        "system.preview_storage.manage",
+        "system.preview_storage.cancel",
+        "system.preview_storage.retry",
+    ],
+)
+def test_preview_storage_actions_are_bootstrap_owner_only(action):
+    evaluator = PolicyEvaluator()
+    granted_actor = _actor(grants=(CapabilityGrant(action, "global", None),))
+
+    assert evaluator.evaluate(_context(_actor(bootstrap=True), action)).decision.allowed
+    denied = evaluator.evaluate(_context(granted_actor, action))
+    assert denied.decision.allowed is False
+    assert denied.decision.reason_code == "bootstrap_only"
+
+
+@pytest.mark.parametrize(
+    ("surface", "allowed"),
+    [
+        ("private_web", True),
+        ("desktop", True),
+        ("cloud_web", False),
+        ("mobile", False),
+        ("tv", False),
+        ("node", False),
+    ],
+)
+def test_preview_storage_actions_obey_the_approved_client_matrix(surface, allowed):
+    result = PolicyEvaluator().evaluate(
+        _context(
+            _actor(bootstrap=True),
+            "system.preview_storage.read",
+            surface=surface,
+        )
+    )
+
+    assert result.decision.allowed is allowed
+    if not allowed:
+        assert result.decision.reason_code == "client_surface_denied"
 
 
 @pytest.mark.parametrize("action", ["app.shell.read", "app.bootstrap.read", "app.status.read"])

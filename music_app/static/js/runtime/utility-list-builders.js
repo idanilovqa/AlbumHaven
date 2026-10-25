@@ -1865,6 +1865,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   const mutation = {
     taskId: normalizedTaskId,
     albumKey: selectedKey,
+    originalTrackPaths: Array.from(getAlbumTrackPaths(originalAlbum)),
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
@@ -1888,12 +1889,16 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (survivingKeys.has(selectedKey)) {
       state.utility.selectedProblematicKey = selectedKey;
     } else {
+      const retainedAlbum = findAlbumByTrackPaths(
+        items,
+        new Set(Array.isArray(mutation.originalTrackPaths) ? mutation.originalTrackPaths : []),
+      );
       const priorKeys = Array.isArray(mutation.priorKeys) ? mutation.priorKeys : [];
       const selectedIndex = priorKeys.indexOf(selectedKey);
       const previousSurvivor = selectedIndex > 0
         ? priorKeys.slice(0, selectedIndex).reverse().find((key) => survivingKeys.has(key))
         : '';
-      state.utility.selectedProblematicKey = previousSurvivor || String(items[0]?.key || '');
+      state.utility.selectedProblematicKey = String(retainedAlbum?.key || previousSurvivor || items[0]?.key || '');
     }
     const survivorKey = String(state.utility.selectedProblematicKey || '');
     const survivor = items.find((album) => String(album?.key || '') === survivorKey) || null;
@@ -1990,6 +1995,139 @@ async function refreshLoadedProblematicFilesAfterSaveCompletion() {
   return true;
 }
 
+async function reconcileCommittedTagEditDestination(terminalPayload, context = {}) {
+  const status = String(
+    terminalPayload?.status || terminalPayload?.save_task_status || '',
+  ).trim().toLowerCase();
+  const destinationArtist = String(terminalPayload?.destination_artist || '').trim();
+  const destinationAlbumKey = String(
+    terminalPayload?.destination_album_key || '',
+  ).trim();
+  const destinationAlbumId = Number(terminalPayload?.destination_album_id || 0);
+  const shouldApplyResponse = typeof context.shouldApplyResponse === 'function'
+    ? context.shouldApplyResponse
+    : () => true;
+  if (
+    status !== 'completed'
+    || !destinationArtist
+    || !shouldApplyResponse(terminalPayload)
+  ) return false;
+
+  const orphanedArtists = new Set(
+    (Array.isArray(terminalPayload?.orphaned_source_artists)
+      ? terminalPayload.orphaned_source_artists
+      : [])
+      .map((artist) => String(artist || '').trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  const selectedArtistKey = selectedArtist.toLocaleLowerCase();
+  if (
+    !selectedArtist
+    || (
+      selectedArtistKey !== destinationArtist.toLocaleLowerCase()
+      && !orphanedArtists.has(selectedArtistKey)
+    )
+  ) return false;
+
+  const activeQuery = String(state.view?.query || '').trim();
+  const destinationView = {
+    ...state.view,
+    selected_artist: destinationArtist,
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    ...(activeQuery ? {
+      search_context: {
+        ...(state.view?.search_context || {}),
+        selected_artist: destinationArtist,
+        selected_artist_source: 'requested_artist',
+      },
+    } : {}),
+  };
+  const refreshed = await fetchAndRender(
+    buildApiUrl(destinationView, { rootFullPayload: true }),
+    false,
+    {
+      ...(context.renderOptions || {}),
+      restartIfSameUrl: true,
+      shouldApplyResponse,
+    },
+  );
+  if (
+    !refreshed
+    || !shouldApplyResponse(terminalPayload)
+    || String(state.view?.selected_artist || '').trim() !== destinationArtist
+  ) return false;
+
+  if (destinationAlbumKey) {
+    const updatedDestinationAlbums = (
+      Array.isArray(terminalPayload?.updated_albums) ? terminalPayload.updated_albums : []
+    ).filter((album) => (
+      getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+      || (
+        destinationAlbumId > 0
+        && Number(album?.album_id || 0) === destinationAlbumId
+      )
+    ));
+    const destinationVisible = collectVisibleAlbumsUnique().some((album) => (
+      getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+      || updatedDestinationAlbums.some((updatedAlbum) => (
+        albumsShareTrackPath(album, getAlbumTrackPaths(updatedAlbum))
+        || albumsShareLogicalReleaseIdentity(album, updatedAlbum)
+      ))
+    ));
+    if (!destinationVisible) return false;
+  }
+
+  const destinationSidebarKey = destinationArtist.toLocaleLowerCase();
+  const sidebarArtists = Array.isArray(state.view?.artists_sidebar)
+    ? state.view.artists_sidebar
+    : [];
+  if (!sidebarArtists.some((item) => (
+    String(item?.artist || '').trim().toLocaleLowerCase() === destinationSidebarKey
+  ))) {
+    const destinationGroup = [
+      ...(state.view?.primary_artist_groups || []),
+      ...(state.view?.artist_groups || []),
+    ].find((group) => (
+      String(group?.artist || group?.artist_display || '').trim().toLocaleLowerCase()
+        === destinationSidebarKey
+    ));
+    const albumCount = Number(destinationGroup?.album_count || destinationGroup?.count || 0)
+      || Math.max(1, Array.isArray(destinationGroup?.albums) ? destinationGroup.albums.length : 0);
+    state.view.artists_sidebar = [
+      ...sidebarArtists,
+      { artist: destinationArtist, count: albumCount },
+    ].sort((left, right) => String(left?.artist || '').localeCompare(
+      String(right?.artist || ''),
+      undefined,
+      { sensitivity: 'base' },
+    ));
+  }
+
+  if (orphanedArtists.size) {
+    state.view.artists_sidebar = (state.view.artists_sidebar || []).filter((item) => (
+      !orphanedArtists.has(String(item?.artist || '').trim().toLocaleLowerCase())
+    ));
+    for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
+      state.view[key] = (state.view[key] || []).filter((group) => (
+        !orphanedArtists.has(
+          String(group?.artist || group?.artist_display || '').trim().toLocaleLowerCase(),
+        )
+      ));
+    }
+  }
+  if (typeof buildUrl === 'function' && window?.history?.replaceState) {
+    window.history.replaceState(
+      { ...window.history.state, ...state.view },
+      '',
+      buildUrl(state.view),
+    );
+  }
+  return true;
+}
+
 async function watchSaveTask(taskId, context = {}) {
   const normalizedId = String(taskId || '').trim();
   if (!normalizedId) return;
@@ -2038,7 +2176,7 @@ async function watchSaveTask(taskId, context = {}) {
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
   const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
-  const absoluteScrollPosition = context.absoluteScrollPosition
+  let absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
     ? {
@@ -2046,19 +2184,58 @@ async function watchSaveTask(taskId, context = {}) {
       scrollTop: Number(context.absoluteScrollPosition.scrollTop),
     }
     : null;
-  const renderOptions = context.preserveAbsoluteScroll === true
+  let absoluteScrollOwnerGeneration = Number.isSafeInteger(
+    context.absoluteScrollOwnerGeneration,
+  )
+    ? context.absoluteScrollOwnerGeneration
+    : null;
+  let renderOptions = context.preserveAbsoluteScroll === true
     ? {
       preserveScroll: true,
       preserveAbsoluteScroll: true,
       ...(absoluteScrollPosition ? { absoluteScrollPosition } : {}),
     }
     : { preserveScroll: true };
+  const refreshAbsoluteScrollForUserIntent = () => {
+    if (
+      !Number.isSafeInteger(absoluteScrollOwnerGeneration)
+      || context.preserveAbsoluteScroll !== true
+      || (!originStillOwnsView() && !currentViewMatchesOriginRequest())
+      || typeof virtualGrid === 'undefined'
+      || typeof virtualGrid?.getUserScrollIntentGeneration !== 'function'
+      || typeof document === 'undefined'
+      || typeof document.getElementById !== 'function'
+    ) return false;
+    const currentGeneration = virtualGrid.getUserScrollIntentGeneration();
+    if (
+      !Number.isSafeInteger(currentGeneration)
+      || currentGeneration === absoluteScrollOwnerGeneration
+    ) return false;
+    const galleryScroll = document.getElementById('albums-scroll');
+    if (
+      !galleryScroll
+      || !Number.isFinite(Number(galleryScroll.scrollTop))
+      || !Number.isFinite(Number(galleryScroll.scrollLeft))
+    ) return false;
+    absoluteScrollPosition = {
+      scrollLeft: Number(galleryScroll.scrollLeft),
+      scrollTop: Number(galleryScroll.scrollTop),
+    };
+    absoluteScrollOwnerGeneration = currentGeneration;
+    renderOptions = { ...renderOptions, absoluteScrollPosition };
+    return true;
+  };
+  const currentRenderOptions = () => {
+    refreshAbsoluteScrollForUserIntent();
+    return renderOptions;
+  };
   const currentViewRenderOptions = () => (
     originStillOwnsView() || currentViewMatchesOriginRequest()
-      ? { ...renderOptions, preserveGalleryOptionsMenu: true }
+      ? { ...currentRenderOptions(), preserveGalleryOptionsMenu: true }
       : { preserveScroll: true, preserveGalleryOptionsMenu: true }
   );
   const restoreOwnedAbsoluteScroll = () => {
+    refreshAbsoluteScrollForUserIntent();
     if (
       !absoluteScrollPosition
       || (!originStillOwnsView() && !currentViewMatchesOriginRequest())
@@ -2078,7 +2255,7 @@ async function watchSaveTask(taskId, context = {}) {
     galleryScroll.scrollTop = absoluteScrollPosition.scrollTop;
     return true;
   };
-  const providedTerminalPayload = context.terminalPayload
+  let providedTerminalPayload = context.terminalPayload
     && typeof context.terminalPayload === 'object'
     && !Array.isArray(context.terminalPayload)
     ? {
@@ -2095,8 +2272,11 @@ async function watchSaveTask(taskId, context = {}) {
       ).trim().toLowerCase(),
     }
     : null;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const consumesProvidedTerminalPayload = attempt === 0 && providedTerminalPayload;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const consumesProvidedTerminalPayload = Boolean(
+      providedTerminalPayload
+      && (attempt === 0 || providedTerminalPayload.status === 'completed'),
+    );
     try {
       let data = providedTerminalPayload;
       if (!consumesProvidedTerminalPayload) {
@@ -2110,12 +2290,42 @@ async function watchSaveTask(taskId, context = {}) {
       }
       const responseTaskId = String(data.task_id || '').trim();
       if (responseTaskId && responseTaskId !== normalizedId) {
+        providedTerminalPayload = null;
         await waitForBrowserTimeout(500);
         continue;
       }
       if (data.status === 'completed') {
+        const committedInventoryMutationRevision = Number(data.inventory_mutation_revision);
+        const responseContainsCommittedInventoryMutation = (responseData) => (
+          !Number.isSafeInteger(committedInventoryMutationRevision)
+          || committedInventoryMutationRevision <= 0
+          || (
+            Number(responseData?.inventory_mutation_revision) >= committedInventoryMutationRevision
+            && responseData?.gallery_page?.projection_stale !== true
+          )
+        );
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         await refreshLoadedProblematicFilesAfterSaveCompletion();
+        let destinationViewReconciled = false;
+        if (data.destination_artist && canReconcileOriginView()) {
+          try {
+            destinationViewReconciled = await reconcileCommittedTagEditDestination(
+              data,
+              {
+                renderOptions: currentViewRenderOptions(),
+                shouldApplyResponse: responseData => (
+                  !mutationWasSuperseded()
+                  && responseContainsCommittedInventoryMutation(responseData)
+                ),
+              },
+            );
+          } catch (destinationError) {
+            console.warn(
+              '[AlbumHaven][SaveTask] Saved tags, but failed to open the committed destination artist.',
+              destinationError,
+            );
+          }
+        }
         const finalizedAlbums = applyExplicitFinalizedAlbumArtistEdits(
           Array.isArray(data.updated_albums) ? data.updated_albums : [],
           context.tagEdits,
@@ -2153,15 +2363,37 @@ async function watchSaveTask(taskId, context = {}) {
           && !finalizedAlbumsCoverOriginalMembership
         );
         let modalUpdatedAlbums = finalizedAlbums;
-        let viewRefreshed = false;
+        let viewRefreshed = destinationViewReconciled;
         let viewReconciledLocally = false;
+        const currentViewContainsAffectedAlbum = () => {
+          const affectedAlbums = [originalAlbum, ...finalizedAlbums].filter(Boolean);
+          if (!affectedAlbums.length) return true;
+          return collectVisibleAlbumsUnique().some((visibleAlbum) => (
+            affectedAlbums.some((affectedAlbum) => {
+              const visibleAliases = getAlbumRuntimeIdentityAliases(visibleAlbum);
+              const sharesRuntimeIdentity = Array.from(
+                getAlbumRuntimeIdentityAliases(affectedAlbum),
+              ).some((alias) => visibleAliases.has(alias));
+              return sharesRuntimeIdentity
+                || albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(affectedAlbum))
+                || albumsShareLogicalReleaseIdentity(visibleAlbum, affectedAlbum);
+            })
+          ));
+        };
         if (data.requires_view_refresh) {
           if (
+            !viewRefreshed
+            &&
             canReconcileOriginView()
             && finalizedAlbums.length
             && (
               !structuralTagEditRequiresCanonicalView
               || finalizedAlbumsHaveCanonicalRuntimeIdentities
+            )
+            && !(
+              structuralPartialMembershipRequiresCanonicalRefresh
+              && Number.isSafeInteger(committedInventoryMutationRevision)
+              && committedInventoryMutationRevision > 0
             )
           ) {
             try {
@@ -2176,7 +2408,7 @@ async function watchSaveTask(taskId, context = {}) {
               );
               if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
               renderView({
-                ...renderOptions,
+                ...currentRenderOptions(),
                 preserveMountedGalleryChildren: true,
               });
               viewReconciledLocally = true;
@@ -2188,11 +2420,14 @@ async function watchSaveTask(taskId, context = {}) {
             }
           }
           if (
+            !viewRefreshed
+            &&
             (
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
             && !mutationWasSuperseded()
+            && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
               let refreshView = state.view;
@@ -2223,7 +2458,7 @@ async function watchSaveTask(taskId, context = {}) {
                 await waitForCommittedInventoryRevision(data.inventory_mutation_revision);
               }
               viewRefreshed = await fetchAndRender(
-                buildApiUrl(refreshView),
+                buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -2237,6 +2472,7 @@ async function watchSaveTask(taskId, context = {}) {
                   restartIfSameUrl: true,
                   shouldApplyResponse: (payload) => (
                     !mutationWasSuperseded()
+                    && responseContainsCommittedInventoryMutation(payload)
                     && (
                       !structuralPartialMembershipRequiresCanonicalRefresh
                       || canonicalViewPayloadCoversExpectedTagEdit(
@@ -2249,6 +2485,16 @@ async function watchSaveTask(taskId, context = {}) {
                   ),
                 },
               );
+              if (
+                !viewRefreshed
+                && Number.isSafeInteger(committedInventoryMutationRevision)
+                && committedInventoryMutationRevision > 0
+                && !mutationWasSuperseded()
+                && (originStillOwnsView() || currentViewContainsAffectedAlbum())
+              ) {
+                await waitForBrowserTimeout(500);
+                continue;
+              }
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
                 window.history.replaceState(
                   { ...window.history.state, ...state.view }, '', buildUrl(state.view),
@@ -2307,7 +2553,7 @@ async function watchSaveTask(taskId, context = {}) {
             );
             if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
             renderView({
-              ...renderOptions,
+              ...currentRenderOptions(),
               preserveMountedGalleryChildren: true,
             });
             viewReconciledLocally = true;
@@ -2323,8 +2569,8 @@ async function watchSaveTask(taskId, context = {}) {
             },
           );
           if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
-          renderView(renderOptions);
-        } else if (!originStillOwnsView()) {
+          renderView(currentRenderOptions());
+        } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
             await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
           } catch (refreshError) {
@@ -2374,6 +2620,48 @@ async function watchSaveTask(taskId, context = {}) {
               ...modalUpdatedAlbums,
             ]);
           }
+          if (
+            structuralTagEditRequiresMountedGalleryChildReplacement
+            && data.requires_view_refresh
+            && !finalizedAlbums.length
+            && trackModalOpen
+            && typeof loadTrackModalAlbumDetails === 'function'
+          ) {
+            const currentModalAlbum = state.modalReleases[state.modalReleaseIndex] || originalAlbum;
+            const currentModalPaths = getAlbumTrackPaths(currentModalAlbum);
+            const canonicalModalCandidates = modalUpdatedAlbums.length
+              ? modalUpdatedAlbums
+              : collectVisibleAlbumsUnique();
+            const canonicalModalAlbum = canonicalModalCandidates.find((album) => (
+              albumsShareTrackPath(album, currentModalPaths)
+              || albumsShareRuntimeIdentityAlias(album, currentModalAlbum)
+              || albumsShareLogicalReleaseIdentity(album, currentModalAlbum)
+            ));
+            const canonicalModalKey = getAlbumRequestKey(canonicalModalAlbum);
+            if (canonicalModalKey) {
+              try {
+                const hydratedModalAlbum = await loadTrackModalAlbumDetails(canonicalModalKey);
+                if (hydratedModalAlbum) {
+                  modalUpdatedAlbums = canonicalModalCandidates.map((album) => (
+                    album === canonicalModalAlbum ? hydratedModalAlbum : album
+                  ));
+                  updateOpenTrackModalAfterTagEdit(
+                    originalAlbum,
+                    modalUpdatedAlbums,
+                    {
+                      patchVisibleState: !viewRefreshed,
+                      preserveHydratedModalAfterCanonicalSave: true,
+                    },
+                  );
+                }
+              } catch (hydrationError) {
+                console.warn(
+                  '[AlbumHaven][SaveTask] Saved tags, but failed to refresh open album details.',
+                  hydrationError,
+                );
+              }
+            }
+          }
         }
         if (data.log_entry) {
           await prependUtilityLogHistoryEntry(data.log_entry);
@@ -2382,7 +2670,23 @@ async function watchSaveTask(taskId, context = {}) {
           await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
         }
         restoreOwnedAbsoluteScroll();
-        if (!consumesProvidedTerminalPayload) {
+        const completionMessage = String(
+          context.tagEditAlert?.completionMessage || '',
+        ).trim();
+        if (completionMessage) {
+          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+            .map((warning) => String(warning || '').trim())
+            .filter(Boolean);
+          const hasCompletionWarning = completionWarnings.length > 0;
+          showRepairAlert(
+            [completionMessage, ...completionWarnings].join(' '),
+            hasCompletionWarning ? 'warning' : 'success',
+            hasCompletionWarning ? 8000 : 2000,
+            {
+              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+            },
+          );
+        } else if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
         settleTagEditViewMutation(tagEditMutationClaim);
@@ -2413,7 +2717,7 @@ async function watchSaveTask(taskId, context = {}) {
               preserveScroll: true,
             },
           );
-          renderView(renderOptions);
+          renderView(currentRenderOptions());
         }
         if (originalAlbum && canReconcileOriginView()) {
           const reconciledAlbums = viewRefreshed
@@ -2422,6 +2726,13 @@ async function watchSaveTask(taskId, context = {}) {
           updateOpenTrackModalAfterTagEdit(originalAlbum, reconciledAlbums, {
             preserveHydratedModalAfterFailedSave: true,
           });
+        }
+        if (
+          context.tagEditorDraft
+          && canReconcileOriginView()
+          && typeof restoreTagEditorDraftAfterFailedSave === 'function'
+        ) {
+          restoreTagEditorDraftAfterFailedSave(context.tagEditorDraft);
         }
         if (data.log_entry) {
           try {
@@ -2445,6 +2756,14 @@ async function watchSaveTask(taskId, context = {}) {
       console.warn('[AlbumHaven][SaveTask] Could not check save task status.', error);
     }
     await waitForBrowserTimeout(500);
+  }
+  if (!mutationWasSuperseded()) {
+    showRepairAlert(
+      'Tag changes are still being finalized. Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    );
   }
   if (problematicMutation) settleProblematicSaveTaskMutation(normalizedId);
   settleTagEditViewMutation(tagEditMutationClaim);
@@ -2818,6 +3137,7 @@ async function openUtilityModalForTrack(trackPath) {
   const navigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationToken = navigationToken;
   state.utility.problematicNavigationActiveToken = navigationToken;
+  let openedCanonicalTarget = false;
   const ownsNavigation = () => (
     Number(state.utility.problematicNavigationToken || 0) === navigationToken
   );
@@ -2892,13 +3212,33 @@ async function openUtilityModalForTrack(trackPath) {
       && Number(state.utility.problematicSummaryRequestToken || 0)
         > summaryRequestTokenBeforePendingTasks
     );
+    const loadTrackSummary = async () => {
+      const complete = loadProblematicFiles(true, { render: false });
+      const initial = state.utility.initialLoadPromise || complete;
+      if (initial !== complete) {
+        complete.then((result) => {
+          if (result !== null && openedCanonicalTarget && ownsNavigation()
+              && state.utility.activeTab === 'problematic-files'
+              && state.utility.focusedTrackPath === String(trackPath || '')) {
+            renderUtilityModalContent();
+          }
+        });
+      }
+      const result = await initial;
+      if (result === null || !ownsNavigation()
+          || (initial.problematicSummaryRequestToken !== undefined
+            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      if (getProblematicAlbumForTrackPath(trackPath)) return result;
+      // Only returned canonical track membership may identify the target.
+      return complete;
+    };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
-      const loadResult = await loadProblematicFiles(true, { render: false });
+      const loadResult = await loadTrackSummary();
       if (loadResult === null || !ownsNavigation()) return;
     }
     let album = getProblematicAlbumForTrackPath(trackPath);
     if (!album && summaryWasLoaded) {
-      const refreshResult = await loadProblematicFiles(true, { render: false });
+      const refreshResult = await loadTrackSummary();
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
@@ -2914,10 +3254,63 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
+    let refreshedStaleDetailTarget = false;
     if (!album.detail_loaded) {
-      await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
-      if (!ownsNavigation()) return;
+      while (album && !album.detail_loaded) {
+        const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+        state.utility.selectedProblematicKey = album.key || '';
+        const detailRequest = loadProblematicAlbumDetail(
+          album.key || '',
+          undefined,
+          { render: false, allowMissing: true },
+        );
+        const detailOwner = Number(state.utility.problematicDetailRequestToken || 0);
+        const refreshedDetail = await detailRequest;
+        if (!ownsNavigation()) return;
+        const detailMissing = !refreshedDetail
+          && Number(state.utility.problematicDetailRequestToken || 0) === detailOwner;
+        const currentSummary = state.utility.completeLoadPromise
+          || state.utility.initialLoadPromise;
+        if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+          const current = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
+          if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
+            await state.utility.detailLoadPromises[current.key];
+            if (!ownsNavigation()) return;
+          }
+          if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+            album = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
+            if (!album && !refreshedStaleDetailTarget) {
+              if (currentSummary && typeof currentSummary.then === 'function') {
+                await currentSummary;
+                if (!ownsNavigation()) return;
+                album = getProblematicAlbumForTrackPath(trackPath);
+                if (album) continue;
+              }
+              refreshedStaleDetailTarget = true;
+              const refreshResult = await loadTrackSummary();
+              if (refreshResult === null || !ownsNavigation()) return;
+              album = getProblematicAlbumForTrackPath(trackPath);
+              if (album) continue;
+            }
+            if (album?.detail_loaded
+                || !currentSummary
+                || typeof currentSummary.then !== 'function') break;
+          }
+        }
+        if (!currentSummary || typeof currentSummary.then !== 'function') {
+          if (!state.utility.loaded) return;
+          album = getProblematicAlbumForTrackPath(trackPath);
+          if (!album) return;
+          continue;
+        }
+        await currentSummary;
+        if (!ownsNavigation()) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
+      }
     }
+    if (!album) return;
+    state.utility.selectedProblematicKey = album.key || '';
+    openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {
     if (Number(state.utility.problematicNavigationActiveToken || 0) === navigationToken) {

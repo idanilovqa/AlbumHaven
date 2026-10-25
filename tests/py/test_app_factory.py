@@ -68,6 +68,17 @@ def _stub_relation_projection_startup(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _disable_preview_storage_database_by_default(monkeypatch):
+    from music_app.services import generated_preview_storage_postgres
+
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "is_generated_preview_storage_postgres_available",
+        lambda _config: False,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _preserve_process_global_executors(monkeypatch):
     from music_app.services import runtime_shutdown
 
@@ -1160,7 +1171,180 @@ def test_create_asgi_app_lifespan_starts_and_stops_cover_preview_backfill(
     assert calls[0][2] is asgi_app.state.logger
 
 
-def test_dynamic_request_notifies_cover_preview_backfill(monkeypatch):
+def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
+    monkeypatch, tmp_path
+):
+    import music_app
+    from music_app.services import generated_preview_relocation
+    from music_app.services import generated_preview_storage_postgres
+
+    recorded = []
+    class FakeRepository:
+        def __init__(self, config):
+            self.config = config
+
+        def load(self):
+            return {
+                "mode": "custom",
+                "active_root": str(tmp_path / "Generated"),
+                "operation_state": "idle",
+            }
+
+        def record_inventory(self, **metadata):
+            recorded.append(metadata)
+
+    class FakeWorker:
+        def __init__(self, repository, *, logger, on_state, **_kwargs):
+            self.on_state = on_state
+
+        def start(self):
+            return None
+
+        async def stop(self, *, timeout_seconds=30.0):
+            return None
+
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "is_generated_preview_storage_postgres_available",
+        lambda _config: True,
+    )
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "PostgresGeneratedPreviewStorageRepository",
+        FakeRepository,
+    )
+    monkeypatch.setattr(
+        generated_preview_relocation,
+        "GeneratedPreviewRelocationWorker",
+        FakeWorker,
+    )
+
+    asgi_app = music_app.create_asgi_app()
+    messages = _run_asgi_lifespan(asgi_app)
+    assert asgi_app.state.generated_preview_storage_policy.snapshot.mode == "custom"
+    source_path = tmp_path / "Music" / "Artist" / "Album" / "cover.jpg"
+    preview_path = (
+        tmp_path / "Generated" / "v1" / "cover_variants" / "aa" / "aabb.jpg"
+    )
+    preview_path.parent.mkdir(parents=True)
+    preview_path.write_bytes(b"preview")
+
+    asgi_app.state.config["_GENERATED_PREVIEW_INVENTORY_RECORDER"](
+        source_path, preview_path
+    )
+    asgi_app.state.config["_GENERATED_PREVIEW_INVENTORY_RECORDER"](
+        source_path, preview_path
+    )
+
+    assert messages[-1] == {"type": "lifespan.shutdown.complete"}
+    assert len(recorded) == 2
+    assert recorded[0]["managed_relative_path"] == "v1/cover_variants/aa/aabb.jpg"
+
+
+@pytest.mark.parametrize("active_relocation", [True, False, "queued_after_start"])
+def test_preview_relocation_coordinates_cover_backfill_start(
+    monkeypatch, tmp_path, active_relocation
+):
+    import music_app
+    from music_app.services import cover_preview_backfill
+    from music_app.services import generated_preview_relocation
+    from music_app.services import generated_preview_storage_postgres
+
+    queued = {
+        "mode": "custom",
+        "active_root": str(tmp_path / "Generated"),
+        "requested_mode": "album_folders",
+        "requested_root": None,
+        "operation_state": "queued",
+    }
+    completed = {
+        "mode": "album_folders",
+        "active_root": None,
+        "requested_mode": None,
+        "requested_root": None,
+        "operation_state": "completed",
+    }
+    calls = []
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+        def load(self):
+            return queued if active_relocation is True else completed
+
+    class FakeBackfill:
+        def __init__(self, _config, *, logger):
+            self.logger = logger
+
+        def start(self):
+            calls.append("backfill-start")
+
+        def stop(self):
+            calls.append("backfill-stop")
+
+        def note_foreground_activity(self):
+            pass
+
+        def inventory_existing_previews(self):
+            return 0
+
+    class FakeWorker:
+        def __init__(self, _repository, *, on_state, **_kwargs):
+            self.on_state = on_state
+
+        def start(self):
+            calls.append("worker-start")
+            if active_relocation is True:
+                self.on_state(queued)
+                assert "backfill-start" not in calls
+                calls.append("worker-queued")
+            elif active_relocation == "queued_after_start":
+                self.on_state(queued)
+                calls.append("worker-queued")
+            self.on_state(completed)
+            calls.append("worker-completed")
+
+        async def stop(self, *, timeout_seconds=30.0):
+            calls.append(("worker-stop", timeout_seconds))
+
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "is_generated_preview_storage_postgres_available",
+        lambda _config: True,
+    )
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "PostgresGeneratedPreviewStorageRepository",
+        FakeRepository,
+    )
+    monkeypatch.setattr(
+        cover_preview_backfill,
+        "CoverPreviewBackfill",
+        FakeBackfill,
+    )
+    monkeypatch.setattr(
+        generated_preview_relocation,
+        "GeneratedPreviewRelocationWorker",
+        FakeWorker,
+    )
+
+    messages = _run_asgi_lifespan(music_app.create_asgi_app())
+
+    assert messages[-1] == {"type": "lifespan.shutdown.complete"}
+    assert calls.count("backfill-start") == (
+        2 if active_relocation == "queued_after_start" else 1
+    )
+    if active_relocation is True:
+        assert calls.index("backfill-start") > calls.index("worker-queued")
+    elif active_relocation == "queued_after_start":
+        assert calls.index("backfill-stop") < calls.index("worker-queued")
+    assert calls.index(("worker-stop", 30.0)) < max(
+        index for index, call in enumerate(calls) if call == "backfill-stop"
+    )
+
+
+def test_status_poll_does_not_interrupt_cover_preview_backfill(monkeypatch):
     import music_app
 
     asgi_app = music_app.create_asgi_app()
@@ -1174,6 +1358,23 @@ def test_dynamic_request_notifies_cover_preview_backfill(monkeypatch):
     status, _headers, _body = run_asgi_request(asgi_app, "GET", "/status")
 
     assert status == 200
+    assert activities == []
+
+
+def test_dynamic_request_interrupts_cover_preview_backfill(monkeypatch):
+    import music_app
+
+    asgi_app = music_app.create_asgi_app()
+    activities = []
+    asgi_app.state.cover_preview_backfill = type(
+        "Backfill",
+        (),
+        {"note_foreground_activity": lambda self: activities.append("activity")},
+    )()
+
+    status, _headers, _body = run_asgi_request(asgi_app, "GET", "/not-found")
+
+    assert status == 404
     assert activities == ["activity"]
 
 
@@ -1294,6 +1495,36 @@ def stub_watcher_session(monkeypatch):
     )
 
 
+def test_postgres_relation_warmup_waits_for_startup_grace(monkeypatch):
+    import music_app
+
+    monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0.05)
+    monkeypatch.setattr(
+        "music_app.services.state.start_background_refresh_for_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("scan must not start")
+        ),
+    )
+    relation_started = threading.Event()
+    runtime = types.SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        logger=logging.getLogger("test-library-warmup-grace"),
+        library_state={},
+    )
+
+    handle = music_app._start_library_warmup(
+        runtime,
+        lambda _runtime: (_ for _ in ()).throw(AssertionError("hydrate must not run")),
+        lambda _runtime, **_kwargs: relation_started.set(),
+        lambda _database_url: None,
+    )
+    try:
+        assert not relation_started.wait(timeout=0.01)
+        assert relation_started.wait(timeout=0.5)
+    finally:
+        asyncio.run(handle.stop())
+
+
 def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch, stub_watcher_session):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
@@ -1341,6 +1572,7 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
     projection_finished = threading.Event()
     shutdown_requested = threading.Event()
     original_request_stop = music_app._LibraryWarmupHandle.request_stop
+    monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
 
     def request_stop(handle):
         shutdown_requested.set()
@@ -1430,6 +1662,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     caplog,
     stub_watcher_session,
 ):
+    import music_app
     from config import Config
     from music_app import create_asgi_app
     from music_app.services import postgres_connections, runtime_shutdown, state
@@ -1438,6 +1671,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     calls = []
     projection_ready = threading.Event()
     database_url = "postgresql://album_haven_app@localhost/app"
+    monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
 
     def fail_prewarm(url):
         calls.append(("prewarm", url))
@@ -1862,10 +2096,11 @@ def test_route_method_collection_uses_prefixed_nested_paths():
     assert _collect_route_methods(synthetic_app) == {"/api/status": {"GET"}}
 
 
-def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration():
+def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration(monkeypatch):
     import asyncio
     from music_app import _start_library_warmup
 
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
     completed = threading.Event()
     calls = []
     runtime = types.SimpleNamespace(
@@ -1879,8 +2114,11 @@ def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration():
         app.library_state["last_scan"] = 1609459200.0
 
     def ensure_relations(app, **_options):
+        from datetime import datetime
+
         calls.append("relations")
         assert app.library_state["last_scan"] == 1609459200.0
+        assert isinstance(app.relation_projection_startup_started_at, datetime)
         completed.set()
 
     def unexpected_inventory_hydration(_app):
@@ -1899,10 +2137,11 @@ def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration():
         asyncio.run(handle.stop())
 
 
-def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization():
+def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization(monkeypatch):
     import asyncio
     from music_app import _start_library_warmup
 
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
     completed = threading.Event()
     runtime = types.SimpleNamespace(
         config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test/isolated"},
@@ -1922,11 +2161,12 @@ def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization(
         asyncio.run(handle.stop())
 
 
-def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration():
+def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
     from music_app import _start_library_warmup
 
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
     calls = []
     runtime = SimpleNamespace(config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"}, logger=Mock())
     handle = _start_library_warmup(

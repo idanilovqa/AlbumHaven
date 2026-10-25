@@ -91,7 +91,10 @@ for (const outcome of ['success', 'success without gallery', 'error']) {
     assert.equal(h.context.state.coverLookup.modal.album.name, 'B');
     assert.equal(h.galleries.length, reads, 'A completion must not request B gallery');
     assert.equal(h.painted.get('A'), outcome === 'error' ? 'A-old' : 'A-settled');
-    assert.equal(h.notifications.at(-1)[1], outcome === 'error' ? 'error' : 'success');
+    assert.deepEqual(
+      h.notifications,
+      outcome === 'error' ? [['Owned local mutation failed', 'error', 2800]] : [],
+    );
   });
 }
 
@@ -142,6 +145,7 @@ for (const outcome of ['success', 'error']) {
     await h.open(album('A'));
     const first = h.context.saveLocalCoverFromLookup('/A/source.jpg');
     h.context.closeCoverLookupModal();
+    assert.equal(h.context.state.coverLookup.modal.saving, false, 'Close releases the finished modal busy state');
     await h.open(album('B'));
     const second = h.context.saveLocalCoverFromLookup('/B/source.jpg');
     assert.equal(h.requests.length, 2, 'independent albums may proceed');
@@ -379,7 +383,7 @@ test('mark-seen settles an unchanged resource after Close without reopening the 
   settleSeen(h.requests[0], first);
   await pending;
   assert.equal(a.cover_candidate_snapshot.has_unseen_automatic_improvement, false);
-  assert.strictEqual(h.context.state.coverLookup.modal.candidateSnapshot, first);
+  assert.strictEqual(h.context.state.coverLookup.modal.candidateSnapshot, null);
   assert.equal(h.overlay.hidden, true);
 });
 
@@ -408,7 +412,7 @@ for (const destination of ['closed A', 'different B']) {
       }
       assert.equal(a.cover_candidate_snapshot.search_generation, 'generation-2');
       assert.equal(a.cover_candidate_snapshot.has_unseen_automatic_improvement, false);
-      assert.strictEqual(h.context.state.coverLookup.modal.candidateSnapshot, destination === 'closed A' ? next : null);
+      assert.strictEqual(h.context.state.coverLookup.modal.candidateSnapshot, null);
     });
   }
 }

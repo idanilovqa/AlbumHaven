@@ -61,6 +61,22 @@ test('foundation workflow uses a published Chrome pin and matches component snap
   assert.doesNotMatch(performanceJob, /name:\s*Write performance foundation version manifest/);
 });
 
+test('performance CI isolates application, trusted workflow, and pinned generator checkouts', () => {
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  const start = workflow.indexOf('  e2e_performance_ci:');
+  const remainder = workflow.slice(start + 1);
+  const nextJob = remainder.match(/\n {2}[A-Za-z_][A-Za-z0-9_]*:\r?\n/);
+  const job = workflow.slice(start, nextJob ? start + 1 + nextJob.index : workflow.length);
+
+  assert.match(job, /name:\s*Checkout pull request[\s\S]*?ref:\s*\$\{\{\s*github\.sha\s*\}\}[\s\S]*?path:\s*album-haven-app/);
+  assert.match(job, /name:\s*Checkout trusted fixture downloader[\s\S]*?path:\s*album-haven-trusted-ci/);
+  assert.match(job, /repository:\s*idanilovqa\/album-haven-test-data/);
+  assert.match(job, /ref:\s*b7ffc6b586fd5b25a049617c5e95fbdcccfddc11/);
+  assert.match(job, /path:\s*album-haven-test-data/);
+  assert.doesNotMatch(job, /path:\s*album-haven-app[\\/]album-haven-test-data/);
+  assert.match(job, /working-directory:\s*\$\{\{\s*github\.workspace\s*\}\}\\album-haven-app/);
+});
+
 test('dedicated Phase 7 jobs select their pinned Chrome executable', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   for (const jobName of ['e2e_phase7_auth', 'e2e_phase7_admin']) {
@@ -118,7 +134,7 @@ test('foundation validator enforces the approved portable and Windows gate contr
     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
     'Total: 2 tests in 2 files',
   ].join('\n')).length, 2);
-  assert.equal(validator.discoverComponentCases(repoRoot).length, 194);
+  assert.equal(validator.discoverComponentCases(repoRoot).length, 214);
 
   assert.deepEqual(
     validator.validatePytestCollection(

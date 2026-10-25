@@ -135,6 +135,121 @@ def test_watchdog_mapping_keeps_child_delete_and_move_events(
     assert watchdog_event_kind("created") is LibraryEventKind.CREATED
 
 
+def test_watchdog_ignores_app_owned_cover_write(monkeypatch, tmp_path: Path):
+    from music_app.services import library_watch
+
+    root = tmp_path / "music"
+    cover = root / "Artist" / "Album" / "cover.jpg"
+    published = []
+    monkeypatch.setattr(
+        library_watch,
+        "is_library_watch_event_suppressed",
+        lambda path: Path(path) == cover.resolve(strict=False),
+    )
+    library_watch.publish_watchdog_event(
+        SimpleNamespace(event_type="modified", src_path=str(cover), is_directory=False),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=published.append,
+        clock=lambda: 3.0,
+    )
+    assert published == []
+
+
+def test_watchdog_ignores_cover_transaction_temp_files(tmp_path: Path):
+    from music_app.services.library_reconciliation import publish_watchdog_event
+
+    root = tmp_path / "music"
+    artifact = root / "Artist" / "Album" / ".cover.jpg.abc.tmp"
+    published = []
+    publish_watchdog_event(
+        SimpleNamespace(event_type="modified", src_path=str(artifact), is_directory=False),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=published.append,
+        clock=lambda: 3.0,
+    )
+    assert published == []
+
+
+def test_external_cover_transaction_rename_is_published_as_cover_creation(tmp_path: Path):
+    from music_app.services.library_reconciliation import (
+        LibraryEventKind,
+        publish_watchdog_event,
+    )
+
+    root = tmp_path / "music"
+    artifact = root / "Artist" / "Album" / ".cover.jpg.abc.tmp"
+    cover = root / "Artist" / "Album" / "cover.jpg"
+    published = []
+    publish_watchdog_event(
+        SimpleNamespace(
+            event_type="moved",
+            src_path=str(artifact),
+            dest_path=str(cover),
+            is_directory=False,
+        ),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=published.append,
+        clock=lambda: 3.0,
+    )
+    assert len(published) == 1
+    assert published[0].kind is LibraryEventKind.CREATED
+    assert published[0].path == cover.resolve(strict=False)
+
+
+@pytest.mark.parametrize("event_type", ["deleted", "moved"])
+@pytest.mark.parametrize("is_directory", [True, False])
+def test_watchdog_maps_configured_root_disappearance_to_unavailable_health_event(
+    tmp_path: Path, event_type: str, is_directory: bool,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import (
+        LibraryEventKind,
+        publish_watchdog_event,
+    )
+
+    root = tmp_path / "music"
+    root.mkdir()
+    root.rmdir()
+    published = []
+    admitted = []
+    problems = []
+    admission_failures = []
+    coordinator = LibraryEventCoordinator(
+        admitted.append,
+        record_problem=problems.append,
+        report_admission_failure=admission_failures.append,
+    )
+
+    def publish(event):
+        published.append(event)
+        coordinator.accept(event)
+
+    event = SimpleNamespace(
+        event_type=event_type,
+        src_path=str(root),
+        dest_path=str(tmp_path / "moved-music") if event_type == "moved" else None,
+        is_directory=is_directory,
+    )
+    publish_watchdog_event(
+        event,
+        roots=[{"id": "main", "path": str(root)}],
+        publish=publish,
+        clock=lambda: 4.0,
+    )
+
+    assert admitted == []
+    assert admission_failures == []
+    assert len(published) == 1
+    assert published[0].kind is LibraryEventKind.ROOT_UNAVAILABLE
+    assert published[0].root_id == "main"
+    assert published[0].path == root.resolve(strict=False)
+    assert published[0].is_directory is True
+    assert published[0].observed_at == 4.0
+    assert [(problem.code, problem.root_id) for problem in problems] == [
+        ("root_unavailable", "main")
+    ]
+
+
 def test_library_watch_service_starts_and_stops_injected_source_once(tmp_path: Path):
     from music_app.services.library_reconciliation import (
         LibraryEvent,
@@ -1229,6 +1344,28 @@ def test_watchdog_uses_aware_utc_acceptance_time_without_leaking_cover_variants(
     assert len(events) == 1
     assert events[0].observed_at == accepted_at.astimezone(timezone.utc)
     assert events[0].observed_at.tzinfo is timezone.utc
+
+
+def test_watcher_uses_shared_managed_preview_classifier(tmp_path, monkeypatch):
+    from music_app.services import library_watch
+
+    root = tmp_path / "Music"
+    source = root / "Album" / "generated.bin"
+    events = []
+    monkeypatch.setattr(
+        library_watch,
+        "is_managed_preview_path",
+        lambda path: path == source.resolve(strict=False),
+    )
+
+    library_watch.publish_watchdog_event(
+        SimpleNamespace(event_type="modified", src_path=str(source), is_directory=False),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=events.append,
+        clock=lambda: 1.0,
+    )
+
+    assert events == []
 
 
 @pytest.mark.parametrize("relative", ["Album/track.flac", "Album/cover.jpg", "Album/.album-haven/track.flac", "Album/cover_variants/track.flac"])

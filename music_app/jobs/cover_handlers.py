@@ -21,6 +21,7 @@ _CANDIDATE_REPOSITORY_FACTORY_KEY = (
 _CANDIDATE_PERSISTENCE_REQUIRED_KEY = (
     "COVER_CANDIDATE_SNAPSHOT_PERSISTENCE_REQUIRED"
 )
+_PROVIDER_OUTCOME_PERSISTER_KEY = "CLAIMED_COVER_PROVIDER_OUTCOME_PERSISTER"
 _STORAGE_RETRY_DELAY = timedelta(seconds=5)
 
 
@@ -521,6 +522,19 @@ def build_cover_refresh_handler(
 
         execution_config["CLAIMED_COVER_SELECTION_PERSISTER"] = (
             persist_claimed_selection
+        )
+
+        def persist_claimed_provider_outcomes(**outcome_values: object) -> None:
+            if should_cancel():
+                raise RuntimeError("cover refresh claim is no longer active")
+            cover_repository.persist_claimed_cover_provider_outcomes(
+                **_refresh_claim_parameters(claim, now()),
+                task_id=scope.task_id,
+                **outcome_values,
+            )
+
+        execution_config[_PROVIDER_OUTCOME_PERSISTER_KEY] = (
+            persist_claimed_provider_outcomes
         )
         try:
             result = run_refresh(

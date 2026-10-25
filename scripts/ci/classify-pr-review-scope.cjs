@@ -1,6 +1,11 @@
 const fs = require('node:fs');
+const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { PERFORMANCE_SHARDS: PERFORMANCE_SHARD_CONFIGS } = require('./resolve-ci-shard.cjs');
+const { applyPerformanceChangeImpact } = require('./performance-change-impact.cjs');
+const {
+  FUNCTIONAL_SHARDS: FUNCTIONAL_SHARD_CONFIGS,
+  PERFORMANCE_SHARDS: PERFORMANCE_SHARD_CONFIGS,
+} = require('./resolve-ci-shard.cjs');
 
 const INCREMENTAL_LINE_LIMIT = 250;
 const FOCUSED_E2E_LABEL = 'ci:focused-e2e';
@@ -18,12 +23,17 @@ const SUPPORTED_FOCUSED_AREAS = Object.freeze([
   'loops',
   'responsive-visual',
 ]);
-const FUNCTIONAL_SHARDS = [
-  'gallery-search-visual',
-  'cover-providers',
-  'metadata-mutations',
-  'playback-utilities',
-];
+const FUNCTIONAL_SHARDS = Object.freeze(Object.keys(FUNCTIONAL_SHARD_CONFIGS));
+const FUNCTIONAL_SHARD_LABELS = Object.freeze({
+  'gallery-search-visual': ['gallery-search-visual'],
+  'cover-providers': ['cover-providers-1', 'cover-providers-2'],
+  'metadata-mutations': ['metadata-mutations'],
+  'playback-utilities': [
+    'playback-utilities-1',
+    'playback-utilities-2',
+    'playback-utilities-3',
+  ],
+});
 const PHASE7_TARGETS = ['phase7-auth', 'phase7-admin'];
 const PERFORMANCE_SHARDS = Object.freeze(Object.keys(PERFORMANCE_SHARD_CONFIGS));
 const SUPPORTED_PERFORMANCE_TARGETS = Object.freeze(PERFORMANCE_SHARDS.flatMap(
@@ -198,9 +208,9 @@ function classifyPipelineLabels(
       ? 'related'
       : 'exact'
     : 'full';
-  const focusedFunctionalShards = FUNCTIONAL_SHARDS.filter((shard) => (
-    labelSet.has(`ci:e2e:${shard}`)
-  ));
+  const focusedFunctionalShards = Object.entries(FUNCTIONAL_SHARD_LABELS)
+    .filter(([label]) => labelSet.has(`ci:e2e:${label}`))
+    .flatMap(([, shards]) => shards);
   const focusedPhase7Targets = PHASE7_TARGETS.filter((target) => (
     labelSet.has(`ci:e2e:${target}`)
   ));
@@ -214,7 +224,7 @@ function classifyPipelineLabels(
   if (focused) {
     const targetPrefixes = ['ci:e2e:', 'ci:e2e-performance:'];
     const supportedTargetLabels = new Set([
-      ...FUNCTIONAL_SHARDS.map((shard) => `ci:e2e:${shard}`),
+      ...Object.keys(FUNCTIONAL_SHARD_LABELS).map((label) => `ci:e2e:${label}`),
       ...PHASE7_TARGETS.map((target) => `ci:e2e:${target}`),
       ...PERFORMANCE_SHARDS.map((shard) => `ci:e2e-performance:${shard}`),
     ]);
@@ -318,6 +328,15 @@ function runCli(env = process.env) {
     'git',
     ['diff', '--numstat', '--no-renames', diffBase, headSha],
     { encoding: 'utf8' },
+  );
+  const changedPaths = parseNumstat(numstat).map(({ path: changedPath }) => changedPath);
+  const performanceChangeImpact = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'tests', 'ci', 'performance-change-impact.json'),
+    'utf8',
+  ));
+  Object.assign(
+    pipeline,
+    applyPerformanceChangeImpact(pipeline, changedPaths, performanceChangeImpact),
   );
   const review = classifyReviewScope({
     action,

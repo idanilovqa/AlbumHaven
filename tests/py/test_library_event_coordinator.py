@@ -45,6 +45,38 @@ def test_distinct_events_are_not_rejected_by_process_local_capacity():
 
 @pytest.mark.parametrize(
     "kind",
+    [LibraryEventKind.CREATED, LibraryEventKind.DELETED, LibraryEventKind.MOVED],
+)
+def test_capacity_admits_all_events_without_process_local_overflow(tmp_path: Path, kind):
+    accepted, health, failures = [], [], []
+    coordinator = LibraryEventCoordinator(
+        accepted.append,
+        record_problem=health.append,
+        report_admission_failure=failures.append,
+    )
+    events = [
+        LibraryEvent(
+            kind,
+            "root-a",
+            tmp_path / "Artist" / "Album" / f"{index:05}.flac",
+            destination=(
+                tmp_path / "Artist" / "Album" / f"renamed-{index:05}.flac"
+                if kind is LibraryEventKind.MOVED
+                else None
+            ),
+        )
+        for index in range(5_000)
+    ]
+
+    assert all(coordinator.accept(event) for event in events)
+    assert accepted == events
+    assert health == []
+    assert failures == []
+    assert "_pending" not in vars(coordinator)
+
+
+@pytest.mark.parametrize(
+    "kind",
     [LibraryEventKind.OVERFLOW, LibraryEventKind.ROOT_UNAVAILABLE],
 )
 def test_health_event_records_problem_without_exact_admission(kind):

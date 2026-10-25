@@ -2096,6 +2096,56 @@ def test_mark_dirty_is_atomic_stable_and_single_successor(
     assert generation["watcher_generation_kind"] == "root_catch_up"
 
 
+def test_delayed_dirty_event_preserves_newer_warning_presentation(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    repository = _repository(scope.app_url)
+    newer_at = NOW + timedelta(seconds=2)
+    older_at = NOW + timedelta(seconds=1)
+
+    newer = repository.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id="root-b",
+        reason_code="root_unavailable",
+        observed_at=newer_at,
+    )
+    delayed = repository.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id="root-b",
+        reason_code="overflow",
+        observed_at=older_at,
+    )
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        incident = connection.execute(
+            """
+            select reason_code, first_seen_at, last_seen_at, occurrence_count,
+                   accepted_sequence, dirty_generation
+            from library.watcher_incidents
+            where incident_id = %s
+            """,
+            (newer.incident_id,),
+        ).fetchone()
+
+    assert delayed.generation_id == newer.generation_id
+    assert delayed.incident_id == newer.incident_id
+    assert incident["reason_code"] == "root_unavailable"
+    assert incident["first_seen_at"] == newer_at
+    assert incident["last_seen_at"] == newer_at
+    assert incident["occurrence_count"] == 2
+    assert (
+        incident["accepted_sequence"]
+        == delayed.participants[0].accepted_sequence_upper
+        > newer.participants[0].accepted_sequence_upper
+    )
+    assert (
+        incident["dirty_generation"]
+        == delayed.participants[0].dirty_generation
+        > newer.participants[0].dirty_generation
+    )
+
+
 def test_unresolved_watcher_incident_is_projected_through_durable_status(
     live_watcher_database,
 ):

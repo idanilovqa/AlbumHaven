@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import datetime, timezone
+import json
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -187,11 +189,104 @@ def test_list_candidate_lookup_tasks_reloads_only_the_authorized_library():
     ]
     sql, parameters = connection.executed[0]
     assert "library_id = %(library_id)s" in sql
-    assert "source_family' = 'durable_cover_lookup'" in sql
+    assert "source_family' = any(%(source_families)s::text[])" in sql
+    assert parameters["source_families"] == [
+        "cover_lookup_notifications",
+        "runtime_cover_lookup_notifications_adapter",
+        "durable_cover_lookup",
+    ]
     assert "notification_cleared" in sql
     assert "membership.account_id = %(actor_account_id)s" in sql
     assert parameters["actor_account_id"] == 7
     assert parameters["library_id"] == 19
+
+
+def test_candidate_lookup_notification_counts_are_actor_and_library_scoped():
+    connection = _Connection(
+        [{"total_count": 8, "active_count": 2, "finished_count": 6}]
+    )
+    repository = _repository(connection, _Jobs())
+
+    counts = repository.count_candidate_lookup_task_notifications(
+        actor_account_id=7, library_id=19
+    )
+
+    assert counts == {"total_count": 8, "active_count": 2, "finished_count": 6}
+    sql, parameters = connection.executed[0]
+    assert "library_id = %(library_id)s" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert "notification_cleared" in sql
+    assert parameters["actor_account_id"] == 7
+    assert parameters["library_id"] == 19
+
+
+def test_candidate_lookup_notification_page_is_bounded_scoped_and_cursor_based():
+    first = {
+        "task_key": "lookup-2",
+        "status": "completed",
+        "requested_at": NOW,
+        "completed_at": NOW,
+        "effective_timestamp": NOW,
+        "provider_payload": {},
+        "metadata": {
+            "source_family": "cover_lookup_notifications",
+            "source_payload": {"artist": "Legacy Artist"},
+        },
+    }
+    second = {
+        **first,
+        "task_key": "lookup-1",
+        "metadata": {
+            "source_family": "durable_cover_lookup",
+            "source_payload": {"artist": "Durable Artist"},
+        },
+    }
+    connection = _Connection(
+        [
+            [first, second],
+            {"total_count": 2, "active_count": 0, "finished_count": 2},
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    page = repository.load_candidate_lookup_task_summary_page(
+        actor_account_id=7,
+        library_id=19,
+        limit=1,
+        cursor=None,
+        active_only=False,
+    )
+
+    assert page["items"] == [
+        {
+            "artist": "Legacy Artist",
+            "id": "lookup-2",
+            "status": "completed",
+            "notification_action_taken": False,
+            "notification_completed_at": NOW.isoformat(),
+            "notification_expires_at": "",
+        }
+    ]
+    assert page["next_cursor"]
+    assert page["counts"] == {
+        "total_count": 2,
+        "active_count": 0,
+        "finished_count": 2,
+    }
+    sql, parameters = connection.executed[0]
+    assert "limit %(page_limit)s" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert parameters["page_limit"] == 2
+    assert parameters["library_id"] == 19
+
+    with pytest.raises(ValueError, match="invalid cover lookup notification cursor"):
+        repository.load_candidate_lookup_task_summary_page(
+            actor_account_id=7,
+            library_id=19,
+            limit=1,
+            cursor="not-a-cursor",
+            active_only=False,
+        )
 
 
 def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped():
@@ -225,7 +320,7 @@ def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped()
     assert "'{notification_cleared}'" in sql
     assert "status = any(%(terminal_statuses)s" in sql
     assert "library_id = %(library_id)s" in sql
-    assert "source_family' = 'durable_cover_lookup'" in sql
+    assert "source_family' = any(%(source_families)s::text[])" in sql
     assert "membership.account_id = %(actor_account_id)s" in sql
     assert parameters["task_keys"] == ["lookup-opaque-42"]
     assert connection.remote_save_checkpoints == {
@@ -263,10 +358,96 @@ def test_mark_candidate_lookup_notification_action_is_terminal_and_library_scope
     sql, parameters = connection.executed[0]
     assert "status = any(%(terminal_statuses)s" in sql
     assert "library_id = %(library_id)s" in sql
-    assert "source_family' = 'durable_cover_lookup'" in sql
+    assert "source_family' = any(%(source_families)s::text[])" in sql
     assert "notification_cleared" in sql
     assert "membership.account_id = %(actor_account_id)s" in sql
     assert parameters["actor_account_id"] == 7
+
+
+def test_claimed_automatic_cover_selection_forwards_explicit_state_and_dimensions():
+    connection = _Connection(
+        [
+            {
+                "input_path_count": 1,
+                "resolved_path_count": 1,
+                "selected_album_count": 1,
+                "album_track_file_count": 1,
+                "album_rows_updated": 1,
+                "track_file_rows_updated": 1,
+                "blocked_by_user_selection": False,
+                "blocked_by_expected_cover_state": False,
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    repository.persist_claimed_automatic_cover_selection(
+        task_id=73,
+        library_id=19,
+        job_id=88,
+        attempt=1,
+        worker_id="cover-worker",
+        lease_token="cover-lease",
+        now=NOW,
+        track_paths={"C:/Music/Artist/Album/01.flac"},
+        selected_cover_path=Path("C:/Music/Artist/Album/cover.jpg"),
+        cover_revision="replacement-revision",
+        cover_selection_origin="automatic",
+        reject_if_user_controlled=False,
+        reject_if_explicit_selection=True,
+        expected_cover_state=("user", "legacy-revision"),
+        local_cover_width=1200,
+        local_cover_height=1200,
+    )
+
+    sql, parameters = connection.executed[0]
+    assert "%(reject_if_explicit_selection)s" in sql
+    assert "%(local_cover_width)s" in sql
+    assert "%(local_cover_height)s" in sql
+    assert parameters["reject_if_explicit_selection"] is True
+    assert parameters["expected_cover_selection_origin"] == "user"
+    assert parameters["expected_cover_revision"] == "legacy-revision"
+    assert parameters["local_cover_width"] == 1200
+    assert parameters["local_cover_height"] == 1200
+
+
+def test_claimed_provider_outcomes_use_worker_function_without_direct_task_dml():
+    connection = _Connection([{"persisted": True}, {"persisted": True}])
+    repository = _repository(connection, _Jobs())
+
+    repository.persist_claimed_cover_provider_outcomes(
+        task_id=73,
+        library_id=19,
+        job_id=88,
+        attempt=1,
+        worker_id="cover-worker",
+        lease_token="cover-lease",
+        now=NOW,
+        album_id=31,
+        album_key="artist|album|2001",
+        outcomes={
+            "musicbrainz": {"category": "no_candidate", "http_status": 200},
+            "spotify": {"category": "rate_limit_quota", "http_status": 429},
+        },
+    )
+
+    assert len(connection.executed) == 2
+    assert all(
+        "ops.persist_claimed_cover_provider_outcome" in sql
+        and "insert into ops.cover_lookup_tasks" not in sql
+        for sql, _parameters in connection.executed
+    )
+    first = connection.executed[0][1]
+    second = connection.executed[1][1]
+    assert first["task_id"] == 73
+    assert first["library_id"] == 19
+    assert first["outcome_task_key"] == "31:musicbrainz"
+    assert first["outcome_status"] == "completed"
+    assert json.loads(first["metadata"])["source_family"] == (
+        "automatic_cover_provider_outcomes_v1"
+    )
+    assert second["outcome_task_key"] == "31:spotify"
+    assert second["outcome_status"] == "failed"
 
 
 def test_persist_candidate_authority_uses_one_atomic_postgres_boundary():

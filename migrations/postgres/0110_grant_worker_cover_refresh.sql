@@ -471,6 +471,9 @@ create or replace function ops.persist_claimed_automatic_cover_selection(
   selected_cover_revision text,
   selected_origin text,
   reject_if_user_controlled boolean,
+  reject_if_explicit_selection boolean,
+  selected_local_cover_width integer,
+  selected_local_cover_height integer,
   expected_origin text,
   expected_revision text
 )
@@ -488,10 +491,14 @@ language sql
 security definer
 set search_path = pg_catalog, ops, library
 as $$
-  with valid_claim as materialized (
+  with publication_lock as materialized (
+    select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))
+  ),
+  valid_claim as materialized (
     select refresh.id
       from ops.cover_bulk_refreshes as refresh
       join ops.jobs as job on job.id = refresh.job_id
+      cross join publication_lock
      where refresh.id = requested_task_id
        and refresh.library_id = requested_library_id
        and refresh.status = 'running'
@@ -559,11 +566,19 @@ as $$
                'remote_cover_album_url', 'remote_cover_width',
                'remote_cover_height'
              ]::text[]
-           ) || jsonb_build_object(
-             'cover_path', selected_cover_path,
-             'cover_revision', selected_cover_revision,
-             'cover_selection_origin', selected_origin
-           )
+          ) || jsonb_build_object(
+            'cover_path', selected_cover_path,
+            'cover_revision', selected_cover_revision,
+            'cover_selection_origin', selected_origin
+          ) || case
+            when selected_local_cover_width is not null
+             and selected_local_cover_height is not null
+            then jsonb_build_object(
+              'local_cover_width', selected_local_cover_width,
+              'local_cover_height', selected_local_cover_height
+            )
+            else '{}'::jsonb
+          end
       from target_album
      where album.id = target_album.id
        and selected_origin in ('automatic', 'user')
@@ -571,6 +586,10 @@ as $$
          not reject_if_user_controlled
          or coalesce(album.metadata ->> 'cover_selection_origin', '') <> 'user'
        )
+      and (
+        not reject_if_explicit_selection
+        or coalesce(album.metadata ->> 'cover_selection_provenance', '') <> 'explicit'
+      )
        and (
          expected_origin is null
          or (
@@ -596,10 +615,18 @@ as $$
                  'remote_cover_album_url', 'remote_cover_width',
                  'remote_cover_height'
                ]::text[]
-             ) || jsonb_build_object(
-               'cover_path', selected_cover_path,
-               'cover_revision', selected_cover_revision
-             )
+            ) || jsonb_build_object(
+              'cover_path', selected_cover_path,
+              'cover_revision', selected_cover_revision
+            ) || case
+              when selected_local_cover_width is not null
+               and selected_local_cover_height is not null
+              then jsonb_build_object(
+                'local_cover_width', selected_local_cover_width,
+                'local_cover_height', selected_local_cover_height
+              )
+              else '{}'::jsonb
+            end
            ),
          true
        )
@@ -608,19 +635,27 @@ as $$
        and exists (select 1 from updated_albums)
     returning file.id
   ),
+  updated_authority as (
+    insert into library.cover_mutation_state as state (
+      library_id, cover_mutation_revision, updated_at
+    )
+    select requested_library_id, 1, observed_at
+    where exists (select 1 from updated_albums)
+    on conflict (library_id) do update
+    set cover_mutation_revision = state.cover_mutation_revision + 1,
+        updated_at = excluded.updated_at
+    returning state.cover_mutation_revision
+  ),
   updated_library as (
     update library.libraries as library_record
        set metadata = coalesce(library_record.metadata, '{}'::jsonb)
          || jsonb_build_object(
            'cover_mutation_revision',
-           coalesce(
-             nullif(library_record.metadata ->> 'cover_mutation_revision', '')::bigint,
-             0
-           ) + 1
+             (select cover_mutation_revision from updated_authority)
          ),
          updated_at = observed_at
      where library_record.id = requested_library_id
-       and exists (select 1 from updated_albums)
+       and exists (select 1 from updated_authority)
     returning library_record.id
   )
   select
@@ -630,13 +665,77 @@ as $$
     (select count(*) from album_track_files)::integer,
     (select count(*) from updated_albums)::integer,
     (select count(*) from updated_track_files)::integer,
-    reject_if_user_controlled
+    (reject_if_user_controlled or reject_if_explicit_selection)
       and exists (select 1 from target_album)
       and not exists (select 1 from updated_albums),
     expected_origin is not null
       and exists (select 1 from target_album)
       and not exists (select 1 from updated_albums)
     from selection_scope;
+$$;
+
+create or replace function ops.persist_claimed_cover_provider_outcome(
+  requested_task_id bigint,
+  requested_library_id bigint,
+  requested_job_id bigint,
+  requested_attempt integer,
+  requested_worker_id text,
+  requested_lease_token text,
+  observed_at timestamptz,
+  outcome_task_key text,
+  outcome_status text,
+  outcome_album_key text,
+  outcome_provider_payload jsonb,
+  outcome_error_message text,
+  outcome_metadata jsonb
+)
+returns boolean
+language sql
+security definer
+set search_path = pg_catalog, ops
+as $$
+  with valid_claim as materialized (
+    select refresh.id
+    from ops.cover_bulk_refreshes as refresh
+    join ops.jobs as job on job.id = refresh.job_id
+    where refresh.id = requested_task_id
+      and refresh.library_id = requested_library_id
+      and refresh.status = 'running'
+      and refresh.cancel_requested_at is null
+      and job.id = requested_job_id
+      and job.state = 'running'
+      and job.attempt_count = requested_attempt
+      and job.lease_owner = requested_worker_id
+      and job.lease_token = requested_lease_token
+      and job.lease_expires_at > clock_timestamp()
+      and job.cancel_requested_at is null
+  ),
+  persisted as (
+    insert into ops.cover_lookup_tasks (
+      library_id, task_key, status, requested_at, completed_at,
+      album_key, selected_cover_private_path, provider_payload,
+      error_message, metadata
+    )
+    select requested_library_id, outcome_task_key, outcome_status,
+           observed_at, observed_at, outcome_album_key, null,
+           outcome_provider_payload, outcome_error_message, outcome_metadata
+    from valid_claim
+    where outcome_status in ('completed', 'failed')
+      and nullif(outcome_task_key, '') is not null
+      and outcome_metadata ->> 'source_family' =
+          'automatic_cover_provider_outcomes_v1'
+    on conflict (library_id, (metadata ->> 'source_family'), task_key)
+    where library_id is not null and metadata ? 'source_family'
+    do update set
+      status = excluded.status,
+      completed_at = excluded.completed_at,
+      album_key = excluded.album_key,
+      provider_payload = excluded.provider_payload,
+      error_message = excluded.error_message,
+      metadata = excluded.metadata
+    returning id
+  )
+  select exists(select 1 from persisted);
 $$;
 
 create or replace function ops.load_authorized_cover_refresh_status(
@@ -672,7 +771,8 @@ revoke all on function ops.request_cover_bulk_refresh_cancellation(bigint, bigin
 revoke all on function ops.cover_refresh_cancel_requested(bigint, bigint, bigint, integer, text, text, timestamptz) from public;
 revoke all on function ops.checkpoint_claimed_cover_refresh(bigint, bigint, bigint, integer, text, text, timestamptz, bigint, integer, integer, integer, text) from public;
 revoke all on function ops.finish_claimed_cover_refresh(bigint, bigint, bigint, integer, text, text, timestamptz, bigint, text, integer, integer) from public;
-revoke all on function ops.persist_claimed_automatic_cover_selection(bigint, bigint, bigint, integer, text, text, timestamptz, text[], text, text, text, boolean, text, text) from public;
+revoke all on function ops.persist_claimed_automatic_cover_selection(bigint, bigint, bigint, integer, text, text, timestamptz, text[], text, text, text, boolean, boolean, integer, integer, text, text) from public;
+revoke all on function ops.persist_claimed_cover_provider_outcome(bigint, bigint, bigint, integer, text, text, timestamptz, text, text, text, jsonb, text, jsonb) from public;
 revoke all on function ops.load_authorized_cover_refresh_status(bigint) from public;
 
 do $$
@@ -682,7 +782,8 @@ begin
     grant execute on function ops.cover_refresh_cancel_requested(bigint, bigint, bigint, integer, text, text, timestamptz) to album_haven_worker;
     grant execute on function ops.checkpoint_claimed_cover_refresh(bigint, bigint, bigint, integer, text, text, timestamptz, bigint, integer, integer, integer, text) to album_haven_worker;
     grant execute on function ops.finish_claimed_cover_refresh(bigint, bigint, bigint, integer, text, text, timestamptz, bigint, text, integer, integer) to album_haven_worker;
-    grant execute on function ops.persist_claimed_automatic_cover_selection(bigint, bigint, bigint, integer, text, text, timestamptz, text[], text, text, text, boolean, text, text) to album_haven_worker;
+grant execute on function ops.persist_claimed_automatic_cover_selection(bigint, bigint, bigint, integer, text, text, timestamptz, text[], text, text, text, boolean, boolean, integer, integer, text, text) to album_haven_worker;
+grant execute on function ops.persist_claimed_cover_provider_outcome(bigint, bigint, bigint, integer, text, text, timestamptz, text, text, text, jsonb, text, jsonb) to album_haven_worker;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
     grant execute on function ops.accept_cover_bulk_refresh(text, bigint, bigint, text, text, text, text, text, boolean, bigint, timestamptz) to album_haven_app;

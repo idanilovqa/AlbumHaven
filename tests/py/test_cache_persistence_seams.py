@@ -25,6 +25,14 @@ def _cache_entry(path: Path) -> dict[str, object]:
     }
 
 
+def test_file_entry_round_trip_preserves_local_membership_rejection(tmp_path):
+    entry = _cache_entry(tmp_path / "orphan.flac")
+    entry["local_album_membership_problem"] = "Duplicate track outside album folder"
+    serialized = cache_module.serialize_file_entry(entry)
+    assert serialized["local_album_membership_problem"] == entry["local_album_membership_problem"]
+    assert cache_module.deserialize_file_entry(serialized)["local_album_membership_problem"] == entry["local_album_membership_problem"]
+
+
 def _write_migration_cache(
     cache_path: Path,
     *,
@@ -551,6 +559,49 @@ def test_queued_cache_update_never_rebases_authoritative_cover_fields():
     }
 
 
+def test_queued_cache_update_preserves_newer_explicit_cover_provenance():
+    track_path = "C:/Music/song.mp3"
+    baseline = {
+        "path": track_path,
+        "title": "Old Title",
+        "cover_selection_origin": "auto",
+        "cover_selection_provenance": "legacy",
+    }
+    latest = {
+        **baseline,
+        "cover_selection_origin": "user",
+        "cover_selection_provenance": "explicit",
+    }
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={track_path: baseline},
+        changed_entries={track_path: {
+            **baseline,
+            "title": "New Title",
+            "cover_selection_origin": None,
+            "cover_selection_provenance": None,
+        }},
+        latest_file_cache={track_path: latest},
+    )
+
+    assert rebased[track_path]["title"] == "New Title"
+    assert rebased[track_path]["cover_selection_origin"] == "user"
+    assert rebased[track_path]["cover_selection_provenance"] == "explicit"
+
+
+def test_queued_cache_update_accepts_committed_trimmed_collection_name():
+    track_path = "C:/Music/song.mp3"
+    baseline = {"path": track_path, "custom_collection_name": "Old Collection"}
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={track_path: baseline},
+        changed_entries={track_path: {**baseline, "custom_collection_name": "  New Collection  "}},
+        latest_file_cache={track_path: {**baseline, "custom_collection_name": "New Collection"}},
+    )
+
+    assert rebased[track_path]["custom_collection_name"] == "  New Collection  "
+
+
 def test_queued_cache_update_rejects_divergent_same_field_conflict():
     track_path = "C:/Music/song.mp3"
 
@@ -605,6 +656,36 @@ def test_queued_cache_update_accepts_already_committed_empty_exception_value():
     )
 
     assert rebased[track_path]["exception_type"] == ""
+
+
+def test_queued_cache_update_accepts_already_committed_empty_collection_name():
+    track_path = "C:/Music/song.mp3"
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={
+            track_path: {
+                "path": track_path,
+                "exception_type": "Custom Collection",
+                "custom_collection_name": "Road trip",
+            }
+        },
+        changed_entries={
+            track_path: {
+                "path": track_path,
+                "exception_type": "",
+                "custom_collection_name": "",
+            }
+        },
+        latest_file_cache={
+            track_path: {
+                "path": track_path,
+                "exception_type": None,
+                "custom_collection_name": None,
+            }
+        },
+    )
+
+    assert rebased[track_path]["custom_collection_name"] == ""
 
 
 def test_queued_cache_update_accepts_already_committed_numeric_year_value():
@@ -1068,6 +1149,19 @@ def test_scheduled_cache_delta_preserves_structural_inventory_changed_before_wor
     assert store["file_cache"][track_path]["play_count"] == 1
 
 
+def test_cache_delta_rebase_preserves_newer_inventory_removal():
+    path = "C:/Music/Artist/Album/song.mp3"
+    baseline_entry = {"path": path, "title": "Old title"}
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={path: baseline_entry},
+        changed_entries={path: {**baseline_entry, "title": "New title"}},
+        latest_file_cache={},
+    )
+
+    assert rebased == {}
+
+
 def test_runtime_cover_selection_uses_targeted_postgres_mutation_without_republishing_snapshot(
     tmp_path,
     monkeypatch,
@@ -1207,3 +1301,41 @@ def test_runtime_cache_save_forwards_explicit_scan_rating_seed_intent(
     )
 
     assert seed_intents == [True]
+
+
+def test_structural_tag_persistence_invalidates_utility_projections(monkeypatch):
+    from music_app.services import cache as cache_module
+    from music_app.services import library_browse_postgres as browse_module
+
+    calls: list[dict[str, object]] = []
+
+    class Adapter:
+        def persist_structural_tag_edit(self, **options):
+            calls.append(options)
+            return {"track_rows_updated": 1}
+
+    invalidations: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cache_module,
+        "_select_runtime_scan_cache_adapter",
+        lambda _config: Adapter(),
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "invalidate_postgres_utility_projection_cache",
+        lambda **options: invalidations.append(options),
+    )
+
+    result = cache_module.persist_structural_tag_edit_for_config(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://runtime/library"},
+        changed_paths={"track.flac"},
+        previous_file_entries={"track.flac": {"album": "Before"}},
+        updated_file_entries={"track.flac": {"album": "After"}},
+        changed_field_names={"album"},
+    )
+
+    assert result == {"track_rows_updated": 1}
+    assert calls[0]["changed_paths"] == {"track.flac"}
+    assert invalidations == [
+        {"database_url": "postgresql://runtime/library"}
+    ]

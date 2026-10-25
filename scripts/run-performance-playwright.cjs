@@ -51,6 +51,7 @@ const SCAN_SETUP_DATABASE_ROLE = 'album_haven_migrator';
 const SCAN_RUNTIME_DATABASE_ROLE = 'album_haven_app';
 const SCAN_WORKER_DATABASE_ROLE = 'album_haven_worker';
 const PRELOADED_RELEASE_FIXTURE_MODE = 'preloaded-release';
+const PRELOADED_DERIVED_FIXTURE_MODE = 'preloaded-derived';
 const GENERATED_ISOLATED_FIXTURE_MODE = 'generated-isolated';
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
   'MUSIC_DIR',
@@ -108,8 +109,14 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'edit-tags-post-edit',
+    'cover-lookup',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'root-album-browse',
+    'artist-tree-scroll-navigation',
+    'gallery-artwork-diversity',
     'app-open-all-artists',
     'problematic-files-focused',
     'rules-focused',
@@ -121,6 +128,23 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-health',
     'paired-search-calibration',
     'scan-error',
+    'notification-history',
+  ],
+  'library-browse': [
+    'all-artists',
+    'artist-family',
+    'search-all-artists',
+    'utility-rules',
+    'selected-artist',
+    'album-title-search',
+    'track-title-search',
+    'search-browse',
+    'root-album-browse',
+    'artist-tree-scroll-navigation',
+    'app-open-all-artists',
+    'rules-focused',
+    'paired-search-calibration',
+    'notification-history',
   ],
   'idle-memory': [
     'idle-memory',
@@ -138,8 +162,11 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'root-album-browse',
+    'artist-tree-scroll-navigation',
     'app-open-all-artists',
     'problematic-files-focused',
     'rules-focused',
@@ -294,10 +321,74 @@ const PERFORMANCE_TARGETS = {
     reportId: 'selectedArtistFocusedLocal',
     casePattern: 'FTC-GALLERY-STARTUP-005Q',
     casePatterns: [
+      'Stale projection keeps selected startup and superseding Home responsive',
       'Selected artist UI reports library_browse telemetry and timing',
       'FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family',
     ],
     metricCasePattern: 'Selected artist UI reports library_browse telemetry and timing',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
+  'edit-tags-post-edit': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'Real local app repeated Edit Tags saves, success-notification cleanup, and same-session post-edit search, tree, gallery, cover, and Album Details responsiveness.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js',
+    grep: 'FTC-TAGS-026P',
+    aliasNames: ['edit-tags-post-edit', 'edit-tags-performance', 'post-edit-navigation'],
+    reportId: 'editTagsPostEditLocal',
+    casePattern: 'FTC-TAGS-026P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
+  'cover-lookup': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'Real local app Cover Lookup open, candidate rendering, selection, and Save acceptance through Postgres-backed production routes.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js',
+    grep: 'FTC-COVERS-019P',
+    aliasNames: ['cover-lookup', 'covers', 'cover-lookup-interactions'],
+    reportId: 'coverLookupLocal',
+    casePattern: 'FTC-COVERS-019P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
+  'album-title-search': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'True-cold full-fixture album-title search to the correct visible album card.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/albumTitleSearchPerformance.spec.js',
+    grep: 'FTC-SEARCH-NAV-029P',
+    aliasNames: ['album-title-search', 'album-search-performance'],
+    reportId: 'albumTitleSearchLocal',
+    casePattern: 'FTC-SEARCH-NAV-029P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    },
+  },
+  'track-title-search': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'True-cold full-fixture track-title search to the correct album and rendered matching-track accent.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/trackTitleSearchPerformance.spec.js',
+    grep: 'FTC-SEARCH-NAV-030P',
+    aliasNames: ['track-title-search', 'track-search-performance'],
+    reportId: 'trackTitleSearchLocal',
+    casePattern: 'FTC-SEARCH-NAV-030P',
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     },
@@ -328,6 +419,62 @@ const PERFORMANCE_TARGETS = {
     aliasNames: ['root-album-browse', 'root-albums', 'library-browse-root-albums'],
     reportId: 'rootAlbumBrowseFocusedLocal',
     casePattern: 'FTC-GALLERY-STARTUP-005S',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    },
+  },
+  'artist-tree-scroll-navigation': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'Real local large-library Artist Tree jump alignment, restoration, search/Home anchoring, and root continuation coverage.',
+    specPath: 'tests/e2e/syntheticLargeLibrary',
+    grep: 'FTC-GALLERY-NAV-03(?:2|3|4|5|7)',
+    aliasNames: ['artist-tree-scroll-navigation', 'artist-tree-scroll', 'gallery-scroll-navigation'],
+    casePattern: 'FTC-GALLERY-NAV-03(?:2|3|4|5|7)',
+    casePatterns: [
+      'search and Home destinations do not rebound after settling',
+      'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
+      'root continuation starts eight viewports early and never reaches a hard stop during its real request',
+      'mobile Cards › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Cards › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'mobile Covers › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Covers › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'mobile Rows › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Rows › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'desktop Cards › desktop Scroll, album, Close retains the jumped-to position',
+      'desktop Cards › desktop Scroll, ordinary scroll, album, Close retains the departure position',
+      'desktop Covers › desktop Scroll, album, Close retains the jumped-to position',
+      'desktop Covers › desktop Scroll, ordinary scroll, album, Close retains the departure position',
+      'Mobile Cards, covers and rows retain the jumped-to release',
+      'Desktop Cards and covers retain the jumped-to release',
+      'mobile Cards › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'mobile Covers › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'mobile Rows › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'desktop Cards › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'desktop Covers › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'real continuation response during held touch keeps gallery coordinates stable',
+      'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
+      'real continuation response during wheel sequence keeps gallery coordinates stable',
+    ],
+    measurementExpected: false,
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
+  'gallery-artwork-diversity': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_DERIVED_FIXTURE_MODE,
+    coverageClass: 'real-app-gallery-memory-diagnostic',
+    coverageDescription: 'Long-session pagination, decoded-cover diversity, detached-card bounds, and retained memory diagnostics.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js',
+    grep: 'FTC-GALLERY-NAV-036',
+    aliasNames: ['gallery-artwork-diversity'],
+    casePattern: 'FTC-GALLERY-NAV-036',
+    measurementExpected: false,
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     },
@@ -505,6 +652,23 @@ PERFORMANCE_TARGETS['scan-error'] = {
   },
 };
 
+PERFORMANCE_TARGETS['notification-history'] = {
+  kind: 'synthetic',
+  fixtureProfile: 'synthetic-large-library',
+  fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+  coverageClass: 'real-app-library-browse-load',
+  coverageDescription: 'PostgreSQL-backed 528-row notification pagination, virtualization, retained-memory, and post-history navigation coverage.',
+  specPath: 'tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js',
+  grep: 'FTC-NOTIFICATIONS-001P',
+  aliasNames: ['notification-history', 'notifications-performance'],
+  reportId: 'notificationHistoryLocal',
+  casePattern: 'FTC-NOTIFICATIONS-001P',
+  env: {
+    ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+  },
+};
+
 const TARGETS_BY_ALIAS = new Map(
   Object.values(PERFORMANCE_TARGETS)
     .flatMap((target) => target.aliasNames.map((alias) => [alias, target]))
@@ -667,10 +831,10 @@ function assertPerformanceTargetFixtureConfiguration(targets, env) {
 
     const fixtureRoot = String(env.ALBUM_HAVEN_FIXTURE_ROOT || '').trim();
     const mediaRoot = String(env.ALBUM_HAVEN_MEDIA_ROOT || '').trim();
-    if (target.fixtureMode === PRELOADED_RELEASE_FIXTURE_MODE) {
+    if ([PRELOADED_RELEASE_FIXTURE_MODE, PRELOADED_DERIVED_FIXTURE_MODE].includes(target.fixtureMode)) {
       if (!fixtureRoot || !mediaRoot || !path.isAbsolute(fixtureRoot) || !path.isAbsolute(mediaRoot)) {
         throw new Error(
-          `Performance target ${targetName} uses fixture mode preloaded-release and requires absolute ALBUM_HAVEN_FIXTURE_ROOT and ALBUM_HAVEN_MEDIA_ROOT.`,
+          `Performance target ${targetName} uses fixture mode ${target.fixtureMode} and requires absolute ALBUM_HAVEN_FIXTURE_ROOT and ALBUM_HAVEN_MEDIA_ROOT.`,
         );
       }
       const expectedMediaRoot = path.resolve(path.resolve(fixtureRoot), 'media');
@@ -718,6 +882,12 @@ function runConfiguredPerformanceSuite(args, baseEnv = process.env, dependencies
   const loadEnv = dependencies.loadEnv || ((env) => loadDotEnvFile(env));
   const runDatabasePreflight = dependencies.runDatabasePreflight || runScanPerformanceDatabasePreflight;
   const runSuite = dependencies.runSuite || runSequentialPerformanceSuite;
+  if (!String(args.targetInput || '').trim() && normalizeTargetKey(args.group) === 'all') {
+    throw new Error(
+      'The --group all registry is not runnable with one prepared fixture. '
+      + 'Choose a fixture-compatible group or use the cloud performance matrix.',
+    );
+  }
   const targets = resolveRequestedTargets(args);
   assertSinglePreloadedFixtureProfile(targets);
   const childEnv = loadEnv({ ...baseEnv });
@@ -823,6 +993,7 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     repeatCount: DEFAULT_REPEAT_COUNT,
     targetInput: '',
   };
+  let groupProvided = false;
   Object.defineProperty(options, 'preparedFixture', {
     value: preparedFixtureDefaults.preparedFixture,
     writable: true,
@@ -867,11 +1038,13 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     }
     if (arg === '--group') {
       options.group = argv[index + 1] || '';
+      groupProvided = true;
       index += 1;
       continue;
     }
     if (arg.startsWith('--group=')) {
       options.group = arg.slice('--group='.length);
+      groupProvided = true;
       continue;
     }
     if (arg === '--test') {
@@ -917,6 +1090,9 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     throw new Error(`Unsupported argument: ${arg}`);
   }
 
+  if (!options.targetInput && !groupProvided) {
+    options.group = 'library-browse';
+  }
   return options;
 }
 
@@ -1023,6 +1199,19 @@ function assertSinglePreloadedFixtureProfile(targets) {
     throw new Error(
       'A grouped performance run cannot combine preloaded fixture profiles '
       + `${fixtureProfiles.join(', ')} without reloading PostgreSQL between targets. `
+      + 'Run one --test target at a time or use the cloud performance matrix.',
+    );
+  }
+  const fixtureModes = [...new Set(
+    targets
+      .filter((target) => target.kind === 'synthetic')
+      .map((target) => String(target.fixtureMode || '').trim())
+      .filter(Boolean),
+  )];
+  if (fixtureModes.includes(PRELOADED_RELEASE_FIXTURE_MODE)
+      && fixtureModes.includes(PRELOADED_DERIVED_FIXTURE_MODE)) {
+    throw new Error(
+      `A grouped performance run cannot combine fixture modes ${PRELOADED_RELEASE_FIXTURE_MODE} and ${PRELOADED_DERIVED_FIXTURE_MODE}. `
       + 'Run one --test target at a time or use the cloud performance matrix.',
     );
   }
@@ -1289,15 +1478,23 @@ function listTargetCasePatterns(target) {
     .filter(Boolean);
 }
 
+function normalizeTestHierarchy(value) {
+  return String(value || '').replaceAll('›', '>');
+}
+
+function parsedTestSearchText(entry) {
+  return [entry?.fullName, entry?.testName, entry?.suiteName]
+    .map(normalizeTestHierarchy)
+    .join('\n');
+}
+
 function parsedTestMatchesTarget(target, entry) {
   const casePatterns = listTargetCasePatterns(target);
   if (casePatterns.length === 0) {
     return true;
   }
-  const searchableText = [entry?.fullName, entry?.testName, entry?.suiteName]
-    .map((value) => String(value || ''))
-    .join('\n');
-  return casePatterns.some((casePattern) => searchableText.includes(casePattern));
+  const searchableText = parsedTestSearchText(entry);
+  return casePatterns.some((casePattern) => searchableText.includes(normalizeTestHierarchy(casePattern)));
 }
 
 function filterParsedTestsForTarget(target, parsedTestResults = []) {
@@ -1327,11 +1524,26 @@ function resolveDisplaySuiteName(target) {
   if (targetName === 'selected-artist') {
     return 'Selected Artist Browse';
   }
+  if (targetName === 'edit-tags-post-edit') {
+    return 'Edit Tags Post-Edit Navigation';
+  }
+  if (targetName === 'cover-lookup') {
+    return 'Cover Lookup';
+  }
+  if (targetName === 'album-title-search') {
+    return 'Album Title Search';
+  }
+  if (targetName === 'track-title-search') {
+    return 'Track Title Search';
+  }
   if (targetName === 'search-browse') {
     return 'Search Browse';
   }
   if (targetName === 'root-album-browse') {
     return 'Root Album Browse';
+  }
+  if (targetName === 'artist-tree-scroll-navigation') {
+    return 'Artist Tree Scroll Navigation';
   }
   if (targetName === 'app-open-all-artists') {
     return 'App Open All Artists';
@@ -1430,27 +1642,19 @@ function classifyPerformanceAttempt(attemptRecord = {}, selectedContract = 'loca
     &&
     parsedCases.filter((entry) => entry?.status === 'failed').length === 1
     && parsedCases.filter((entry) => entry?.status === 'failed').every((entry) => (
-      [entry?.fullName, entry?.testName, entry?.suiteName]
-        .map((value) => String(value || ''))
-        .join('\n')
-        .includes(String(attemptRecord.metricCasePattern || attemptRecord.metricCaseId || ''))
+        parsedTestSearchText(entry)
+          .includes(normalizeTestHierarchy(attemptRecord.metricCasePattern || attemptRecord.metricCaseId))
     ))
-    && expectedCasePatterns.every((pattern) => parsedCases.some((entry) => (
-      [entry?.fullName, entry?.testName, entry?.suiteName]
-        .map((value) => String(value || ''))
-        .join('\n')
-        .includes(pattern)
-    )))
+      && expectedCasePatterns.every((pattern) => parsedCases.some((entry) => (
+        parsedTestSearchText(entry).includes(normalizeTestHierarchy(pattern))
+      )))
   );
   const processAndStructurePassed = attemptRecord.processStatus === 0
     && attemptRecord.structuredStatus === 'passed';
   if (attemptRecord.status === 0 || processAndStructurePassed) {
     if (attemptRecord.measurementExpected === false) {
       const caseMatches = expectedCasePatterns.map((pattern) => parsedCases.filter((entry) => (
-        [entry?.fullName, entry?.testName, entry?.suiteName]
-          .map((value) => String(value || ''))
-          .join('\n')
-          .includes(pattern)
+        parsedTestSearchText(entry).includes(normalizeTestHierarchy(pattern))
       )));
       const casesComplete = expectedCasePatterns.length > 0
         && parsedCases.every((entry) => entry?.status === 'passed')
@@ -1672,6 +1876,40 @@ function resolvePerformanceAttemptArtifactDir(targetRoot, attemptNumber) {
 function preparePerformanceTargetArtifactRoot(targetRoot) {
   fs.rmSync(targetRoot, { recursive: true, force: true });
   fs.mkdirSync(targetRoot, { recursive: true });
+}
+
+function retainArtworkDiversityProvenance(target, env = process.env) {
+  if (target?.fixtureMode !== PRELOADED_DERIVED_FIXTURE_MODE) return null;
+
+  const sourcePath = String(env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE || '').trim();
+  if (!sourcePath) {
+    throw new Error(
+      'ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE is required for the derived artwork target.',
+    );
+  }
+
+  let sourceBytes;
+  try {
+    sourceBytes = fs.readFileSync(sourcePath);
+  } catch (error) {
+    throw new Error(
+      `ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE must name a readable file: ${error?.message || error}`,
+    );
+  }
+  try {
+    JSON.parse(sourceBytes.toString('utf8'));
+  } catch (error) {
+    throw new Error(
+      `ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE must contain valid JSON: ${error?.message || error}`,
+    );
+  }
+
+  const retainedPath = path.join(
+    resolvePerformanceTargetArtifactRoot(target),
+    'artwork-diversity-provenance.json',
+  );
+  fs.writeFileSync(retainedPath, sourceBytes);
+  return retainedPath;
 }
 
 function assertFixtureDatabaseUrlSafe(databaseUrl) {
@@ -2051,6 +2289,7 @@ function runSinglePerformanceAttempt(target, options, verificationGroup, attempt
       applyTargetEnvOverrides({
         ...process.env,
         PLAYWRIGHT_HEADLESS: options.headless ? 'true' : 'false',
+        ...(target.kind === 'synthetic' ? { PLAYWRIGHT_PROVIDER_PORT: String(attemptPorts.realAppPort + 2) } : {}),
         ...(target.kind === 'scan' ? { PLAYWRIGHT_PORT: String(attemptPorts.scanAppPort) } : {}),
         ...managedScanStatusEnv,
       }, target.env || {}),
@@ -2131,6 +2370,7 @@ function runBatchPerformanceAttempt(targets, options, verificationGroup, attempt
       applyTargetEnvOverrides({
         ...process.env,
         PLAYWRIGHT_HEADLESS: options.headless ? 'true' : 'false',
+        ...(firstTarget.kind === 'synthetic' ? { PLAYWRIGHT_PROVIDER_PORT: String(targetPorts.realAppPort + 2) } : {}),
         ...(firstTarget.kind === 'scan' ? { PLAYWRIGHT_PORT: String(targetPorts.scanAppPort) } : {}),
         ...managedScanStatusEnv,
       }, firstTarget.env || {}),
@@ -2182,6 +2422,7 @@ function runTargetWithPolicy(target, options, targetPorts) {
   const totalPlannedAttempts = forcedAttempts ? verificationGroup.maxAttempts : 1;
   const displayedAttemptTotal = formatDisplayedAttemptTotal(verificationGroup);
   preparePerformanceTargetArtifactRoot(resolvePerformanceTargetArtifactRoot(target));
+  retainArtworkDiversityProvenance(target);
 
   for (let attemptNumber = 1; attemptNumber <= totalPlannedAttempts; attemptNumber += 1) {
     console.log(`=== Performance run ${attemptNumber}/${displayedAttemptTotal} for ${targetName} ===`);
@@ -2476,9 +2717,9 @@ function runSequentialPerformanceSuite(options) {
 }
 
 function printUsage() {
-  console.log('Usage: npm run test:e2e:performance -- [--group all|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
-  console.log('Known groups: all, idle-memory, playback-start, gapless-playback, real-app, scan');
+  console.log('Usage: npm run test:e2e:performance -- [--group library-browse|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
+  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, edit-tags-post-edit, cover-lookup, album-title-search, track-title-search, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+  console.log('Known groups: library-browse, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');
   console.log('The browser defaults to Playwright-managed Chromium; branded Chrome and Edge are explicit comparison overrides.');
@@ -2513,6 +2754,8 @@ module.exports = {
     normalizeRelativeSpecPath,
     parseCliArgs,
     printUsage,
+    preparePerformanceTargetArtifactRoot,
+    retainArtworkDiversityProvenance,
     loadDotEnvFile,
     assertScanPerformanceDatabaseConfiguration,
     runScanPerformanceDatabasePreflight,

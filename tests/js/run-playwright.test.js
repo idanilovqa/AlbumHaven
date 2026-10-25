@@ -3202,11 +3202,10 @@ test('initial functional-core app startup waits for shared warmup and background
   assert.deepEqual(startupEvents[0], { stage: 'authenticate', port: 4324 });
   assert.equal(startupEvents[1].stage, 'warmup');
   assert.equal(startupEvents[1].port, 4324);
-  assert.deepEqual(startupEvents[1].options, {
-    fetchHttpResponseCompleteFn: undefined,
-    mediaRoot: undefined,
-    requestHeaders,
-  });
+  assert.equal(startupEvents[1].options.fetchHttpResponseCompleteFn, undefined);
+  assert.equal(startupEvents[1].options.mediaRoot, undefined);
+  assert.deepEqual(startupEvents[1].options.requestHeaders, requestHeaders);
+  assert.equal(typeof startupEvents[1].options.diagnosticWriteFn, 'function');
   assert.deepEqual(startupEvents[2], {
     stage: 'background-idle',
     managedChild: child,
@@ -3310,6 +3309,85 @@ test('functional fixture startup waits for a stable idle production status befor
   );
 });
 
+for (const pendingCode of ['search_projection_pending', 'gallery_projection_pending']) {
+  test(`functional fixture warmup retries ${pendingCode} until the gallery projection is ready`, async () => {
+    const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
+    const coverPath = path.join(mediaRoot, 'fixture-cover.jpg');
+    const viewRequests = [];
+    let now = 0;
+
+    const warmed = await _private.prewarmFunctionalFixture(4324, {
+      mediaRoot,
+      nowFn: () => now,
+      sleepFn: async (milliseconds) => { now += milliseconds; },
+      pollIntervalMs: 10,
+      timeoutMs: 100,
+      fetchHttpResponseCompleteFn: async (url) => {
+        if (!url.includes('/view-data?')) {
+          return { ok: true, statusCode: 200, body: '<!doctype html>' };
+        }
+        viewRequests.push(url);
+        if (viewRequests.length === 1) {
+          return {
+            ok: false,
+            statusCode: 503,
+            body: JSON.stringify({ ok: false, code: pendingCode }),
+          };
+        }
+        return {
+          ok: true,
+          statusCode: 200,
+          body: JSON.stringify({ albums: [{ cover_path: coverPath }] }),
+        };
+      },
+    });
+
+    assert.equal(warmed, true);
+    assert.equal(viewRequests.length, 2);
+    assert.equal(now, 10);
+  });
+}
+
+test('functional fixture warmup bounds each projection retry to the original deadline', async () => {
+  const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
+  const requestTimeouts = [];
+  let now = 0;
+  let viewAttempts = 0;
+
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    mediaRoot,
+    nowFn: () => now,
+    sleepFn: async (milliseconds) => { now += milliseconds; },
+    pollIntervalMs: 10,
+    timeoutMs: 100,
+    fetchHttpResponseCompleteFn: async (url, options) => {
+      if (!url.includes('/view-data?')) {
+        return { ok: true, statusCode: 200, body: '<!doctype html>' };
+      }
+      requestTimeouts.push(options.requestTimeoutMs);
+      viewAttempts += 1;
+      if (viewAttempts === 1) {
+        now = 80;
+        return {
+          ok: false,
+          statusCode: 503,
+          body: JSON.stringify({ ok: false, code: 'gallery_projection_pending' }),
+        };
+      }
+      return {
+        ok: true,
+        statusCode: 200,
+        body: JSON.stringify({
+          albums: [{ cover_path: path.join(mediaRoot, 'fixture-cover.jpg') }],
+        }),
+      };
+    },
+  });
+
+  assert.equal(warmed, true);
+  assert.deepEqual(requestTimeouts, [100, 10]);
+});
+
 test('functional fixture warmup derives only fixture-owned cover previews from the real gallery payload', async () => {
   const requests = [];
   const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
@@ -3360,6 +3438,39 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
   )));
 });
 
+test('functional fixture warmup reports only the failed stage and HTTP status', async () => {
+  const diagnostics = [];
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    mediaRoot: path.join(os.tmpdir(), 'album-haven-functional-media'),
+    diagnosticWriteFn: (line) => diagnostics.push(line),
+    fetchHttpResponseCompleteFn: async (url) => {
+      if (url.includes('/view-data?')) {
+        return {
+          ok: true,
+          statusCode: 200,
+          body: JSON.stringify({
+            albums: [{
+              cover_path: path.join(
+                os.tmpdir(),
+                'album-haven-functional-media',
+                'deleted-fixture',
+                'cover.jpg',
+              ),
+            }],
+          }),
+        };
+      }
+      if (url.includes('/cover?')) return { ok: false, statusCode: 404, body: 'private path' };
+      return { ok: true, statusCode: 200, body: '' };
+    },
+  });
+
+  assert.equal(warmed, false);
+  assert.deepEqual(diagnostics, [
+    '[functional-warmup-failure] {"stage":"cover-preview","statusCode":404}\n',
+  ]);
+});
+
 test('waitForManagedIsolatedAppReady rejects an app that exits before status readiness', async () => {
   const child = createFakeChildProcess(5555);
   child.exitCode = 9;
@@ -3370,6 +3481,19 @@ test('waitForManagedIsolatedAppReady rejects an app that exits before status rea
     }),
     /exited before readiness with code 9/,
   );
+});
+
+test('functional fixture warmup reports null status when the failed response has no status', async () => {
+  const diagnostics = [];
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    diagnosticWriteFn: (line) => diagnostics.push(line),
+    fetchHttpResponseCompleteFn: async () => ({ ok: false }),
+  });
+
+  assert.equal(warmed, false);
+  assert.deepEqual(diagnostics, [
+    '[functional-warmup-failure] {"stage":"index","statusCode":null}\n',
+  ]);
 });
 
 test('managed isolated spawn is handed to the outer owner before identity capture', async () => {
@@ -3896,6 +4020,139 @@ test('managed isolated restart controller keeps control files under the runner-o
   }
 });
 
+test('managed isolated restart controller discards stale control messages at startup', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-stale-'));
+  const controlDirectory = path.join(ownedRoot, 'restart-control');
+  const requestPath = path.join(controlDirectory, 'restart-request.json');
+  const ackPath = path.join(controlDirectory, 'restart-ack.json');
+  fs.mkdirSync(controlDirectory, { recursive: true });
+  fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'stale-request' }));
+  fs.writeFileSync(ackPath, JSON.stringify({ nonce: 'stale-request', status: 'ready' }));
+
+  try {
+    const controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: {},
+      ownedIsolatedTempRoot: ownedRoot,
+      initialChild: createFakeChildProcess(5660),
+      ports: [4320, 4322],
+      autoStart: false,
+    });
+
+    assert.equal(fs.existsSync(requestPath), false);
+    assert.equal(fs.existsSync(ackPath), false);
+    await controller.close();
+  } finally {
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
+test('managed restart control accepts only the shard-owned prepared profile root', () => {
+  const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-profile-control-'));
+  const profileRoot = path.join(
+    runnerTemp,
+    'album-haven-performance-shard-scroll',
+    'prepared-profile',
+  );
+  fs.mkdirSync(profileRoot, { recursive: true });
+
+  try {
+    assert.equal(
+      _private.resolveManagedRestartControlRoot({
+        RUNNER_TEMP: runnerTemp,
+        ALBUM_HAVEN_PERFORMANCE_PROFILE_SESSION: '1',
+        ALBUM_HAVEN_E2E_TEMP_ROOT: profileRoot,
+      }),
+      path.resolve(profileRoot),
+    );
+    assert.throws(
+      () => _private.resolveManagedRestartControlRoot({
+        RUNNER_TEMP: runnerTemp,
+        ALBUM_HAVEN_PERFORMANCE_PROFILE_SESSION: '1',
+        ALBUM_HAVEN_E2E_TEMP_ROOT: path.join(os.tmpdir(), 'outside-profile'),
+      }),
+      /runner-owned performance profile/i,
+    );
+  } finally {
+    fs.rmSync(runnerTemp, { recursive: true, force: true });
+  }
+});
+
+for (const linkedComponent of ['shard', 'profile']) {
+  test(`managed restart root rejects an escaping ${linkedComponent} junction`, () => {
+    const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-profile-junction-'));
+    const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-external-profile-'));
+    const shardRoot = path.join(runnerTemp, 'album-haven-performance-shard-junction');
+    const profileRoot = path.join(shardRoot, 'prepared-profile');
+    const linkPath = linkedComponent === 'shard' ? shardRoot : profileRoot;
+    const externalProfile = linkedComponent === 'shard'
+      ? path.join(externalRoot, 'prepared-profile')
+      : externalRoot;
+    const sentinelPath = path.join(externalProfile, 'sentinel.txt');
+    try {
+      fs.mkdirSync(externalProfile, { recursive: true });
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      fs.writeFileSync(sentinelPath, 'external profile must remain unchanged');
+      fs.symlinkSync(externalRoot, linkPath, 'junction');
+      let refusal;
+      try {
+        _private.resolveManagedRestartControlRoot({
+          RUNNER_TEMP: runnerTemp,
+          ALBUM_HAVEN_PERFORMANCE_PROFILE_SESSION: '1',
+          ALBUM_HAVEN_E2E_TEMP_ROOT: profileRoot,
+        });
+      } catch (error) {
+        refusal = error;
+      }
+      assert.equal(fs.readFileSync(sentinelPath, 'utf8'), 'external profile must remain unchanged');
+      assert.match(String(refusal?.message || ''), /runner-owned|escape|outside/i);
+    } finally {
+      if (fs.existsSync(linkPath)) fs.unlinkSync(linkPath);
+      for (const ownedRoot of [runnerTemp, externalRoot]) {
+        assert.equal(path.dirname(path.resolve(ownedRoot)), path.resolve(os.tmpdir()));
+        fs.rmSync(ownedRoot, { recursive: true, force: true });
+      }
+    }
+  });
+}
+
+test('managed restart controller rejects an escaping control junction before deleting external messages', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-control-junction-'));
+  const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-external-control-'));
+  const linkPath = path.join(ownedRoot, 'restart-control');
+  const sentinels = ['restart-request.json', 'restart-ack.json'];
+  const childEnv = { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot };
+  let controller;
+  let refusal;
+  try {
+    for (const filename of sentinels) fs.writeFileSync(path.join(externalRoot, filename), 'external message');
+    fs.symlinkSync(externalRoot, linkPath, 'junction');
+    try {
+      controller = _private.createManagedIsolatedAppRestartController({
+        childEnv,
+        ownedIsolatedTempRoot: ownedRoot,
+        initialChild: createFakeChildProcess(5660),
+        autoStart: false,
+      });
+    } catch (error) {
+      refusal = error;
+    }
+    for (const filename of sentinels) {
+      const sentinelPath = path.join(externalRoot, filename);
+      assert.equal(fs.existsSync(sentinelPath), true, `${filename} must not be removed through the junction`);
+      assert.equal(fs.readFileSync(sentinelPath, 'utf8'), 'external message');
+    }
+    assert.match(String(refusal?.message || ''), /runner-owned|escape|outside/i);
+    assert.equal(childEnv.ALBUM_HAVEN_E2E_RESTART_CONTROL_DIR, undefined);
+  } finally {
+    await controller?.close();
+    if (fs.existsSync(linkPath)) fs.unlinkSync(linkPath);
+    for (const root of [ownedRoot, externalRoot]) {
+      assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('managed isolated replacement skips background idle and acknowledges after health, auth, and warmup', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-request-'));
   const oldChild = createFakeChildProcess(5662);
@@ -3982,13 +4239,29 @@ test('managed watcher cleanup derives its only path from runner media ownership'
     assert.deepEqual(calls[0].args, ['-m', 'tests.e2e.support.watcherFixture', '--owned-root', path.join(ownedRoot, 'media', 'cases', 'watcher-reconciliation')]);
     assert.equal(calls[0].options.env, environment);
     assert.ok(calls[0].options.timeout > 0);
+    calls.length = 0;
+    await _private.cleanupManagedWatcherFixture(environment, {
+      ownedDirectoryName: 'gallery-native-response-overlap',
+      runCommandFn(command, args, options) {
+        calls.push({ command, args, options });
+        return { status: 0, signal: null };
+      },
+    });
+    assert.deepEqual(calls[0].args, [
+      '-m', 'tests.e2e.support.watcherFixture', '--owned-root',
+      path.join(ownedRoot, 'media', 'cases', 'gallery-native-response-overlap'),
+    ]);
+    await assert.rejects(
+      _private.cleanupManagedWatcherFixture(environment, { ownedDirectoryName: 'not-runner-owned' }),
+      /owned directory/i,
+    );
     await assert.rejects(_private.cleanupManagedWatcherFixture(environment, { runCommandFn() {
       return { status: 1, stderr: 'private database/path detail must not enter the error' };
     } }), (error) => error.message === 'Runner-owned watcher inventory cleanup failed; evidence retained.');
   } finally { fs.rmSync(ownedRoot, { recursive: true, force: true }); }
 });
 
-test('managed watcher cleanup rejects a request-supplied path before stopping or touching inventory', async () => {
+test('managed watcher cleanup rejects a request-supplied path or unknown directory before touching inventory', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-request-'));
   let controller;
   try {
@@ -4002,7 +4275,12 @@ test('managed watcher cleanup rejects a request-supplied path before stopping or
     fs.writeFileSync(path.join(controller.controlDirectory, 'restart-request.json'), JSON.stringify({
       nonce: 'untrusted-path', operation: 'watcher-cleanup', ownedRoot: path.join(ownedRoot, 'outside'),
     }));
-    await assert.rejects(controller.processPendingRequest(), /fixed runner-owned operation/);
+    await assert.rejects(controller.processPendingRequest(), /runner-owned directory identity/);
+    assert.equal(controller.getCurrentChild().pid, 5564);
+    fs.writeFileSync(path.join(controller.controlDirectory, 'restart-request.json'), JSON.stringify({
+      nonce: 'untrusted-directory', operation: 'watcher-cleanup', ownedDirectoryName: 'outside',
+    }));
+    await assert.rejects(controller.processPendingRequest(), /owned directory/i);
     assert.equal(controller.getCurrentChild().pid, 5564);
   } finally { await controller?.close(); fs.rmSync(ownedRoot, { recursive: true, force: true }); }
 });

@@ -41,6 +41,11 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/admin/accounts/{account_id}/invitation/copy"): "accounts.invitation.copy",
     ("POST", "/admin/accounts/{account_id}/invitation/send"): "accounts.invitation.send",
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
+    ("GET", "/admin/server"): "system.preview_storage.read",
+    ("GET", "/admin/server/preview-storage"): "system.preview_storage.read",
+    ("PUT", "/admin/server/preview-storage"): "system.preview_storage.manage",
+    ("POST", "/admin/server/preview-storage/cancel"): "system.preview_storage.cancel",
+    ("POST", "/admin/server/preview-storage/retry"): "system.preview_storage.retry",
     ("GET", "/account"): "account.self.read",
     ("GET", "/account/appearance"): "account.self.appearance.read",
     ("GET", "/account/layout-preferences"): "account.self.appearance.read",
@@ -113,7 +118,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/open-album-location"): "library.files.open_location",
     ("POST", "/utilities/repair-album"): "library.files.repair",
     ("POST", "/utilities/edit-tags"): "library.files.edit_tags",
+    ("POST", "/utilities/tag-editor/folder-files"): "library.files.edit_tags",
     ("GET", "/utilities/cover-lookup/tasks"): "library.covers.tasks.read",
+    ("GET", "/utilities/cover-lookup/tasks/counts"): "library.covers.tasks.read",
     ("POST", "/utilities/cover-lookup/tasks/clear-completed"): "library.covers.tasks.manage",
     ("POST", "/utilities/cover-lookup/task/{task_id}/clear"): "library.covers.tasks.manage",
     ("POST", "/utilities/cover-lookup/task/{task_id}/mark-action-taken"): "library.covers.tasks.manage",
@@ -236,7 +243,12 @@ def install_private_route_boundary(app: FastAPI) -> None:
             if (
                 exc.status_code == 403
                 and request.method == "GET"
-                and route_path in {"/admin/members", "/admin/accounts/new", "/admin/accounts/{account_id}"}
+                and route_path in {
+                    "/admin/members",
+                    "/admin/accounts/new",
+                    "/admin/accounts/{account_id}",
+                    "/admin/server",
+                }
                 and request.headers.get("sec-fetch-dest") == "document"
             ):
                 # A denied browser page must remain readable. Fetch/API clients

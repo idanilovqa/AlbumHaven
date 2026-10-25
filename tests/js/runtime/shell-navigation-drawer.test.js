@@ -114,6 +114,7 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
   const pendingTimers = new Map();
   let nextTimerId = 0;
   const resizeEvents = [];
+  const startingEvents = [];
   const settledEvents = [];
   const context = {
     state: {
@@ -145,6 +146,9 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
       dispatchEvent(event) {
         this.lastEvent = event;
         if (event.type === 'resize') resizeEvents.push(event);
+        if (event.type === 'album-haven:artist-tree-toggle-starting') {
+          startingEvents.push({ event, folded: appShell.classList.contains('is-artist-tree-folded') });
+        }
         if (event.type === 'album-haven:artist-tree-settled') settledEvents.push(event);
       },
       getComputedStyle: () => ({
@@ -188,6 +192,7 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
     documentElement,
     pendingTimers,
     resizeEvents,
+    startingEvents,
     settledEvents,
   };
 }
@@ -221,7 +226,7 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 {
   const {
     context, drawerRail, foldButton, navigationButton, expandedTree, compactNavigation, artistList, appShell,
-    documentElement, resizeEvents, settledEvents,
+    documentElement, resizeEvents, startingEvents, settledEvents,
   } = loadHelper({ isMobile: false });
   drawerRail.contains = target => target === foldButton;
   context.document.activeElement = foldButton;
@@ -229,6 +234,8 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 
   const folded = context.toggleArtistTreeFold();
 
+  assert.equal(startingEvents.length, 1);
+  assert.equal(startingEvents[0].folded, false, 'The gallery anchor must be captured before folded layout begins');
   assert.equal(folded, true);
   assert.equal(context.state.ui.artistTreeFolded, true);
   assert.equal(context.state.ui.shellLayoutPreferences.artistTreeFolded, true);

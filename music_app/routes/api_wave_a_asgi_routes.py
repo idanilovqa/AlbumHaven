@@ -9,6 +9,7 @@ import inspect
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Event
 from time import perf_counter
 from typing import Any
@@ -54,7 +55,7 @@ from music_app.services.missing_album_removal_postgres import (
     MissingAlbumRootUnavailable,
     PostgresMissingAlbumRemovalService,
 )
-from music_app.services.policy_asgi import require_action, request_origin_ref_for_request
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action, request_origin_ref_for_request
 from music_app.services.library_roots import (
     get_library_roots,
     library_root_cache_identity,
@@ -67,6 +68,7 @@ from music_app.services.library_settings import (
 from music_app.services.log_history import append_log_history
 from music_app.services.manual_versions import load_manual_version_links, save_manual_version_links
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
+from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
 from music_app.services.problematic_albums import (
     find_problematic_album_by_track_paths as _find_problematic_album_by_track_paths_in_payload,
@@ -81,7 +83,9 @@ from music_app.services.save_tasks import (
     queue_finalize_save_task,
     queue_finalize_structural_tag_edit_save_task,
     save_task_result,
+    save_task_timing_recorder,
     structural_tag_edit_resource_keys,
+    update_save_task,
 )
 from music_app.services.separate_releases import load_separate_release_keys, save_separate_release_keys
 from music_app.services.tag_edit_intents_postgres import (
@@ -94,6 +98,7 @@ from music_app.services.state import (
     hydrate_library_state_for_config,
     invalidate_targeted_library_projections,
     run_runtime_state_mutation_for_state,
+    schedule_relation_projection_rebuild,
     start_background_refresh_for_state,
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
@@ -185,7 +190,14 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2
-_STRUCTURAL_EDIT_FIELDS = {"album", "album_artist", "year", "edition", "exception_type"}
+_STRUCTURAL_EDIT_FIELDS = {
+    "album",
+    "album_artist",
+    "year",
+    "edition",
+    "exception_type",
+    "custom_collection_name",
+}
 _RELATION_PROJECTION_EDIT_FIELDS = {"album_artist", "artist"}
 _MEDIA_TAG_EDIT_FIELDS = {
     "artist",
@@ -345,6 +357,58 @@ def _require_album_track_paths(
     return track_paths, None
 
 
+def _normalized_track_path_key(value: object) -> str:
+    text = str(value or "").strip()
+    return str(Path(text).resolve(strict=False)).casefold() if text else ""
+
+
+def _authoritative_tag_editor_track_paths(
+    request: Request,
+    album: Mapping[str, object],
+    source_path: str,
+) -> set[str]:
+    album_key = str(album.get("key") or album.get("album_key") or "").strip()
+    if _is_selected_postgres_library_browse_request(request):
+        if not album_key:
+            raise ValueError("The selected album has no authoritative identity.")
+        authoritative_album = PostgresLibraryBrowseRepository(
+            _app_config(request)
+        ).build_album_detail_payload(album_key)
+    else:
+        source_key = _normalized_track_path_key(source_path)
+        authoritative_albums = [
+            dict(candidate)
+            if isinstance(candidate, Mapping)
+            else album_to_dict(candidate, config=_app_config(request))
+            for candidate in list(_library_state(request).get("albums", []) or [])
+        ]
+        candidates = []
+        for candidate in authoritative_albums:
+            candidate_key = str(
+                candidate.get("key") or candidate.get("album_key") or ""
+            ).strip()
+            candidate_paths = {
+                _normalized_track_path_key(path)
+                for path in _album_track_paths(candidate)
+            }
+            if (album_key and candidate_key == album_key) or (
+                not album_key and source_key in candidate_paths
+            ):
+                candidates.append(candidate)
+        authoritative_album = candidates[0] if len(candidates) == 1 else None
+    if not isinstance(authoritative_album, Mapping):
+        raise ValueError("The selected album is not in the authoritative inventory.")
+
+    authoritative_paths = _album_track_paths(authoritative_album)
+    source_key = _normalized_track_path_key(source_path)
+    authoritative_keys = {
+        _normalized_track_path_key(path) for path in authoritative_paths
+    }
+    if not source_key or source_key not in authoritative_keys:
+        raise ValueError("The selected source file is not in the authoritative album.")
+    return authoritative_paths
+
+
 def _json_response(value: ResponseValue) -> JSONResponse:
     if isinstance(value, tuple):
         payload, status_code = value
@@ -411,6 +475,7 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
     find_albums_by_track_paths = kwargs.pop("find_albums_by_track_paths", None)
     find_problematic_album_by_track_paths = kwargs.pop("find_problematic_album_by_track_paths", None)
     structural_edit_fields = kwargs.pop("structural_edit_fields", set(_STRUCTURAL_EDIT_FIELDS))
+    kwargs["relation_projection_edit_fields"] = set(_RELATION_PROJECTION_EDIT_FIELDS)
     get_state_provider = kwargs.pop("get_state", None)
     if get_state_provider is None:
         raise ValueError("get_state is required")
@@ -817,6 +882,12 @@ def _is_selected_postgres_targeted_structural_edit_request(
     if len(field_sets) == 1 and next(iter(field_sets)) in {
         frozenset({"album"}),
         frozenset({"year"}),
+        frozenset({"artist"}),
+        frozenset({"album_artist"}),
+        frozenset({"artist", "album_artist"}),
+        frozenset({"album", "artist"}),
+        frozenset({"album", "album_artist"}),
+        frozenset({"album", "artist", "album_artist"}),
     }:
         return True
     return bool(field_sets) and all(
@@ -924,6 +995,9 @@ class _EditTagsReservation:
     def __init__(self, intent_lease, structural_reservation):
         self._intent_lease = intent_lease
         self._structural_reservation = structural_reservation
+        self._resource_keys = frozenset(
+            getattr(structural_reservation, "_resource_keys", ()) or ()
+        )
         self._released = False
 
     def release(self):
@@ -1191,6 +1265,13 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
             find_problematic_album_by_track_paths=_empty_problematic_album_by_track_paths,
             structural_edit_fields=set(_SELECTED_POSTGRES_MEDIA_WRITE_REFRESH_FIELDS),
             relation_projection_edit_fields=set(_RELATION_PROJECTION_EDIT_FIELDS),
+            schedule_relation_projection_rebuild=lambda reason: (
+                schedule_relation_projection_rebuild(
+                    config,
+                    reason=reason,
+                    logger=_asgi_logger(request),
+                )
+            ),
             **kwargs,
         )
 
@@ -1228,7 +1309,11 @@ def _is_postgres_edit_tags_exception_only_response_request(
     for raw_edits in updates.values():
         if not isinstance(raw_edits, Mapping):
             return False
-        if len(raw_edits) != 1 or next(iter(raw_edits.keys())) != "exception_type":
+        field_names = {str(field or "") for field in raw_edits}
+        if not field_names or not field_names <= {
+            "exception_type",
+            "custom_collection_name",
+        }:
             return False
 
     config = _app_config(request)
@@ -1369,10 +1454,10 @@ def _with_problem_suggestion_outcomes(result: ResponseValue, proposal_ids: list[
         outcome = "committed"
     elif response.get("proposal_status") == "stale":
         outcome = "stale"
-    elif (response.get("save_task_id") or response.get("save_task_status")) and response.get("save_task_status") != "completed":
-        outcome = "recovery_pending"
     elif response.get("edit_outcome") in {"failed_rolled_back", "recovery_pending"}:
         outcome = response["edit_outcome"]
+    elif (response.get("save_task_id") or response.get("save_task_status")) and response.get("save_task_status") != "completed":
+        outcome = "recovery_pending"
     else:
         outcome = "rejected"
     response["proposal_outcomes"] = [{"id": identifier, "status": outcome}
@@ -1385,6 +1470,7 @@ def _authoritative_edit_tags_response(
     *,
     total_ms: float,
 ) -> ResponseValue:
+    response_started = perf_counter()
     if isinstance(result, tuple) or not result.get("ok"):
         return result
     task_id = str(result.get("save_task_id") or "").strip()
@@ -1413,6 +1499,9 @@ def _authoritative_edit_tags_response(
         task_log_entry = task.get("log_entry")
         if isinstance(task_log_entry, Mapping):
             failure_response["log_entry"] = dict(task_log_entry)
+        for key in ("failure_stage", "edit_outcome"):
+            if key in task:
+                failure_response[key] = task[key]
         return failure_response, 500
 
     for key in (
@@ -1420,6 +1509,16 @@ def _authoritative_edit_tags_response(
         "updated_problematic_album",
         "requires_view_refresh",
         "warnings",
+        "reconciliation_pending",
+        "destination_album_id",
+        "destination_album_key",
+        "destination_artist",
+        "inventory_mutation_revision",
+        "orphaned_source_artists",
+        "operation_id",
+        "phase_timings_ms",
+        "pool_lease_timings_ms",
+        "pool_lease_counts",
     ):
         if key in task:
             response[key] = task[key]
@@ -1430,6 +1529,15 @@ def _authoritative_edit_tags_response(
     response_timings["total_ms"] = round(total_ms, 3)
     response["timings"] = response_timings
     response["save_task_status"] = "completed"
+    timing_recorder = save_task_timing_recorder(task_id)
+    if timing_recorder is not None:
+        timing_recorder.record(
+            "response_construction",
+            (perf_counter() - response_started) * 1000.0,
+        )
+        timing_snapshot = timing_recorder.snapshot()
+        update_save_task(task_id, **timing_snapshot)
+        response.update(timing_snapshot)
     return response
 
 
@@ -1717,6 +1825,44 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
     return _json_response(result)
 
 
+@router.post("/utilities/tag-editor/folder-files")
+async def tag_editor_folder_files(request: Request) -> JSONResponse:
+    actions = allowed_actions_for_request(
+        request,
+        ("library.files.edit_tags", "library.paths.read"),
+    ).as_payload()
+    if not all(actions.get(action) for action in ("library.files.edit_tags", "library.paths.read")):
+        return JSONResponse({"ok": False, "error": "Not authorized"}, status_code=403)
+
+    payload = await _json_payload(request)
+    album, album_error = _require_album_payload(payload)
+    if album_error:
+        return _json_response(album_error)
+    track_paths, track_error = _require_album_track_paths(album)
+    if track_error:
+        return _json_response(track_error)
+    source_path = str(payload.get("source_path") or "").strip() if payload else ""
+    if not source_path or source_path not in track_paths:
+        return JSONResponse({"ok": False, "error": "Invalid source file"}, status_code=400)
+
+    try:
+        authoritative_track_paths = await run_in_threadpool(
+            _authoritative_tag_editor_track_paths,
+            request,
+            album,
+            source_path,
+        )
+        result = await run_in_threadpool(
+            load_tag_editor_folder_files,
+            _app_config(request),
+            source_path,
+            indexed_paths=authoritative_track_paths,
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        return JSONResponse({"ok": False, "error": "Unable to load source folder"}, status_code=400)
+    return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/utilities/edit-tags")
 async def utilities_edit_tags(request: Request) -> JSONResponse:
     history_scope = await history_scope_for_request(request, required=False)
@@ -1871,6 +2017,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             return verified
 
         handler_options["validate_proposals"] = validate_proposals
+    reservation_started = perf_counter()
     structural_tag_edit_reservation = (
         await acquire_structural_tag_edit_reservation_async(
             reservation_resource_keys
@@ -1878,6 +2025,9 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         if reservation_resource_keys
         else None
     )
+    handler_options["reservation_wait_ms"] = (
+        perf_counter() - reservation_started
+    ) * 1000.0
     result = await _run_edit_tags_handler_with_reservation(
         handler_options,
         _EditTagsReservation(intent_lease, structural_tag_edit_reservation),

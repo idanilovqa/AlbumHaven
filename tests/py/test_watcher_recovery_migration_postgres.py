@@ -12,11 +12,11 @@ from tests.e2e.support import isolatedPostgres
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPO_ROOT / "migrations" / "postgres"
-WATCHER_MIGRATION = MIGRATIONS_DIR / "0107_create_durable_watcher_recovery.sql"
+WATCHER_MIGRATION = MIGRATIONS_DIR / "0119_create_durable_watcher_recovery.sql"
 
 
 def _migration_sql() -> str:
-    assert WATCHER_MIGRATION.is_file(), "missing watcher recovery migration 0107"
+    assert WATCHER_MIGRATION.is_file(), "missing watcher recovery migration 0119"
     return WATCHER_MIGRATION.read_text(encoding="utf-8")
 
 
@@ -136,7 +136,7 @@ def _seed_legacy_health(
     return library_id, root_id
 
 
-def test_0107_can_be_reapplied_after_imported_incident_is_resolved(
+def test_0119_can_be_reapplied_after_imported_incident_is_resolved(
     watcher_migration_database,
 ):
     setup_url = watcher_migration_database
@@ -224,7 +224,7 @@ def test_0107_can_be_reapplied_after_imported_incident_is_resolved(
     assert after["unresolved_count"] == 0
 
 
-def test_0107_imports_malformed_legacy_timestamp_with_database_time_fallback(
+def test_0119_imports_malformed_legacy_timestamp_with_database_time_fallback(
     watcher_migration_database,
 ):
     setup_url = watcher_migration_database
@@ -256,7 +256,7 @@ def test_0107_imports_malformed_legacy_timestamp_with_database_time_fallback(
     assert incident["last_seen_at"] == incident["first_seen_at"]
 
 
-def test_0107_publication_contract_has_one_reserved_overload_per_job_kind(
+def test_0119_publication_contract_has_one_reserved_overload_per_job_kind(
     watcher_migration_database,
 ):
     setup_url = watcher_migration_database

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { expect } from '@playwright/test';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 
 export class UtilityProblematicFilesActions {
@@ -34,6 +35,44 @@ export class UtilityProblematicFilesActions {
       activeListItemSelector: this.utilityProblematicFilesTab.activeListItemSelector,
       detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
       listEmptyStateSelector: this.utilityProblematicFilesTab.listEmptyStateSelector,
+    });
+  }
+
+  async waitForFirstVisible(options = {}) {
+    await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
+      const modal = document.querySelector(expected.modalSelector);
+      const visible = (element) => {
+        if (!element || !modal?.contains(element)) return false;
+        for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+          const style = getComputedStyle(ancestor);
+          if (ancestor.hidden || style.display === 'none' || style.visibility === 'hidden'
+            || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+        }
+        const rect = element.getBoundingClientRect();
+        const left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
+        const top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
+        if (right <= left || bottom <= top) return false;
+        const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+        return Boolean(hit && element.contains(hit));
+      };
+      const activeTab = modal?.querySelector(expected.activeTabSelector);
+      if (!visible(activeTab) || activeTab.getAttribute('data-utility-tab') !== 'problematic-files') return false;
+      const hasVisibleItem = Array.from(modal.querySelectorAll(expected.listItemSelector)).some(visible);
+      const selected = modal.querySelector(expected.activeListItemSelector);
+      const title = modal.querySelector(expected.detailTitleSelector);
+      if (hasVisibleItem && visible(selected) && visible(title) && String(title.textContent || '').trim()) return true;
+      if (expected.requirePopulated || (typeof state !== 'undefined' && state.utility?.loading)) return false;
+      return visible(modal.querySelector(expected.listEmptyStateSelector))
+        && visible(modal.querySelector(expected.detailEmptyStateSelector));
+    }, { timeout: options.timeout || 60000 }, {
+      requirePopulated: Boolean(options.requirePopulated),
+      modalSelector: this.utilityProblematicFilesTab.modalSelector,
+      activeTabSelector: this.utilityProblematicFilesTab.activeTabSelector,
+      listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
+      activeListItemSelector: this.utilityProblematicFilesTab.activeListItemSelector,
+      detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
+      listEmptyStateSelector: this.utilityProblematicFilesTab.listEmptyStateSelector,
+      detailEmptyStateSelector: this.utilityProblematicFilesTab.detailEmptyStateSelector,
     });
   }
 
@@ -162,11 +201,23 @@ export class UtilityProblematicFilesActions {
   }
 
   async revealListItemByIdentity({ key, title, meta }, options = {}) {
-    for await (const items of this.walkListWindows(options)) {
-      const matches = items.filter(item => key ? item.key === key : item.title === title && item.meta === meta);
-      assert.ok(matches.length <= 1, `Ambiguous Problematic Files identity: ${key || `${title} / ${meta}`}`);
-      if (matches.length) return matches[0];
-    }
+    const reveal = async () => {
+      for await (const items of this.walkListWindows(options)) {
+        const matches = items.filter(item => key ? item.key === key : item.title === title && item.meta === meta);
+        assert.ok(matches.length <= 1, `Ambiguous Problematic Files identity: ${key || `${title} / ${meta}`}`);
+        if (matches.length) return matches[0];
+      }
+      return null;
+    };
+    const initialMatch = await reveal();
+    if (initialMatch) return initialMatch;
+    await this.utilityProblematicFilesTab.waitForPageCondition(
+      () => state.utility?.problematicFilesComplete === true,
+      { timeout: options.timeout || 30000 },
+      { completeInventory: true },
+    );
+    const completeMatch = await reveal();
+    if (completeMatch) return completeMatch;
     throw new Error(`Exact Problematic Files identity was not found: ${key || `${title} / ${meta}`}`);
   }
 
@@ -644,10 +695,11 @@ export class UtilityProblematicFilesActions {
     const pills = filenames.map((filename) => this.utilityProblematicFilesTab.fileProblemPill(filename, reason));
     const boxes = [];
     for (const pill of pills) {
-      await pill.waitFor({ state: 'visible', timeout: 60000 });
-      boxes.push(await pill.boundingBox());
+      boxes.push(await this.readStablePointerBox(
+        pill,
+        'Expected every Problematic reason pill to have pointer geometry.',
+      ));
     }
-    if (boxes.some((box) => !box)) throw new Error('Expected every Problematic reason pill to have pointer geometry.');
     const center = (box) => ({ x: box.x + (box.width / 2), y: box.y + (box.height / 2) });
     const start = center(boxes[0]);
     await this.utilityProblematicFilesTab.page.mouse.move(start.x, start.y);
@@ -666,10 +718,11 @@ export class UtilityProblematicFilesActions {
     ];
     const boxes = [];
     for (const pill of pills) {
-      await pill.waitFor({ state: 'visible', timeout: 60000 });
-      boxes.push(await pill.boundingBox());
+      boxes.push(await this.readStablePointerBox(
+        pill,
+        'Expected both boundary pills to have pointer geometry.',
+      ));
     }
-    if (boxes.some((box) => !box)) throw new Error('Expected both boundary pills to have pointer geometry.');
     const center = (box) => ({ x: box.x + (box.width / 2), y: box.y + (box.height / 2) });
     const startPoint = center(boxes[0]);
     const endPoint = center(boxes[1]);
@@ -677,6 +730,20 @@ export class UtilityProblematicFilesActions {
     await this.utilityProblematicFilesTab.page.mouse.down();
     await this.utilityProblematicFilesTab.page.mouse.move(endPoint.x, endPoint.y, { steps: 8 });
     await this.utilityProblematicFilesTab.page.mouse.up();
+  }
+
+  async readStablePointerBox(locator, message) {
+    let box = null;
+    await expect.poll(async () => {
+      try {
+        await locator.scrollIntoViewIfNeeded({ timeout: 5000 });
+        box = await locator.boundingBox();
+      } catch {
+        box = null;
+      }
+      return box;
+    }, { timeout: 60000, message }).not.toBeNull();
+    return box;
   }
 
   async readSelectedProblemInstances() {

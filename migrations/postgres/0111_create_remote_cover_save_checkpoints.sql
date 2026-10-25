@@ -461,7 +461,15 @@ declare
   selected_candidate jsonb;
   updated_album_count integer;
   updated_file_count integer;
+  authority_revision bigint;
+  current_cover_path text;
+  current_album_metadata jsonb;
+  desired_cover_path text;
+  desired_album_metadata jsonb;
+  cover_authority_changed boolean;
 begin
+  perform pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));
+
   select job.* into selected_job
     from ops.jobs as job
    where job.id = requested_job_id
@@ -504,11 +512,22 @@ begin
     return null;
   end if;
 
-  perform album.id
+  insert into library.cover_mutation_state (library_id)
+  values (selected_checkpoint.library_id)
+  on conflict (library_id) do nothing;
+  select state.cover_mutation_revision
+    into authority_revision
+    from library.cover_mutation_state as state
+   where state.library_id = selected_checkpoint.library_id
+   for update;
+
+  select album.cover_path, coalesce(album.metadata, '{}'::jsonb)
+    into current_cover_path, current_album_metadata
     from library.local_albums as album
    where album.id = selected_checkpoint.local_album_id
      and album.library_id = selected_checkpoint.library_id
    for update;
+  if not found then return null; end if;
   perform file.id
     from library.local_track_files as file
     join library.local_tracks as track on track.id = file.track_id
@@ -518,35 +537,41 @@ begin
    for update of file;
   if selected_job.lease_expires_at <= clock_timestamp() then return null; end if;
 
+  desired_cover_path := case when linked_remote then null else selected_cover_path end;
+  desired_album_metadata := (
+    current_album_metadata
+    - array[
+      'remote_cover_url', 'remote_cover_thumbnail_url',
+      'remote_cover_source', 'remote_cover_source_label',
+      'remote_cover_album_url', 'remote_cover_width',
+      'remote_cover_height'
+    ]::text[]
+  ) || case when linked_remote then jsonb_build_object(
+    'cover_path', null,
+    'cover_revision', null,
+    'cover_selection_origin', 'user',
+    'remote_cover_url', selected_candidate ->> 'url',
+    'remote_cover_thumbnail_url', coalesce(
+      nullif(selected_candidate ->> 'thumbnail_url', ''),
+      selected_candidate ->> 'url'
+    ),
+    'remote_cover_source', selected_candidate ->> 'source',
+    'remote_cover_source_label', selected_candidate ->> 'source_label',
+    'remote_cover_album_url', selected_candidate ->> 'album_url',
+    'remote_cover_width', nullif(selected_candidate ->> 'width', '')::integer,
+    'remote_cover_height', nullif(selected_candidate ->> 'height', '')::integer
+  ) else jsonb_build_object(
+    'cover_path', selected_cover_path,
+    'cover_revision', selected_cover_revision,
+    'cover_selection_origin', 'user'
+  ) end;
+  cover_authority_changed :=
+    current_cover_path is distinct from desired_cover_path
+    or current_album_metadata is distinct from desired_album_metadata;
+
   update library.local_albums as album
-     set cover_path = case when linked_remote then null else selected_cover_path end,
-         metadata = (
-           coalesce(album.metadata, '{}'::jsonb)
-           - array[
-             'remote_cover_url', 'remote_cover_thumbnail_url',
-             'remote_cover_source', 'remote_cover_source_label',
-             'remote_cover_album_url', 'remote_cover_width',
-             'remote_cover_height'
-           ]::text[]
-         ) || case when linked_remote then jsonb_build_object(
-           'cover_path', null,
-           'cover_revision', null,
-           'cover_selection_origin', 'user',
-           'remote_cover_url', selected_candidate ->> 'url',
-           'remote_cover_thumbnail_url', coalesce(
-             nullif(selected_candidate ->> 'thumbnail_url', ''),
-             selected_candidate ->> 'url'
-           ),
-           'remote_cover_source', selected_candidate ->> 'source',
-           'remote_cover_source_label', selected_candidate ->> 'source_label',
-           'remote_cover_album_url', selected_candidate ->> 'album_url',
-           'remote_cover_width', nullif(selected_candidate ->> 'width', '')::integer,
-           'remote_cover_height', nullif(selected_candidate ->> 'height', '')::integer
-         ) else jsonb_build_object(
-           'cover_path', selected_cover_path,
-           'cover_revision', selected_cover_revision,
-           'cover_selection_origin', 'user'
-         ) end
+     set cover_path = desired_cover_path,
+         metadata = desired_album_metadata
    where album.id = selected_checkpoint.local_album_id
      and album.library_id = selected_checkpoint.library_id;
   get diagnostics updated_album_count = row_count;
@@ -595,14 +620,19 @@ begin
     raise exception 'remote cover selection scope changed';
   end if;
 
+  if cover_authority_changed then
+    update library.cover_mutation_state as state
+       set cover_mutation_revision = state.cover_mutation_revision + 1,
+           updated_at = observed_at
+     where state.library_id = selected_checkpoint.library_id
+    returning state.cover_mutation_revision into authority_revision;
+  end if;
+
   update library.libraries as library_record
      set metadata = coalesce(library_record.metadata, '{}'::jsonb)
        || jsonb_build_object(
          'cover_mutation_revision',
-         coalesce(
-           nullif(library_record.metadata ->> 'cover_mutation_revision', '')::bigint,
-           0
-         ) + 1
+         authority_revision
        ),
        updated_at = observed_at
    where library_record.id = selected_checkpoint.library_id;

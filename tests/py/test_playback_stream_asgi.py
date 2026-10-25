@@ -90,10 +90,20 @@ class DecoderFactoryDouble:
 
 
 @pytest.fixture
-def playback_app(tmp_path, monkeypatch):
+def playback_app(tmp_path, monkeypatch, request):
     from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+    from music_app.services import library_roots
 
+    resolve_roots = library_roots.get_library_roots
     stub_targeted_reconciliation_repository(monkeypatch)
+    root_settings = {}
+    if getattr(request, "param", None):
+        # The unrelated watcher stub defaults to Main-only roots; this case
+        # exercises the real root resolver against the configured fake store.
+        monkeypatch.setattr(library_roots, "get_library_roots", resolve_roots)
+        added_root = tmp_path / request.param
+        added_root.mkdir()
+        root_settings[request.param] = [{"id": "added-source", "path": str(added_root)}]
     class FakePostgresLibraryRootSettingsStore:
         def __init__(self, config):
             self._config = config
@@ -102,7 +112,7 @@ def playback_app(tmp_path, monkeypatch):
             from music_app.services.library_roots import normalize_library_root_settings
 
             return normalize_library_root_settings(
-                {},
+                root_settings,
                 fallback_main_root=Path(self._config["MUSIC_DIR"]).resolve(),
             )
 
@@ -856,6 +866,34 @@ def test_waveform_route_only_literal_one_selects_cache_only_mode(
     assert status == 200
     assert decode_json(body)["sampleCount"] == 280
     assert registry.run_calls == [(media_path, 280)]
+
+
+@pytest.mark.parametrize("playback_app,category", [
+    (category, category) for category in ("hoarding_library_roots", "new_arrivals_roots")
+], indirect=["playback_app"])
+def test_waveform_route_accepts_media_from_additional_library_categories(
+    playback_app, tmp_path, category,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    added_root = tmp_path / category
+    added_track = added_root / "Artist" / "Album" / "track.flac"
+    added_track.parent.mkdir(parents=True)
+    added_track.write_bytes(b"generated-media")
+    calls = []
+
+    class RegistryDouble:
+        async def run(self, path, *, bins):
+            calls.append(path)
+            return WaveformPeaks(left=(0.25,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    status, _headers, body = run_asgi_request(
+        playback_app, "GET", "/playback/waveform", query={"path": str(added_track)},
+    )
+    assert status == 200
+    assert decode_json(body)["sampleCount"] == 280
+    assert calls == [added_track.resolve()]
 
 
 def test_waveform_route_rejects_unconfigured_or_missing_media_without_starting_job(
@@ -2446,7 +2484,7 @@ def test_pcm_socket_serializes_current_and_continuity_websocket_sends():
     asyncio.run(scenario())
 
 
-def test_pcm_credit_drain_yields_to_unrelated_app_work(monkeypatch):
+def test_pcm_credit_drain_yields_without_timer_delay_amplification(monkeypatch):
     class ImmediatelyBufferedDecoderDouble:
         def __init__(self, frame_count: int) -> None:
             self.outstanding_credit_frames = frame_count
@@ -2505,7 +2543,7 @@ def test_pcm_credit_drain_yields_to_unrelated_app_work(monkeypatch):
         assert observed_send_counts[0] < 64
         assert websocket.send_count == 64
         assert len(cooperative_pauses) == 64
-        assert all(delay > 0 for delay in cooperative_pauses)
+        assert cooperative_pauses == [0] * 64
 
     asyncio.run(scenario())
 

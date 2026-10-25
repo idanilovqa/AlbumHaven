@@ -20,7 +20,7 @@ MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "migrations"
     / "postgres"
-    / "0108_create_watcher_runtime_sessions.sql"
+    / "0120_create_watcher_runtime_sessions.sql"
 )
 _UNSET = object()
 
@@ -71,13 +71,13 @@ def watcher_session_database():
     try:
         _drop_schemas(setup_url)
         isolatedPostgres.prepare_isolated_database(setup_url, app_url)
-        assert MIGRATION.is_file(), "migration 0108 is required for watcher sessions"
+        assert MIGRATION.is_file(), "migration 0120 is required for watcher sessions"
         with isolatedPostgres._connect(setup_url) as connection:
             applied = connection.execute(
                 "select checksum from ops.schema_migrations where migration_name = %s",
                 (MIGRATION.name,),
             ).fetchone()
-            assert applied is not None, "migration 0108 was not applied"
+            assert applied is not None, "migration 0120 was not applied"
             owner_id = int(
                 connection.execute(
                     "select account_id from app.bootstrap_owners "

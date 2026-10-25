@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,6 +20,15 @@ except ImportError:  # pragma: no cover
     dict_row = None
 
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
+
+
+_CANDIDATE_LOOKUP_NOTIFICATION_SOURCES = (
+    "cover_lookup_notifications",
+    "runtime_cover_lookup_notifications_adapter",
+    "durable_cover_lookup",
+)
+_CANDIDATE_LOOKUP_ACTIVE_STATUSES = ("pending", "running")
+_PROVIDER_OUTCOME_SOURCE_FAMILY = "automatic_cover_provider_outcomes_v1"
 
 
 @dataclass(frozen=True)
@@ -119,9 +130,13 @@ def _candidate_lookup_task_from_row(row: object) -> dict[str, object] | None:
     mapped = _mapping(row)
     task_key = str(mapped.get("task_key") or "").strip()
     payload = mapped.get("provider_payload")
+    metadata = mapped.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    source_payload = metadata.get("source_payload")
     if not task_key or not isinstance(payload, Mapping):
         return None
-    task = dict(payload)
+    task = dict(source_payload) if isinstance(source_payload, Mapping) else {}
+    task.update(payload)
     for private_key in (
         "album_payload",
         "track_paths",
@@ -135,8 +150,6 @@ def _candidate_lookup_task_from_row(row: object) -> dict[str, object] | None:
         task.pop(private_key, None)
     task["id"] = task_key
     task["status"] = str(mapped.get("status") or task.get("status") or "").strip()
-    metadata = mapped.get("metadata")
-    metadata = metadata if isinstance(metadata, Mapping) else {}
     task["notification_action_taken"] = bool(
         metadata.get("notification_action_taken")
     )
@@ -145,6 +158,33 @@ def _candidate_lookup_task_from_row(row: object) -> dict[str, object] | None:
         task["notification_completed_at"] = completed_at
     task["notification_expires_at"] = ""
     return task
+
+
+def _candidate_lookup_cursor(timestamp: object, task_key: object) -> str:
+    payload = json.dumps(
+        {"timestamp": _timestamp_text(timestamp), "task_key": str(task_key or "")},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_candidate_lookup_cursor(cursor: str) -> tuple[datetime, str]:
+    try:
+        encoded = cursor.encode("ascii")
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded + b"=" * (-len(encoded) % 4)).decode(
+                "utf-8"
+            )
+        )
+        timestamp = datetime.fromisoformat(
+            str(payload.get("timestamp") or "").replace("Z", "+00:00")
+        )
+        task_key = _bounded("task_key", payload.get("task_key"), maximum=128)
+        if timestamp.tzinfo is None:
+            raise ValueError
+        return timestamp, task_key
+    except (binascii.Error, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        raise ValueError("invalid cover lookup notification cursor") from None
 
 
 class PostgresCoverJobRepository:
@@ -771,8 +811,12 @@ class PostgresCoverJobRepository:
         cover_revision: str,
         cover_selection_origin: str,
         reject_if_user_controlled: bool,
+        reject_if_explicit_selection: bool = False,
+        local_cover_width: int | None = None,
+        local_cover_height: int | None = None,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
+        expected_cover_state: tuple[str | None, str | None] | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
         **values: object,
     ) -> dict[str, object]:
@@ -787,10 +831,40 @@ class PostgresCoverJobRepository:
         ).casefold()
         if origin not in {"automatic", "user"}:
             raise ValueError("cover_selection_origin is invalid")
-        expected_origin = str(expected_cover_selection_origin or "").strip() or None
+        expected_origin = str(expected_cover_selection_origin or "").strip().casefold() or None
         expected_revision = str(expected_cover_revision or "").strip() or None
-        if (expected_origin is None) != (expected_revision is None):
+        if expected_origin is not None and expected_origin not in {"user", "automatic"}:
+            raise ValueError("expected_cover_selection_origin is invalid")
+        if expected_cover_state is not None:
+            if expected_cover_selection_origin is not None or expected_cover_revision is not None:
+                raise ValueError(
+                    "explicit expected cover state cannot be combined with legacy fields"
+                )
+            if (
+                not isinstance(expected_cover_state, tuple)
+                or len(expected_cover_state) != 2
+                or any(
+                    value is not None and not isinstance(value, str)
+                    for value in expected_cover_state
+                )
+            ):
+                raise ValueError("expected cover state must be a pair of nullable strings")
+            expected_origin = (expected_cover_state[0] or "").strip().casefold()
+            expected_revision = (expected_cover_state[1] or "").strip()
+            if expected_origin not in {"", "user", "automatic"}:
+                raise ValueError("expected cover selection origin is invalid")
+        elif (expected_origin is None) != (expected_revision is None):
             raise ValueError("expected cover state must be complete")
+        if reject_if_explicit_selection and expected_cover_state is None and expected_origin is None:
+            raise ValueError("rejecting explicit selections requires an expected cover state")
+        has_local_dimensions = local_cover_width is not None or local_cover_height is not None
+        if has_local_dimensions and (
+            type(local_cover_width) is not int
+            or type(local_cover_height) is not int
+            or local_cover_width <= 0
+            or local_cover_height <= 0
+        ):
+            raise ValueError("local cover dimensions require two positive integers")
         parameters.update(
             {
                 "track_paths": normalized_paths,
@@ -800,6 +874,9 @@ class PostgresCoverJobRepository:
                 ),
                 "cover_selection_origin": origin,
                 "reject_if_user_controlled": bool(reject_if_user_controlled),
+                "reject_if_explicit_selection": bool(reject_if_explicit_selection),
+                "local_cover_width": local_cover_width,
+                "local_cover_height": local_cover_height,
                 "expected_cover_selection_origin": expected_origin,
                 "expected_cover_revision": expected_revision,
             }
@@ -807,7 +884,7 @@ class PostgresCoverJobRepository:
         with self._connect() as connection:
             row = _mapping(
                 connection.execute(
-                    "select * from ops.persist_claimed_automatic_cover_selection(%(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(track_paths)s, %(selected_cover_path)s, %(cover_revision)s, %(cover_selection_origin)s, %(reject_if_user_controlled)s, %(expected_cover_selection_origin)s, %(expected_cover_revision)s)",
+                    "select * from ops.persist_claimed_automatic_cover_selection(%(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(track_paths)s, %(selected_cover_path)s, %(cover_revision)s, %(cover_selection_origin)s, %(reject_if_user_controlled)s, %(reject_if_explicit_selection)s, %(local_cover_width)s, %(local_cover_height)s, %(expected_cover_selection_origin)s, %(expected_cover_revision)s)",
                     parameters,
                 ).fetchone()
             )
@@ -834,6 +911,55 @@ class PostgresCoverJobRepository:
             if commit_guard is not None:
                 commit_guard(connection.commit)
             return result
+
+    def persist_claimed_cover_provider_outcomes(
+        self,
+        *,
+        task_id: int,
+        album_id: object,
+        album_key: object,
+        outcomes: Mapping[str, Mapping[str, object]],
+        **values: object,
+    ) -> None:
+        parameters = self._refresh_claim_values(task_id=task_id, **values)
+        normalized_album_id = _positive("album_id", album_id)
+        normalized_album_key = str(album_key or "").strip()
+        with self._connect() as connection:
+            for provider, outcome in outcomes.items():
+                provider_name = _bounded(
+                    "provider", provider or "unknown", maximum=64
+                ).casefold()
+                safe = {
+                    "provider": provider_name,
+                    "category": str(outcome.get("category") or "unknown"),
+                    "http_status": outcome.get("http_status"),
+                    "retry_at": outcome.get("retry_at"),
+                }
+                category = _bounded("category", safe["category"], maximum=64)
+                outcome_values = {
+                    **parameters,
+                    "outcome_task_key": f"{normalized_album_id}:{provider_name}",
+                    "outcome_status": (
+                        "completed"
+                        if category in {"no_candidate", "recovered"}
+                        else "failed"
+                    ),
+                    "outcome_album_key": normalized_album_key,
+                    "provider_payload": json.dumps(safe, ensure_ascii=True),
+                    "error_message": f"{category} ({provider_name})",
+                    "metadata": json.dumps(
+                        {"source_family": _PROVIDER_OUTCOME_SOURCE_FAMILY, **safe},
+                        ensure_ascii=True,
+                    ),
+                }
+                row = connection.execute(
+                    "select ops.persist_claimed_cover_provider_outcome(%(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(outcome_task_key)s, %(outcome_status)s, %(outcome_album_key)s, %(provider_payload)s::jsonb, %(error_message)s, %(metadata)s::jsonb) as persisted",
+                    outcome_values,
+                ).fetchone()
+                if not bool(_mapping(row).get("persisted")):
+                    raise RuntimeError(
+                        "cover provider outcome lost its resource or lease fence"
+                    )
 
     def load_cover_refresh_status(self, *, library_id: int) -> dict[str, object] | None:
         with self._connect() as connection:
@@ -1050,12 +1176,13 @@ class PostgresCoverJobRepository:
         values = self._task_management_values(
             actor_account_id=actor_account_id, library_id=library_id
         )
+        values["source_families"] = list(_CANDIDATE_LOOKUP_NOTIFICATION_SOURCES)
         sql = """
             select task_key, status, requested_at, completed_at,
                    provider_payload, metadata
               from ops.cover_lookup_tasks as task
              where task.library_id = %(library_id)s
-               and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and task.metadata ->> 'source_family' = any(%(source_families)s::text[])
                and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
                and exists (
                      select 1
@@ -1082,6 +1209,131 @@ class PostgresCoverJobRepository:
             if task is not None
         ]
 
+    def count_candidate_lookup_task_notifications(
+        self, *, actor_account_id: int, library_id: int
+    ) -> dict[str, int]:
+        values = self._task_management_values(
+            actor_account_id=actor_account_id, library_id=library_id
+        )
+        values.update(
+            {
+                "source_families": list(_CANDIDATE_LOOKUP_NOTIFICATION_SOURCES),
+                "active_statuses": list(_CANDIDATE_LOOKUP_ACTIVE_STATUSES),
+            }
+        )
+        sql = """
+            select count(*)::int as total_count,
+                   count(*) filter (
+                     where task.status = any(%(active_statuses)s::varchar[])
+                   )::int as active_count,
+                   count(*) filter (
+                     where task.status = any(%(terminal_statuses)s::varchar[])
+                   )::int as finished_count
+              from ops.cover_lookup_tasks as task
+             where task.library_id = %(library_id)s
+               and task.metadata ->> 'source_family' = any(%(source_families)s::text[])
+               and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
+               and exists (
+                     select 1
+                       from library.libraries as scoped_library
+                      where scoped_library.id = task.library_id
+                        and (
+                          scoped_library.owner_account_id = %(actor_account_id)s
+                          or exists (
+                            select 1
+                              from library.library_memberships as membership
+                             where membership.library_id = task.library_id
+                               and membership.account_id = %(actor_account_id)s
+                          )
+                        )
+                   )
+        """
+        with self._connect() as connection:
+            row = _mapping(connection.execute(sql, values).fetchone())
+        return {
+            "total_count": int(row.get("total_count") or 0),
+            "active_count": int(row.get("active_count") or 0),
+            "finished_count": int(row.get("finished_count") or 0),
+        }
+
+    def load_candidate_lookup_task_summary_page(
+        self,
+        *,
+        actor_account_id: int,
+        library_id: int,
+        limit: int,
+        cursor: str | None,
+        active_only: bool,
+    ) -> dict[str, object]:
+        page_size = max(1, min(int(limit), 50))
+        cursor_values = _decode_candidate_lookup_cursor(cursor) if cursor else None
+        values = self._task_management_values(
+            actor_account_id=actor_account_id, library_id=library_id
+        )
+        values.update(
+            {
+                "source_families": list(_CANDIDATE_LOOKUP_NOTIFICATION_SOURCES),
+                "active_statuses": list(_CANDIDATE_LOOKUP_ACTIVE_STATUSES),
+                "active_only": bool(active_only),
+                "has_cursor": cursor_values is not None,
+                "cursor_timestamp": cursor_values[0] if cursor_values else None,
+                "cursor_task_key": cursor_values[1] if cursor_values else None,
+                "page_limit": page_size + 1,
+            }
+        )
+        sql = """
+            select task.task_key, task.status, task.requested_at, task.completed_at,
+                   task.provider_payload, task.metadata,
+                   coalesce(task.completed_at, task.requested_at) as effective_timestamp
+              from ops.cover_lookup_tasks as task
+             where task.library_id = %(library_id)s
+               and task.metadata ->> 'source_family' = any(%(source_families)s::text[])
+               and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
+               and (not %(active_only)s or task.status = any(%(active_statuses)s::varchar[]))
+               and (
+                 not %(has_cursor)s
+                 or (coalesce(task.completed_at, task.requested_at), task.task_key)
+                    < (%(cursor_timestamp)s, %(cursor_task_key)s)
+               )
+               and exists (
+                     select 1
+                       from library.libraries as scoped_library
+                      where scoped_library.id = task.library_id
+                        and (
+                          scoped_library.owner_account_id = %(actor_account_id)s
+                          or exists (
+                            select 1
+                              from library.library_memberships as membership
+                             where membership.library_id = task.library_id
+                               and membership.account_id = %(actor_account_id)s
+                          )
+                        )
+                   )
+             order by coalesce(task.completed_at, task.requested_at) desc,
+                      task.task_key desc
+             limit %(page_limit)s
+        """
+        with self._connect() as connection:
+            rows = connection.execute(sql, values).fetchall()
+        page_rows = rows[:page_size]
+        next_cursor = None
+        if len(rows) > page_size and page_rows:
+            last = _mapping(page_rows[-1])
+            next_cursor = _candidate_lookup_cursor(
+                last.get("effective_timestamp"), last.get("task_key")
+            )
+        return {
+            "items": [
+                task
+                for task in (_candidate_lookup_task_from_row(row) for row in page_rows)
+                if task is not None
+            ],
+            "next_cursor": next_cursor,
+            "counts": self.count_candidate_lookup_task_notifications(
+                actor_account_id=actor_account_id, library_id=library_id
+            ),
+        }
+
     def clear_completed_candidate_lookup_tasks(
         self,
         *,
@@ -1092,6 +1344,7 @@ class PostgresCoverJobRepository:
         values = self._task_management_values(
             actor_account_id=actor_account_id, library_id=library_id
         )
+        values["source_families"] = list(_CANDIDATE_LOOKUP_NOTIFICATION_SOURCES)
         normalized_keys = [
             _bounded("task_key", task_key, maximum=128)
             for task_key in (task_keys or ())
@@ -1114,7 +1367,7 @@ class PostgresCoverJobRepository:
                    ),
                    row_revision = task.row_revision + 1
              where task.library_id = %(library_id)s
-               and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and task.metadata ->> 'source_family' = any(%(source_families)s::text[])
                and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
                and task.status = any(%(terminal_statuses)s::varchar[])
                and (%(clear_all)s or task.task_key = any(%(task_keys)s::text[]))
@@ -1152,6 +1405,7 @@ class PostgresCoverJobRepository:
         values = self._task_management_values(
             actor_account_id=actor_account_id, library_id=library_id
         )
+        values["source_families"] = list(_CANDIDATE_LOOKUP_NOTIFICATION_SOURCES)
         values["task_key"] = _bounded("task_key", task_key, maximum=128)
         sql = """
             update ops.cover_lookup_tasks as task
@@ -1164,7 +1418,7 @@ class PostgresCoverJobRepository:
                    row_revision = row_revision + 1
              where task.library_id = %(library_id)s
                and task.task_key = %(task_key)s
-               and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and task.metadata ->> 'source_family' = any(%(source_families)s::text[])
                and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
                and task.status = any(%(terminal_statuses)s::varchar[])
                and exists (

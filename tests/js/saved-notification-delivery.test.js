@@ -23,10 +23,10 @@ function savedEditor(overlap = { withinViewport: true, overlaps: [] }) {
     async _expect(expression, options) {
       assert.equal(options.timeout, 60000);
       events.push(`${name}:${expression}`);
-      if (name === 'message') assert.equal(options.expectedText[0].string, 'Tag changes saved.');
       if (name === 'alert') assert.equal(hidden, expression === 'to.be.hidden');
       return { matches: true, received: { value: true }, log: [] };
     },
+    textContent: async () => (name === 'message' ? 'Tag changes saved.' : ''),
     toString: () => name,
   });
   return {

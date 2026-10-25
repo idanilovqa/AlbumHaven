@@ -221,8 +221,18 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
 #library-scan-warning .on-page-alert--compact { width: 100%; }
 #library-scan-warning .on-page-alert--compact .on-page-alert__content {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  overflow: visible;
+}
+#library-scan-warning .on-page-alert--compact .on-page-alert__message {
+  flex: 1 1 16rem;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  text-overflow: clip;
 }
 #library-scan-warning .on-page-alert--compact .on-page-alert__actions {
   flex: 0 0 auto;

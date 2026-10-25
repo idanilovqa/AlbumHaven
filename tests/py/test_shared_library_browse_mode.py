@@ -36,7 +36,12 @@ def test_shared_browse_cover_serves_existing_without_generating(monkeypatch, tmp
     monkeypatch.setattr(web_asgi, "find_existing_cover_display_variant", lambda *a, **k: preview if cached else None)
     monkeypatch.setattr(web_asgi, "resolve_cover_display_variant", lambda *a, **k: pytest.fail("shared browsing must not write cover previews"))
     monkeypatch.setattr(web_asgi, "_conditional_file_response", lambda request, resolved, **kwargs: resolved)
-    request = SimpleNamespace(headers={})
+    request = SimpleNamespace(
+        headers={},
+        app=SimpleNamespace(
+            state=SimpleNamespace(generated_preview_storage_policy=None),
+        ),
+    )
     assert web_asgi._cover_response(request, "cover.jpg", "320") == (preview if cached else source)
 
 

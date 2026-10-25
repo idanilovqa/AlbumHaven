@@ -14,6 +14,8 @@ _AUTHORITATIVE_COVER_FIELDS = frozenset(
     {
         "cover_path",
         "cover_revision",
+        "cover_selection_origin",
+        "cover_selection_provenance",
         "local_cover_width",
         "local_cover_height",
         "cover_validation_path",
@@ -35,6 +37,8 @@ _INTEGER_TAG_FIELDS = frozenset({"year", "track_number", "disc_number", "album_r
 def _cache_rebase_comparison_value(key: str, value: object) -> object:
     if key == "exception_type" and value is not _MISSING_CACHE_FIELD:
         return normalize_exception_value(value)
+    if key == "custom_collection_name" and value is not _MISSING_CACHE_FIELD:
+        return str(value or "").strip()
     if key in _INTEGER_TAG_FIELDS and value is not _MISSING_CACHE_FIELD:
         text = str(value or "").strip()
         if not text:
@@ -76,9 +80,12 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "edition": entry.get("edition"), "album_rating": entry.get("album_rating"),
         "library_root_id": entry.get("library_root_id"), "library_root_category": entry.get("library_root_category"),
         "exception_type": entry.get("exception_type"),
+        "custom_collection_name": entry.get("custom_collection_name"),
     }
     if "metadata_schema_version" in entry:
         serialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    if "local_album_membership_problem" in entry:
+        serialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
     return serialized
 
 def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
@@ -101,11 +108,14 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "year": entry.get("year"), "edition": entry.get("edition"), "album_rating": entry.get("album_rating"),
         "library_root_id": entry.get("library_root_id"), "library_root_category": entry.get("library_root_category"),
         "exception_type": entry.get("exception_type"),
+        "custom_collection_name": entry.get("custom_collection_name"),
     }
     if "release_date" in entry:
         deserialized["release_date"] = entry.get("release_date")
     if "metadata_schema_version" in entry:
         deserialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    if "local_album_membership_problem" in entry:
+        deserialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
     return deserialized
 
 
@@ -485,6 +495,11 @@ def _rebase_non_cover_cache_entry_changes(
                 if key not in _AUTHORITATIVE_COVER_FIELDS
             }
             continue
+        if isinstance(baseline_entry, dict) and latest_entry is None:
+            # A newer inventory publication removed this path while the queued
+            # delta was waiting. Keep that authoritative removal instead of
+            # resurrecting the stale entry or failing an already-written edit.
+            continue
         if not isinstance(baseline_entry, dict) or not isinstance(latest_entry, dict):
             raise RuntimeError(
                 "Queued scan-cache update cannot rebase a missing inventory entry."
@@ -541,10 +556,15 @@ def persist_cover_selection_for_tracks_for_config(
     remote_cover_width: int | None = None,
     remote_cover_height: int | None = None,
     cover_selection_origin: str | None = None,
+    explicit_selection: bool = False,
+    reject_if_explicit_selection: bool = False,
+    local_cover_width: int | None = None,
+    local_cover_height: int | None = None,
     reject_if_user_controlled: bool = False,
     clear_selection: bool = False,
     expected_cover_selection_origin: str | None = None,
     expected_cover_revision: str | None = None,
+    expected_cover_state: tuple[str | None, str | None] | None = None,
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
     logger=None,
 ) -> dict[str, object]:
@@ -566,11 +586,19 @@ def persist_cover_selection_for_tracks_for_config(
     if cover_selection_origin is not None:
         persistence_options["cover_selection_origin"] = cover_selection_origin
         persistence_options["reject_if_user_controlled"] = reject_if_user_controlled
+    if explicit_selection:
+        persistence_options["explicit_selection"] = True
+    if reject_if_explicit_selection:
+        persistence_options["reject_if_explicit_selection"] = True
+    if local_cover_width is not None or local_cover_height is not None:
+        persistence_options.update(local_cover_width=local_cover_width, local_cover_height=local_cover_height)
     if clear_selection:
         persistence_options["clear_selection"] = True
     if expected_cover_selection_origin is not None or expected_cover_revision is not None:
         persistence_options["expected_cover_selection_origin"] = expected_cover_selection_origin
         persistence_options["expected_cover_revision"] = expected_cover_revision
+    if expected_cover_state is not None:
+        persistence_options["expected_cover_state"] = expected_cover_state
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
     return adapter.persist_cover_selection(
@@ -599,13 +627,21 @@ def persist_structural_tag_edit_for_config(
         persistence_options["before_commit"] = before_commit
     if rebuild_relation_projection:
         persistence_options["rebuild_relation_projection"] = True
-    return adapter.persist_structural_tag_edit(
+    result = adapter.persist_structural_tag_edit(
         changed_paths=set(changed_paths),
         previous_file_entries=previous_file_entries,
         updated_file_entries=updated_file_entries,
         changed_field_names=set(changed_field_names),
         **persistence_options,
     )
+    from music_app.services.library_browse_postgres import (
+        invalidate_postgres_utility_projection_cache,
+    )
+
+    invalidate_postgres_utility_projection_cache(
+        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+    )
+    return result
 
 
 def validate_structural_tag_edit_for_config(

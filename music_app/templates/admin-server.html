@@ -1,0 +1,79 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
+{% from "partials/button.html" import ui_button %}
+{% from "partials/page-gallery-bar.html" import page_gallery_bar %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Server settings — Album Haven</title>
+  <link rel="stylesheet" href="/static/css/admin-members.css">
+  <link rel="stylesheet" href="/static/css/account.css">
+  <link rel="stylesheet" href="/static/css/settings-navigation.css">
+  <link rel="stylesheet" href="/static/css/app-chrome.css">
+  {% include "partials/admin-ui-assets.html" %}
+  {% include "partials/navigation-tree-assets.html" %}
+  <script src="/static/js/settings-navigation.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
+  {% include "partials/appearance-bootstrap.html" %}
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
+  <link rel="stylesheet" href="/static/css/gallery-main.css?v={{ runtime_asset_version | default(app_version) }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version | default(app_version) }}">
+</head>
+<body>
+  {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
+  <main class="settings-host settings-shell" data-settings-host>
+    {% from "partials/app-bar.html" import app_bar with context %}
+    {{ app_bar() }}
+    {% set settings_section = 'server' %}
+    {% include "partials/admin-settings-nav.html" %}
+    <div class="settings-outlet" data-settings-outlet>
+      <section class="settings-main server-settings-main">
+        {{ page_gallery_bar('Server', 'Settings that apply to everyone', settings_navigation=true) }}
+        <form class="server-preview-settings" data-admin-server data-csrf-token="{{ csrf_token }}" aria-labelledby="album-previews-title">
+          <section class="account-section" aria-labelledby="album-previews-title">
+            <div class="server-setting-heading">
+              <div>
+                <h2 id="album-previews-title">Album previews</h2>
+                <p>Choose where this server stores generated cover previews. Original artwork and music never move.</p>
+              </div>
+              <span class="server-setting-location" data-preview-location>Loading…</span>
+            </div>
+
+            {{ on_page_alert(role='status', hidden=true, attributes={'data-preview-status': '', 'aria-live': 'polite'}) }}
+            {{ on_page_alert(severity='error', hidden=true, attributes={'data-preview-error': '', 'aria-live': 'assertive'}) }}
+
+            <fieldset class="server-storage-choices">
+              <legend>Storage location</legend>
+              <label class="server-storage-choice">
+                <input type="radio" name="preview_storage_mode" value="album_folders" data-preview-mode="album_folders">
+                <span><strong>Store previews in album folders</strong><small>Keep generated files in Album Haven’s reserved folder beside each album.</small></span>
+              </label>
+              <label class="server-storage-choice">
+                <input type="radio" name="preview_storage_mode" value="custom" data-preview-mode="custom">
+                <span><strong>Store previews in a special server path</strong><small>The path is on the computer running Album Haven, not this browser.</small></span>
+              </label>
+            </fieldset>
+
+            <label class="field server-path-field" for="preview-storage-path">
+              <span>Server path</span>
+              <input id="preview-storage-path" type="text" autocomplete="off" data-preview-path disabled>
+            </label>
+
+            <div class="server-relocation-progress">
+              <progress data-preview-progress value="0" max="1" aria-label="Preview relocation progress"></progress>
+              <span data-preview-counts>No generated previews recorded.</span>
+            </div>
+            <p class="server-preview-failure" data-preview-failure hidden></p>
+
+            <div class="server-setting-actions">
+              {{ ui_button('Save', type='submit', variant='primary', attributes={'data-preview-save': true}) }}
+              {{ ui_button('Cancel move', type='button', variant='secondary', attributes={'data-preview-cancel': true, 'hidden': true}) }}
+              {{ ui_button('Retry failed files', type='button', variant='secondary', attributes={'data-preview-retry': true, 'hidden': true}) }}
+            </div>
+          </section>
+        </form>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

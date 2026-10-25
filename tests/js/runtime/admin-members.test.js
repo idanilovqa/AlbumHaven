@@ -347,7 +347,8 @@ test('admin add-user password toggle preserves accessible pressed state', () => 
 });
 
 test('admin add-user form sends only the bounded JSON contract with session CSRF', async () => {
-  const runtime = loadRuntime();
+  const destinations = [];
+  const runtime = loadRuntime({ navigate: async (url) => { destinations.push(url); return true; } });
 
   await runtime.form.listeners.get('submit')({ preventDefault() {} });
 
@@ -361,7 +362,20 @@ test('admin add-user form sends only the bounded JSON contract with session CSRF
     capability_keys: ['library.browse.read'],
     send_invitation: false,
   });
-  assert.equal(runtime.assigned(), '/admin/members?created=1');
+  assert.deepEqual(destinations, ['/admin/members?created=1']);
+  assert.equal(runtime.assigned(), '');
+});
+
+test('admin mutations never fall back to a full-document navigation', async () => {
+  const runtime = loadRuntime();
+
+  await runtime.form.listeners.get('submit')({ preventDefault() {} });
+
+  assert.equal(runtime.fetches.length, 1);
+  assert.equal(runtime.assigned(), '');
+  assert.equal(runtime.submit.disabled, false);
+  assert.equal(runtime.submit.textContent, 'Retry navigation');
+  assert.match(runtime.status.textContent, /could not be loaded/);
 });
 
 test('admin edit form confirms destructive state and sends the bounded patch contract', async () => {

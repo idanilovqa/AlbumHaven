@@ -157,6 +157,17 @@ update ops.cover_lookup_tasks
        #- '{source_payload,track_paths}'
        #- '{source_payload,album_payload}';
 
+create table if not exists library.cover_mutation_state (
+  library_id bigint
+    references library.libraries(id) on delete cascade,
+  cover_mutation_revision bigint not null default 0
+    check (cover_mutation_revision >= 0),
+  updated_at timestamptz not null default now(),
+  primary key (library_id)
+);
+
+revoke all on table library.cover_mutation_state from public;
+
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then

@@ -17,7 +17,7 @@ vm.runInContext(runtime, context);
 const statusBarHtml = context.buildLibraryStatusBarHtml();
 
 test('Library Status Page mounts a shared GalleryBar only while its FullPage body is active', () => {
-  assert.match(template, /class="gallery-bar"[^>]*data-gallery-bar-instance="gallery"/);
+  assert.match(template, /gallery_bar\('Gallery'[^)]*instance='gallery'/);
   assert.doesNotMatch(template, /data-gallery-bar-instance="library-(?:scan|status)"/);
   assert.match(template, /id="library-loader"[^>]*data-full-page="library-status"/);
   assert.match(statusBarHtml, /data-close-scan-page="1"[^]*Library State/);
@@ -41,7 +41,7 @@ test('rendering detaches and restores the GalleryBar instance and uses truthful 
   assert.match(runtime, /galleryBar\.remove\(\)/);
   assert.match(runtime, /function unmountLibraryStatusBar\(/);
   assert.match(runtime, /insertBefore\(detachedGalleryBar, anchor\)/);
-  assert.match(runtime, /\? 'Scanning the library'/);
+  assert.match(runtime, /coverBusy && !data.scan_in_progress \? \(data\.covers_phase === 'preparing' \? 'Preparing cover search' : 'Fetching covers'\) : 'Scanning the library'/);
   assert.match(runtime, /const stages = \['discover', 'metadata', 'covers', 'relations'\]/);
   assert.match(runtime, /item\.classList\.toggle\('is-current'/);
   assert.match(runtime, /item\.classList\.toggle\('is-complete'/);

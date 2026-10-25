@@ -112,10 +112,10 @@ function validateTestDataMatrix(matrix, options = {}) {
       }
       const databaseIdentity = entry.mutationOwnership?.databaseIdentity;
       const filesystemCopy = entry.mutationOwnership?.filesystemCopy;
-      if (!databaseIdentity || !filesystemCopy) {
-        errors.push(`${identity} must name its database identity and writable filesystem copy`);
+      if (!databaseIdentity && !filesystemCopy) {
+        errors.push(`${identity} must name its database identity or writable filesystem copy`);
       } else {
-        const owner = `${databaseIdentity}::${filesystemCopy}`;
+        const owner = `${databaseIdentity || '-'}::${filesystemCopy || '-'}`;
         if (mutationOwners.has(owner)) errors.push(`duplicate mutation ownership: ${owner}`);
         mutationOwners.add(owner);
       }
@@ -161,8 +161,8 @@ function validateFunctionalShards(contract, expectedCases) {
   if (contract?.schemaVersion !== 1) errors.push('functional shard contract must use schemaVersion 1');
   if (contract?.browser !== 'chrome') errors.push('functional shards must use Chrome');
   if (contract?.workersPerInvocation !== 1) errors.push('functional shard invocations must use one worker');
-  if (!Array.isArray(contract?.shards) || contract.shards.length !== 4) {
-    errors.push('functional contract must declare exactly four shards');
+  if (!Array.isArray(contract?.shards) || contract.shards.length !== 7) {
+    errors.push('functional contract must declare exactly seven shards');
     return errors;
   }
 
@@ -292,7 +292,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 22) errors.push('default performance group must expose all 22 targets');
+  if (defaults.length !== 29) errors.push('default performance group must expose all 29 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -355,7 +355,6 @@ test('fixture manifest schema pins v1 and all five fixture profiles', () => {
   assert.equal(schema.$defs?.counts?.additionalProperties?.minimum, 0);
   assert.equal(schema.$defs?.namedScenarioAssertions?.minProperties, 1);
 });
-
 test('approved test-data matrix records every discovered case', () => {
   const matrix = readJson(testDataMatrixPath);
   const inventory = discoverInventory();
@@ -507,7 +506,19 @@ test('matrix validation rejects mutation assigned to shared or duplicate data', 
   assert.equal(errors.includes('duplicate mutation ownership: album:mutable-example::media/mutable-example'), true);
 });
 
-test('functional shard contract owns all 124 browser-functional cases exactly once', () => {
+test('matrix validation accepts isolated database-only mutation ownership', () => {
+  const errors = validateTestDataMatrix([
+    validEntry({
+      case: 'mutates only an owned database record',
+      setupScope: 'isolated',
+      stateMode: 'owned-mutation',
+      mutationOwnership: { databaseIdentity: 'case:database-only' },
+    }),
+  ]);
+  assert.deepEqual(errors, []);
+});
+
+ test('functional shard contract owns all 134 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -523,14 +534,14 @@ test('functional shard contract owns all 124 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 124);
+   assert.equal(expectedCases.size, 134);
   assert.deepEqual(errors, []);
-  assert.equal(contract.shards.length, 4);
+  assert.equal(contract.shards.length, 7);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 30 performance cases across 22 targets', () => {
+test('performance target contract owns all 60 performance cases across 29 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -552,9 +563,16 @@ test('performance target contract owns all 30 performance cases across 22 target
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'notification-history',
+    'edit-tags-post-edit',
+    'cover-lookup',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'paired-search-calibration',
     'root-album-browse',
+    'artist-tree-scroll-navigation',
+    'gallery-artwork-diversity',
     'app-open-all-artists',
     'problematic-files-focused',
     'rules-focused',
@@ -568,10 +586,10 @@ test('performance target contract owns all 30 performance cases across 22 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 30);
+  assert.equal(expectedCases.size, 60);
   assert.deepEqual(errors, []);
-  assert.equal(contract.targets.length, 22);
-  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 22);
+  assert.equal(contract.targets.length, 29);
+  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 29);
   assert.equal(
     contract.targets
       .filter((target) => target.calibrationState !== 'approved')
@@ -613,6 +631,12 @@ test('functional shard validation rejects duplicate, missing, and empty ownershi
         suitePrerequisites: ['fixture seed'],
         invocations: [{ config: first.config, project: first.project, workers: 1, cases: [first] }],
       },
+      ...['fifth', 'sixth', 'seventh'].map((name) => ({
+        name: `${name}-shard`,
+        fixtureProfile: 'functional-core',
+        suitePrerequisites: ['fixture seed'],
+        invocations: [{ config: first.config, project: first.project, workers: 1, cases: [first] }],
+      })),
     ],
   };
   const errors = validateFunctionalShards(contract, expectedCases);
@@ -728,16 +752,15 @@ test('read-only inventory command reports complete discovery and ownership total
 
   assert.equal(inventory.configuredSurfaces, 12);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 124,
-    component: 194,
-    mobile: 74,
-    performance: 30,
-    total: 422,
+    browserFunctional: 134,
+    component: 214,
+    mobile: 76,
+    performance: 60,
+    total: 484,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 422,
-    functionalShards: 124,
-    performanceTargets: 30,
+    testDataMatrix: 484,
+    functionalShards: 134,
+    performanceTargets: 60,
   });
 });
-

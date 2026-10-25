@@ -262,7 +262,7 @@ def test_isolated_migrator_can_apply_and_ledger_an_aggregate_upgrade_in_stages(
     monkeypatch.setattr(isolated, "_connect", lambda _database_url: connection)
 
     isolated.apply_migrations("postgresql://owned", [bootstrap_path])
-    isolated.apply_migrations("postgresql://owned", [concurrent_path])
+    isolated.apply_migrations("postgresql://owned", [bootstrap_path, concurrent_path])
 
     assert set(connection.ledger) == {bootstrap_path.name, concurrent_path.name}
     assert connection.index_ready is True
@@ -387,5 +387,5 @@ def test_live_appearance_aggregate_upgrade_uses_staged_migration_runner() -> Non
     ]
 
     assert "isolatedPostgres.apply_migrations(setup_url, legacy)" in aggregate
-    assert "isolatedPostgres.apply_migrations(setup_url, upgrade)" in aggregate
+    assert "isolatedPostgres.apply_migrations(setup_url, migrations)" in aggregate
     assert "connection.execute(path.read_text(encoding=\"utf-8\"))" not in aggregate

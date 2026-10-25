@@ -401,6 +401,7 @@ def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress
             self.checkpoints = []
             self.finished = []
             self.selections = []
+            self.provider_outcomes = []
 
         def begin_claimed_cover_refresh(self, **_kwargs):
             return scope
@@ -420,6 +421,9 @@ def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress
             self.selections.append(kwargs)
             return {"album_rows_updated": 1, "track_file_rows_updated": 1}
 
+        def persist_claimed_cover_provider_outcomes(self, **kwargs):
+            self.provider_outcomes.append(kwargs)
+
     repository = Repository()
     runs = []
 
@@ -431,6 +435,11 @@ def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress
             cover_revision="revision-1",
             cover_selection_origin="automatic",
             reject_if_user_controlled=True,
+        )
+        kwargs["config"]["CLAIMED_COVER_PROVIDER_OUTCOME_PERSISTER"](
+            album_id=31,
+            album_key="artist|album|2001",
+            outcomes={"musicbrainz": {"category": "no_candidate"}},
         )
         kwargs["progress"](current=1, total=1, downloaded=0, safe_label="Album")
         return {"processed": 1, "downloaded": 0, "failed": 0}
@@ -449,6 +458,8 @@ def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress
     assert repository.checkpoints[0]["safe_display_label"] == "Album"
     assert repository.selections[0]["job_id"] == claim.job_id
     assert repository.selections[0]["task_id"] == scope.task_id
+    assert repository.provider_outcomes[0]["job_id"] == claim.job_id
+    assert repository.provider_outcomes[0]["task_id"] == scope.task_id
     assert repository.finished[0]["next_status"] == "completed"
 
 

@@ -1,6 +1,6 @@
 {
   "name": "musicapp",
-  "version": "0.9.50",
+  "version": "0.10.0",
   "private": true,
   "description": "A local web app for browsing a music library by artist and album, with folder-based family context.",
   "main": "index.js",
@@ -11,6 +11,7 @@
     "test:js": "node --test --test-concurrency=1 tests/js/runtime/*.test.js",
     "test:js:all": "node scripts/ci/validate-foundation-gates.cjs --run-node-tests",
     "test:component": "playwright test --config=playwright.component.config.js",
+    "test:search-regressions": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-search-regressions.ps1",
     "check:e2e-production-parity": "node scripts/check-e2e-production-parity.cjs",
     "test:e2e:functional": "node scripts/run-functional-playwright.cjs test",
     "test:e2e:functional:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-functional-e2e-local.ps1",

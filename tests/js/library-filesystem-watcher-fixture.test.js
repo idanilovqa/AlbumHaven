@@ -1,10 +1,12 @@
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { pathToFileURL } = require('node:url');
 const test = require('node:test');
+const { resolvePlaywrightPython } = require('../../scripts/playwright-python.cjs');
 const helperPath = path.resolve(__dirname, '../e2e/helpers/libraryFilesystemWatcherFixture.js');
 const load = () => import(pathToFileURL(helperPath).href);
 const actionsPath = path.resolve(__dirname, '../e2e/actions/libraryFilesystemWatcherActions.js');
@@ -28,16 +30,17 @@ function useTempRoot(t, tempRoot) {
     else process.env.ALBUM_HAVEN_E2E_TEMP_ROOT = priorRoot;
   });
 }
+const mediaRootHelperPath = path.resolve(__dirname, '../e2e/helpers/fixtureMediaRoot.js');
 
-function fixture(t) {
+function fixture(t, ownedDirectoryName = 'watcher-reconciliation') {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-cleanup-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const mediaRoot = path.join(temp, 'media');
-  const ownedRoot = path.join(mediaRoot, 'cases', 'watcher-reconciliation');
+  const ownedRoot = path.join(mediaRoot, 'cases', ownedDirectoryName);
   fs.mkdirSync(ownedRoot, { recursive: true });
   fs.writeFileSync(path.join(ownedRoot, 'owned.mp3'), 'owned');
   fs.writeFileSync(path.join(mediaRoot, 'unrelated.mp3'), 'untouched');
-  return { mediaRoot, ownedRoot };
+  return { mediaRoot, ownedRoot, ownedDirectoryName };
 }
 
 function recoveryFixture(t) {
@@ -67,6 +70,172 @@ function recoveryFixture(t) {
   };
 }
 
+test('writable media-root resolver allows synthetic fixtures only when the caller opts in', async (t) => {
+  const { resolveWritableFixtureMediaRoot } = await import(pathToFileURL(mediaRootHelperPath).href);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-media-root-'));
+  const mediaRoot = path.join(temp, 'media');
+  fs.mkdirSync(mediaRoot);
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const environment = {
+    ALBUM_HAVEN_FIXTURE_PROFILE: 'synthetic-large-library',
+    ALBUM_HAVEN_FIXTURE_ROOT: temp,
+    ALBUM_HAVEN_MEDIA_ROOT: mediaRoot,
+  };
+
+  assert.throws(() => resolveWritableFixtureMediaRoot(environment), /does not allow/i);
+  assert.equal(
+    resolveWritableFixtureMediaRoot(environment, {
+      allowedProfiles: ['functional-core', 'synthetic-large-library'],
+    }),
+    fs.realpathSync(mediaRoot),
+  );
+});
+
+test('writable media-root resolver accepts a contained target-owned override', async (t) => {
+  const { resolveWritableFixtureMediaRoot } = await import(pathToFileURL(mediaRootHelperPath).href);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-owned-media-root-'));
+  const fixtureRoot = path.join(temp, 'fixture');
+  const fixtureMediaRoot = path.join(fixtureRoot, 'media');
+  const sessionRoot = path.join(temp, 'session');
+  const writableMediaRoot = path.join(sessionRoot, 'media', 'writable');
+  fs.mkdirSync(fixtureMediaRoot, { recursive: true });
+  fs.mkdirSync(writableMediaRoot, { recursive: true });
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+
+  const environment = {
+    ALBUM_HAVEN_FIXTURE_PROFILE: 'synthetic-large-library',
+    ALBUM_HAVEN_FIXTURE_ROOT: fixtureRoot,
+    ALBUM_HAVEN_MEDIA_ROOT: fixtureMediaRoot,
+    ALBUM_HAVEN_E2E_TEMP_ROOT: sessionRoot,
+    ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT: writableMediaRoot,
+  };
+
+  assert.equal(
+    resolveWritableFixtureMediaRoot(environment, {
+      allowedProfiles: ['synthetic-large-library'],
+    }),
+    fs.realpathSync(writableMediaRoot),
+  );
+  assert.throws(() => resolveWritableFixtureMediaRoot({
+    ...environment,
+    ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT: fixtureMediaRoot,
+  }, {
+    allowedProfiles: ['synthetic-large-library'],
+  }), /inside.*temporary/i);
+});
+
+test('watcher fixture generates a decoder-valid MP3 source instead of accepting metadata stubs', async (t) => {
+  const { generatePlayableMp3Source } = await load();
+  assert.equal(typeof generatePlayableMp3Source, 'function');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-audio-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const destination = path.join(temp, 'source.mp3');
+
+  await generatePlayableMp3Source(destination);
+
+  const duration = Number(execFileSync(resolvePlaywrightPython(process.env), [
+    '-c',
+    'import sys; from mutagen.mp3 import MP3; print(MP3(sys.argv[1]).info.length)',
+    destination,
+  ], { encoding: 'utf8', windowsHide: true }).trim());
+  assert.ok(duration > 0, `expected playable MP3 duration, received ${duration}`);
+});
+
+test('watched tracks become playable only after their tags are complete', async (t) => {
+  const { materializeTaggedTrack } = await load();
+  assert.equal(typeof materializeTaggedTrack, 'function');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-publish-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const source = path.join(temp, 'source.mp3');
+  const destination = path.join(temp, 'published.mp3');
+  fs.writeFileSync(source, 'source audio');
+  let stagedPath = null;
+
+  await materializeTaggedTrack({
+    source,
+    destination,
+    metadata: { artist: 'Neal Morse', album: 'Gallery Refresh' },
+    async retagTrack(trackPath) {
+      stagedPath = trackPath;
+      assert.equal(path.extname(trackPath), '.pending');
+      assert.equal(fs.existsSync(trackPath), true);
+      assert.equal(fs.existsSync(destination), false);
+      fs.appendFileSync(trackPath, ' tagged');
+    },
+  });
+
+  assert.notEqual(stagedPath, destination);
+  assert.equal(fs.existsSync(stagedPath), false);
+  assert.equal(fs.readFileSync(destination, 'utf8'), 'source audio tagged');
+});
+
+test('watched albums become visible only after every track is complete', async (t) => {
+  const { materializeTaggedAlbum } = await load();
+  assert.equal(typeof materializeTaggedAlbum, 'function');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-album-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const stagingParent = path.join(temp, 'staging');
+  const destination = path.join(temp, 'watched', 'artist', 'album');
+  fs.mkdirSync(stagingParent, { recursive: true });
+
+  await materializeTaggedAlbum({
+    stagingParent,
+    destination,
+    async buildAlbum(stagedAlbum) {
+      assert.equal(fs.existsSync(destination), false);
+      fs.writeFileSync(path.join(stagedAlbum, '01.mp3'), 'tagged first');
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(fs.existsSync(destination), false);
+      fs.writeFileSync(path.join(stagedAlbum, '02.mp3'), 'tagged second');
+    },
+  });
+
+  assert.deepEqual(fs.readdirSync(destination).sort(), ['01.mp3', '02.mp3']);
+  assert.deepEqual(fs.readdirSync(stagingParent), []);
+});
+
+test('watcher cleanup accepts a separately owned case directory', async (t) => {
+  const { cleanupWatchedAlbumFixture } = await load();
+  const paths = fixture(t, 'gallery-native-response-overlap');
+  const cleanupOwners = [];
+
+  await cleanupWatchedAlbumFixture({
+    ...paths,
+    context: { async close() {} },
+    managedAppLifecycle: {
+      async cleanupWatcherFixture(ownedDirectoryName) {
+        cleanupOwners.push(ownedDirectoryName);
+      },
+    },
+  });
+
+  assert.deepEqual(cleanupOwners, ['gallery-native-response-overlap']);
+  assert.equal(fs.existsSync(paths.ownedRoot), false);
+  assert.equal(fs.readFileSync(path.join(paths.mediaRoot, 'unrelated.mp3'), 'utf8'), 'untouched');
+});
+
+test('watcher cleanup rejects an unknown case directory before filesystem mutation', async (t) => {
+  const { cleanupWatchedAlbumFixture } = await load();
+  const paths = fixture(t, 'not-runner-owned');
+  let contextClosed = false;
+  let lifecycleCalled = false;
+
+  await assert.rejects(
+    cleanupWatchedAlbumFixture({
+      ...paths,
+      context: { async close() { contextClosed = true; } },
+      managedAppLifecycle: {
+        async cleanupWatcherFixture() { lifecycleCalled = true; },
+      },
+    }),
+    /runner-owned directory/i,
+  );
+
+  assert.equal(contextClosed, false);
+  assert.equal(lifecycleCalled, false);
+  assert.equal(fs.existsSync(path.join(paths.ownedRoot, 'owned.mp3')), true);
+});
+
 test('watcher cleanup drains writers before deleting only its scoped inventory', async (t) => {
   const { cleanupWatchedAlbumFixture } = await load();
   assert.equal(typeof cleanupWatchedAlbumFixture, 'function');
@@ -85,6 +254,26 @@ test('watcher cleanup drains writers before deleting only its scoped inventory',
   await cleanup;
   assert.deepEqual(calls, ['context', 'restart', 'drained', 'inventory']);
   assert.equal(fs.readFileSync(path.join(paths.mediaRoot, 'unrelated.mp3'), 'utf8'), 'untouched');
+});
+
+test('watcher cleanup removes scoped files and inventory when browser close fails', async (t) => {
+  const { cleanupWatchedAlbumFixture } = await load();
+  const paths = fixture(t);
+  const closeFailure = new Error('browser close failed');
+  const calls = [];
+
+  await assert.rejects(cleanupWatchedAlbumFixture({
+    ...paths,
+    context: { async close() { throw closeFailure; } },
+    managedAppLifecycle: {
+      async cleanupWatcherFixture() { calls.push('inventory'); },
+      async reportFailure() { calls.push('reported'); },
+    },
+  }), error => error === closeFailure);
+
+  assert.equal(fs.existsSync(paths.ownedRoot), false);
+  assert.equal(fs.readFileSync(path.join(paths.mediaRoot, 'unrelated.mp3'), 'utf8'), 'untouched');
+  assert.deepEqual(calls, ['inventory', 'reported']);
 });
 
 test('watcher cleanup preserves original failure and refuses database mutation after failed drain', async (t) => {

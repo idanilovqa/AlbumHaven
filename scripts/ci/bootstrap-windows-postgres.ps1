@@ -191,8 +191,15 @@ function Get-Contract {
 }
 
 function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
-    & $Executable @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "Command failed: $([IO.Path]::GetFileName($Executable))" }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Executable @Arguments 2>&1 | Write-Output
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0) { throw "Command failed: $([IO.Path]::GetFileName($Executable))" }
 }
 
 function Invoke-PsqlText([string]$Psql, [string]$Role, [string]$Database, [string]$Sql) {

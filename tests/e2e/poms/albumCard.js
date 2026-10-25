@@ -23,6 +23,11 @@ export class AlbumCard extends BasePage {
     this.coverImages = page.locator(this.coverImageSelector);
     this.visibleCoverPlaceholders = page.locator(`${this.cardSelector} ${this.coverPlaceholderWithinCardSelector}:visible`);
     this.visibleTitles = page.locator(`${this.cardSelector}:visible ${this.titleButtonSelector}`);
+    this.contextMenu = page.locator('#album-card-context-menu');
+    this.contextEditTags = this.contextMenu.getByRole('button', {
+      name: 'Edit Tags',
+      exact: true,
+    });
   }
 
   get cardSelector() {
@@ -63,6 +68,10 @@ export class AlbumCard extends BasePage {
 
   get coverPlaceholderWithinCardSelector() {
     return '.cover-placeholder';
+  }
+
+  get emptyArtboxWithinCardSelector() {
+    return '[data-album-artbox-state="empty"]';
   }
 
   get subtitleWithinCardSelector() {

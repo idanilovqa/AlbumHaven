@@ -81,11 +81,24 @@ export class NavigationPanelActions {
       const countNode = document.querySelector(selectors.allArtistsCountSelector);
       if (!(countNode instanceof HTMLElement)) return false;
       const visibleCount = Number.parseInt(String(countNode.textContent || '').replace(/[^\d-]/g, '').trim(), 10) || 0;
+      const sidebarList = document.querySelector(selectors.sidebarListSelector);
+      if (
+        sidebarList instanceof HTMLElement
+        && sidebarList.getAttribute('data-sidebar-virtualized') === 'true'
+      ) {
+        const runtimeSidebarCount = Array.isArray(sidebarList.albumHavenSidebarArtistsSource)
+          ? sidebarList.albumHavenSidebarArtistsSource.length
+          : 0;
+        return sidebarArtists > 0
+          && runtimeSidebarCount > 0
+          && visibleCount === runtimeSidebarCount;
+      }
       return visibleCount === sidebarArtists;
     }, {
       timeout: options.timeout || 60000,
     }, {
       sidebarArtistSelector: this.navigationPanel.sidebarArtistSelector,
+      sidebarListSelector: this.navigationPanel.sidebarListSelector,
       allArtistsCountSelector: this.navigationPanel.allArtistsCountSelector,
       maximumSidebarCount: Number(options.maximumSidebarCount || 40),
     });
@@ -93,19 +106,32 @@ export class NavigationPanelActions {
 
   async waitForSidebarFullyHydrated(options = {}) {
     await this.navigationPanel.waitForPageCondition((selectors) => {
-      const sidebarArtists = document.querySelectorAll(selectors.sidebarArtistSelector).length;
+      const mountedArtists = document.querySelectorAll(selectors.sidebarArtistSelector).length;
+      if (!mountedArtists) return false;
+      const sidebarList = document.querySelector(selectors.sidebarListSelector);
+      const virtualized = sidebarList?.getAttribute('data-sidebar-virtualized') === 'true';
+      const sidebarArtists = virtualized
+        ? (Array.isArray(sidebarList.albumHavenSidebarArtistsSource) ? sidebarList.albumHavenSidebarArtistsSource.length : 0)
+        : mountedArtists;
       return sidebarArtists > selectors.minimumSidebarCount;
     }, {
       timeout: options.timeout || 60000,
     }, {
       sidebarArtistSelector: this.navigationPanel.sidebarArtistSelector,
+      sidebarListSelector: this.navigationPanel.sidebarListSelector,
       minimumSidebarCount: Number(options.minimumSidebarCount || 100),
     });
   }
 
   async waitForSidebarAndAllArtistsCountSynchronized(options = {}) {
     await this.navigationPanel.waitForPageCondition((selectors) => {
-      const sidebarArtists = document.querySelectorAll(selectors.sidebarArtistSelector).length;
+      const mountedArtists = document.querySelectorAll(selectors.sidebarArtistSelector).length;
+      if (!mountedArtists) return false;
+      const sidebarList = document.querySelector(selectors.sidebarListSelector);
+      const virtualized = sidebarList?.getAttribute('data-sidebar-virtualized') === 'true';
+      const sidebarArtists = virtualized
+        ? (Array.isArray(sidebarList.albumHavenSidebarArtistsSource) ? sidebarList.albumHavenSidebarArtistsSource.length : 0)
+        : mountedArtists;
       if (!(sidebarArtists > selectors.minimumSidebarCount)) return false;
       const countNode = document.querySelector(selectors.allArtistsCountSelector);
       if (!(countNode instanceof HTMLElement)) return false;
@@ -115,6 +141,7 @@ export class NavigationPanelActions {
       timeout: options.timeout || 60000,
     }, {
       sidebarArtistSelector: this.navigationPanel.sidebarArtistSelector,
+      sidebarListSelector: this.navigationPanel.sidebarListSelector,
       allArtistsCountSelector: this.navigationPanel.allArtistsCountSelector,
       minimumSidebarCount: Number(options.minimumSidebarCount || 100),
     });
@@ -175,6 +202,20 @@ export class NavigationPanelActions {
         .map((element) => String(element.getAttribute('data-sidebar-artist') || '').trim())
         .filter(Boolean)
     ));
+  }
+
+  async readHydratedSidebarArtistNames() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the production virtual list source; mounted rows remain independently observable
+    return this.navigationPanel.sidebarArtists.evaluateAll((elements, sidebarListSelector) => {
+      const sidebarList = document.querySelector(sidebarListSelector);
+      if (sidebarList?.getAttribute('data-sidebar-virtualized') === 'true') {
+        const source = sidebarList.albumHavenSidebarArtistsSource;
+        return Array.isArray(source)
+          ? source.map(item => String(item?.artist || '').trim()).filter(Boolean)
+          : [];
+      }
+      return elements.map(element => String(element.getAttribute('data-sidebar-artist') || '').trim()).filter(Boolean);
+    }, this.navigationPanel.sidebarListSelector);
   }
 
   async readRuntimeSidebarArtistNames() {
@@ -286,6 +327,10 @@ export class NavigationPanelActions {
 
   async selectSidebarArtistByName(artistName, options = {}) {
     await this.openArtistTree();
+    await this.clickVisibleSidebarArtistByName(artistName, options);
+  }
+
+  async clickVisibleSidebarArtistByName(artistName, options = {}) {
     const selectedArtist = String(artistName || '').trim();
     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
     await artistLocator.click({ noWaitAfter: true, ...options });

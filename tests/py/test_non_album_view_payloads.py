@@ -13,6 +13,18 @@ from music_app.services.scan_cache_persistence import (
 )
 
 
+def test_custom_collection_loose_payload_retains_name_and_library_scope():
+    tracks = build_non_album_track_list([{
+        "path": "C:/Music/Random/song.mp3", "album": "Unknown Album",
+        "artist": "Guest", "title": "Song", "exception_type": "Custom Collection",
+        "custom_collection_name": "Road trip", "library_root_category": "hoard",
+    }])
+    assert len(tracks) == 1
+    assert tracks[0]["custom_collection_name"] == "Road trip"
+    assert tracks[0]["library_category"] == "hoard"
+    assert tracks[0]["is_problematic"] is True
+
+
 def test_blank_album_membership_requires_numbered_sibling_consensus_adjacent_number_and_folder():
     target_path = r"C:\Music\Mono\Hymn to the Immortal Wind\02 - Burial at Sea.flac"
     entries = {
@@ -262,6 +274,7 @@ def test_build_non_album_track_list_preserves_editable_tag_values():
         "edition": "Bonus",
         "album_rating": 8,
         "reason_label": "Non-album rarity",
+            "is_problematic": False,
         "display_path": r"C:\Music\Stereolab\Loose\Alpha.mp3",
         "duration_seconds": None,
     }]

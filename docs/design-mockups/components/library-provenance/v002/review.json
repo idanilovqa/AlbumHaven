@@ -1,0 +1,12 @@
+{
+  "id": "library-provenance-v002",
+  "version": "v002",
+  "status": "in_review",
+  "entrypoint": "index.html",
+  "ownerDirection": "Subtle selected; Appearance opt-in, clearer icons, icon-only expansion and theme/source artbox outlines requested",
+  "approval": null,
+  "production_implementation_approved": false,
+  "data": "synthetic",
+  "verification": "Browser verified card hover leaves source and duplicate labels collapsed; warning hover expands only Duplicate files; no below-card duplicate label; Appearance Save applies amber frame and subtle tint; Cancel retains saved choice; Main Library light-theme frame stays black. Product implementation pending.",
+  "screenshots": ["warning.png", "colors.png"]
+}

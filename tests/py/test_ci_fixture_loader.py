@@ -18,6 +18,77 @@ LOADER_PATH = Path(__file__).parents[2] / "scripts" / "ci" / "load-fixture-profi
 BOOTSTRAP_PATH = Path(__file__).parents[2] / "scripts" / "ci" / "bootstrap-windows-postgres.ps1"
 
 
+@pytest.mark.parametrize("ready", [True, False])
+def test_prepare_relation_projection_uses_product_readiness_and_requires_success(monkeypatch, ready):
+    from music_app.services import relation_projection_postgres as projection
+
+    loader = _load_fixture_loader_module()
+    calls = []
+    database_url = "postgresql://album_haven_migrator_123@localhost/album_haven_ci_123"
+    monkeypatch.setattr(projection, "ensure_relation_projection_ready", lambda config: (
+        calls.append(config) or {"ready": ready, "duration_ms": 12}
+    ))
+    if ready:
+        loader.prepare_relation_projection(database_url)
+    else:
+        with pytest.raises(RuntimeError, match="did not become ready"):
+            loader.prepare_relation_projection(database_url)
+    assert calls == [{"ALBUM_HAVEN_APP_DATABASE_URL": database_url}]
+
+
+def test_prepare_relation_projection_rejects_non_fixture_database_before_builder(monkeypatch):
+    from music_app.services import relation_projection_postgres as projection
+
+    loader = _load_fixture_loader_module()
+    monkeypatch.setattr(projection, "ensure_relation_projection_ready", lambda config: pytest.fail("unsafe builder call"))
+    with pytest.raises(ValueError):
+        loader.prepare_relation_projection("postgresql://postgres@localhost/album_haven_core")
+
+
+def test_prepare_relation_projection_propagates_product_failure(monkeypatch):
+    from music_app.services import relation_projection_postgres as projection
+
+    def fail(config):
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(projection, "ensure_relation_projection_ready", fail)
+    with pytest.raises(RuntimeError, match="publication failed"):
+        _load_fixture_loader_module().prepare_relation_projection(
+            "postgresql://album_haven_migrator_123@localhost/album_haven_ci_123"
+        )
+
+
+@pytest.mark.parametrize("configured,explicit,expected", [(None, None, "missing"), ("ready", None, "ready"), ("ready", "missing", "missing")])
+def test_fixture_cli_forwards_relation_projection_mode(monkeypatch, tmp_path, configured, explicit, expected):
+    import sys
+
+    loader = _load_fixture_loader_module()
+    argv = [str(LOADER_PATH), "--fixture-root", str(tmp_path), "--profile", "functional-core",
+            "--database-url", "postgresql://album_haven_migrator_123@localhost/album_haven_ci_123"]
+    if configured is None:
+        monkeypatch.delenv("ALBUM_HAVEN_FIXTURE_RELATION_PROJECTION", raising=False)
+    else:
+        monkeypatch.setenv("ALBUM_HAVEN_FIXTURE_RELATION_PROJECTION", configured)
+    if explicit:
+        argv.extend(["--relation-projection", explicit])
+    monkeypatch.setattr(sys, "argv", argv)
+    calls = []
+    monkeypatch.setattr(loader, "load_fixture_profile", lambda **kwargs: calls.append(kwargs))
+    assert loader.main() == 0
+    assert calls[0]["relation_projection"] == expected
+
+
+def test_invalid_relation_projection_mode_fails_before_database_access(tmp_path):
+    loader = _load_fixture_loader_module()
+    with pytest.raises(ValueError, match="relation_projection"):
+        loader.load_fixture_profile(
+            fixture_root=tmp_path, profile="functional-core",
+            database_url="postgresql://album_haven_migrator_123@localhost/album_haven_ci_123",
+            relation_projection="unknown",
+            connect=lambda _: pytest.fail("invalid mode reached database"),
+        )
+
+
 def _load_fixture_loader_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("album_haven_ci_fixture_loader", LOADER_PATH)
     assert spec is not None and spec.loader is not None, f"loader is missing: {LOADER_PATH}"
@@ -1361,6 +1432,45 @@ def test_loader_uses_copy_staging_then_resets_identities_and_analyzes() -> None:
     assert "library.local_track_files" in normalized[-1]
 
 
+@pytest.mark.parametrize(
+    ("table", "key", "dependent"),
+    [
+        ("local_artists", "fixture_artist_key", "local_albums"),
+        ("local_albums", "fixture_album_key", "local_tracks"),
+        ("local_tracks", "fixture_track_key", "local_track_files"),
+    ],
+)
+def test_projection_lookup_indexes_exist_only_during_fixture_loading(
+    table: str, key: str, dependent: str
+) -> None:
+    loader = _load_fixture_loader_module()
+    statements = [
+        " ".join(sql.casefold().split())
+        for sql in loader.product_projection_statements("synthetic-large-library")
+    ]
+    inserted = next(
+        i for i, sql in enumerate(statements)
+        if sql.startswith(f"insert into library.{table} ")
+    )
+    lookup = next(
+        (i for i, sql in enumerate(statements)
+         if sql.startswith("create index ")
+         and f"on library.{table} " in sql
+         and f"metadata->>'{key}'" in sql),
+        None,
+    )
+    assert lookup is not None, f"Missing bulk-load lookup index for {table}"
+    index_name = statements[lookup].split()[2]
+    analyzed = statements.index(f"analyze library.{table}")
+    consumed = next(
+        i for i, sql in enumerate(statements)
+        if sql.startswith(f"insert into library.{dependent} ")
+    )
+    removed = statements.index(f"drop index library.{index_name}")
+    assert inserted < lookup < analyzed < consumed < removed < len(statements) - 1
+    assert statements[-1].startswith("analyze ")
+
+
 def test_loader_copy_seed_to_staging_uses_psycopg_row_copy(tmp_path: Path) -> None:
     loader = _load_fixture_loader_module()
     seed = _write_seed(tmp_path / "fixture.ndjson.zst", [{"table": "local_artists", "record": {"artistKey": "a", "name": "Artist"}}])
@@ -1382,6 +1492,11 @@ def test_loader_indexes_staging_join_keys_before_validation_and_projection() -> 
 
     statements = [" ".join(statement.casefold().split()) for statement, _ in connection.executed]
     assert statements[-1] == "analyze fixture_stage"
+    assert any(
+        "on fixture_stage ((record->>'trackref'))" in statement
+        and "where table_name='local_track_files'" in statement
+        for statement in statements
+    )
     assert any(
         "where table_name='local_artists'" in statement
         and "record->>'artistkey'" in statement
@@ -1642,9 +1757,11 @@ def test_loader_rolls_back_transaction_when_seed_is_corrupt(tmp_path: Path) -> N
     assert "commit" not in connection.events
 
 
+@pytest.mark.parametrize("relation_projection", ["missing", "ready"])
 def test_loader_replace_existing_resets_normal_product_tables_inside_load_transaction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    relation_projection: str,
 ) -> None:
     loader = _load_fixture_loader_module()
     fixture_root = tmp_path / "fixture"
@@ -1674,11 +1791,18 @@ def test_loader_replace_existing_resets_normal_product_tables_inside_load_transa
     monkeypatch.setattr(loader, "validate_projected_scan_discovery_absence", lambda *_args: None)
     monkeypatch.setattr(loader, "validate_projected_problematic_files_scenario", lambda *_args: None)
 
+    prepared = []
+    def prepare(database_url):
+        assert connection.events == ["begin", "commit"]
+        prepared.append(database_url)
+    monkeypatch.setattr(loader, "prepare_relation_projection", prepare)
+
     loader.load_fixture_profile(
         fixture_root=fixture_root,
         profile="functional-core",
         database_url="postgresql://album_haven_migrator_123@localhost/album_haven_ci_123",
         replace_existing=True,
+        relation_projection=relation_projection,
         connect=lambda _url: connection,
     )
 
@@ -1689,6 +1813,8 @@ def test_loader_replace_existing_resets_normal_product_tables_inside_load_transa
         "context",
         "insert into fixture_context (profile, fixture_root, media_root, root_settings, root_identity) values (%s, %s, %s, %s::jsonb, %s)",
     ]
+
+    assert len(prepared) == (1 if relation_projection == "ready" else 0)
 
 
 def test_loader_replace_existing_reseeds_enabled_watcher_runtime_state_before_commit(
@@ -1804,6 +1930,7 @@ def test_loader_reset_targets_only_application_tables_and_preserves_migration_au
     assert "accounts" in reset_statement
     assert "local_tracks" in reset_statement
     assert "client_surface_classes" not in reset_statement
+    assert "generated_preview_storage" not in reset_statement
     assert "schema_migrations" not in reset_statement
 
 
@@ -2225,3 +2352,39 @@ def test_isolated_postgres_skip_or_fail_ci_fails_in_ci_and_skips_locally(monkeyp
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     with pytest.raises(pytest.skip.Exception, match="Postgres unavailable"):
         test_isolated_postgres_live._skip_or_fail_ci("Postgres unavailable")
+
+
+@pytest.mark.parametrize("counts", [
+    {"artists": 2081, "albums": 5346, "tracks": 57980, "trackFiles": 57980},
+    {"artists": 6345, "albums": 14673, "tracks": 159547, "trackFiles": 159546},
+])
+def test_calibrated_fixture_rejects_wrong_manifest_before_database(tmp_path, counts):
+    loader = _load_fixture_loader_module()
+    manifest = _manifest(counts=counts)
+    manifest["profiles"]["synthetic-large-library"] = manifest["profiles"].pop("functional-core")
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    def unexpected_connect(_url):
+        pytest.fail("Scale preflight must run before database access")
+    with pytest.raises(ValueError, match="production-calibration.*counts"):
+        loader.load_fixture_profile(
+            fixture_root=tmp_path, profile="synthetic-large-library",
+            database_url="postgresql://album_haven_migrator_test@localhost/album_haven_ci_test",
+            synthetic_scale_preset="production-calibration", connect=unexpected_connect,
+        )
+
+
+def test_calibrated_fixture_accepts_exact_scale_and_preserves_default_profiles():
+    loader = _load_fixture_loader_module()
+    definition = {"counts": {"artists": 6345, "albums": 14673, "tracks": 159547, "trackFiles": 159547}}
+    loader.validate_synthetic_scale("synthetic-large-library", definition, "production-calibration")
+    loader.validate_synthetic_scale("synthetic-large-library", {"counts": {}}, None)
+    loader.validate_synthetic_scale("functional-core", {"counts": {}}, "production-calibration")
+    with pytest.raises(ValueError, match="Unknown synthetic scale preset"):
+        loader.validate_synthetic_scale("synthetic-large-library", definition, "unknown")
+
+
+def test_fixture_cli_inherits_opt_in_calibration(monkeypatch):
+    loader = _load_fixture_loader_module()
+    monkeypatch.setenv("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET", "production-calibration")
+    monkeypatch.setattr("sys.argv", ["loader", "--fixture-root", ".", "--profile", "synthetic-large-library", "--database-url", "unused"])
+    assert loader._parse_args().synthetic_scale_preset == "production-calibration"

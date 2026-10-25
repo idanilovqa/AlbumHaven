@@ -368,7 +368,7 @@ class TargetedLibraryReconciler:
                     )
                 ),
             )
-            if self._after_commit is not None:
+            if self._after_commit is not None and result.revision:
                 self._after_commit(result)
             return result
         except Exception as exc:

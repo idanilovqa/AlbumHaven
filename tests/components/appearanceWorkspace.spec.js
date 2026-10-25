@@ -755,7 +755,7 @@ test('actual Utilities close-button MouseEvent keeps the dirty editor until disc
     window.promptCount = 0;
     window.showAppConfirmDialog = () => { window.promptCount += 1; return new Promise(resolve => { window.resolveAppearanceLeave = resolve; }); };
   });
-  for (const file of ['utility-loaders-and-cover-lookup.js', 'track-modal-and-gallery.js', 'appearance-backgrounds-bridge.js']) {
+  for (const file of ['album-artbox.js', 'utility-loaders-and-cover-lookup.js', 'track-modal-and-gallery.js', 'appearance-backgrounds-bridge.js']) {
     await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
   }
   await page.evaluate(() => { resumeDeferredUtilityViewRequest = () => {}; attachUtilityModalEvents(); });

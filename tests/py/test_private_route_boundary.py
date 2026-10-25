@@ -100,6 +100,11 @@ def test_private_routes_have_explicit_action_classification():
             "/admin/accounts/{account_id}/invitation/send",
             "accounts.invitation.send",
         ),
+        ("GET", "/admin/server", "system.preview_storage.read"),
+        ("GET", "/admin/server/preview-storage", "system.preview_storage.read"),
+        ("PUT", "/admin/server/preview-storage", "system.preview_storage.manage"),
+        ("POST", "/admin/server/preview-storage/cancel", "system.preview_storage.cancel"),
+        ("POST", "/admin/server/preview-storage/retry", "system.preview_storage.retry"),
     ],
 )
 def test_representative_routes_use_specific_action_keys(method, path, action):
@@ -527,7 +532,7 @@ def test_authenticated_listener_without_cover_task_capabilities_cannot_read_or_m
         pytest.fail("Capability denial must precede task lookup and mutation")
 
     for operation in (
-        "list_cover_lookup_tasks",
+        "list_cover_lookup_task_summaries",
         "clear_completed_cover_lookup_tasks",
         "mark_cover_lookup_task_notification_action_taken",
         "cancel_cover_lookup_task_payload",

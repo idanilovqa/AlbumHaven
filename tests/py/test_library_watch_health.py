@@ -598,6 +598,8 @@ def test_timestamp_manual_recovery_callback_is_removed():
     service = _health_module().LibraryWatchHealthService(SimpleNamespace())
     for obsolete_name in (
         "clear_after_scan",
+        "clear_after_reconciliation",
+        "recovery_publication_guard",
         "_recovered_before",
         "_recovery_generation",
     ):

@@ -1181,28 +1181,69 @@ async function prewarmFunctionalFixture(port, options = {}) {
   const viewUrl = `${baseUrl}/view-data?surface=albums&omit_sidebar=1`;
   const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
     || fetchHttpResponseComplete;
+  const timeoutMs = Number(options.timeoutMs || MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS);
+  const pollIntervalMs = Number(options.pollIntervalMs || 1000);
+  const sleepFn = options.sleepFn || sleep;
+  const nowFn = options.nowFn || Date.now;
+  const reportFailure = (stage, response = null) => {
+    if (typeof options.diagnosticWriteFn !== 'function') return;
+    const rawStatusCode = Number(response?.statusCode);
+    options.diagnosticWriteFn(`[functional-warmup-failure] ${JSON.stringify({
+      stage,
+      statusCode: Number.isInteger(rawStatusCode) ? rawStatusCode : null,
+    })}\n`);
+  };
   const requestHeaders = { ...(options.requestHeaders || {}) };
   const indexResponse = await fetchHttpResponseCompleteFn(indexUrl, {
     requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
     headers: requestHeaders,
   });
-  if (!indexResponse?.ok) return false;
-  const viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
-    requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
-    headers: requestHeaders,
-  });
-  if (!viewResponse?.ok) return false;
+  if (!indexResponse?.ok) {
+    reportFailure('index', indexResponse);
+    return false;
+  }
+  const deadline = nowFn() + timeoutMs;
+  let viewResponse;
+  while (true) {
+    const remainingMs = deadline - nowFn();
+    if (remainingMs <= 0) {
+      reportFailure('view-data', viewResponse);
+      return false;
+    }
+    viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
+      requestTimeoutMs: remainingMs,
+      headers: requestHeaders,
+    });
+    if (viewResponse?.ok) break;
+    let pendingCode = null;
+    try {
+      pendingCode = JSON.parse(String(viewResponse?.body || '')).code;
+    } catch {
+      // Non-JSON errors are terminal warmup failures.
+    }
+    if (Number(viewResponse?.statusCode) !== 503
+      || !['search_projection_pending', 'gallery_projection_pending'].includes(pendingCode)
+      || nowFn() >= deadline) {
+      reportFailure('view-data', viewResponse);
+      return false;
+    }
+    await sleepFn(Math.min(pollIntervalMs, Math.max(0, deadline - nowFn())));
+  }
 
   let payload;
   try {
     payload = JSON.parse(String(viewResponse.body || ''));
   } catch {
+    reportFailure('view-data-json', viewResponse);
     return false;
   }
   const coverUrls = [...collectLocalCoverPreviewUrls(payload, baseUrl, new Set(), {
     mediaRoot: options.mediaRoot,
   })].sort();
-  if (coverUrls.length === 0) return false;
+  if (coverUrls.length === 0) {
+    reportFailure('cover-discovery');
+    return false;
+  }
   for (let offset = 0; offset < coverUrls.length; offset += 4) {
     const responses = await Promise.all(
       coverUrls.slice(offset, offset + 4).map((coverUrl) => fetchHttpResponseCompleteFn(
@@ -1213,14 +1254,22 @@ async function prewarmFunctionalFixture(port, options = {}) {
         },
       )),
     );
-    if (responses.some((response) => !response?.ok)) return false;
+    const failedResponse = responses.find((response) => !response?.ok);
+    if (failedResponse) {
+      reportFailure('cover-preview', failedResponse);
+      return false;
+    }
   }
   for (const pathname of ['/utilities/problematic-files', '/utilities/rules']) {
     const response = await fetchHttpResponseCompleteFn(`${baseUrl}${pathname}`, {
       requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
       headers: requestHeaders,
     });
-    if (!response?.ok) return false;
+    if (!response?.ok) {
+      reportFailure(pathname === '/utilities/problematic-files'
+        ? 'problematic-files' : 'rules', response);
+      return false;
+    }
   }
   return true;
 }
@@ -1398,6 +1447,7 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
         mediaRoot: childEnv.ALBUM_HAVEN_MEDIA_ROOT,
         requestHeaders,
+        diagnosticWriteFn: (line) => stderr.write(line),
       });
       if (!warmed) {
         throw new Error(
@@ -1602,8 +1652,14 @@ async function cleanupManagedWatcherFixture(childEnv, options = {}) {
     ];
   } else {
     const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
-    const mediaRoot = resolveWritableFixtureMediaRoot(childEnv);
-    cleanupArguments = ['--owned-root', path.join(mediaRoot, 'cases', 'watcher-reconciliation')];
+    const ownedDirectoryName = String(options.ownedDirectoryName || 'watcher-reconciliation').trim();
+    if (!['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+      throw new Error('Watcher cleanup requires a runner-owned directory identity.');
+    }
+    const mediaRoot = resolveWritableFixtureMediaRoot(childEnv, {
+      allowedProfiles: ['functional-core', 'synthetic-large-library'],
+    });
+    cleanupArguments = ['--owned-root', path.join(mediaRoot, 'cases', ownedDirectoryName)];
   }
   const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [
     '-m', 'tests.e2e.support.watcherFixture', ...cleanupArguments,
@@ -1627,9 +1683,11 @@ function createManagedIsolatedAppRestartController(options = {}) {
     throw new Error('Managed isolated restart controller requires a runner-owned temp root.');
   }
 
-  const resolvedOwnedRoot = path.resolve(ownedIsolatedTempRoot);
+  const resolvedOwnedRoot = fs.realpathSync(ownedIsolatedTempRoot);
   const controlDirectory = path.resolve(resolvedOwnedRoot, 'restart-control');
-  if (path.dirname(controlDirectory) !== resolvedOwnedRoot) {
+  if (path.dirname(controlDirectory) !== resolvedOwnedRoot
+      || (fs.existsSync(controlDirectory)
+        && fs.realpathSync(controlDirectory) !== controlDirectory)) {
     throw new Error('Managed isolated restart control directory escaped its runner-owned temp root.');
   }
   fs.mkdirSync(controlDirectory, { recursive: true });
@@ -1637,6 +1695,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
 
   const requestPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_REQUEST_FILE);
   const ackPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_ACK_FILE);
+  fs.rmSync(requestPath, { force: true });
+  fs.rmSync(ackPath, { force: true });
   const startManagedIsolatedAppFn = options.startManagedIsolatedAppFn || startManagedIsolatedApp;
   const stopManagedIsolatedAppFn = options.stopManagedIsolatedAppFn || stopManagedIsolatedApp;
   const cleanupWatchedInventoryFn = options.cleanupWatchedInventoryFn || cleanupManagedWatcherFixture;
@@ -1753,12 +1813,23 @@ function createManagedIsolatedAppRestartController(options = {}) {
       'restart', 'stop', 'report-failure', 'watcher-cleanup', 'watcher-recovery-cleanup',
     ].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
     if (
-      ['watcher-cleanup', 'watcher-recovery-cleanup'].includes(operation)
+      operation === 'watcher-recovery-cleanup'
       && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))
     ) {
       throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
     }
-    return { nonce, operation };
+    if (operation === 'watcher-cleanup'
+        && Object.keys(request).some((key) => !['nonce', 'operation', 'ownedDirectoryName'].includes(key))) {
+      throw new Error('Watcher cleanup accepts only a runner-owned directory identity.');
+    }
+    const ownedDirectoryName = operation === 'watcher-cleanup'
+      ? String(request.ownedDirectoryName || 'watcher-reconciliation').trim()
+      : null;
+    if (operation === 'watcher-cleanup'
+        && !['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+      throw new Error('Watcher cleanup requires a runner-owned directory identity.');
+    }
+    return { nonce, operation, ownedDirectoryName };
   };
 
   const processPendingRequest = async () => {
@@ -1795,9 +1866,9 @@ function createManagedIsolatedAppRestartController(options = {}) {
         if (['watcher-cleanup', 'watcher-recovery-cleanup'].includes(request.operation)) {
           phase = 'fixture-cleanup';
           try {
-            await cleanupWatchedInventoryFn(childEnv, {
-              recovery: request.operation === 'watcher-recovery-cleanup',
-            });
+            await cleanupWatchedInventoryFn(childEnv, request.operation === 'watcher-recovery-cleanup'
+              ? { recovery: true }
+              : { ownedDirectoryName: request.ownedDirectoryName });
           } catch (error) {
             error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
             error.lifecycle = { exitReason: 'fake-database-cleanup-error',
@@ -3232,6 +3303,40 @@ function reportManagedPortOwners(port, options = {}) {
   }
 }
 
+function resolveManagedRestartControlRoot(childEnv = {}, ownedIsolatedTempRoot = null) {
+  if (ownedIsolatedTempRoot) return path.resolve(ownedIsolatedTempRoot);
+
+  const preparedProfileSession = (
+    String(childEnv.ALBUM_HAVEN_PERFORMANCE_PROFILE_SESSION || '').trim() === '1'
+  );
+  if (!preparedProfileSession) return null;
+
+  const runnerTemp = String(childEnv.RUNNER_TEMP || '').trim();
+  const profileRoot = String(childEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();
+  const resolvedRunnerTemp = runnerTemp && fs.existsSync(runnerTemp)
+    ? fs.realpathSync(runnerTemp) : '';
+  const resolvedProfileRoot = profileRoot && fs.existsSync(profileRoot)
+    ? fs.realpathSync(profileRoot) : '';
+  const relativeProfileRoot = resolvedRunnerTemp && resolvedProfileRoot
+    ? path.relative(resolvedRunnerTemp, resolvedProfileRoot)
+    : '';
+  const profileParent = resolvedProfileRoot ? path.basename(path.dirname(resolvedProfileRoot)) : '';
+  const isRunnerOwnedProfile = Boolean(
+    relativeProfileRoot
+    && !relativeProfileRoot.startsWith(`..${path.sep}`)
+    && relativeProfileRoot !== '..'
+    && !path.isAbsolute(relativeProfileRoot)
+    && path.basename(resolvedProfileRoot) === 'prepared-profile'
+    && profileParent.startsWith('album-haven-performance-shard-')
+    && fs.existsSync(resolvedProfileRoot)
+    && fs.statSync(resolvedProfileRoot).isDirectory()
+  );
+  if (!isRunnerOwnedProfile) {
+    throw new Error('Managed restart control requires a runner-owned performance profile directory.');
+  }
+  return resolvedProfileRoot;
+}
+
 async function runManagedPlaywrightAttempt(options = {}) {
   const {
     passthroughArgv,
@@ -3327,10 +3432,14 @@ async function runManagedPlaywrightAttempt(options = {}) {
         },
       });
       managedIsolatedAppStarted = true;
-      if (ownedIsolatedTempRoot || options.createManagedIsolatedAppRestartControllerFn) {
+      const managedRestartControlRoot = resolveManagedRestartControlRoot(
+        childEnv,
+        ownedIsolatedTempRoot,
+      );
+      if (managedRestartControlRoot || options.createManagedIsolatedAppRestartControllerFn) {
         managedIsolatedRestartController = createManagedIsolatedAppRestartControllerFn({
           childEnv,
-          ownedIsolatedTempRoot,
+          ownedIsolatedTempRoot: managedRestartControlRoot,
           initialChild: managedIsolatedChild,
           ports: [resolvedIsolatedAppPort, resolvedIsolatedProviderPort],
           seedAllFunctionalCoverMisses,
@@ -3702,6 +3811,7 @@ module.exports = {
     writeIsolatedE2ETempRootLease,
     createOwnedIsolatedE2ETempRoot,
     cleanupIsolatedE2ETempRoots,
+    resolveManagedRestartControlRoot,
     readPortOwningProcesses,
     resolvePlaywrightCompletionExitCode,
     resolvePlaywrightFinalResultExitCode,

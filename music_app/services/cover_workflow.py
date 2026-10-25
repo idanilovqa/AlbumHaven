@@ -13,7 +13,9 @@ from typing import Callable
 
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
 from music_app.services.covers import Image, reserve_existing_cover_variant
+from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
+from music_app.services.library_watch_suppression import suppress_library_watch_events
 
 
 _ALBUM_DISC_MARKER_RE = re.compile(
@@ -82,6 +84,7 @@ def resolve_album_root_from_track_paths(
     if not resolved_dirs:
         return None
     resolved_album_roots = [path.resolve(strict=False) for path in resolved_dirs]
+    enforce_layout_depth = False
     if len(resolved_album_roots) == 1:
         album_root = resolved_album_roots[0]
     else:
@@ -99,7 +102,13 @@ def resolve_album_root_from_track_paths(
             if not all(_is_path_within(path, common_root) for path in resolved_album_roots):
                 return None
             album_root = common_root
-    if not _is_valid_album_root(config, album_root, configured_roots=configured_roots):
+            enforce_layout_depth = True
+    if not _is_valid_album_root(
+        config,
+        album_root,
+        configured_roots=configured_roots,
+        enforce_layout_depth=enforce_layout_depth,
+    ):
         return None
     return album_root
 
@@ -149,6 +158,7 @@ def _is_valid_album_root(
     album_root: Path,
     *,
     configured_roots: list[dict[str, object]] | None = None,
+    enforce_layout_depth: bool = False,
 ) -> bool:
     matching_roots = _matching_library_roots(
         config,
@@ -164,7 +174,9 @@ def _is_valid_album_root(
         return False
     if not relative_parts:
         return False
-    return len(relative_parts) >= _minimum_album_folder_depth(root)
+    if enforce_layout_depth:
+        return len(relative_parts) >= _minimum_album_folder_depth(root)
+    return True
 
 
 def _minimum_album_folder_depth(root: dict[str, object]) -> int:
@@ -188,6 +200,8 @@ def validate_local_cover_source(config: dict[str, object], album_root: Path, sou
         raise ValueError("Selected image is outside the album folder") from exc
     if not resolved.is_file():
         raise FileNotFoundError("Selected image was not found")
+    if is_managed_preview_path(resolved):
+        raise ValueError("Selected image is an internal managed preview")
     return resolved
 
 
@@ -206,17 +220,18 @@ def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) ->
     except Exception as exc:
         raise ValueError("Clipboard image data could not be decoded.") from exc
     target = album_root / "cover.jpg"
-    if Image is None:
-        if mime_type != "image/jpeg":
-            raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
-        target.write_bytes(raw_bytes)
-        return target
-    try:
-        with Image.open(io.BytesIO(raw_bytes)) as img:
-            converted = img.convert("RGB")
-            converted.save(target, format="JPEG", quality=95)
-    except Exception as exc:
-        raise ValueError("Clipboard image could not be processed.") from exc
+    with suppress_library_watch_events((target,)):
+        if Image is None:
+            if mime_type != "image/jpeg":
+                raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
+            target.write_bytes(raw_bytes)
+            return target
+        try:
+            with Image.open(io.BytesIO(raw_bytes)) as img:
+                converted = img.convert("RGB")
+                converted.save(target, format="JPEG", quality=95)
+        except Exception as exc:
+            raise ValueError("Clipboard image could not be processed.") from exc
     return target
 
 
@@ -325,27 +340,28 @@ def _atomic_replace_file_bytes(
     atime_ns: int | None = None,
     mtime_ns: int | None = None,
 ) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temp_file:
-            temp_path = Path(temp_file.name)
-            temp_file.write(raw_bytes)
-            temp_file.flush()
-            os.fsync(temp_file.fileno())
-        if atime_ns is not None and mtime_ns is not None:
-            os.utime(temp_path, ns=(atime_ns, mtime_ns))
-        os.replace(temp_path, target)
-        temp_path = None
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+    with suppress_library_watch_events((target,)):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                temp_file.write(raw_bytes)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+            if atime_ns is not None and mtime_ns is not None:
+                os.utime(temp_path, ns=(atime_ns, mtime_ns))
+            os.replace(temp_path, target)
+            temp_path = None
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
 
 def begin_local_image_promotion(
@@ -679,7 +695,11 @@ def choose_best_remaining_local_cover(
     score_image,
 ) -> Path | None:
     candidates = [
-        path for path in album_root.rglob("*") if path.is_file() and path.suffix.lower() in image_extensions
+        path
+        for path in album_root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in image_extensions
+        and not is_managed_preview_path(path)
     ]
     if not candidates:
         return None
@@ -702,7 +722,8 @@ def delete_local_cover_and_choose_next(
     is_squareish_cover,
     score_image,
 ) -> Path | None:
-    source_path.unlink()
+    with suppress_library_watch_events((source_path,)):
+        source_path.unlink()
     if not active_cover_path or source_path != active_cover_path:
         return active_cover_path
     next_source = choose_best_remaining_local_cover(

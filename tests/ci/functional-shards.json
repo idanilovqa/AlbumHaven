@@ -836,6 +836,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-COVERS-038 persisted lookup survives an album identity rename and app restart",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
               "case": "FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence",
               "area": "tag-edit"
             },

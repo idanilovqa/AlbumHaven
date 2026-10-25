@@ -49,6 +49,7 @@ from music_app.services.cover_lookup_tasks import (
     serialize_cover_lookup_task_payload,
     update_cover_lookup_task,
 )
+from music_app.services.cover_lookup_notifications import load_cover_lookup_notification
 from music_app.services.cover_manual_links import add_manual_cover_candidates_from_urls
 from music_app.services.client_surfaces import client_surface_from_request
 from music_app.services.cover_provider_candidates import is_provider_lookup_match
@@ -207,8 +208,36 @@ def _album_with_context_tracks(album: Mapping[str, object]) -> JsonDict:
 async def _resolve_album_payload_context(
     config: Mapping[str, object],
     album: Mapping[str, object],
+    *,
+    fallback_track_paths: set[str] | None = None,
 ):
     normalized_album = _album_with_context_tracks(album)
+    repository = AlbumCoverCandidateSnapshotRepository(config)
+    fallback_paths = {
+        str(path or "").strip()
+        for path in (fallback_track_paths or set())
+        if str(path or "").strip()
+    }
+    if fallback_paths and not _album_track_paths(normalized_album):
+        album_id = await run_in_threadpool(
+            repository.resolve_album_id_for_track_paths,
+            track_paths=fallback_paths,
+        )
+        if album_id is not None:
+            track_context = await run_in_threadpool(
+                repository.resolve_album_track_context,
+                album_id=album_id,
+                album_key=None,
+            )
+            if isinstance(track_context, Mapping):
+                normalized_album["id"] = track_context.get("album_id")
+                normalized_album["album_id"] = track_context.get("album_id")
+                normalized_album["key"] = track_context.get("album_key")
+                normalized_album["tracks"] = [
+                    {"path": path}
+                    for path in list(track_context.get("track_paths") or [])
+                    if str(path or "").strip()
+                ]
     if not _album_track_paths(normalized_album):
         album_id = _album_id(normalized_album)
         album_key = str(
@@ -219,7 +248,7 @@ async def _resolve_album_payload_context(
         ).strip() or None
         if album_id is not None or album_key is not None:
             track_context = await run_in_threadpool(
-                AlbumCoverCandidateSnapshotRepository(config).resolve_album_track_context,
+                repository.resolve_album_track_context,
                 album_id=album_id,
                 album_key=album_key,
             )
@@ -262,6 +291,7 @@ async def _serialize_cover_gallery_from_asgi(
     track_paths: set[str],
     task_id: str = "",
     candidate_snapshot: Mapping[str, object] | None = None,
+    task_payload: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     config = _app_config(request)
     file_cache = _library_state(request).get("file_cache", {}) or {}
@@ -274,7 +304,11 @@ async def _serialize_cover_gallery_from_asgi(
             missing_paths,
         )
         file_cache = {**file_cache, **selected_entries}
-    task_payload = serialize_cover_lookup_task_payload(cover_lookup_result(task_id) if task_id else {})
+    serialized_task_payload = serialize_cover_lookup_task_payload(
+        dict(task_payload) if isinstance(task_payload, Mapping)
+        else cover_lookup_result(task_id) if task_id
+        else {}
+    )
     return await run_in_threadpool(
         serialize_cover_gallery_payload,
         album_root=album_root,
@@ -283,7 +317,7 @@ async def _serialize_cover_gallery_from_asgi(
         image_extensions=set(config["IMAGE_EXTENSIONS"]),
         image_dimensions=image_dimensions,
         is_squareish_cover=_is_squareish_cover,
-        task_payload=task_payload,
+        task_payload=serialized_task_payload,
         candidate_snapshot=candidate_snapshot,
     )
 
@@ -476,10 +510,26 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     album, album_error = _require_album_payload(payload)
     if album_error is not None:
         return _json_response(album_error)
-    album, album_context = await _resolve_album_payload_context(config, album)
+    task_id = str(payload.get("task_id") or "").strip()
+    task_payload = cover_lookup_result(task_id) if task_id else {}
+    if task_id and not task_payload:
+        task_payload = await run_in_threadpool(
+            load_cover_lookup_notification,
+            dict(config),
+            task_id,
+        ) or {}
+    task_track_paths = {
+        str(path or "").strip()
+        for path in list(task_payload.get("track_paths") or [])
+        if str(path or "").strip()
+    }
+    album, album_context = await _resolve_album_payload_context(
+        config,
+        album,
+        fallback_track_paths=task_track_paths,
+    )
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    task_id = str(payload.get("task_id") or "").strip()
     repository, album_id, identity_error = _resolved_snapshot_album_context(
         config,
         album,
@@ -487,7 +537,6 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     )
     if identity_error is not None:
         return _json_response(identity_error)
-    task_payload = cover_lookup_result(task_id) if task_id else {}
     if task_payload and not _task_matches_album_context(
         task_payload,
         track_paths=album_context.track_paths,
@@ -508,6 +557,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
             album_context.track_paths,
             task_id,
             candidate_snapshot,
+            task_payload,
         )
     )
 

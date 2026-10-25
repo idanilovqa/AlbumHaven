@@ -63,6 +63,41 @@ def test_notification_rows_keep_the_authoritative_album_key():
     assert row["album_key"] == "artist::album::year::2026"
 
 
+def test_load_notification_reads_one_full_persisted_task_by_id():
+    connection = _Connection(
+        page_rows=[
+            {
+                "task_key": "persisted-task",
+                "status": "completed",
+                "requested_at": datetime.fromisoformat("2026-10-25T12:00:00+00:00"),
+                "completed_at": datetime.fromisoformat("2026-10-25T12:01:00+00:00"),
+                "album_key": "artist|album|2026",
+                "selected_cover_private_path": None,
+                "provider_payload": {},
+                "error_message": None,
+                "metadata": {
+                    "source_family": "runtime_cover_lookup_notifications_adapter",
+                    "source_payload": {
+                        "id": "persisted-task",
+                        "track_paths": ["C:/Music/Artist/Album/01.flac"],
+                        "possible_matches": [{"id": "candidate-1"}],
+                    },
+                },
+            }
+        ]
+    )
+
+    task = _adapter(connection).load_notification("persisted-task")
+
+    assert task["id"] == "persisted-task"
+    assert task["track_paths"] == ["C:/Music/Artist/Album/01.flac"]
+    assert task["possible_matches"] == [{"id": "candidate-1"}]
+    sql, params = connection.operations[-1]
+    assert "ops.cover_lookup_tasks.task_key = %s" in sql
+    assert "limit 1" in sql
+    assert params == ("persisted-task",)
+
+
 def test_adapter_uses_prewarmed_default_pool_when_connector_not_injected(monkeypatch):
     database_url = "postgresql://example/test"
     connection = _Connection(

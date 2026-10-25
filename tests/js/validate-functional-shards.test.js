@@ -20,7 +20,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 65],
   ['cover-providers-1', 20],
   ['cover-providers-2', 13],
-  ['metadata-mutations', 14],
+  ['metadata-mutations', 15],
   ['playback-utilities-1', 14],
   ['playback-utilities-2', 14],
   ['playback-utilities-3', 14],
@@ -116,7 +116,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved seven-way 154-case assignment', () => {
+test('functional shard contract pins the approved seven-way 155-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -130,7 +130,7 @@ test('functional shard contract pins the approved seven-way 154-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 154);
+  assert.equal(total, 155);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -459,8 +459,8 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
     const checkpointCalls = calls.filter((call) => call.executable === 'fixture-python');
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-  const invocationCount = 13;
-  assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 14);
+  const invocationCount = 14;
+  assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 15);
     assert.equal(checkpointCalls.length, invocationCount + 2);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
@@ -650,7 +650,7 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
     assert.ok(globalMutations.length <= 1);
     for (const ownedCase of cases) waveByCase.set(ownedCase.case, wave.wave);
   }
-  assert.equal(waveByCase.size, 14);
+  assert.equal(waveByCase.size, 15);
   for (const caseName of [
     'FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards',
     'FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split',
@@ -925,7 +925,7 @@ validatorTest('all seven shards use explicit effect-compatible wave budgets', ()
     ['gallery-search-visual', { cases: 65, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 20, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 13, waves: [1, 2] }],
-    ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
+    ['metadata-mutations', { cases: 15, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 14, waves: [1, 2, 5] }],
     ['playback-utilities-3', { cases: 14, waves: [1, 2] }],

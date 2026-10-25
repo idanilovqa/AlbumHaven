@@ -22,6 +22,13 @@ def load_cover_lookup_notifications(config: dict[str, object]) -> list[dict[str,
     )
 
 
+def load_cover_lookup_notification(
+    config: dict[str, object],
+    task_id: str,
+) -> dict[str, object] | None:
+    return _cover_lookup_notifications_adapter(config).load_notification(task_id)
+
+
 def load_cover_lookup_notification_summaries(
     config: dict[str, object],
 ) -> list[dict[str, object]]:

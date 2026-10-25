@@ -3627,6 +3627,91 @@ def test_asgi_cover_lookup_save_remote_rejects_unsafe_album_roots_before_queuein
     assert not (tmp_path / "cover.jpg").exists()
 
 
+def test_asgi_cover_lookup_gallery_rebinds_persisted_notification_after_album_identity_change(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (
+        app.config["MUSIC_DIR"]
+        / "Аквариум"
+        / "Сергей Курёхин в Аквариуме"
+        / "CD2"
+        / "01.mp3"
+    ).resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    _seed_album_state(app.library_state, track_path)
+
+    stale_album = {
+        "album_id": 418526,
+        "key": "аквариум::сергей курёхин в аквариуме: концерт в жуковском",
+        "name": "Сергей Курёхин в Аквариуме: Концерт в Жуковском",
+        "tracks": [],
+    }
+    persisted_task = {
+        "id": "persisted-stale-notification",
+        "status": "completed",
+        "track_paths": [str(track_path)],
+        "possible_matches": [
+            {
+                "id": "preserved-candidate",
+                "art_kind": "cover",
+                "url": "https://images.example/preserved.jpg",
+            }
+        ],
+        "album_payload": stale_album,
+    }
+    resolved_context_calls = []
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 641037
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            resolved_context_calls.append((album_id, album_key))
+            assert album_id == 641037
+            assert album_key is None
+            return {
+                "album_id": 641037,
+                "album_key": "аквариум::сергей курёхин в «аквариуме»::концерт в жуковском",
+                "track_paths": [str(track_path)],
+            }
+
+        def get_for_album_context(self, *, album_id):
+            assert album_id == 641037
+            return None
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeRepository)
+    monkeypatch.setattr(asgi_routes, "cover_lookup_result", lambda _task_id: {})
+    monkeypatch.setattr(
+        asgi_routes,
+        "load_cover_lookup_notification",
+        lambda _config, task_id: persisted_task if task_id == persisted_task["id"] else None,
+        raising=False,
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={"album": stale_album, "task_id": persisted_task["id"]},
+    )
+    payload = _decode_json(body)
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["album_root"] == str(track_path.parent.parent)
+    assert payload["task"]["id"] == persisted_task["id"]
+    assert payload["task"]["possible_matches"][0]["id"] == "preserved-candidate"
+    assert resolved_context_calls == [(641037, None)]
+
+
 def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import state as state_module

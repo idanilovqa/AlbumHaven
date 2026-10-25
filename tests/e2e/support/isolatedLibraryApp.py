@@ -4848,8 +4848,15 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         if mode == "artist-conjunction":
             return [dict(self.server.cover_lookup_artist_conjunction_spec)]
         if mode in {"selection-concurrency-a", "selection-concurrency-b"}:
+            index = 0 if mode.endswith("-a") else 1
+            if _normalize_provider_query("E2E Rarity Artist Queued Album Rename Fixture") in normalized_query:
+                return [{
+                    **dict(self.server.cover_lookup_selection_concurrency_specs[index]),
+                    "artist": "E2E Rarity Artist",
+                    "album": "Queued Album Rename Fixture",
+                    "year": 2026,
+                }]
             if _normalize_provider_query("Mastodon Crack The Skye Fixture 07") in normalized_query:
-                index = 0 if mode.endswith("-a") else 1
                 return [dict(self.server.cover_lookup_selection_concurrency_specs[index])]
             return []
         if mode == "automatic-coverless":

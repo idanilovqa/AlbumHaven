@@ -59,6 +59,16 @@ class CoverLookupTasksPostgresAdapter:
         tasks = [_task_from_row(row) for row in rows]
         return [task for task in tasks if str(task.get("id") or "").strip()]
 
+    def load_notification(self, task_id: str) -> dict[str, object] | None:
+        normalized_id = str(task_id or "").strip()
+        if not normalized_id:
+            return None
+        with self._connect_to_database() as connection:
+            _ensure_bootstrap_context(connection)
+            row = connection.execute(_load_notification_sql(), (normalized_id,)).fetchone()
+        task = _task_from_row(row) if row is not None else {}
+        return task if str(task.get("id") or "").strip() else None
+
     def load_notification_summaries(self) -> list[dict[str, object]]:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
@@ -640,6 +650,34 @@ def _load_notifications_sql() -> str:
           ops.cover_lookup_tasks.task_key desc;
     """
     ).replace("%s::text[]", f"array[{', '.join(repr(item) for item in _SOURCE_FAMILIES)}]::text[]")
+
+
+def _load_notification_sql() -> str:
+    return (
+        _bootstrap_context_sql()
+        + """
+        select
+          ops.cover_lookup_tasks.task_key,
+          ops.cover_lookup_tasks.status,
+          ops.cover_lookup_tasks.requested_at,
+          ops.cover_lookup_tasks.completed_at,
+          ops.cover_lookup_tasks.album_key,
+          ops.cover_lookup_tasks.selected_cover_private_path,
+          ops.cover_lookup_tasks.provider_payload,
+          ops.cover_lookup_tasks.error_message,
+          ops.cover_lookup_tasks.metadata
+        from ops.cover_lookup_tasks
+        join bootstrap_context
+          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
+        where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
+          and ops.cover_lookup_tasks.task_key = %s
+        limit 1;
+    """
+    ).replace(
+        "%s::text[]",
+        f"array[{', '.join(repr(item) for item in _SOURCE_FAMILIES)}]::text[]",
+        1,
+    )
 
 
 def _load_notification_summaries_sql() -> str:

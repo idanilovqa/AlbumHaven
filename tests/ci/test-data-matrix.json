@@ -682,6 +682,32 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumTagRename.spec.js",
+    "case": "FTC-COVERS-038 persisted lookup survives an album identity rename and app restart",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "rename-completion",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:persisted-notification-album-rename"
+    ],
+    "filesystemScenarios": [
+      "media-copy:persisted-notification-album-rename"
+    ],
+    "expectedContracts": [
+      "persisted-notification-current-album-resolution",
+      "persisted-candidate-preservation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:persisted-notification-album-rename",
+      "filesystemCopy": "media/cases/persisted-notification-album-rename"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumTagRename.spec.js",
     "case": "FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence",
     "profile": "functional-core",
     "setupScope": "isolated",

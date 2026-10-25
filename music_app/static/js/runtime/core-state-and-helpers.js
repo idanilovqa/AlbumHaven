@@ -379,6 +379,7 @@ const state = {
       seenCandidateImprovementToken: '',
       statusText: '',
       statusTone: 'neutral',
+      failureNotice: '',
       loading: false,
       pendingDeletePath: '',
       manualUrlText: '',

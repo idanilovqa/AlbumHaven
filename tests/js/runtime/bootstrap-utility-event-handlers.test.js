@@ -52,6 +52,13 @@ test('cancel refresh retains the task until its terminal state is persisted', ()
     /\.finally\(\(\) => loadCoverLookupTasks\(\{ toast: false, mergeFirstPage: true \}\)\);/,
   );
 });
+
+test('dismissing an interrupted cover lookup notice clears and rerenders it', () => {
+  assert.match(
+    helperSource,
+    /data-dismiss-cover-lookup-notice[\s\S]*?failureNotice = '';[\s\S]*?renderCoverLookupModal\(\);/,
+  );
+});
 const utilityListBuildersSource = fs.readFileSync(utilityListBuildersPath, 'utf8');
 const utilityLoadersSource = fs.readFileSync(utilityLoadersPath, 'utf8');
 const utilityRenderersSource = fs.readFileSync(path.join(

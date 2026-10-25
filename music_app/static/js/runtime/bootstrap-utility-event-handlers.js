@@ -828,6 +828,13 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-dismiss-cover-lookup-notice="1"]')) {
+    event.preventDefault();
+    state.coverLookup.modal.failureNotice = '';
+    renderCoverLookupModal();
+    return;
+  }
+
   if (event.target.closest('[data-start-cover-lookup="1"]')) {
     event.preventDefault();
     startCoverLookupForAlbum(state.coverLookup.modal.album);

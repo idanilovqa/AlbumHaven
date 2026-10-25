@@ -727,7 +727,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
     grid-template-rows: auto; flex-wrap: nowrap; box-shadow: none;
   }
   /* Save/error announcements stay in the accessibility tree, not a second footer row. */
-  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert], .on-page-alert, [role="alert"]))) {
+  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert], .on-page-alert, [role="alert"], .cover-lookup-inline-notice))) {
     position: absolute; width: 1px; height: 1px; min-height: 0;
     padding: 0; margin: -1px; border: 0; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap;
@@ -810,7 +810,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
 @media (max-width: 900px) {
   /* Failures remain visible above the compact button row, never silently clipped. */
-  #cover-lookup-modal.is-mobile-page #cover-lookup-modal-status:has([data-on-page-alert], .on-page-alert, [role="alert"]) {
+  #cover-lookup-modal.is-mobile-page #cover-lookup-modal-status:has([data-on-page-alert], .on-page-alert, [role="alert"], .cover-lookup-inline-notice) {
     position: absolute; inset: auto 0 100%; max-height: 180px; overflow-y: auto;
     background: var(--appearance-main-surface, var(--panel)); z-index: 1;
   }

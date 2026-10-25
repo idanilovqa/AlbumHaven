@@ -5452,6 +5452,7 @@ const state = {
       seenCandidateImprovementToken: '',
       statusText: '',
       statusTone: 'neutral',
+      failureNotice: '',
       loading: false,
       pendingDeletePath: '',
       manualUrlText: '',
@@ -28522,6 +28523,43 @@ const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
 const COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS = 2000;
 const COVER_LOOKUP_SHEET_DISMISS_DISTANCE = 72;
+const COVER_LOOKUP_INTERRUPTION_NOTICE_KEY_PREFIX = 'albumhaven.coverLookup.interruptionNotice.';
+
+function applyCoverLookupTaskModalStatus(task) {
+  const modal = state.coverLookup.modal;
+  const status = String(task?.status || '');
+  if (['pending', 'running'].includes(status)) {
+    modal.statusText = String(task?.message || task?.progress_label || '');
+    modal.statusTone = getCoverLookupStatusTone(task);
+    modal.failureNotice = '';
+    return;
+  }
+  modal.statusText = '';
+  modal.statusTone = 'neutral';
+  modal.failureNotice = '';
+  const taskId = String(task?.id || '').trim();
+  if (String(task?.result_kind || '') !== 'interrupted' || !taskId) return;
+  const noticeKey = `${COVER_LOOKUP_INTERRUPTION_NOTICE_KEY_PREFIX}${taskId}`;
+  if (getLocalStorageItem(noticeKey)) return;
+  modal.failureNotice = 'Previous cover lookup was interrupted.';
+  setLocalStorageItem(noticeKey, '1');
+}
+
+function buildCoverLookupModalStatusHtml(taskRunning) {
+  if (taskRunning) return '';
+  const modal = state.coverLookup.modal;
+  if (modal.failureNotice) {
+    return `<span class="cover-lookup-inline-notice">${buildSmallAlertHtml({
+      severity: 'warning',
+      message: modal.failureNotice,
+    })}<button class="icon-button" type="button" data-dismiss-cover-lookup-notice="1" aria-label="Dismiss cover lookup notice">×</button></span>`;
+  }
+  const statusText = String(modal.statusText || '');
+  if (!statusText) return '';
+  return String(modal.statusTone || '') === 'error'
+    ? buildSmallAlertHtml({ severity: 'error', message: statusText })
+    : escapeHtml(statusText);
+}
 
 function isCoverLookupMobileSheet(overlay) {
   return Boolean(overlay?.classList?.contains?.('is-mobile-sheet'));
@@ -29009,8 +29047,7 @@ function applyCoverLookupGalleryPayload(gallery) {
     state.coverLookup.modal.selectedRemoteId = '';
   }
   if (task) {
-    state.coverLookup.modal.statusText = String(task.message || task.progress_label || '');
-    state.coverLookup.modal.statusTone = getCoverLookupStatusTone(task);
+    applyCoverLookupTaskModalStatus(task);
     logCoverLookupTaskDebug('Gallery payload task update.', task);
   } else if (candidateSnapshot) {
     state.coverLookup.modal.statusText = String(candidateSnapshot.diagnostic || '');
@@ -30459,11 +30496,10 @@ function renderCoverLookupModal() {
   const showCaaEmptyNotice = Boolean(task?.caa_empty_notice) && !archiveMatches.length;
   const taskRunning = Boolean(task && ['pending', 'running'].includes(String(task.status || '')));
   if (els.status) {
-    const statusText = taskRunning ? '' : (modalState.statusText || '');
-    if (statusText && String(modalState.statusTone || '') === 'error') {
-      els.status.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Cover lookup failed', message: statusText });
+    if (!taskRunning && !modalState.failureNotice && String(modalState.statusTone || '') !== 'error') {
+      els.status.textContent = String(modalState.statusText || '');
     } else {
-      els.status.textContent = statusText;
+      els.status.innerHTML = buildCoverLookupModalStatusHtml(taskRunning);
     }
   }
   const searchControlsDisabled = Boolean(taskRunning || modalState.manualBusy);
@@ -30691,8 +30727,7 @@ async function loadCoverLookupTasks(options = {}) {
       const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
-        state.coverLookup.modal.statusText = String(task.message || task.progress_label || '');
-        state.coverLookup.modal.statusTone = getCoverLookupStatusTone(task);
+        applyCoverLookupTaskModalStatus(task);
         const taskStatus = String(task.status || '');
         const candidateSource = getCoverLookupCandidateSource(
           task,
@@ -30978,6 +31013,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.seenCandidateImprovementToken = '';
   state.coverLookup.modal.statusText = '';
   state.coverLookup.modal.statusTone = 'neutral';
+  state.coverLookup.modal.failureNotice = '';
   state.coverLookup.modal.manualUrlText = '';
   state.coverLookup.modal.manualBusy = false;
   state.coverLookup.modal.loading = !cachedCandidates.length;
@@ -31022,6 +31058,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.candidateGeneration = '';
   state.coverLookup.modal.statusText = '';
   state.coverLookup.modal.statusTone = 'neutral';
+  state.coverLookup.modal.failureNotice = '';
   state.coverLookup.modal.manualUrlText = '';
   if (els.body) els.body.innerHTML = '';
   if (els.saveRemote instanceof HTMLButtonElement) {
@@ -31439,8 +31476,7 @@ async function addRemoteCoverLinksFromLookup() {
     }
     if (data.task && typeof data.task === 'object') {
       state.coverLookup.modal.possibleMatches = Array.isArray(data.task.possible_matches) ? data.task.possible_matches : [];
-      state.coverLookup.modal.statusText = String(data.task.message || data.task.progress_label || '');
-      state.coverLookup.modal.statusTone = getCoverLookupStatusTone(data.task);
+      applyCoverLookupTaskModalStatus(data.task);
     }
     await loadCoverLookupTasks({ toast: false });
     renderCoverLookupModal();
@@ -41879,6 +41915,13 @@ async function handleUtilityBootstrapClick(event) {
   if (event.target.closest('[data-close-cover-lookup-modal="1"]')) {
     event.preventDefault();
     closeCoverLookupModal();
+    return;
+  }
+
+  if (event.target.closest('[data-dismiss-cover-lookup-notice="1"]')) {
+    event.preventDefault();
+    state.coverLookup.modal.failureNotice = '';
+    renderCoverLookupModal();
     return;
   }
 

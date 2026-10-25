@@ -74,6 +74,17 @@
   color: var(--muted);
   font-size: 0.84rem;
 }
+
+.cover-lookup-inline-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cover-lookup-inline-notice .icon-button {
+  width: 24px;
+  height: 24px;
+}
 @media (max-width: 900px) {
   .cover-lookup-modal.is-mobile-sheet {
     align-items: flex-end;
@@ -122,7 +133,7 @@
     padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
     gap: 8px;
   }
-  .cover-lookup-modal.is-mobile-sheet .cover-lookup-modal-status:not(:has([role='alert'], .on-page-alert, [data-on-page-alert])) {
+  .cover-lookup-modal.is-mobile-sheet .cover-lookup-modal-status:not(:has([role='alert'], .on-page-alert, [data-on-page-alert], .cover-lookup-inline-notice)) {
     position: absolute;
     width: 1px;
     height: 1px;

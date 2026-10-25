@@ -2942,7 +2942,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.state.coverLookup.modal.statusTone = 'error';
   context.state.coverLookup.modal.statusText = 'Lookup unavailable';
   context.renderCoverLookupModal();
-  assert.match(statusElement.innerHTML, /data-on-page-alert="error"/);
+  assert.match(statusElement.innerHTML, /data-small-alert="error"/);
+  assert.doesNotMatch(statusElement.innerHTML, /data-on-page-alert/);
   assert.match(statusElement.innerHTML, /Lookup unavailable/);
   context.state.coverLookup.modal.statusTone = 'neutral';
   context.state.coverLookup.modal.statusText = 'Clipboard image added.';

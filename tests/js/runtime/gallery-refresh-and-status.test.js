@@ -3622,12 +3622,14 @@ test('idle pollStatus waits for real foreground cover idle and retries immediate
 
   releaseForegroundIdle();
   await deferredPoll;
-  assert.equal(scheduled.length, 1);
-  assert.equal(scheduled[0].delayMs, 25);
+  assert.equal(scheduled.length, 2);
+  assert.equal(scheduled[0].delayMs, 1200);
+  assert.deepEqual(calls.clearedTimeouts, [1]);
+  assert.equal(scheduled[1].delayMs, 25);
   assert.equal(calls.updateStatusIndicator.length, 0);
 
   context.galleryCoverLoadScheduler.isForegroundIdle = () => true;
-  scheduled[0].callback();
+  scheduled[1].callback();
   assert.equal(pendingRequests.length, 1);
   assert.equal(pendingRequests[0].url, '/status');
   pendingRequests[0].resolveWith({
@@ -3637,6 +3639,41 @@ test('idle pollStatus waits for real foreground cover idle and retries immediate
     relations_in_progress: false,
   });
   await flushMicrotasks();
+});
+
+test('idle pollStatus cannot wait forever for stalled foreground cover work', async () => {
+  const { context, pendingRequests } = createContext();
+  const scheduled = [];
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+  };
+  context.galleryCoverLoadScheduler = {
+    isForegroundIdle() { return false; },
+    whenForegroundIdle() { return new Promise(() => {}); },
+  };
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduled.push({ callback, delayMs });
+    return scheduled.length;
+  };
+
+  const statusPromise = context.pollStatus();
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 0);
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].delayMs, 1200);
+
+  scheduled[0].callback();
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/status');
+  pendingRequests[0].resolveWith({
+    covers_in_progress: false,
+    scan_in_progress: false,
+    relations_in_progress: false,
+  });
+  await statusPromise;
 });
 
 test('busy pollStatus is never delayed by foreground cover activity', async () => {

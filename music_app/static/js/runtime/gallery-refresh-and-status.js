@@ -292,6 +292,7 @@ const SCAN_COMPLETION_VIEW_REFRESH_RETRY_DELAYS_MS = Object.freeze([1000, 3000])
 const COVER_COMPLETION_VIEW_REFRESH_RETRY_DELAYS_MS = Object.freeze([1000, 3000]);
 const BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT = 2;
 const STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS = 25;
+const STATUS_POLL_FOREGROUND_IDLE_MAX_WAIT_MS = 1200;
 const STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS = 100;
 let pendingSidebarRenderFrameId = 0;
 let libraryStatusAction = null;
@@ -2226,9 +2227,21 @@ async function pollStatus() {
       && coverScheduler?.isForegroundIdle?.() === false
       && typeof coverScheduler.whenForegroundIdle === 'function'
     ) {
-      await coverScheduler.whenForegroundIdle();
-      if (ownsStatus()) nextPollDelay = STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS;
-      return;
+      let idleDeadlineId = 0;
+      const foregroundIdleBeforeDeadline = await Promise.race([
+        coverScheduler.whenForegroundIdle().then(() => true),
+        new Promise((resolve) => {
+          idleDeadlineId = scheduleBrowserTimeout(
+            () => resolve(false),
+            STATUS_POLL_FOREGROUND_IDLE_MAX_WAIT_MS,
+          );
+        }),
+      ]);
+      if (foregroundIdleBeforeDeadline) {
+        clearBrowserTimeout(idleDeadlineId);
+        if (ownsStatus()) nextPollDelay = STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS;
+        return;
+      }
     }
     const response = await fetch('/status');
     const data = await readGalleryResponse(response, ownsStatus);

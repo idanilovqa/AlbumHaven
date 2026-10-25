@@ -372,6 +372,70 @@ def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatc
     }
 
 
+def test_cover_lookup_notification_reads_use_threadpool_boundary(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    inside_threadpool = False
+    threadpool_calls = []
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        nonlocal inside_threadpool
+        threadpool_calls.append(function)
+        inside_threadpool = True
+        try:
+            return function(*args, **kwargs)
+        finally:
+            inside_threadpool = False
+
+    def fake_counts(*, config):
+        assert inside_threadpool, "notification counts must not block the ASGI event loop"
+        return {"total_count": 1, "active_count": 0, "finished_count": 1}
+
+    def fake_page(*, limit, cursor, active_only, config):
+        assert inside_threadpool, "notification history must not block the ASGI event loop"
+        return {
+            "items": [{"id": "task-1"}],
+            "next_cursor": None,
+            "counts": {"total_count": 1, "active_count": 0, "finished_count": 1},
+        }
+
+    def fake_unpaged(*, config):
+        assert inside_threadpool, "legacy notification history must not block the ASGI event loop"
+        return [{"id": "legacy-task"}]
+
+    monkeypatch.setattr(asgi_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(asgi_routes, "count_cover_lookup_task_notifications", fake_counts)
+    monkeypatch.setattr(asgi_routes, "load_cover_lookup_task_summary_page", fake_page)
+    monkeypatch.setattr(asgi_routes, "list_cover_lookup_task_summaries", fake_unpaged)
+    asgi_app = _make_wave_d_app(app)
+
+    count_status, _count_headers, _count_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks/counts",
+    )
+    page_status, _page_headers, _page_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks",
+        query={"limit": 50},
+    )
+    legacy_status, _legacy_headers, _legacy_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks",
+    )
+
+    assert count_status == 200
+    assert page_status == 200
+    assert legacy_status == 200
+    assert threadpool_calls == [
+        asgi_routes.count_cover_lookup_task_notifications,
+        asgi_routes.load_cover_lookup_task_summary_page,
+        asgi_routes.list_cover_lookup_task_summaries,
+    ]
+
+
 def test_asgi_cover_lookup_notification_page_preserves_each_album_payload(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 

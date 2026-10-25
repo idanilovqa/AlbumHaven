@@ -371,7 +371,10 @@ def _same_cover_lookup_generation(left: object, right: object) -> bool:
 
 @router.get("/utilities/cover-lookup/tasks/counts")
 async def utilities_cover_lookup_task_counts(request: Request) -> JSONResponse:
-    counts = count_cover_lookup_task_notifications(config=_app_config(request))
+    counts = await run_in_threadpool(
+        count_cover_lookup_task_notifications,
+        config=_app_config(request),
+    )
     return JSONResponse({"ok": True, **counts})
 
 
@@ -384,9 +387,11 @@ async def utilities_cover_lookup_tasks(
 ) -> JSONResponse:
     config = _app_config(request)
     if limit is None and cursor is None and active_only is None:
-        return JSONResponse({"ok": True, "tasks": list_cover_lookup_task_summaries(config=config)})
+        tasks = await run_in_threadpool(list_cover_lookup_task_summaries, config=config)
+        return JSONResponse({"ok": True, "tasks": tasks})
     try:
-        page = load_cover_lookup_task_summary_page(
+        page = await run_in_threadpool(
+            load_cover_lookup_task_summary_page,
             config=config,
             limit=max(1, min(limit or 50, 50)),
             cursor=cursor,

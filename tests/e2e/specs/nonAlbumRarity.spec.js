@@ -321,6 +321,7 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
+  page,
   searchToolbarActions,
   stepLogger,
   tagEditorActions,

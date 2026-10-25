@@ -1788,8 +1788,7 @@ def test_asgi_cover_serves_opaque_png_display_variant_as_jpeg(app, monkeypatch):
     with image_module.open(io.BytesIO(body)) as rendered:
         assert rendered.format == "JPEG"
         assert rendered.size == (480, 480)
-    assert list((Path(app.config["DATA_DIR"]) / "display-cover-cache").rglob("*.jpg"))
-    assert not (cover_path.parent / ".album-haven").exists()
+    assert list((cover_path.parent / ".album-haven").rglob("*.jpg"))
 
 
 def test_asgi_open_album_location_preserves_json_statuses(app, monkeypatch):

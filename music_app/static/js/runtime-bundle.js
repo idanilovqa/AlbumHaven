@@ -13032,6 +13032,27 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
+async function refreshOpenTrackModalAfterInventoryMutation() {
+  const els = getTrackModalElements();
+  const openAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (!els.overlay || els.overlay.hidden || !openAlbum) return false;
+  const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
+  if (!albumKey) return false;
+  const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
+  const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+  const currentAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (
+    els.overlay.hidden
+    || !currentAlbum
+    || (
+      String(getAlbumRequestKey(currentAlbum) || '').trim() !== albumKey
+      && getTrackModalAlbumVersionKey(currentAlbum) !== albumVersionKey
+    )
+  ) return false;
+  refreshOpenTrackModalVersionState(albumKey, refreshedAlbum);
+  return true;
+}
+
 function queueTrackModalAlbumDetailsPrewarm(albumKey) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return;
@@ -15360,6 +15381,7 @@ const SCAN_COMPLETION_VIEW_REFRESH_RETRY_DELAYS_MS = Object.freeze([1000, 3000])
 const COVER_COMPLETION_VIEW_REFRESH_RETRY_DELAYS_MS = Object.freeze([1000, 3000]);
 const BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT = 2;
 const STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS = 25;
+const STATUS_POLL_FOREGROUND_IDLE_MAX_WAIT_MS = 1200;
 const STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS = 100;
 let pendingSidebarRenderFrameId = 0;
 let libraryStatusAction = null;
@@ -16612,7 +16634,16 @@ async function fetchAndRender(url, push = true, options = {}) {
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
     applyViewPayload(payloadToApply, responseApplyOptions);
+    const previousAppliedInventoryMutationRevision = Number(
+      state.ui.appliedViewInventoryMutationRevision,
+    );
     const appliedInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    const appliedNewInventoryRevision = Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0
+      && (
+        !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
+        || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
+      );
     if (Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
@@ -16656,6 +16687,13 @@ async function fetchAndRender(url, push = true, options = {}) {
         : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
+    if (appliedNewInventoryRevision
+        && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+      invalidateAllHydratedTrackModalAlbumDetails();
+      if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
+        await refreshOpenTrackModalAfterInventoryMutation();
+      }
+    }
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
     if (responseOwnsModalAlbum && currentModalAlbum === responseModalAlbum
         && typeof refreshOpenTrackModalVersionState === 'function'
@@ -17294,9 +17332,21 @@ async function pollStatus() {
       && coverScheduler?.isForegroundIdle?.() === false
       && typeof coverScheduler.whenForegroundIdle === 'function'
     ) {
-      await coverScheduler.whenForegroundIdle();
-      if (ownsStatus()) nextPollDelay = STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS;
-      return;
+      let idleDeadlineId = 0;
+      const foregroundIdleBeforeDeadline = await Promise.race([
+        coverScheduler.whenForegroundIdle().then(() => true),
+        new Promise((resolve) => {
+          idleDeadlineId = scheduleBrowserTimeout(
+            () => resolve(false),
+            STATUS_POLL_FOREGROUND_IDLE_MAX_WAIT_MS,
+          );
+        }),
+      ]);
+      if (foregroundIdleBeforeDeadline) {
+        clearBrowserTimeout(idleDeadlineId);
+        if (ownsStatus()) nextPollDelay = STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS;
+        return;
+      }
     }
     const response = await fetch('/status');
     const data = await readGalleryResponse(response, ownsStatus);
@@ -32254,12 +32304,7 @@ async function confirmManualTagEdit() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
-      if (
-        data.save_task_id
-        && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
-      ) {
-        failedSaveTaskError = String(data.error || '').trim();
-      }
+      failedSaveTaskError = String(data.error || '').trim();
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {
@@ -32407,7 +32452,9 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
-      restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
+      if (!failedLogHistoryEntryId) {
+        restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
+      }
     }
     showRepairAlert(
       failedSaveTaskError || 'Failed to edit tags.',

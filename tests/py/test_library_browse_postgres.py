@@ -2107,7 +2107,7 @@ def test_postgres_library_browse_builds_root_sidebar_payload_from_rows(monkeypat
     assert tender_buttons["album_preference"]["rating"] == 9
     assert tender_buttons["album_preference"]["provenance"] == "explicit_import"
     assert tender_buttons["album_preference"]["can_edit"] is True
-    assert queued_covers == [(r"covers/tender.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480)]
+    assert queued_covers == [(r"covers/tender.jpg", str(Path("covers") / ".album-haven"), 480)]
     assert len(connections) == 1
     assert connections[0].rollback_count == 1
     assert connections[0].close_count == 1
@@ -8102,8 +8102,8 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     ]
     assert payload["artist_count"] == 3
     assert queued_covers == [
-        ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
-        ("covers/transatlantic.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        ("covers/neal.jpg", str(Path("covers") / ".album-haven"), 480),
+        ("covers/transatlantic.jpg", str(Path("covers") / ".album-haven"), 480),
     ]
     assert "delegate" in event_order
     assert event_order.index("delegate") < event_order.index("queue")
@@ -8930,7 +8930,7 @@ def test_postgres_selected_artist_payload_queues_visible_display_cover_variants(
     )
 
     assert payload["selected_artist"] == "Broadcast"
-    assert queued_covers == [(r"covers/tender.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480)]
+    assert queued_covers == [(r"covers/tender.jpg", str(Path("covers") / ".album-haven"), 480)]
     assert not hasattr(library_browse_postgres_module, "_prewarm_display_cover_variants_for_groups")
 
 
@@ -8970,8 +8970,8 @@ def test_postgres_cover_variant_queue_uses_preview_and_full_card_sizes(monkeypat
     )
 
     assert queued_covers == [
-        ("covers/preview.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
-        ("covers/full.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        ("covers/preview.jpg", str(Path("covers") / ".album-haven"), 480),
+        ("covers/full.jpg", str(Path("covers") / ".album-haven"), 480),
     ]
     assert queued_recorders == [recorder, recorder]
 
@@ -9005,8 +9005,8 @@ def test_postgres_cover_variant_queue_deduplicates_without_consuming_limit(monke
     )
 
     assert queued_covers == [
-        ("covers/shared.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
-        ("covers/full.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        ("covers/shared.jpg", str(Path("covers") / ".album-haven"), 480),
+        ("covers/full.jpg", str(Path("covers") / ".album-haven"), 480),
     ]
 
 
@@ -9038,8 +9038,8 @@ def test_postgres_search_all_artists_cover_variant_queue_is_bounded_to_two(monke
     )
 
     assert queued_covers == [
-        ("covers/artist-0.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
-        ("covers/artist-1.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        ("covers/artist-0.jpg", str(Path("covers") / ".album-haven"), 480),
+        ("covers/artist-1.jpg", str(Path("covers") / ".album-haven"), 480),
     ]
     assert all(path != "covers/artist-2.jpg" for path, _cache_root, _size in queued_covers)
 
@@ -9111,7 +9111,7 @@ def test_postgres_root_album_browse_payload_queues_visible_display_cover_variant
     )
 
     assert payload["artist_count"] == 1
-    assert queued_covers == [(r"covers/tender.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480)]
+    assert queued_covers == [(r"covers/tender.jpg", str(Path("covers") / ".album-haven"), 480)]
     assert not hasattr(library_browse_postgres_module, "_prewarm_display_cover_variants_for_groups")
 
 
@@ -9233,8 +9233,8 @@ def test_postgres_selected_artist_preview_payload_queues_reusable_family_cover_v
         "Trish Keenan"
     ]
     assert queued_covers == [
-        (r"covers/tender.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
-        (r"covers/trish.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        (r"covers/tender.jpg", str(Path("covers") / ".album-haven"), 480),
+        (r"covers/trish.jpg", str(Path("covers") / ".album-haven"), 480),
     ]
     assert not hasattr(library_browse_postgres_module, "_prewarm_display_cover_variants_for_groups")
 
@@ -12374,7 +12374,14 @@ def test_duplicate_source_attachment_defers_pg18_cache_miss_to_global_prewarm(mo
             )
             return Cursor(rows)
 
-    album = {"key": "one", "preview_only": True}
+    album = {
+        "key": "one",
+        "preview_only": False,
+        "tracks": [
+            {"path": "C:\\Music\\Artist\\Original\\CD1\\01.flac"},
+            {"path": "C:\\Music\\Artist\\Complete copy\\CD1\\01.flac"},
+        ],
+    }
     connection = Connection()
     started_at = perf_counter()
     repository._attach_duplicate_sources(
@@ -12388,6 +12395,7 @@ def test_duplicate_source_attachment_defers_pg18_cache_miss_to_global_prewarm(mo
     assert queued == ["duplicate-identities"]
     assert connection.queries == []
     assert "has_duplicate_files" not in album
+    assert album["preview_only"] is True
     assert elapsed_ms < 250, (
         "interactive duplicate projection cache misses must return within 250 ms; "
         f"measured {elapsed_ms:.1f} ms"
@@ -17729,7 +17737,7 @@ def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypa
     assert queued == [
         (
             r"N:\Music\Artist\Album\Art\Front.jpg",
-            str(Path(r"C:\AlbumHavenData") / "display-cover-cache"),
+            str(Path(r"N:\Music\Artist\Album\Art") / ".album-haven"),
             None,
         )
     ]

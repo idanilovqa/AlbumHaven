@@ -17,8 +17,8 @@ const validatorTest = validatorExists ? test : test.skip;
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual', 53],
-  ['cover-providers-1', 12],
+  ['gallery-search-visual', 65],
+  ['cover-providers-1', 19],
   ['cover-providers-2', 13],
   ['metadata-mutations', 14],
   ['playback-utilities-1', 14],
@@ -116,7 +116,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved seven-way 133-case assignment', () => {
+test('functional shard contract pins the approved seven-way 153-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -130,7 +130,7 @@ test('functional shard contract pins the approved seven-way 133-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 133);
+  assert.equal(total, 153);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -265,6 +265,7 @@ for (const [failureCode, name] of [
 validatorTest(name, () => {
   const validator = loadValidator();
   const { shard, matrix } = invocationIsolationFixture();
+  shard.name = 'cover-providers-1';
   shard.invocations[0].cases = shard.invocations[0].cases.slice(0, 4);
   const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-functional-shard-'));
   const fixtureWorkRoot = path.join(runnerTemp, 'fixture-work');
@@ -369,6 +370,7 @@ validatorTest(name, () => {
       );
       assert.equal(call.options.env.PLAYWRIGHT_REAL_APP_PORT, '5200');
       assert.equal(call.options.env.PLAYWRIGHT_PROVIDER_PORT, '5202');
+      assert.equal(call.options.env.ALBUM_HAVEN_COVER_REPAIR_MIN_EDGE, '2000');
       for (const key of [
         'MUSIC_DIR',
         'MUSIC_APP_DATA_DIR',
@@ -748,12 +750,13 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
       "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
       "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
       "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
-      "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+      "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
+      "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
     ].sort(),
   );
   assert.equal(
     secondWaveInvocations.filter((invocation) => invocation.baselineMode === 'global-mutation').length,
-    1,
+    2,
   );
 });
 
@@ -764,8 +767,8 @@ validatorTest('gallery startup projections share one early app process before is
   const shard = contract.shards.find((candidate) => candidate.name === 'gallery-search-visual');
   const waves = validator.executionWavesForShard(shard, matrix);
 
-  assert.equal(waves.length, 2);
-  assert.deepEqual(waves.map((wave) => wave.wave), [1, 2]);
+  assert.equal(waves.length, 4);
+  assert.deepEqual(waves.map((wave) => wave.wave), [1, 2, 3, 4]);
   const isolatedFirstWave = waves[0].invocations.filter((invocation) => (
     invocation.baselineMode === 'isolated-app-process'
   ));
@@ -919,8 +922,8 @@ validatorTest('all seven shards use explicit effect-compatible wave budgets', ()
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual', { cases: 53, waves: [1, 2] }],
-    ['cover-providers-1', { cases: 12, waves: [1, 2] }],
+    ['gallery-search-visual', { cases: 65, waves: [1, 2, 3, 4] }],
+    ['cover-providers-1', { cases: 19, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 13, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],

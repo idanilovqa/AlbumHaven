@@ -244,7 +244,11 @@ function loadFunctionalCaseMatrix(repoRoot) {
 }
 
 function executionWavesForShard(shard, matrixRows) {
-  const maximumWave = shard.name.startsWith('playback-utilities-') ? 5 : 3;
+  const maximumWave = shard.name.startsWith('playback-utilities-')
+    ? 5
+    : shard.name === 'metadata-mutations'
+      ? 3
+      : 4;
   const matrixByCase = new Map(matrixRows.map((row) => [caseKey(row), row]));
   const waves = new Map();
   for (const invocation of shard.invocations || []) {
@@ -486,6 +490,7 @@ function runFunctionalShard(contract, shardName, options = {}) {
         PLAYWRIGHT_PROVIDER_PORT: String(portBase + 2),
         PLAYWRIGHT_BLOB_OUTPUT_FILE: path.join(blobRoot, `${invocationName}.zip`),
       };
+      if (shardName === 'cover-providers-1') childEnv.ALBUM_HAVEN_COVER_REPAIR_MIN_EDGE = '2000';
       for (const key of OWNER_RUNTIME_ENV_KEYS) childEnv[key] = '';
       delete childEnv.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE;
       if (invocation.config === 'playwright.lastfm-auto-timezone.config.js') {

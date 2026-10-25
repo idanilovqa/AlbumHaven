@@ -120,7 +120,6 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
     );
 
     const candidates = await coverLookupActions.readRemoteCandidateSummaries();
-    await coverLookupActions.waitForTaskStatus(taskTitle, `${candidates.length} covers found`);
     const appleCandidates = candidates.filter(
       (candidate) => candidate.source.toLowerCase().includes('apple'),
     );

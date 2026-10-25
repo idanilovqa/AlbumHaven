@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from os.path import basename
+from os.path import basename, normcase
 import re
 from threading import Event, Lock
 from time import perf_counter, thread_time
@@ -358,6 +358,18 @@ class PostgresLibraryBrowseRepository:
         else:
             duplicates = load(connection)
         if duplicates is None:
+            from music_app.services.library import _track_album_container
+
+            for album in albums:
+                if album.get("preview_only"):
+                    continue
+                physical_containers = {
+                    normcase(_track_album_container(str(track.get("path") or "")))
+                    for track in album.get("tracks", [])
+                    if isinstance(track, Mapping) and str(track.get("path") or "")
+                }
+                if len(physical_containers) > 1:
+                    album["preview_only"] = True
             return
         for album in albums:
             result = duplicates.get(str(album.get("_persisted_album_key") or album.get("key") or album.get("album_ref") or ""), {})

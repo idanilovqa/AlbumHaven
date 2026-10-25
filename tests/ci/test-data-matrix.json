@@ -2884,7 +2884,7 @@
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
-    "executionWave": 1,
+    "executionWave": 2,
     "databaseScenarios": [
       "cover-lookup:selected-local-art-rescan"
     ],
@@ -2907,7 +2907,7 @@
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
-    "executionWave": 1,
+    "executionWave": 4,
     "databaseScenarios": [
       "cover-lookup:persisted-candidates-restart"
     ],

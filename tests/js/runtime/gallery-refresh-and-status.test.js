@@ -3623,12 +3623,14 @@ test('idle pollStatus waits for real foreground cover idle and retries immediate
 
   releaseForegroundIdle();
   await deferredPoll;
-  assert.equal(scheduled.length, 1);
-  assert.equal(scheduled[0].delayMs, 25);
+  assert.equal(scheduled.length, 2);
+  assert.equal(scheduled[0].delayMs, 1200);
+  assert.deepEqual(calls.clearedTimeouts, [1]);
+  assert.equal(scheduled[1].delayMs, 25);
   assert.equal(calls.updateStatusIndicator.length, 0);
 
   context.galleryCoverLoadScheduler.isForegroundIdle = () => true;
-  scheduled[0].callback();
+  scheduled[1].callback();
   assert.equal(pendingRequests.length, 1);
   assert.equal(pendingRequests[0].url, '/status');
   pendingRequests[0].resolveWith({
@@ -3638,6 +3640,41 @@ test('idle pollStatus waits for real foreground cover idle and retries immediate
     relations_in_progress: false,
   });
   await flushMicrotasks();
+});
+
+test('idle pollStatus cannot wait forever for stalled foreground cover work', async () => {
+  const { context, pendingRequests } = createContext();
+  const scheduled = [];
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+  };
+  context.galleryCoverLoadScheduler = {
+    isForegroundIdle() { return false; },
+    whenForegroundIdle() { return new Promise(() => {}); },
+  };
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduled.push({ callback, delayMs });
+    return scheduled.length;
+  };
+
+  const statusPromise = context.pollStatus();
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 0);
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].delayMs, 1200);
+
+  scheduled[0].callback();
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/status');
+  pendingRequests[0].resolveWith({
+    covers_in_progress: false,
+    scan_in_progress: false,
+    relations_in_progress: false,
+  });
+  await statusPromise;
 });
 
 test('busy pollStatus is never delayed by foreground cover activity', async () => {
@@ -3952,6 +3989,43 @@ test('pollStatus does not reload a foreground view already read at the advanced 
     '/status',
   ]);
   assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+test('pollStatus refreshes an open Album Details after applying an inventory mutation', async () => {
+  const { context, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.modalReleases = [{ key: 'watcher-album' }];
+  context.state.modalReleaseIndex = 0;
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 12,
+  };
+  let modalRefreshes = 0;
+  context.refreshOpenTrackModalAfterInventoryMutation = async () => {
+    modalRefreshes += 1;
+  };
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+  assert.equal(pendingRequests.length, 2);
+  pendingRequests[1].resolveWith({
+    artist_groups: [],
+    inventory_mutation_revision: 13,
+  });
+  await statusRequest;
+
+  assert.equal(modalRefreshes, 1);
 });
 
 test('pollStatus defers an inventory refresh while a tag edit owns gallery resources', async () => {

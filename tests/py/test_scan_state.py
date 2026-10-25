@@ -2411,18 +2411,24 @@ def test_scan_watcher_health_failure_remains_best_effort(
         followups.append("health")
         raise RuntimeError("watcher health failed")
 
+    def start_background_cover_refresh():
+        assert library_state["post_scan_cover_refresh_pending"] is True
+        followups.append("background")
+        library_state["scan_generation"] += 1
+
     scan_state.refresh_library_state(
         library_state, config=runtime_config, logger=runtime_logger, force=True,
         cache_lock=scan_state.Lock(), scan_music_incremental=lambda **_kwargs: ({}, 55.0),
         refresh_relation_views=lambda **_kwargs: None,
         start_manual_cover_refresh=lambda **_kwargs: followups.append("manual"),
-        start_background_cover_refresh=lambda: followups.append("background"),
+        start_background_cover_refresh=start_background_cover_refresh,
         queue_mbid_assertion_follow_up=lambda *_args, **_kwargs: followups.append("mbid"),
         recover_library_watch_health=fail_health,
     )
     assert followups == ["health", "background", "mbid"]
     assert library_state["scan_outcome"] == "completed"
     assert library_state["scan_in_progress"] is False
+    assert library_state["post_scan_cover_refresh_pending"] is False
     assert library_state["last_error"] is None
 
 @pytest.mark.parametrize("projection_ready", [False, True])

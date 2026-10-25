@@ -73,6 +73,12 @@ $profileSessionRoot = Join-Path $stateRoot 'prepared-profile'
 $foundationRoot = Join-Path $RunnerTemp 'album-haven-performance-foundations'
 $resultRoot = Join-Path $RepositoryRoot 'test-results\playwright-performance-targets'
 $failedTargets = [System.Collections.Generic.List[string]]::new()
+$databaseMutatingTargets = @(
+    'edit-tags-post-edit',
+    'cover-lookup',
+    'notification-history'
+)
+$restorePreparedDatabaseBeforeNextTarget = $false
 $targetIndex = 0
 $postgresServiceName = "postgresql-x64-$ExpectedPostgresMajor"
 $verifiedBaseFixtureRoot = $env:ALBUM_HAVEN_FIXTURE_ROOT
@@ -202,13 +208,7 @@ function Prepare-PerformanceFixture {
     }
 
     if ($FixtureMode -in @('preloaded-release', 'preloaded-derived')) {
-        $loader = Join-Path $RepositoryRoot 'scripts\ci\load-fixture-profile.py'
-        & $PythonPath $loader `
-            --fixture-root $env:ALBUM_HAVEN_FIXTURE_ROOT `
-            --profile $FixtureProfile `
-            --database-url $env:DATABASE_MIGRATOR_URL `
-            --replace-existing
-        if ($LASTEXITCODE -ne 0) { throw "Fixture preparation failed for $FixtureProfile." }
+        Restore-PerformanceDatabase
         $env:ALBUM_HAVEN_E2E_REUSE_STATE = '1'
         return
     }
@@ -225,6 +225,16 @@ function Prepare-PerformanceFixture {
     }
     if ($LASTEXITCODE -ne 0) { throw "Fixture preparation failed for $FixtureProfile." }
     $env:ALBUM_HAVEN_E2E_REUSE_STATE = '1'
+}
+
+function Restore-PerformanceDatabase {
+    $loader = Join-Path $RepositoryRoot 'scripts\ci\load-fixture-profile.py'
+    & $PythonPath $loader `
+        --fixture-root $env:ALBUM_HAVEN_FIXTURE_ROOT `
+        --profile $FixtureProfile `
+        --database-url $env:DATABASE_MIGRATOR_URL `
+        --replace-existing
+    if ($LASTEXITCODE -ne 0) { throw "Fixture restoration failed for $FixtureProfile." }
 }
 
 Set-Location $RepositoryRoot
@@ -287,6 +297,10 @@ try {
     $env:ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT = $null
     foreach ($target in $targetNames) {
         $targetIndex += 1
+        if ($restorePreparedDatabaseBeforeNextTarget) {
+            Restore-PerformanceDatabase
+            $restorePreparedDatabaseBeforeNextTarget = $false
+        }
         $targetPort = Get-SafeTargetPort -SequenceIndex ($targetIndex - 1)
         $targetFailure = $null
         $targetPortFailure = $null
@@ -326,6 +340,7 @@ try {
             $conclusion = if ($targetFailure -or $targetExitCode -ne 0 -or $targetPortFailure) { 'failure' } else { 'success' }
             Write-CiJob $target $conclusion
         }
+        $restorePreparedDatabaseBeforeNextTarget = $databaseMutatingTargets -contains $target
         if ($processCleanupFailed) { throw "Performance target $target process cleanup is unproven; stopping remaining targets." }
         if ($targetPortFailure) { throw "Performance target $target cleanup failed; shard continuation is unsafe: $targetPortFailure" }
     }

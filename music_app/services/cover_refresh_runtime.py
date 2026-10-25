@@ -64,26 +64,49 @@ class CoverRefreshContext:
 PreparedCoverRefresh = tuple[CoverRefreshContext, list[dict[str, object]]]
 
 
+def is_cover_refresh_busy(library_state: dict[str, object]) -> bool:
+    return bool(
+        library_state.get("covers_in_progress")
+        or library_state.get("post_scan_cover_refresh_pending")
+    )
+
+
 def build_cover_progress_status(library_state: dict[str, object], *, now=None) -> dict[str, object]:
     """Project monotonic run timing without inventing estimates for older workers."""
     now = time.monotonic() if now is None else now
-    started = library_state.get("covers_started_monotonic")
-    execution = library_state.get("covers_execution_started_monotonic")
-    finished = library_state.get("covers_finished_monotonic")
+    pending_handoff = bool(
+        library_state.get("post_scan_cover_refresh_pending")
+        and not library_state.get("covers_in_progress")
+    )
+    started = None if pending_handoff else library_state.get("covers_started_monotonic")
+    execution = None if pending_handoff else library_state.get("covers_execution_started_monotonic")
+    finished = None if pending_handoff else library_state.get("covers_finished_monotonic")
     elapsed = max(0.0, (finished or now) - started) if started is not None else None
-    processed = int(library_state.get("covers_completed", library_state.get("covers_processed")) or 0)
-    total = int(library_state.get("covers_total") or 0)
+    processed = 0 if pending_handoff else int(library_state.get("covers_processed") or 0)
+    completed = 0 if pending_handoff else int(
+        library_state.get("covers_completed", processed) or 0
+    )
+    total = 0 if pending_handoff else int(library_state.get("covers_total") or 0)
+    covers_in_progress = is_cover_refresh_busy(library_state)
     remaining = None
-    if library_state.get("covers_in_progress") and execution is not None and processed > 0 and total >= processed:
-        remaining = max(0.0, (finished or now) - execution) / processed * (total - processed)
+    if covers_in_progress and execution is not None and completed > 0 and total >= completed:
+        remaining = max(0.0, (finished or now) - execution) / completed * (total - completed)
     return {
-        "covers_spotify_quota_exceeded": bool(library_state.get("covers_spotify_quota_exceeded")),
+        "covers_in_progress": covers_in_progress,
+        "covers_spotify_quota_exceeded": False if pending_handoff else bool(
+            library_state.get("covers_spotify_quota_exceeded")
+        ),
         "covers_elapsed_seconds": elapsed,
         "covers_estimated_remaining_seconds": remaining,
-        "covers_run_mode": library_state.get("covers_run_mode") or "unknown",
-        "covers_outcome": library_state.get("covers_outcome") or "unknown",
+        "covers_run_mode": "unknown" if pending_handoff else library_state.get("covers_run_mode") or "unknown",
+        "covers_outcome": "running" if pending_handoff else library_state.get("covers_outcome") or "unknown",
         "covers_phase": ("preparing" if execution is None else "fetching")
-        if library_state.get("covers_in_progress") else ("finished" if finished is not None else "idle"),
+        if covers_in_progress else ("finished" if finished is not None else "idle"),
+        "covers_processed": processed,
+        "covers_completed": completed,
+        "covers_total": total,
+        "covers_downloaded": 0 if pending_handoff else int(library_state.get("covers_downloaded") or 0),
+        "covers_current_folder": "" if pending_handoff else library_state.get("covers_current_folder") or "",
     }
 
 

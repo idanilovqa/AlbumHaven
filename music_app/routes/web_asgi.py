@@ -31,6 +31,7 @@ from music_app.services.covers import (
     normalize_cover_variant_size,
     resolve_cover_display_variant,
 )
+from music_app.services.cover_refresh_runtime import is_cover_refresh_busy
 from music_app.services.gallery_display import (
     DEFAULT_GALLERY_DISPLAY_MODE,
     DEFAULT_GALLERY_SCALE_PERCENT,
@@ -868,7 +869,7 @@ def _build_bootstrap_payload(
                 "rebuildReason": str(library_state.get("relation_projection_rebuild_reason") or ""),
                 "durationMs": float(library_state.get("relation_projection_duration_ms") or 0.0),
             },
-            "coversInProgress": bool(library_state.get("covers_in_progress")),
+            "coversInProgress": is_cover_refresh_busy(library_state),
             "partialView": initial_view_partial,
             "startupPreview": {
                 "mode": preview_mode,
@@ -1104,7 +1105,7 @@ async def index(request: Request) -> Response:
         artist_count=int(initial_view.get("artist_count") or 0),
         scan_in_progress=bool(library_state.get("scan_in_progress")) or started_background_refresh,
         hydrate_in_progress=bool(library_state.get("hydrate_in_progress")),
-        covers_in_progress=bool(library_state.get("covers_in_progress")),
+        covers_in_progress=is_cover_refresh_busy(library_state),
         bootstrap_mode=startup_preview_mode
         if initial_view_partial or startup_preview_mode != "empty_shell"
         else "shell_only",
@@ -1141,7 +1142,7 @@ async def news_center(request: Request) -> Response:
             "scanInProgress": bool(library_state.get("scan_in_progress")),
             "scanMode": str(library_state.get("scan_mode") or "idle"),
             "relationsInProgress": bool(library_state.get("relations_in_progress")),
-            "coversInProgress": bool(library_state.get("covers_in_progress")),
+            "coversInProgress": is_cover_refresh_busy(library_state),
             "refreshed": False,
             "statusApiUrl": "/status",
             "startupHydration": {

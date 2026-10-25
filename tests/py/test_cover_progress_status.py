@@ -29,6 +29,35 @@ def test_cover_progress_unknown_timing_does_not_invent_eta():
     assert status["covers_estimated_remaining_seconds"] is None
 
 
+def test_post_scan_cover_handoff_projects_one_consistent_preparing_status():
+    status = build_cover_progress_status({
+        "covers_in_progress": False,
+        "post_scan_cover_refresh_pending": True,
+        "covers_started_monotonic": 100.0,
+        "covers_execution_started_monotonic": 120.0,
+        "covers_finished_monotonic": 200.0,
+        "covers_run_mode": "background",
+        "covers_outcome": "completed",
+        "covers_processed": 5,
+        "covers_completed": 5,
+        "covers_total": 10,
+        "covers_downloaded": 3,
+        "covers_current_folder": "Old/Album",
+    }, now=300.0)
+
+    assert status["covers_in_progress"] is True
+    assert status["covers_phase"] == "preparing"
+    assert status["covers_elapsed_seconds"] is None
+    assert status["covers_estimated_remaining_seconds"] is None
+    assert status["covers_run_mode"] == "unknown"
+    assert status["covers_outcome"] == "running"
+    assert status["covers_processed"] == 0
+    assert status["covers_completed"] == 0
+    assert status["covers_total"] == 0
+    assert status["covers_downloaded"] == 0
+    assert status["covers_current_folder"] == ""
+
+
 def test_new_run_discards_previous_run_timing():
     state = {"covers_execution_started_monotonic": 10.0, "covers_finished_monotonic": 20.0}
     _reset_cover_refresh_progress(state, in_progress=True)

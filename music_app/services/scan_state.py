@@ -522,53 +522,65 @@ def refresh_library_state(
             )
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_current_path"] = ""
+                library_state["post_scan_cover_refresh_pending"] = bool(
+                    scan_completed_successfully
+                )
+                library_state["post_scan_cover_refresh_pending_generation"] = (
+                    scan_generation if scan_completed_successfully else 0
+                )
                 library_state["scan_in_progress"] = False
                 library_state["scan_phase"] = "idle"
                 library_state["scan_mode"] = "idle"
                 library_state.pop("scan_committed_generation", None)
 
-    if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
-        if (
-            requested_scan_mode == "manual_full_rescan"
-            and recover_library_watch_health is not None
-        ):
-            observed_root_ids = publication_state.get(
-                "observed_library_root_ids"
+    try:
+        if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
+            if (
+                requested_scan_mode == "manual_full_rescan"
+                and recover_library_watch_health is not None
+            ):
+                observed_root_ids = publication_state.get(
+                    "observed_library_root_ids"
+                )
+                try:
+                    recover_library_watch_health(
+                        scan_mode=requested_scan_mode,
+                        scan_started_at=scan_started_at,
+                        observed_root_ids=(
+                            observed_root_ids
+                            if isinstance(observed_root_ids, (set, list, tuple))
+                            else ()
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Unable to clear recovered library watcher health."
+                    )
+            finalize_post_scan_actions(
+                library_state,
+                config=cfg,
+                logger=logger,
+                previous_album_keys=previous_album_keys,
+                start_manual_cover_refresh=start_manual_cover_refresh,
+                start_background_cover_refresh=start_background_cover_refresh,
             )
-            try:
-                recover_library_watch_health(
-                    scan_mode=requested_scan_mode,
-                    scan_started_at=scan_started_at,
-                    observed_root_ids=(
-                        observed_root_ids
-                        if isinstance(observed_root_ids, (set, list, tuple))
-                        else ()
-                    ),
-                )
-            except Exception:
-                logger.exception(
-                    "Unable to clear recovered library watcher health."
-                )
-        finalize_post_scan_actions(
-            library_state,
-            config=cfg,
-            logger=logger,
-            previous_album_keys=previous_album_keys,
-            start_manual_cover_refresh=start_manual_cover_refresh,
-            start_background_cover_refresh=start_background_cover_refresh,
-        )
-        if queue_mbid_assertion_follow_up is not None:
-            try:
-                queue_mbid_assertion_follow_up(
-                    library_state,
-                    previous_albums=previous_albums,
-                )
-            except Exception as exc:
-                log_app_event(
-                    cfg,
-                    logger,
-                    "Post-scan MBID assertion follow-up hook failed",
-                    level="warning",
-                    reason="post_scan_mbid_assertion_hook_failed",
-                    error=str(exc),
-                )
+            if queue_mbid_assertion_follow_up is not None:
+                try:
+                    queue_mbid_assertion_follow_up(
+                        library_state,
+                        previous_albums=previous_albums,
+                    )
+                except Exception as exc:
+                    log_app_event(
+                        cfg,
+                        logger,
+                        "Post-scan MBID assertion follow-up hook failed",
+                        level="warning",
+                        reason="post_scan_mbid_assertion_hook_failed",
+                        error=str(exc),
+                    )
+    finally:
+        with cache_lock:
+            if int(library_state.get("post_scan_cover_refresh_pending_generation") or 0) == scan_generation:
+                library_state["post_scan_cover_refresh_pending"] = False
+                library_state["post_scan_cover_refresh_pending_generation"] = 0

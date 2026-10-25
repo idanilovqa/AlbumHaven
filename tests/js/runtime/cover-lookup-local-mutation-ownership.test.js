@@ -12,7 +12,7 @@ function harness() {
   class Button { disabled = false; hidden = false; textContent = ''; }
   const save = new Button(), remove = new Button();
   const overlay = { hidden: true, querySelectorAll: () => [remove] };
-  const confirm = { hidden: true };
+  const confirm = { hidden: true, style: {} };
   const requests = [], galleries = [], notifications = [], painted = new Map(), server = new Map();
   const context = vm.createContext({
     state: { coverRefreshTokens: {}, coverLookup: { modal: { pastedImages: [] }, tasks: [], optimisticAlbumCovers: {} } },
@@ -72,6 +72,19 @@ function harness() {
   };
   return { context, markSeen, open, settle, draft, selection, save, remove, overlay, confirm, requests, galleries, notifications, painted, server };
 }
+
+test('local cover delete confirmation foregrounds the desktop and mobile Cover Lookup layers', async () => {
+  const h = harness();
+  await h.open(album('A'));
+
+  h.context.openCoverLookupDeleteConfirm('/A/source.jpg');
+
+  assert.equal(h.confirm.hidden, false);
+  assert.ok(
+    Number(h.confirm.style.zIndex) > 4550,
+    'the confirmation must remain clickable above the mobile Cover Lookup sheet',
+  );
+});
 
 for (const outcome of ['success', 'success without gallery', 'error']) {
   test(`late local deletion ${outcome} preserves another album's modal`, async () => {

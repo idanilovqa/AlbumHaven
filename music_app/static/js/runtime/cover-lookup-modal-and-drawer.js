@@ -2558,6 +2558,7 @@ function openCoverLookupDeleteConfirm(path) {
   if (els.text) {
     els.text.textContent = 'Are you sure you want to delete this local cover art?';
   }
+  els.overlay.style.zIndex = '4700';
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
 }

@@ -30,6 +30,9 @@ export class CoverLookup extends BasePage {
     this.sectionTitles = this.modalBody.locator('.cover-lookup-section-title');
     this.subsectionTitles = this.modalBody.locator('.cover-lookup-subsection-title');
     this.localCoverCards = this.modalBody.locator('[data-select-local-cover]');
+    this.deleteConfirm = page.locator('#cover-lookup-delete-confirm-modal');
+    this.deleteConfirmDialog = this.deleteConfirm.getByRole('dialog');
+    this.deleteConfirmButton = this.deleteConfirm.getByRole('button', { name: 'Delete', exact: true });
     this.activeLocalCoverCard = this.modalBody
       .locator('[data-select-local-cover][data-cover-lookup-local-active]')
       .first();
@@ -461,6 +464,28 @@ export class CoverLookup extends BasePage {
 
   localCoverActionWithin(card) {
     return card.locator(this.localCoverActionWithinCardSelector).first();
+  }
+
+  localCoverDeleteWithin(card) {
+    return card.locator('[data-delete-local-cover]').first();
+  }
+
+  async readDeleteConfirmStacking() {
+    // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns its confirmation stacking evidence
+    return this.deleteConfirmDialog.evaluate((dialog) => {
+      const confirmation = dialog.closest('#cover-lookup-delete-confirm-modal');
+      const lookup = document.querySelector('#cover-lookup-modal');
+      const bounds = dialog.getBoundingClientRect();
+      const topmost = document.elementFromPoint(
+        bounds.left + (bounds.width / 2),
+        bounds.top + (bounds.height / 2),
+      );
+      return {
+        confirmationZIndex: Number(getComputedStyle(confirmation).zIndex) || 0,
+        lookupZIndex: Number(getComputedStyle(lookup).zIndex) || 0,
+        confirmationOwnsTopElement: Boolean(topmost?.closest('#cover-lookup-delete-confirm-modal')),
+      };
+    });
   }
 
   localCoverResolutionWithin(card) {

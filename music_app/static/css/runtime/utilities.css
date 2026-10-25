@@ -1373,7 +1373,7 @@
   z-index: 96;
 }
 #cover-lookup-delete-confirm-modal {
-  z-index: 130;
+  z-index: 4700;
 }
 #repair-confirm-modal {
   z-index: 120;

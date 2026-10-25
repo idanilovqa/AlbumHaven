@@ -1476,6 +1476,57 @@ export class CoverLookupActions {
     return names;
   }
 
+  async deleteLocalCoverBySourcePath(sourcePath, options = {}) {
+    const timeout = options.timeout || 30000;
+    const expectedPath = String(sourcePath || '').trim();
+    const count = await this.coverLookup.localCoverCards.count();
+    let card = null;
+    for (let index = 0; index < count; index += 1) {
+      const candidate = this.coverLookup.localCoverCards.nth(index);
+      if (String(await candidate.getAttribute('data-select-local-cover') || '').trim() === expectedPath) {
+        card = candidate;
+        break;
+      }
+    }
+    if (!card) throw new Error(`Local cover candidate was not found: ${expectedPath}`);
+
+    await this.coverLookup.localCoverDeleteWithin(card).click();
+    await expect(this.coverLookup.deleteConfirm).toBeVisible({ timeout });
+    await expect(this.coverLookup.modal).toBeVisible({ timeout });
+    const stacking = await this.coverLookup.readDeleteConfirmStacking();
+    expect(stacking.confirmationZIndex).toBeGreaterThan(stacking.lookupZIndex);
+    expect(stacking.confirmationOwnsTopElement).toBe(true);
+
+    const responsePromise = this.coverLookup.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/local-delete'
+    ), { timeout });
+    await this.coverLookup.deleteConfirmButton.click();
+    const response = await responsePromise;
+    const payload = await response.json();
+    if (!response.ok() || payload?.ok !== true) {
+      throw new Error(
+        `Local cover deletion failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
+      );
+    }
+    await expect(this.coverLookup.deleteConfirm).toBeHidden({ timeout });
+    await expect.poll(async () => {
+      const paths = [];
+      const remainingCount = await this.coverLookup.localCoverCards.count();
+      for (let index = 0; index < remainingCount; index += 1) {
+        paths.push(String(
+          await this.coverLookup.localCoverCards.nth(index)
+            .getAttribute('data-select-local-cover') || '',
+        ).trim());
+      }
+      return paths;
+    }, {
+      message: `Expected deleted local cover to leave the gallery: ${expectedPath}`,
+      timeout,
+    }).not.toContain(expectedPath);
+    return { payload, stacking };
+  }
+
   async selectFirstInactiveLocalCoverAndSave(options = {}) {
     const timeout = options.timeout || 30000;
     await expect(this.coverLookup.inactiveLocalCoverCards.first()).toBeVisible({ timeout });

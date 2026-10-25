@@ -1064,6 +1064,69 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
   });
 });
 
+test('FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  page,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.setTimeout(120_000);
+  let deletedPath = '';
+  let ownedPath = '';
+
+  try {
+    await stepLogger.step('Delete an inactive local cover through the foreground confirmation', async () => {
+      await galleryActions.goto(COVER_LOOKUP_FILTERED_URL);
+      await galleryActions.waitForGalleryReady();
+      expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
+        .toEqual(COVER_LOOKUP_TARGET);
+      await trackModalActions.waitForLoadedSummary();
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      const candidates = await coverLookupActions.readLocalCoverCandidates();
+      const sourceCandidate = candidates.find((item) => (
+        !item.isActive && /[\\/]Art[\\/]Back\.jpg$/i.test(item.sourcePath)
+      ));
+      expect(sourceCandidate).not.toBeUndefined();
+      ownedPath = path.join(path.dirname(sourceCandidate.sourcePath), `delete-e2e-${process.pid}.jpg`);
+      fs.copyFileSync(sourceCandidate.sourcePath, ownedPath);
+      await coverLookupActions.closeModal();
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      const ownedCandidates = await coverLookupActions.readLocalCoverCandidates();
+      const candidate = ownedCandidates.find((item) => item.sourcePath === ownedPath);
+      expect(candidate).not.toBeUndefined();
+      deletedPath = candidate.sourcePath;
+      expect(fs.existsSync(deletedPath)).toBe(true);
+
+      const result = await coverLookupActions.deleteLocalCoverBySourcePath(deletedPath);
+
+      expect(result.stacking.confirmationZIndex).toBeGreaterThan(result.stacking.lookupZIndex);
+      expect(result.stacking.confirmationOwnsTopElement).toBe(true);
+      expect(fs.existsSync(deletedPath)).toBe(false);
+      await expect(coverLookupActions.coverLookup.modal).toBeVisible();
+    });
+
+    await stepLogger.step('Reload and prove the deleted local cover does not return', async () => {
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await galleryActions.waitForGalleryReady();
+      expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
+        .toEqual(COVER_LOOKUP_TARGET);
+      await trackModalActions.waitForLoadedSummary();
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      const reopened = await coverLookupActions.readLocalCoverCandidates();
+      expect(reopened.map((candidate) => candidate.sourcePath)).not.toContain(deletedPath);
+      expect(fs.existsSync(deletedPath)).toBe(false);
+    });
+  } finally {
+    if (ownedPath && fs.existsSync(ownedPath)) fs.unlinkSync(ownedPath);
+  }
+});
+
 test('FTC-COVERS-011 selected local art remains authoritative after rescan and app restart', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,

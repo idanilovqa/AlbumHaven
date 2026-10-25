@@ -1428,3 +1428,21 @@ test('tag editor backdrop closes only when the editor has no changed updates', a
     'a backdrop click should leave a dirty tag editor open',
   );
 });
+
+test('confirming local cover deletion forwards the retained path exactly once', async () => {
+  const { context } = createContext();
+  const deleteButton = createElement({ 'data-confirm-cover-lookup-delete': '1' });
+  const paths = [];
+  context.state.coverLookup.modal = { pendingDeletePath: 'C:\\Music\\Artist\\Album\\Front.jpg' };
+  context.deleteLocalCoverFromLookup = async (sourcePath) => {
+    paths.push(sourcePath);
+  };
+  const { event, wasPrevented } = createEvent({
+    '[data-confirm-cover-lookup-delete="1"]': deleteButton,
+  });
+
+  await context.handleUtilityBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.deepEqual(paths, ['C:\\Music\\Artist\\Album\\Front.jpg']);
+});

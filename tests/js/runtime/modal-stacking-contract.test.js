@@ -73,6 +73,15 @@ test('loop naming launched from Utilities stays above its owning modal', () => {
   );
 });
 
+test('cover delete confirmation remains above desktop and mobile Cover Lookup', () => {
+  const utilitiesCss = readCss('utilities.css');
+  const coverLookupCss = readCss('cover-lookup-modal.css');
+  const confirmationZ = zIndexFor(utilitiesCss, '#cover-lookup-delete-confirm-modal');
+
+  assert.ok(confirmationZ > zIndexFor(coverLookupCss, '.cover-lookup-modal'));
+  assert.ok(confirmationZ > zIndexFor(coverLookupCss, '.cover-lookup-modal.is-mobile-sheet'));
+});
+
 test('missing album badge stays in the cover bottom-right and respects reduced motion', () => {
   const nonAlbumCss = readCss('non-album-and-player.css');
   const badgeRule = nonAlbumCss.match(/\.album-missing-badge\s*\{([^}]*)\}/m)?.[1] || '';

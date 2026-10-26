@@ -28,19 +28,20 @@ function harness(initial = descriptor()) {
   const shell = {...node(), dataset: {nativeAccountId: '41', nativeLibraryId: '73', privateUiContext: STAMP}};
   const nodes = new Map([['app-shell', shell], ...['album-tops-root', 'shell-main-surface', 'sidebar-list',
     'playlist-sidebar-root', 'album-tops-sidebar-root', 'collection-library-navigation'].map(id => [id, node()])]);
-  const events = new Map(), observers = [], calls = {navigation: [], closes: [], forms: [], confirms: [], cancelled: []};
-  const state = {view: initial, ui: {activeViewRequestId: 0}};
-  const window = {location: new URL('https://music.test/'),
+  const observers = [], calls = {navigation: [], closes: [], forms: [], confirms: [], cancelled: []};
+  const state = {view: initial, ui: {activeViewRequestId: 0}, gallery: {}, player: {}};
+  const storage = new Map();
+  const document = Object.assign(new EventTarget(), {getElementById: id => nodes.get(id)});
+  const window = Object.assign(new EventTarget(), {Event, CustomEvent, EventTarget, location: new URL('https://music.test/'),
+    localStorage: {getItem: key => storage.get(String(key)) ?? null,
+      setItem: (key, value) => storage.set(String(key), String(value)), removeItem: key => storage.delete(String(key))},
     history: {pushState() {assert.fail('Top bridge must use the native navigation owner');},
       replaceState() {assert.fail('Top bridge must use the native navigation owner');}},
-    addEventListener(name, listener) {if (!events.has(name)) events.set(name, new Set()); events.get(name).add(listener);},
-    dispatchEvent(event) {for (const listener of events.get(event.type) || []) listener(event);},
     matchMedia: () => ({matches: false}),
     AlbumHavenHomeRuntime: Object.fromEntries(['buttonHtml', 'actionHtml', 'alertHtml', 'galleryCardHtml',
       'artboxHtml', 'navigationItemHtml', 'openChoice'].map(name => [name, () => name])),
-  };
-  const context = vm.createContext({window, state, URL, URLSearchParams, Event,
-    document: {getElementById: id => nodes.get(id)},
+  });
+  const context = vm.createContext({window, document, state, URL, URLSearchParams, Event, CustomEvent, EventTarget,
     MutationObserver: class {constructor(callback) {this.callback = callback; observers.push(this);} observe() {}},
     activeAppConfirmDialog: null, activeAppFormDialog: null,
     openReactFormDialog(options, available) {
@@ -57,23 +58,121 @@ function harness(initial = descriptor()) {
       return pending.promise;
     },
     fetchAndRender(url, pushHistory, options) {
-      const pending = deferred(), requestId = ++state.ui.activeViewRequestId;
+      // Controlled request boundary: no network. Match the native owner's
+      // dispatch/settlement callbacks while the real bridge checks admission.
+      const pending = deferred(), requestId = ++state.ui.activeViewRequestId, sourceView = state.view;
+      const transport = window.AlbumHavenPrivateUITransport, generation = transport.peekGeneration();
+      const current = () => state.ui.activeViewRequestId === requestId && transport.peekGeneration() === generation;
+      const started = options.onStart?.({requestId}, options) !== false && current() && state.view === sourceView;
+      let finished = false;
       calls.navigation.push({url, pushHistory, options, requestId,
         finish(payload) {
-          const accepted = options.shouldApplyResponse(payload);
+          assert.equal(finished, false, 'a controlled request settles only once'); finished = true;
+          // Exercise the real admission predicate even for a late response;
+          // fixture currentness must never hide a broken bridge rejection.
+          const accepted = started && options.shouldApplyResponse(payload) === true;
+          assert.ok(!accepted || current() && state.view === sourceView, 'the bridge cannot admit a superseded response');
           if (accepted) state.view = payload;
+          if (started && current() && state.view === (accepted ? payload : sourceView)) {
+            options.onSettled?.({requestId, applied: accepted, error: null});
+          }
           pending.resolve(accepted);
           return accepted;
         }});
+      if (!started) pending.resolve(false);
       return pending.promise;
     },
   });
-  load(context, 'private-ui-transport.js', 'shell-navigation-drawer.js');
+  load(context, 'browser-storage-helpers.js', 'shell-navigation-drawer.js',
+    'client-preferences-helpers.js', 'gallery-display-preference-helpers.js', 'private-ui-transport.js');
   context.closeArtistsDrawer = options => calls.closes.push(options);
   load(context, 'album-tops-react-bridge.js');
   return {context, bridge: window.AlbumHavenAlbumTopsRuntime, transport: window.AlbumHavenPrivateUITransport,
-    window, state, shell, nodes, events, observers, calls};
+    window, document, state, shell, nodes, observers, calls};
 }
+
+test('Top event targets use same-realm events and remove notification subscriptions', () => {
+  const h = harness(), received = [];
+  assert.ok(h.window instanceof h.context.EventTarget);
+  assert.ok(h.document instanceof h.context.EventTarget);
+  assert.equal(h.window.Event, h.context.Event);
+  assert.equal(h.window.CustomEvent, h.context.CustomEvent);
+  const unsubscribe = h.bridge.subscribeNotificationRegistry(event => received.push(event));
+  const first = vm.runInContext("new Event('albumhaven:notifications-ready')", h.context);
+  assert.equal(h.window.dispatchEvent(first), true);
+  assert.deepEqual(received, [first]);
+  assert.equal(first.target, h.window);
+  unsubscribe();
+  h.window.dispatchEvent(new h.window.Event('albumhaven:notifications-ready'));
+  assert.equal(received.length, 1);
+  let documentCalls = 0;
+  const listener = event => {documentCalls++; assert.equal(event.target, h.document);};
+  h.document.addEventListener('fixture-event', listener);
+  h.document.dispatchEvent(new h.context.CustomEvent('fixture-event', {detail: {source: 'test'}}));
+  h.document.removeEventListener('fixture-event', listener);
+  h.document.dispatchEvent(new h.context.Event('fixture-event'));
+  assert.equal(documentCalls, 1);
+});
+
+test('preferences notifications update presentation without minting navigation or private authority', () => {
+  const h = harness(descriptor(TOP)), view = h.state.view, before = h.bridge.snapshot(), href = h.window.location.href;
+  let updates = 0;
+  const unsubscribe = h.bridge.subscribe(() => updates++);
+  const publish = (mode, scale) => {
+    h.context.setLocalStorageItem('albumhaven.galleryDisplayPreferences.v1', JSON.stringify({
+      defaultGalleryDisplayMode: mode, defaultGalleryScalePercent: scale}));
+    h.context.restorePersistedClientPreferences();
+    h.document.dispatchEvent(new h.context.CustomEvent('album-haven:preferences-sync', {
+      detail: {context_ref: STAMP, top_ref: OTHER, can_edit: true},
+    }));
+  };
+  publish('covers', 120);
+  const next = h.bridge.snapshot();
+  assert.equal(next.galleryDisplayMode, 'covers'); assert.equal(next.galleryScalePercent, 120);
+  assert.equal(updates, 1);
+  for (const key of ['scopeKey', 'authenticated', 'topRef', 'viewVersion', 'viewRequestId']) assert.equal(next[key], before[key], key);
+  assert.equal(h.state.view, view); assert.equal(h.window.location.href, href);
+  assert.equal(h.calls.navigation.length, 0); assert.equal(h.calls.forms.length, 0);
+  assert.equal(h.bridge.acceptsPrivateScope(before.scopeKey), true);
+  unsubscribe();
+  publish('list', 100);
+  assert.equal(updates, 1, 'removing the observer does not stop the genuine preferences owner');
+  assert.equal(h.bridge.snapshot().galleryDisplayMode, 'list');
+  h.shell.dataset.privateUiContext = '';
+  publish('cards', 100);
+  assert.equal(h.bridge.snapshot().authenticated, false);
+  assert.equal(h.bridge.acceptsPrivateScope(before.scopeKey), false, 'event detail cannot restore revoked private identity');
+  assert.equal(h.state.view, view); assert.equal(h.calls.navigation.length, 0);
+  const fresh = harness();
+  assert.equal(fresh.window.localStorage.getItem('albumhaven.galleryDisplayPreferences.v1'), null);
+  assert.equal(fresh.bridge.snapshot().galleryDisplayMode, 'cards', 'test preference storage is isolated per harness');
+});
+
+test('removing a Top subscriber before the history microtask suppresses its pending delivery', async () => {
+  const h = harness(descriptor(TOP)); h.bridge.snapshot();
+  let updates = 0;
+  const unsubscribe = h.bridge.subscribe(() => updates++);
+  h.state.view = descriptor(OTHER);
+  h.window.dispatchEvent(new h.window.Event('popstate'));
+  assert.equal(updates, 0);
+  unsubscribe(); await Promise.resolve();
+  assert.equal(updates, 0);
+  assert.equal(h.bridge.snapshot().topRef, OTHER);
+});
+
+test('controlled Top dispatch cannot report success after onStart replaces its private scope', async () => {
+  const h = harness(), original = h.state.view;
+  let starts = 0, settlements = 0;
+  const opening = h.bridge.navigate({top_ref: TOP,
+    onStart() {starts++; h.shell.dataset.privateUiContext = 'b'.repeat(64);},
+    onSettled() {settlements++;},
+  });
+  assert.equal(starts, 1);
+  await assert.rejects(opening, {name: 'AbortError'});
+  assert.equal(h.calls.navigation[0].finish(descriptor(TOP)), false);
+  assert.equal(settlements, 0); assert.equal(h.calls.closes.length, 0);
+  assert.equal(h.state.view, original);
+});
 
 test('native Top directory and detail URLs round-trip without inherited gallery or playlist filters', () => {
   const context = vm.createContext({URL, URLSearchParams});
@@ -148,7 +247,7 @@ test('Top and Playlist collection panes remain supported by the shared drawer', 
   assert.equal(h.context.canUseArtistsDrawerForCurrentView(), false);
 });
 
-test('snapshot publishes native identity and stable state without putting Top DTOs in shell history', () => {
+test('snapshot publishes native identity and stable state without putting Top DTOs in shell history', async () => {
   const h = harness({...descriptor(TOP), tops: [{title: 'Private title'}], items: [{local_path: '/private/item'}]});
   const first = h.bridge.snapshot();
   assert.equal(first.active, true);
@@ -163,6 +262,8 @@ test('snapshot publishes native identity and stable state without putting Top DT
   assert.equal(updates, 0);
   h.state.view = descriptor(OTHER);
   h.window.dispatchEvent(new Event('popstate'));
+  assert.equal(updates, 0, 'history observation does not notify subscribers at its reconciliation midpoint');
+  await Promise.resolve();
   assert.equal(updates, 1);
   assert.equal(h.bridge.snapshot().topRef, OTHER);
   assert.ok(h.bridge.snapshot().viewVersion > first.viewVersion);
@@ -331,9 +432,9 @@ function bootstrapHarness({viewPatch = {}, bootstrapPatch = {}} = {}) {
   const requests = [], view = {...descriptor(TOP), artist_groups: [], artists_sidebar: [], album_count: 0,
     initial_view_partial: false, shell_layout: {slots: {main_content: {content_kind: 'album_tops'}}}, ...viewPatch};
   const bootstrap = {partialView: false, startupHydration: {required: false, endpoint: '/view-data?surface=album_tops'}, ...bootstrapPatch};
-  const context = vm.createContext({URL, URLSearchParams, console,
-    window: {location: new URL(`https://music.test/?surface=album_tops&top_ref=${TOP}`), addEventListener() {}},
-    document: {querySelectorAll: () => [], getElementById: () => null, addEventListener() {}},
+  const context = vm.createContext({URL, URLSearchParams, console, Event, CustomEvent, EventTarget,
+    window: Object.assign(new EventTarget(), {Event, CustomEvent, EventTarget, location: new URL(`https://music.test/?surface=album_tops&top_ref=${TOP}`)}),
+    document: Object.assign(new EventTarget(), {querySelectorAll: () => [], getElementById: () => null}),
     state: {view, ui: {}, player: {}}, appBootstrap: {getBootstrap: () => bootstrap},
     normalizeBootstrapRuntimeStatePayload: payload => ({view: payload.initial_view, bootstrap: payload.bootstrap}),
     resolveGalleryDisplayPreferenceViewState: value => value,

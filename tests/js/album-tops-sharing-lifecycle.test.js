@@ -34,6 +34,7 @@ async function fixture(t, {surface = 'album_tops', notifications = false, holdRe
       can_request_edit: false, can_copy: true, request_status: 'none', pending_requests: feed, next_pending_cursor: null}),
     readAccessGrants: () => ({top_ref: TOP, revision: '7', visibility: 'server_shared', grants: [], next_cursor: null}),
     readAccessCandidates: () => ({top_ref: TOP, revision: '7', candidates: [], next_cursor: null}),
+    listSourceImports: () => ({jobs: [], next_cursor: null}),
     dispose() {disposed++;},
   };
   Object.assign(native.runtime, runtime);
@@ -137,6 +138,13 @@ test('late native Notifications registry setup registers Top globally and dispos
   h.attachRegistry(); await settle();
   assert.match(h.drawer.bodyElement.textContent, /Pending Top access/);
   h.attachRegistry(); await settle(); assert.equal(h.drawer.bodyElement.children.length, 1);
+  for (const name of ['album-top-edit-requests', 'album-top-source-imports']) {
+    assert.equal(h.sourceConfigs.filter(source => source.name === name).length, 1, `${name} registers only once`);
+  }
+  const requests = h.drawer.bodyElement.querySelectorAll('[data-open-request-notification]');
+  assert.equal(requests.length, 1);
+  assert.deepEqual(JSON.parse(requests[0].getAttribute('data-open-request-notification')),
+    ['album-top-edit-requests', SCOPE, REQUEST]);
   const unrelated = h.drawer.context.AlbumHavenNotifications.registerSource({name: 'friend-requests', scopeKey: SCOPE,
     isCurrent: () => true, onOpen() {}});
   unrelated.replace([{id: REQUEST, title: 'Friend remains'}], {status: 'ready'});

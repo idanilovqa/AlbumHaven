@@ -112,7 +112,18 @@ test('Loose Tracks uses the shared Album Details header with custom copy and act
   assert.match(html, /id="non-album-modal-close"/);
   assert.match(html, /data-close-non-album-modal="1"/);
   assert.match(html, /album-details-header__action-icon--close/);
-  assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 2);
+  assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 3);
+  const buttons = [...html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map(match => match[0]);
+  assert.deepEqual(buttons.map(button => button.match(/aria-label="([^"]+)"/)[1]),
+    ['Create sample playlist', 'Edit tags', 'Close loose tracks']);
+  assert.match(buttons[0], /data-create-non-album-sample-playlist="1"/);
+  assert.match(buttons[0], /\sdisabled(?:\s|>)/);
+  assert.match(buttons[0], /aria-disabled="true"/);
+  assert.doesNotMatch(buttons[0].replace(/<[^>]*>/g, ''), /\S/);
+  const enabled = context.buildLooseTracksHeaderActionsHtml({sampleDisabled: false});
+  const enabledSample = enabled.match(/<button\b[^>]*>[\s\S]*?<\/button>/)[0];
+  assert.doesNotMatch(enabledSample, /\sdisabled(?:\s|>)/);
+  assert.doesNotMatch(enabledSample, /aria-disabled="true"/);
   assert.doesNotMatch(html, /album-details-header__action-icon--folder|&#9998;|✕/);
 });
 

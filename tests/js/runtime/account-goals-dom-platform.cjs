@@ -206,7 +206,17 @@ function createNativeHomeRuntime({ home = false, dashboard = false } = {}) {
   document.createElement = name => new Element(name);
   document.createTextNode = value => new Text(String(value));
   document.createDocumentFragment = () => new DomNode(11);
-  document.getElementById = id => document.querySelectorAll('[id]').find(node => node.id === id) || null;
+  document.getElementById = id => {
+    const visit = node => {
+      for (const child of node.childNodes) {
+        if (child instanceof Element && child.hasAttribute('id') && child.id === id) return child;
+        const found = visit(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    return visit(document);
+  };
   document.activeElement = document.body;
   const globals = {
     document, Element, HTMLElement: Element, Node: DomNode, Event: DomEvent, MouseEvent: DomEvent,

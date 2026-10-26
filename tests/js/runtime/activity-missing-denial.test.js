@@ -12,14 +12,29 @@ const deferred = () => {let reject; const promise = new Promise((_, no) => {reje
 const canonical = ref => ({kind: 'album', ref, allowed_actions: {can_view_details: true},
   native_actions: {album_ref: ref, allowed_actions: {can_open_album: true}}});
 
-// Real native source and resource-selection owners, with generated DTOs and a
-// bounded native lease sink. This is source-lifetime coverage, not browser QA.
+// Real native source and resource-selection owners, with generated DTOs and
+// bounded hydration/render sinks. Lease, dock and source lifetime owners are real;
+// this is source-lifetime coverage, not browser or full Album rendering QA.
 async function setup(account_ref = null) {
   const env = createNativeHomeRuntime(), c = env.context, d = env.document;
   const shell = d.createElement('div'); shell.id = 'app-shell';
   Object.assign(shell.dataset, {nativeAccountId: 'actor:one', nativeLibraryId: 'library:one'}); d.body.appendChild(shell);
   const home = d.createElement('div'); home.id = 'mobile-home'; d.body.appendChild(home);
   const overlay = d.createElement('div'); overlay.id = 'track-modal'; overlay.hidden = true; d.body.appendChild(overlay);
+  overlay.innerHTML = '<div class="track-modal-dialog" role="dialog" aria-modal="true" aria-label="Album"><div class="track-modal-header"></div><ul id="track-modal-list"></ul></div>';
+  const dialog = overlay.firstElementChild;
+  // Browser primitives scoped to this instance, not the shared component harness.
+  c.Node.prototype.before = function(node) {this.parentNode?.insertBefore(node, this);};
+  c.Node.prototype.replaceWith = function(node) {if (this.parentNode) {this.before(node); this.remove();}};
+  d.createComment = text => {const node = new c.Node(8); node.data = String(text); return node;};
+  const querySelector = d.querySelector.bind(d);
+  d.querySelector = selector => {
+    if (!selector.includes('>')) return querySelector(selector);
+    const [first, ...children] = selector.split('>').map(value => value.trim());
+    let nodes = d.querySelectorAll(first);
+    for (const child of children) nodes = nodes.flatMap(node => node.children.filter(value => value.matches(child)));
+    return nodes[0] || null;
+  };
   c.location = new URL('https://albumhaven.test/?surface=home'); c.history = {state: {albumHavenNavigationPosition: 1}};
   c.addEventListener = d.addEventListener.bind(d); c.removeEventListener = d.removeEventListener.bind(d);
   c.dispatchEvent = d.dispatchEvent.bind(d); c.AbortController = AbortController;
@@ -27,11 +42,23 @@ async function setup(account_ref = null) {
   c.state = {ui: {}, player: {playbackQueue: {untouched: true}}, view: {recent_local_albums: [
     {album_ref: 'recent:one', name: 'Recent', row_kind: 'local_album', local_match_state: 'matched_local',
       allowed_actions: {can_open_album: true}}], recent_not_local_albums: []}};
-  c.fetchTrackModalAlbumDetails = async ref => ({key: ref, tracks: []}); c.albumRequiresHydration = () => false;
-  let releases = 0;
-  c.acquireTrackModalSelection = () => ({release() {releases++;}});
   installPrivateContext(c);
-  for (const name of ['track-actions.js', 'resource-selection.js', 'playtable-source.js']) vm.runInContext(read(name), c);
+  for (const name of ['modal-and-overlay-helpers.js', 'track-modal-lightbox-helpers.js',
+    'track-actions.js', 'resource-selection.js', 'playtable-source.js']) vm.runInContext(read(name), c);
+  // Declared request/render boundaries: generated metadata and an observed paint
+  // sink. Neither manufactures a source grant, lease, or currentness predicate.
+  c.fetchTrackModalAlbumDetails = async ref => ({key: ref, tracks: []});
+  const rendered = [];
+  c.renderTrackModalRelease = album => {
+    const lease = c.getTrackModalSelectionLease();
+    assert.equal(lease.album, album); assert.equal(lease.dialog, dialog);
+    assert.equal(dialog.isConnected, true); assert.notEqual(dialog.parentNode, overlay);
+    rendered.push(album);
+  };
+  let releases = 0;
+  const acquire = c.acquireTrackModalSelection;
+  c.acquireTrackModalSelection = (host, album, options) => acquire(host, album, {...options,
+    onRelease(reason) {releases++; options.onRelease?.(reason);}});
   let retainResource;
   const nativeSelection = c.AlbumHavenResourceSelection;
   c.AlbumHavenResourceSelection = {...nativeSelection, create(options) {retainResource = options.retainResource; return nativeSelection.create(options);}};
@@ -49,7 +76,7 @@ async function setup(account_ref = null) {
     kind: query.kind, period: query.period, snapshot_ref: snapshot});
   const receipt = (row = result.rows[0]) => retainResource(row.album_target, {scopeKey, origin: row.album_target.origin});
   const options = () => ({scopeKey, origin: origin(), row_refs: ['allowed', 'denied-occurrence'], isCurrent: () => true});
-  return {...env, c, d, shell, bridge, scopeKey, query, reader, receipt, options,
+  return {...env, c, d, shell, bridge, scopeKey, query, reader, receipt, options, overlay, dialog, rendered,
     get result() {return result;}, get reads() {return reads;}, get releases() {return releases;},
     async refresh(ref = 'snapshot:two') {snapshot = ref; result = await reader(query); return result;},
     recentReceipt() {const selected = bridge.albumDetailSelection('recent:one', scopeKey);
@@ -66,15 +93,28 @@ async function setup(account_ref = null) {
 for (const [method, delegate] of [['readActivityMissingEligibility', 'activityMissingEligibility'], ['inspectActivityMissing', 'inspectActivityMissing']]) {
   for (const subject of [null, 'friend:one']) test(`${method} retires only the denied current ${subject ? 'Friend' : 'own'} snapshot and eagerly releases detail`, {timeout: 3000}, async () => {
     const h = await setup(subject), held = h.receipt(), recent = h.recentReceipt(), mounted = await h.mount();
+    const lease = h.c.getTrackModalSelectionLease(), queue = h.c.state.player.playbackQueue;
+    assert.equal(lease.dialog, h.dialog); assert.equal(lease.album, h.rendered[0]);
+    assert.equal(lease.dialog.isConnected, true); assert.notEqual(lease.dialog.parentNode, h.overlay);
+    assert.equal(h.overlay.hidden, true);
+    assert.equal(h.listeners().filter(entry => entry.type === 'resize').length, 1);
     let calls = 0; h.c.AlbumHavenPlaylistUI = {[delegate]: async options => {calls++;
       assert.deepEqual(options.row_refs, ['allowed', 'denied-occurrence']); const error = denied(); options.onSourceDenied(error); throw error;}};
     await assert.rejects(h.bridge[method](h.options()), {code: 'source_unavailable'});
     assert.equal(held.isCurrent(), false); assert.equal(h.receipt(), null);
     assert.equal(recent.isCurrent(), true, 'unrelated Recent source remains readable');
     assert.equal(h.releases, 1, 'mounted detail is released without another gesture');
+    assert.equal(h.c.getTrackModalSelectionLease(), null);
+    assert.equal(h.listeners().filter(entry => entry.type === 'resize').length, 0, 'lease release removes its resize subscription');
+    assert.equal(h.dialog.parentNode, h.overlay); assert.equal(h.overlay.childNodes.length, 1);
+    assert.equal(h.dialog.getAttribute('role'), 'dialog'); assert.equal(h.dialog.getAttribute('aria-modal'), 'true');
+    assert.equal(h.dialog.getAttribute('aria-label'), 'Album');
+    assert.equal(h.c.state.player.playbackQueue, queue); assert.equal(h.overlay.hidden, true);
     assert.equal(h.reads, 1, 'denial does not automatically refresh'); assert.equal(calls, 1);
     await h.refresh(); assert.equal(h.receipt().isCurrent(), true, 'explicit later refresh establishes fresh authority');
     assert.equal(held.isCurrent(), false, 'old authority never revives'); mounted.dispose();
+    assert.equal(h.releases, 1, 'disposing the retired mount cannot release twice');
+    assert.equal(h.dialog.parentNode, h.overlay); assert.deepEqual(h.forbiddenCalls, []);
   });
 }
 

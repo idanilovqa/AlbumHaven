@@ -15,7 +15,7 @@ function fixture() {
     PrivateUITransport: {generation: () => 1},
     albumRequiresHydration: value => value?.needsHydration === true,
     fetch: (url, options) => new Promise(resolve => requests.push({url, options, resolve}))});
-  for (const file of ['track-actions.js', 'track-modal-lightbox-helpers.js', 'playtable-source.js']) {
+  for (const file of ['response-state-helpers.js', 'track-actions.js', 'track-modal-lightbox-helpers.js', 'playtable-source.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, {filename: file});
   }
   const runtime = vm.runInContext('TrackActionsRuntime', context), native = vm.runInContext('NativePlaytables', context);

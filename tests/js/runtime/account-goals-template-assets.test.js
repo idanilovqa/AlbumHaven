@@ -16,7 +16,7 @@ function menu(h, name) {const result = h.document.querySelector(`[role="menu"][a
 
 test('account template composition has the exact protected DOM extraction and ordered standalone classic assets', () => {
   const original = read('tests/js/runtime/native-home-harness.cjs').replace(/\r\n/g, '\n');
-  assert.equal(createHash('sha256').update(original).digest('hex'), 'a3a6902dc55ea75f3e45048a952a4e1b0633717427d7892966a03cc76214e264');
+  assert.equal(createHash('sha256').update(original).digest('hex'), 'ec34efcc5729f0d5c738ddd59d0540af6a26fce13dadb70622045c3efa538419');
   const sentinels = "    openTrackModal: forbidden('openTrackModal'), playAlbum: forbidden('playAlbum'),\n"
     + "    scheduleBrowserAnimationFrame: forbidden('scheduleBrowserAnimationFrame'), scheduleBrowserTimeout: forbidden('scheduleBrowserTimeout'),\n";
   const begin = original.indexOf("  const files = ['js/button-component.js'");
@@ -27,6 +27,48 @@ test('account template composition has the exact protected DOM extraction and or
     'Only the four application sentinels and eager loading block are omitted; protected source stays byte-identical.');
   assert.deepEqual(templateAssets().classic, CLASSIC);
 });
+
+for (const [name, createDom] of [
+  ['published native', require('./native-home-harness.cjs').createNativeHomeRuntime],
+  ['standalone Goals', require('./account-goals-dom-platform.cjs').createNativeHomeRuntime],
+]) {
+  test(`${name} ID lookup preserves tree order and connected descendants independently of selectors`, t => {
+    const {document, forbiddenCalls} = createDom();
+    const add = (tag, id, parent = document.body) => {
+      const node = document.createElement(tag); if (id) node.id = id; parent.appendChild(node); return node;
+    };
+    const earlier = add('section'), later = add('section');
+    const nested = add('div', '', earlier);
+    const first = add('span', 'shared-id', nested), second = add('span', 'shared-id', later);
+    const fragment = document.createDocumentFragment();
+    add('span', 'detached-only', fragment);
+    const template = add('template', 'template-holder');
+    add('span', 'template-only', template.content);
+    const literal = add('div', 'literal: ID');
+    // ID lookup is a separate browser primitive, not a public selector call.
+    document.querySelectorAll = () => {throw new Error('ID lookup must not invoke querySelectorAll');};
+    t.after(() => {delete document.querySelectorAll;});
+    assert.equal(document.getElementById('shared-id'), first, 'first duplicate follows depth-first tree order');
+    document.body.prepend(later);
+    assert.equal(document.getElementById('shared-id'), second, 'moving an ancestor changes the first duplicate');
+    second.remove();
+    assert.equal(document.getElementById('shared-id'), first, 'removed duplicates cannot shadow a connected node');
+    first.id = 'renamed-id';
+    assert.equal(document.getElementById('shared-id'), null, 'ID mutations take effect without a stale index');
+    assert.equal(document.getElementById('renamed-id'), first);
+    earlier.remove();
+    assert.equal(document.getElementById('renamed-id'), null, 'detached subtrees are excluded');
+    document.body.appendChild(earlier);
+    assert.equal(document.getElementById('renamed-id'), first, 'reattached descendants are discoverable');
+    assert.equal(document.getElementById('RENAMED-ID'), null, 'ID matching remains case-sensitive');
+    assert.equal(document.getElementById('detached-only'), null, 'detached fragment content is not in the document');
+    assert.equal(document.getElementById('template-only'), null, 'template content is not a document descendant');
+    assert.equal(document.getElementById('template-holder'), template);
+    assert.equal(document.getElementById('literal: ID'), literal, 'IDs are literal strings rather than selectors');
+    assert.equal(document.getElementById('absent-id'), null);
+    assert.deepEqual(forbiddenCalls, [], 'platform lookup does not invoke application sentinels');
+  });
+}
 
 test('exact account template assets mount empty Goals through the actual entry and its native components', async t => {
   const h = await fixture(t);

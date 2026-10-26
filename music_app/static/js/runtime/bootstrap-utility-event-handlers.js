@@ -863,7 +863,9 @@ async function handleUtilityBootstrapClick(event) {
 
   if (event.target.closest('[data-choose-cover-lookup-files="1"]')) {
     event.preventDefault();
-    document.querySelector('[data-cover-lookup-file-input]')?.click?.();
+    const coverLookupFileInput = document.querySelector('[data-cover-lookup-file-input]');
+    bindCoverLookupFileInput(coverLookupFileInput);
+    coverLookupFileInput?.click?.();
     return;
   }
 
@@ -1155,16 +1157,30 @@ function handleUtilityBootstrapDragEnd() {
   return true;
 }
 
+function stageCoverLookupFiles(coverLookupFiles) {
+  if (!coverLookupFiles) return Promise.resolve();
+  return addCoverLookupFiles(coverLookupFiles.files || [])
+    .catch((error) => {
+      state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
+      state.coverLookup.modal.statusTone = 'error';
+      renderCoverLookupModal();
+    })
+    .finally(() => { coverLookupFiles.value = ''; });
+}
+
+function bindCoverLookupFileInput(coverLookupFiles) {
+  if (!coverLookupFiles || coverLookupFiles.dataset.coverLookupChangeBound === '1') return;
+  coverLookupFiles.dataset.coverLookupChangeBound = '1';
+  coverLookupFiles.addEventListener('change', (event) => {
+    event.stopPropagation();
+    void stageCoverLookupFiles(coverLookupFiles);
+  });
+}
+
 function handleUtilityBootstrapChange(event) {
   const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
   if (coverLookupFiles) {
-    addCoverLookupFiles(coverLookupFiles.files || [])
-      .catch((error) => {
-        state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
-        state.coverLookup.modal.statusTone = 'error';
-        renderCoverLookupModal();
-      })
-      .finally(() => { coverLookupFiles.value = ''; });
+    void stageCoverLookupFiles(coverLookupFiles);
     return;
   }
   if (handleLibrarySettingsChange(event)) {

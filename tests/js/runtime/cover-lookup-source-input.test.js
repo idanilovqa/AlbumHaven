@@ -46,6 +46,15 @@ test('cover picker can select the same file again after staged-file removal', ()
   assert.match(handlers, /addCoverLookupFiles\(coverLookupFiles\.files \|\| \[\]\)[^]*\.finally\(\(\) => \{ coverLookupFiles\.value = ''; \}\)/);
 });
 
+test('cover picker handles a file choice after gallery hydration replaces the input', () => {
+  const handlers = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'bootstrap-utility-event-handlers.js'), 'utf8');
+  assert.match(
+    handlers,
+    /bindCoverLookupFileInput\(coverLookupFileInput\)[^]*coverLookupFileInput\?\.click\?\.\(\)/,
+  );
+  assert.match(handlers, /function bindCoverLookupFileInput[^]*addEventListener\('change'[^]*stopPropagation\(\)[^]*stageCoverLookupFiles/);
+});
+
 test('manual search keeps opened images in the composer until extraction', () => {
   assert.match(source, />MANUAL SEARCH</);
   assert.match(source, /aria-label="Add image"/);

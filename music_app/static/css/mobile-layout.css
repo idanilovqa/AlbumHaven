@@ -179,7 +179,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .track-modal-cover { width: 100%; max-width: none; margin: 0; flex: none; }
   .is-mobile-page .track-modal-tabs { margin-bottom: 8px; padding: 0; }
   .is-mobile-page .track-modal-tabs .in-page-tabs > [role="tab"] { min-height: 44px; }
-  .is-mobile-page .track-modal-cover :is(img, .album-artbox) { width: 100%; max-height: none; aspect-ratio: 1; object-fit: contain; }
+  .is-mobile-page .track-modal-cover :is(img, .album-artbox) { width: 100%; max-height: none; aspect-ratio: 1; }
   .is-mobile-page .track-modal-main { min-width: 0; width: 100%; overflow: visible; }
   .is-mobile-page :is(.track-modal-list, .track-list, .track-table-wrap, .album-track-table-wrap) { max-height: none; overflow: visible; }
   .is-mobile-page .track-modal-list { padding: 0; scrollbar-gutter: auto; }

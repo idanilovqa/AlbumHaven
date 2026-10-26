@@ -83,7 +83,7 @@ const sharing = patch => ({top_ref: TOP, revision: '7', visibility: 'server_shar
 const grant = patch => ({account_id: 41, account_ref: id(20), display_name: 'Inactive Editor', username_display: 'editor',
   grant_ref: id(30), role: 'editor', is_active: false, ...patch});
 const candidate = patch => ({account_id: 42, account_ref: id(21), display_name: 'Candidate', username_display: 'candidate',
-  grant_ref: null, role: null, allowed_actions: {can_grant_editor: true}, ...patch});
+  grant_ref: null, role: null, allowed_actions: {can_grant_viewer: false, can_grant_editor: true}, ...patch});
 
 test('sharing adapters preserve current revision, bounded cursors and revocable inactive grants without private fields', async t => {
   const privateFields = {email: 'private@example.invalid', password_hash: 'not-public', local_path: '/private/library', capabilities: ['secret']};
@@ -129,10 +129,10 @@ for (const method of ['readSharing', 'readAccessGrants', 'readAccessCandidates']
 }
 
 test('candidate eligibility is strictly boolean and cannot be recovered from inherited or coarse permissions', async t => {
-  let actions = {can_grant_editor: 'true', can_edit: true};
+  let actions = {can_grant_viewer: false, can_grant_editor: 'true', can_edit: true};
   const h = transportFixture(t, () => ({top_ref: TOP, revision: '7', candidates: [candidate({allowed_actions: actions})], next_cursor: null}));
   await assert.rejects(h.providers.readAccessCandidates(TOP, h.options()));
-  actions = Object.create({can_grant_editor: true});
+  actions = Object.assign(Object.create({can_grant_editor: true}), {can_grant_viewer: false});
   await assert.rejects(h.providers.readAccessCandidates(TOP, h.options()));
 });
 

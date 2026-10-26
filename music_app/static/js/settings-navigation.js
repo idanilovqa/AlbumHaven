@@ -416,6 +416,9 @@
         return;
       }
       if (event.target?.closest?.('[data-settings-nav-close]') && host.contains(event.target)) { event.preventDefault(); closeDrawer(); return; }
+      // Account-only Foobar keeps the native drawer, but follows links as full
+      // documents. Its component is not an existing Account/Admin SPA outlet.
+      if (host.dataset?.settingsDocumentNavigation === 'true') return;
       if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       const link = event.target?.closest?.('a[href]');
       if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;

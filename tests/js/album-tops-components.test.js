@@ -2,10 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const {readRepo} = require('./runtime/native-home-harness.cjs');
-const {load} = require('./runtime/album-tops-native-fixtures/actual-native-runtime.cjs');
+const {load, TOP} = require('./runtime/album-tops-native-fixtures/actual-native-runtime.cjs');
 const {loadOwners, nativeRuntime, viewOwner, sessionOwner, button, click, plain, deferred, settle} = require('./runtime/album-tops-sharing-harness.cjs');
 test.before(loadOwners);
-const TOP = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const ITEM = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const BROWSE = 'library.browse.read', CREATE = 'library.album_tops.create', MANAGE = 'library.album_tops.manage';
 const top = patch => ({top_ref: TOP, title: 'Top <title>', description: 'A private subtitle', revision: '7',
@@ -16,10 +15,28 @@ function initialState({selected = false, status = 'ready', grants = {[BROWSE]: t
     directory: {status: selected ? 'ready' : status, data: {tops: [top()], allowed_actions: grants}},
     detail: {status: selected ? status : 'idle', data: selected ? detail : null}, mutation: {status: 'idle'}};
 }
+function componentRuntime(t, inline) {
+  const env = nativeRuntime(t, {inlineNavigation: inline});
+  // The genuine Top bridge reads the current library from the served track
+  // owner; retain its authenticated shell/private-context authority checks.
+  if (inline) {
+    const tracks = env.owner('TrackActionsRuntime'), shell = env.document.getElementById('app-shell');
+    assert.equal(typeof tracks.scope, 'function');
+    assert.equal(tracks.scope().actor, shell.dataset.nativeAccountId);
+    assert.equal(tracks.scope().library, shell.dataset.nativeLibraryId);
+  }
+  return env;
+}
 // Preserve the original authored presentation-controller boundary. Mounted
 // session cases below instead own the actual index and real model/providers.
 function fixture(t, state = initialState(), configure) {
-  const env = nativeRuntime(t), listeners = new Set();
+  const inline = Boolean(state.selectedTopRef);
+  const env = componentRuntime(t, inline), listeners = new Set();
+  if (inline) state = {...state, scopeKey: env.runtime.snapshot().scopeKey};
+  else {
+    const nativeSnapshot = env.runtime.snapshot;
+    env.runtime.snapshot = () => ({...nativeSnapshot(), scopeKey: state.scopeKey, topRef: state.selectedTopRef});
+  }
   Object.assign(env.calls, {mutations: [], opens: [], loads: 0, saved: []});
   const controller = {getSnapshot: () => state,
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);},
@@ -32,8 +49,8 @@ function fixture(t, state = initialState(), configure) {
   return {...env, controller, owner,
     replace(next) {state = next; for (const fn of [...listeners]) fn(); owner.update(props());},
     render() {owner.update(props()); return {host: env.host, html: env.host.innerHTML};},
-    form: () => env.content().querySelector('form'),
-    field: name => env.content().querySelector(`[name="${name}"]`),
+    form: () => inline ? env.host.querySelector('form.album-top-inline-edit') : env.content().querySelector('form'),
+    field: name => (inline ? env.host : env.content()).querySelector(`[name="${name}"]`),
     beforeDismiss: () => env.calls.owners.at(-1).options.beforeDismiss(),
   };
 }
@@ -42,10 +59,11 @@ function editor(t, {selected = false, configure} = {}) {
   const opener = button(env.host, selected ? 'Edit Album Top' : 'Create Album Top');
   assert.ok(opener); opener.focus(); click(opener);
   assert.ok(env.form(), 'actual native action opened the real editor');
+  if (selected) {assert.equal(env.modal().hidden, true); assert.equal(env.opens.length, 0);}
   return {...env, opener};
 }
 const submit = async env => {const form = env.form(); assert.ok(form); form.dispatchEvent(new form.ownerDocument.defaultView.Event('submit')); await settle();};
-const absentForm = env => assert.equal(env.content().querySelector('form.album-top-builder'), null);
+const absentForm = env => assert.equal(env.form(), null);
 
 test('directory composes native gallery controls and escaped server cards without unsupported actions', t => {
   const env = fixture(t), {html, host} = env.render();
@@ -121,7 +139,8 @@ test('editor busy, uncertain and acknowledged-refreshing states block fields, su
     env.replace({...env.controller.getSnapshot(), mutation});
     assert.equal(env.field('top-name').disabled, true); assert.equal(env.field('top-subtitle').disabled, true);
     assert.equal(button(env.form(), 'Cancel').disabled, true); assert.equal(button(env.form(), 'Save').disabled, true);
-    assert.equal(env.beforeDismiss(), false); assert.equal(env.calls.owners.at(-1).dismissDisabled, true); await submit(env);
+    assert.equal(await env.runtime.deferDraftNavigation(() => assert.fail('Busy inline editor allowed departure')), false);
+    assert.equal(env.modal().hidden, true); assert.equal(env.opens.length, 0); await submit(env);
   }
   assert.equal(env.calls.mutations.length, 0);
 });
@@ -193,16 +212,16 @@ function nativeFormHistory(env) {
       assert.equal(env.owner('handleMobilePagePopState')(), true);},
   };
 }
-test('acknowledged Top form awaits the actual native mobile parent traversal before reporting its receipt', async t => {
+test('acknowledged Create form awaits the actual native mobile parent traversal before reporting its receipt', async t => {
   let history;
-  const env = editor(t, {selected: true, configure: env => {history = nativeFormHistory(env);}});
+  const env = editor(t, {selected: false, configure: env => {history = nativeFormHistory(env);}});
   assert.equal(history.position, 1); assert.equal(env.context.location.searchParams.get('mobile_page'), 'form');
-  const receipt = {action: 'save', top_ref: TOP, revision: '8', request_key: ITEM};
+  const receipt = {action: 'create', top_ref: TOP, revision: '8', request_key: ITEM};
   env.controller.mutate = async (...args) => {env.calls.mutations.push(args); return true;};
   env.input(env.field('top-name'), 'Saved title'); await submit(env);
   assert.equal(history.queued, null, 'a mutation return value is not a native close acknowledgement');
   env.replace({...env.controller.getSnapshot(), mutation: {status: 'ready', refreshing: true,
-    action: 'save', command: {request_key: ITEM}, data: receipt}});
+    action: 'create', command: {request_key: ITEM}, data: receipt}});
   assert.equal(history.queued, -1); assert.equal(env.modal().hidden, true);
   assert.equal(history.nativeOptions.length, 0); assert.deepEqual(env.calls.saved, []);
   // Native modal detaches its content while parent history is pending. Its
@@ -216,34 +235,33 @@ test('acknowledged Top form awaits the actual native mobile parent traversal bef
   assert.deepEqual(plain(history.nativeOptions), [{restoreFocus: true, returnToParent: true, current: true}]);
   assert.equal(env.document.activeElement, env.opener); absentForm(env);
 });
-test('acknowledged Create and Edit return native focus to the current header after their launcher unmounts', async t => {
-  for (const selected of [false, true]) {
-    let history;
-    const env = editor(t, {selected, configure: env => {history = nativeFormHistory(env);}});
-    const options = env.calls.owners.at(-1).options;
-    assert.equal(options.returnFocus(), env.opener, 'the actual launcher is preferred while connected');
-    const header = env.host.querySelector('[data-shared-header]');
-    assert.equal(header.getAttribute('tabindex'), '-1'); assert.equal(header.getAttribute('aria-label'), 'Album Tops header');
-    const previous = env.controller.getSnapshot(), action = selected ? 'save' : 'create';
-    const receipt = {action, top_ref: TOP, revision: '8', request_key: ITEM};
-    env.replace({...previous, selectedTopRef: TOP, detail: {status: 'loading', data: null},
-      mutation: {status: 'ready', refreshing: true, action, command: {request_key: ITEM}, data: receipt}});
-    assert.equal(button(env.host, selected ? 'Edit Album Top' : 'Create Album Top'), undefined);
-    // The current shared header retains hidden controls instead of deleting them.
-    // Remove the actual old launcher to preserve the explicit disconnected case.
-    env.opener.remove(); env.document.body.focus(); assert.equal(env.opener.isConnected, false);
-    const tools = env.host.querySelector('[data-header-tools]');
-    const focusTarget = tools && !tools.closest('[hidden],[inert],[aria-hidden="true"]') && !tools.disabled && tools.getClientRects().length ? tools : header;
-    assert.equal(options.returnFocus(), focusTarget);
-    assert.equal(history.queued, -1); assert.equal(env.document.activeElement, env.document.body);
-    assert.deepEqual(env.calls.saved, []); history.finishReturn(); await settle();
-    assert.equal(env.document.activeElement, focusTarget); assert.deepEqual(plain(env.calls.saved), [receipt]); absentForm(env);
-  }
+test('acknowledged Create returns native focus to the current header after its launcher unmounts', async t => {
+  let history;
+  const env = editor(t, {selected: false, configure: env => {history = nativeFormHistory(env);}});
+  const options = env.calls.owners.at(-1).options;
+  assert.equal(options.returnFocus(), env.opener, 'the actual launcher is preferred while connected');
+  const header = env.host.querySelector('[data-shared-header]');
+  assert.equal(header.getAttribute('tabindex'), '-1'); assert.equal(header.getAttribute('aria-label'), 'Album Tops header');
+  const previous = env.controller.getSnapshot(), action = 'create';
+  const receipt = {action, top_ref: TOP, revision: '8', request_key: ITEM};
+  env.replace({...previous, selectedTopRef: TOP, detail: {status: 'loading', data: null},
+    mutation: {status: 'ready', refreshing: true, action, command: {request_key: ITEM}, data: receipt}});
+  assert.equal(button(env.host, 'Create Album Top'), undefined);
+  // The current shared header retains hidden controls instead of deleting them.
+  // Remove the actual old launcher to preserve the explicit disconnected case.
+  env.opener.remove(); env.document.body.focus(); assert.equal(env.opener.isConnected, false);
+  const tools = env.host.querySelector('[data-header-tools]');
+  const focusTarget = tools && !tools.closest('[hidden],[inert],[aria-hidden="true"]') && !tools.disabled && tools.getClientRects().length ? tools : header;
+  assert.equal(options.returnFocus(), focusTarget);
+  assert.equal(history.queued, -1); assert.equal(env.document.activeElement, env.document.body);
+  assert.deepEqual(env.calls.saved, []); history.finishReturn(); await settle();
+  assert.equal(env.document.activeElement, focusTarget); assert.deepEqual(plain(env.calls.saved), [receipt]); absentForm(env);
 });
+
 test('clean native Cancel restores the connected launcher and scope-unmount cleanup never steals focus', async t => {
   for (const closeKind of ['cancel', 'scope-unmount']) {
     let history;
-    const env = editor(t, {selected: true, configure: env => {history = nativeFormHistory(env);}});
+    const env = editor(t, {selected: false, configure: env => {history = nativeFormHistory(env);}});
     if (closeKind === 'cancel') {
       click(button(env.form(), 'Cancel')); await settle(); assert.equal(history.queued, -1);
       history.finishReturn(); await settle(); assert.equal(env.document.activeElement, env.opener); absentForm(env);
@@ -269,32 +287,139 @@ function holdNativeClose(env, closing) {
 }
 test('failed native close preserves the confirmed receipt and shows a shared alert without reporting form completion', async t => {
   for (const failure of ['false', 'reject']) {
-    const closing = deferred(), env = editor(t, {selected: true, configure: env => holdNativeClose(env, closing)});
+    const closing = deferred(), env = editor(t, {selected: false, configure: env => holdNativeClose(env, closing)});
     env.replace({...env.controller.getSnapshot(), mutation: {status: 'ready', refreshing: false,
-      action: 'save', command: {request_key: ITEM}, data: {action: 'save', top_ref: TOP, request_key: ITEM, revision: '8'}}});
+      action: 'create', command: {request_key: ITEM}, data: {action: 'create', top_ref: TOP, request_key: ITEM, revision: '8'}}});
     if (failure === 'false') closing.resolve(false); else closing.reject(new Error('Native return failed'));
     await settle(); assert.deepEqual(env.calls.saved, []);
     assert.match(env.form().textContent, /could not return to its parent/); assert.equal(env.controller.getSnapshot().mutation.status, 'ready');
   }
 });
-function session(t, {selected = false, providers, configure} = {}) {
-  const env = nativeRuntime(t), listeners = new Set(), navigations = [];
+
+test('Create modal retains busy field, submission and dismissal protection independently of inline Edit', async t => {
+  const env = editor(t);
+  for (const mutation of [{status: 'loading'}, {status: 'uncertain'}, {status: 'ready', refreshing: true}]) {
+    env.replace({...env.controller.getSnapshot(), mutation});
+    assert.equal(env.field('top-name').disabled, true); assert.equal(env.field('top-subtitle').disabled, true);
+    assert.equal(button(env.form(), 'Cancel').disabled, true); assert.equal(button(env.form(), 'Create Album Top').disabled, true);
+    assert.equal(env.beforeDismiss(), false); assert.equal(env.calls.owners.at(-1).dismissDisabled, true);
+    await submit(env);
+  }
+  assert.equal(env.calls.mutations.length, 0);
+});
+
+test('inline Edit acknowledges the exact save and refresh before restoring current header focus without a modal receipt', async t => {
+  const env = editor(t, {selected: true}), form = env.form();
+  const history = structuredClone(env.context.history.state), url = env.context.location.href;
+  assert.equal(env.opener.isConnected, false, 'inline header replaces the original launcher');
+  env.input(env.field('top-name'), 'Saved inline title'); await submit(env);
+  assert.deepEqual(plain(env.calls.mutations), [['save', {title: 'Saved inline title', description: 'A private subtitle'}]]);
+  const command = {top_ref: TOP, revision: '7', request_key: ITEM};
+  const receipt = {action: 'save', top_ref: TOP, revision: '8', request_key: ITEM};
+  env.document.body.focus();
+  const before = env.controller.getSnapshot();
+  env.replace({...before, detail: {status: 'loading', data: before.detail.data},
+    mutation: {status: 'ready', refreshing: true, action: 'save', command, data: receipt}});
+  assert.equal(env.form(), form); assert.equal(button(form, 'Save').disabled, true);
+  assert.equal(env.document.activeElement, env.document.body); assert.deepEqual(env.calls.saved, []);
+  assert.equal(env.opens.length, 0); assert.equal(env.calls.closes.length, 0);
+  env.replace({...before, detail: {status: 'ready', data: {...before.detail.data, title: 'Saved inline title', revision: '8'}},
+    mutation: {status: 'ready', refreshing: false, action: 'save', command, data: receipt}});
+  await settle(); absentForm(env);
+  assert.equal(env.document.activeElement, button(env.host, 'Edit Album Top'));
+  assert.equal(env.document.activeElement.isConnected, true); assert.notEqual(env.document.activeElement, env.opener);
+  assert.deepEqual(env.calls.saved, []); assert.equal(env.opens.length, 0); assert.equal(env.calls.closes.length, 0);
+  assert.deepEqual(env.context.history.state, history); assert.equal(env.context.location.href, url);
+  form.dispatchEvent(new form.ownerDocument.defaultView.Event('submit'));
+  assert.equal(env.calls.mutations.length, 1, 'retired inline form cannot replay the acknowledged save');
+  assert.equal(env.runtime.deferDraftNavigation(() => assert.fail('Saved editor retained a departure lease')), false);
+});
+
+for (const closeKind of ['cancel', 'scope-unmount']) test(`inline Edit ${closeKind} retires its real navigation lease without stealing replacement focus`, async t => {
+  const env = editor(t, {selected: true}), form = env.form();
+  const history = structuredClone(env.context.history.state), url = env.context.location.href;
+  if (closeKind === 'cancel') {
+    click(button(form, 'Cancel')); await settle(); absentForm(env);
+    assert.equal(env.document.activeElement, button(env.host, 'Edit Album Top'));
+  } else {
+    env.document.getElementById('app-shell').dataset.nativeAccountId = 'replacement-actor';
+    env.document.body.focus(); env.runtime.sync(); env.owner.dispose(); await settle(); absentForm(env);
+    assert.equal(env.document.activeElement, env.document.body);
+  }
+  assert.equal(form.isConnected, false); assert.equal(env.modal().hidden, true);
+  assert.equal(env.opens.length, 0); assert.equal(env.calls.closes.length, 0); assert.deepEqual(env.calls.saved, []);
+  assert.deepEqual(env.context.history.state, history); assert.equal(env.context.location.href, url);
+  assert.equal(env.runtime.deferDraftNavigation(() => assert.fail('Retired editor retained a departure lease')), false);
+});
+
+test('inline Edit keeps the draft on real declined departure and discards only after accepted native confirmation', async t => {
+  const env = editor(t, {selected: true}), form = env.form(); let arrivals = 0;
+  env.input(env.field('top-name'), 'Private unsaved title');
+  const leave = () => {arrivals++; return true;};
+  const declined = env.runtime.deferDraftNavigation(leave); await settle();
+  assert.equal(env.document.getElementById('app-confirm-modal').hidden, false);
+  click(env.document.getElementById('app-confirm-cancel')); assert.equal(await declined, false);
+  assert.equal(env.form(), form); assert.equal(env.field('top-name').value, 'Private unsaved title'); assert.equal(arrivals, 0);
+  const accepted = env.runtime.deferDraftNavigation(leave); await settle();
+  click(env.document.getElementById('app-confirm-accept')); assert.equal(await accepted, true); await settle();
+  absentForm(env); assert.equal(arrivals, 1); assert.equal(env.calls.mutations.length, 0); assert.deepEqual(env.calls.saved, []);
+  assert.doesNotMatch(env.document.body.textContent, /Private unsaved title/);
+  assert.equal(env.runtime.deferDraftNavigation(() => assert.fail('Discarded editor retained a lease')), false);
+});
+
+test('inline Edit cannot submit when its actual navigation protection failed and recovers only after explicit reopen', async t => {
+  let history, url;
+  const env = editor(t, {selected: true, configure: env => {
+    history = structuredClone(env.context.history.state); url = env.context.location.href;
+    env.context.history.replaceState({...history, albumHavenNavigationPosition: '1'}, '', url);
+  }});
+  const blocked = env.form();
+  assert.match(blocked.textContent, /navigation protection could not be started.*Cancel and reopen this Top/);
+  assert.equal(env.field('top-name').disabled, true); assert.equal(button(blocked, 'Save').disabled, true);
+  await submit(env); assert.equal(env.calls.mutations.length, 0);
+  assert.equal(env.runtime.deferDraftNavigation(() => assert.fail('Unavailable guard allowed departure')), false);
+  click(button(blocked, 'Cancel')); await settle(); absentForm(env);
+  env.context.history.replaceState(history, '', url);
+  click(button(env.host, 'Edit Album Top'));
+  assert.notEqual(env.form(), blocked); assert.equal(env.field('top-name').disabled, false);
+  env.input(env.field('top-name'), 'Recovered inline title'); await submit(env);
+  assert.deepEqual(plain(env.calls.mutations), [['save', {title: 'Recovered inline title', description: 'A private subtitle'}]]);
+  assert.equal(env.modal().hidden, true); assert.equal(env.opens.length, 0); assert.deepEqual(env.calls.saved, []);
+});
+
+function session(t, {selected = false, inline = false, providers, configure} = {}) {
+  const env = componentRuntime(t, inline), listeners = new Set(), navigations = [];
   let shell = Object.freeze({scopeKey: 'mounted:actor:library', authenticated: true, inLibrary: true,
     active: true, visible: true, topRef: selected ? TOP : null, sidebarMode: 'album_tops', viewVersion: 1});
-  Object.assign(env.runtime, {snapshot: () => shell,
+  if (inline) {
+    const subscribe = env.runtime.subscribe;
+    env.runtime.subscribe = fn => {listeners.add(fn); const release = subscribe(fn); return () => {listeners.delete(fn); release();};};
+  } else Object.assign(env.runtime, {snapshot: () => shell,
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);},
-    acceptsPrivateScope: scope => shell.authenticated && shell.inLibrary && shell.scopeKey === scope,
-    navigate(value) {navigations.push(value); return Promise.resolve(true);}});
+    acceptsPrivateScope: scope => shell.authenticated && shell.inLibrary && shell.scopeKey === scope});
+  env.runtime.navigate = value => {navigations.push(value); return Promise.resolve(true);};
   configure?.(env);
   const mounted = sessionOwner(env, {providers});
   return {...env, mounted, listeners, navigations,
-    replaceShell(patch) {shell = Object.freeze({...shell, ...patch}); for (const fn of [...listeners]) fn();},
-    form: () => env.content().querySelector('form'), field: name => env.content().querySelector(`[name="${name}"]`),
+    replaceShell(patch) {
+      if (!inline) {shell = Object.freeze({...shell, ...patch}); for (const fn of [...listeners]) fn(); return;}
+      const nativeShell = env.document.getElementById('app-shell');
+      if (Object.hasOwn(patch, 'inLibrary')) nativeShell.hidden = !patch.inLibrary;
+      if (Object.hasOwn(patch, 'authenticated') && !patch.authenticated) nativeShell.dataset.nativeAccountId = '';
+      if (Object.hasOwn(patch, 'active') || Object.hasOwn(patch, 'topRef')) {
+        env.context.state.view = {...env.context.state.view,
+          ...(Object.hasOwn(patch, 'active') ? {surface: {active: patch.active ? 'album_tops' : 'albums'}} : {}),
+          ...(Object.hasOwn(patch, 'topRef') ? {top_ref: patch.topRef} : {})};
+      }
+      env.runtime.sync();
+    },
+    form: () => inline ? env.host.querySelector('form.album-top-inline-edit') : env.content().querySelector('form'),
+    field: name => (inline ? env.host : env.content()).querySelector(`[name="${name}"]`),
   };
 }
 test('native hiding retains an uncertain operation while scope replacement clears it and mount cleanup retires providers', async t => {
   const calls = {list: 0, read: 0, write: [], disposed: 0};
-  const env = session(t, {selected: true, providers: {
+  const env = session(t, {selected: true, inline: true, providers: {
     list() {calls.list++; return {tops: [top()], allowed_actions: {[BROWSE]: true, [CREATE]: true, can_create: true}};},
     read() {calls.read++; return top();},
     execute(action, command) {calls.write.push(plain(command)); if (calls.write.length === 1) throw new TypeError('Connection lost after submission');

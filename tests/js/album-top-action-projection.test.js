@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {buttonNamed} = require('./runtime/native-home-harness.cjs');
 const {nativeEnvironment} = require('./runtime/album-tops-native-fixtures/actual-native-runtime.cjs');
+const {actualChoiceEnvironment} = require('./runtime/album-tops-native-fixtures/actual-choice-runtime.cjs');
 let createAlbumTopController, createAlbumTopBackendProviders, mountAlbumTopsView;
 test.before(async () => {
   ({createAlbumTopController} = await import('../../music_app/static/js/album-tops/model.mjs'));
@@ -45,10 +46,10 @@ const deferred = () => {
   const promise = new Promise((yes, no) => {resolve = yes; reject = no;});
   return {promise, resolve, reject};
 };
-function fixture(t, {top = resource(), list, read, write} = {}) {
+function fixture(t, {top = resource(), list, read, write, scopeKey = SCOPE} = {}) {
   const calls = {reads: [], writes: [], keys: []};
   let currentTop = top;
-  const providers = createAlbumTopBackendProviders({acceptsScope: scope => scope === SCOPE,
+  const providers = createAlbumTopBackendProviders({acceptsScope: scope => scope === scopeKey,
     transport: {context: () => CONTEXT, async request(route, options) {
       if (options.method === 'POST') {
         const action = route === '/album-tops' ? 'create' : route.split('/').at(-1);
@@ -64,7 +65,7 @@ function fixture(t, {top = resource(), list, read, write} = {}) {
   const controller = createAlbumTopController({providers, requestKey() {
     const key = id(100 + calls.keys.length); calls.keys.push(key); return key;
   }});
-  controller.setScope(SCOPE);
+  controller.setScope(scopeKey);
   const owners = []; retirements.set(controller, owners);
   t.after(() => {
     let failure;
@@ -76,10 +77,9 @@ function fixture(t, {top = resource(), list, read, write} = {}) {
     async open() {await controller.load(); await controller.open(TOP);},
   };
 }
-function mountedView(controller) {
-  const env = nativeEnvironment(), {host, runtime} = env;
-  runtime.confirmRetryOriginal = async () => false;
-  runtime.confirm = async () => false;
+function mountedView(controller, environment = null) {
+  const env = environment || nativeEnvironment(), {host, runtime} = env;
+  if (!environment) {runtime.confirmRetryOriginal = async () => false; runtime.confirm = async () => false;}
   let owner;
   const props = () => ({controller, state: controller.getSnapshot(), onOpen() {}});
   const unsubscribe = controller.subscribe(() => owner?.update(props()));
@@ -356,15 +356,19 @@ test('scope replacement retires a blocked uncertain operation instead of replayi
 const input = (host, name) => host.querySelector(`input[name="${name}"]`);
 const button = (host, label) => buttonNamed(host, new RegExp(`^${label}$`));
 test('same-revision Editor revocation disables the retained draft and stale submit callback without discarding text', async t => {
-  for (const permission of ['can_edit', BROWSE]) {
-    const h = fixture(t, {top: resource('editor', 'server_shared')}); await h.open();
+  // Read denial is covered separately by album-tops-inline-permission-lifetime.test.js.
+  for (const permission of ['can_edit']) {
+    const native = actualChoiceEnvironment({inlineNavigation: true});
+    const h = fixture(t, {top: resource('editor', 'server_shared'), scopeKey: native.runtime.snapshot().scopeKey}); await h.open();
     let attempted = 0;
     const mutate = h.controller.mutate;
     h.controller.mutate = (...args) => {attempted++; return mutate(...args);};
-    const env = mountedView(h.controller);
+    const env = mountedView(h.controller, native);
+    assert.equal(env.runtime.registerDraftNavigation, env.context.AlbumHavenAlbumTopsRuntime.registerDraftNavigation);
     env.click(button(env.host, 'Edit Album Top'));
     const form = () => {
-      const fields = env.content().querySelector('form'); assert.ok(fields, 'the draft remains mounted');
+      const fields = env.host.querySelector('form.album-top-inline-edit'); assert.ok(fields, `the draft remains mounted (${permission})`);
+      assert.equal(env.modal().hidden, true, 'saved Top Edit is inline, not a modal');
       return fields;
     };
     env.input(input(form(), 'top-name'), 'My unsaved title');

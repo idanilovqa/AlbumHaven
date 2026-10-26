@@ -53,10 +53,16 @@ async function fixture(t, {actions = {can_share: true, can_copy: true}, sharingR
   const read = (name, value) => async options => {calls[name].push(options); return typeof value === 'function' ? value(options) : envelope(value);};
   // Preserve the original authored controller boundary. The presentation and all
   // native form/menu/control owners below are actual delivered implementations.
-  const controller = {getSnapshot: () => state, readSharing: read('sharing', sharingReply), readAccessGrants: read('grants', grantsReply),
+  const listeners = new Set();
+  const controller = {getSnapshot: () => state,
+    subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);}, readSharing: read('sharing', sharingReply), readAccessGrants: read('grants', grantsReply),
     readAccessCandidates: read('candidates', candidatesReply), canRetryMutation: () => false, retryMutation: async () => false,
     mutate(action, value) {calls.writes.push({action, value}); return Promise.resolve(true);}, open(ref) {calls.opens.push(ref);}};
   const props = () => ({controller, state: controller.getSnapshot(), onOpen: ref => calls.opens.push(ref)});
+  const nativeSnapshot = native.runtime.snapshot;
+  // This shell owns this scope and Top; later controller invalidation must not
+  // silently authenticate a replacement scope in the native owner.
+  native.runtime.snapshot = () => ({...nativeSnapshot(), scopeKey: SCOPE, topRef: TOP});
   const {mountAlbumTopsView} = await load('album-tops/app.mjs');
   const owner = mountAlbumTopsView(native.host, native.runtime, props());
   const renderView = () => {owner.update(props()); return native.host;};
@@ -65,9 +71,9 @@ async function fixture(t, {actions = {can_share: true, can_copy: true}, sharingR
   const open = async () => {
     native.click(button(renderView(), 'Share')); renderShare(); await settle(); renderShare(); await settle(); return renderForm();
   };
-  t.after(async () => {owner.dispose(); await settle(); native.assertClean();});
+  t.after(async () => {owner.dispose(); assert.equal(listeners.size, 0, 'all controller subscriptions retired'); await settle(); native.assertClean();});
   return {...native, calls, controller, props, renderView, renderShare, renderForm, open,
-    replace(patch) {state = {...state, ...patch};}, state: () => state};
+    replace(patch) {state = {...state, ...patch}; for (const listener of [...listeners]) listener();}, state: () => state};
 }
 
 const emptyGrants = () => grants({grants: []});
@@ -210,12 +216,22 @@ test('private Viewer completion uses own progress action without source or playb
   h.replace({detail: {...h.state().detail, data: {...h.state().detail.data, visibility: 'private',
     items: [{item_ref: item, album_ref: album, title: 'Own-progress album', artist: 'Artist'}],
     top_viewer_overlay: {item_progress: {[album]: {progress_revision: '0', manual_completed_at: null}}}}}});
-  const tree = h.renderView(), card = tree.querySelector('[data-gallery-card-intent="complete"]');
+  const tree = h.renderView();
+  let card = tree.querySelector('[data-gallery-card-intent="complete"]');
   assert.ok(card);
   assert.deepEqual(plain(cards[0].actions), {open: false, complete: true});
   assert.equal(cards[0].completion.completed, false);
   h.click(card);
+  assert.equal(h.document.getElementById('app-confirm-modal').hidden, false);
+  assert.deepEqual(h.calls.writes, [], 'opening confirmation is not a progress write');
+  h.click(h.document.getElementById('app-confirm-cancel')); await settle();
+  assert.deepEqual(h.calls.writes, [], 'declined confirmation cannot change progress');
+  card = tree.querySelector('[data-gallery-card-intent="complete"]'); h.click(card);
+  assert.equal(h.document.getElementById('app-confirm-modal').hidden, false);
+  assert.deepEqual(h.calls.writes, []);
+  h.click(h.document.getElementById('app-confirm-accept')); await settle();
   assert.deepEqual(plain(h.calls.writes), [{action: 'set_manual_completion', value: {album_ref: album, completed: true}}]);
+  card = tree.querySelector('[data-gallery-card-intent="complete"]');
   h.replace({detail: {...h.state().detail, data: {...h.state().detail.data, allowed_actions: {...h.state().detail.data.allowed_actions, can_manage_own_progress: false}}}});
   adversarialClick(h, card); assert.equal(h.calls.writes.length, 1);
 });

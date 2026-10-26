@@ -725,6 +725,107 @@ function getSelectedUtilityIntegration() {
   return buildUtilityIntegrationItems().find((item) => String(item.key || '') === String(state.utility.selectedIntegrationKey || '')) || null;
 }
 
+let utilityFoobarPreviewOwner = null;
+let utilityFoobarPreviewGeneration = 0;
+// Keep this cleanup entry point for the existing native modal close owner.
+// The mounted component is now the account-owned review/confirm import UI.
+function disposeUtilityFoobarPreview(message = '') {
+  const owner = utilityFoobarPreviewOwner;
+  utilityFoobarPreviewGeneration += 1;
+  utilityFoobarPreviewOwner = null;
+  if (!owner) return;
+  owner.observer?.disconnect();
+  window.removeEventListener('pagehide', owner.retire);
+  document.removeEventListener('album-haven:policy-invalidated', owner.retire);
+  document.removeEventListener('album-haven:session-changed', owner.retire);
+  try { owner.mounted?.dispose(); } catch { /* Retired callbacks cannot publish. */ }
+  owner.mounted = null;
+  owner.host.replaceChildren();
+  if (message && owner.host.isConnected) {
+    const status = document.createElement('p');
+    status.setAttribute('role', 'status');
+    status.textContent = message;
+    owner.host.append(status);
+  }
+}
+
+function mountUtilityFoobarPreview(els) {
+  const host = els.detail.querySelector('[data-foobar-import-host]');
+  const contextRoot = document.getElementById('app-shell');
+  if (!host || !els.overlay || els.overlay.hidden) return;
+  const action = 'account.self.foobar.write';
+  const capable = () => window.AlbumHavenCapabilities?.allows(action) === true;
+  const marker = contextRoot?.dataset.accountFoobarContext;
+  const scope = contextRoot?.dataset.accountFoobarScope;
+  const matchingLibraryId = contextRoot?.dataset.accountFoobarMatchingLibraryId || '';
+  if (!contextRoot?.isConnected || !/^[a-f0-9]{64}$/.test(marker || '')
+      || scope !== 'account-foobar-v1' || !capable()) {
+    host.textContent = 'Foobar import controls are unavailable. Check the status of any import already submitted.';
+    return;
+  }
+  const utility = state.utility;
+  const token = ++utilityFoobarPreviewGeneration;
+  const isCurrent = () => token === utilityFoobarPreviewGeneration
+    && utilityFoobarPreviewOwner === owner && state.utility === utility
+    && contextRoot.isConnected && document.getElementById('app-shell') === contextRoot
+    && contextRoot.ownerDocument === host.ownerDocument
+    && contextRoot.dataset.accountFoobarContext === marker
+    && contextRoot.dataset.accountFoobarScope === scope
+    && (contextRoot.dataset.accountFoobarMatchingLibraryId || '') === matchingLibraryId
+    && host.isConnected && els.detail.isConnected && els.overlay.isConnected
+    && document.getElementById('utility-modal') === els.overlay
+    && getUtilityModalElements().detail === els.detail
+    && els.overlay.contains(els.detail) && els.detail.contains(host)
+    && els.detail.querySelector('[data-foobar-import-host]') === host
+    && !els.overlay.hidden && utility.activeTab === 'integrations'
+    && utility.selectedIntegrationKey === 'foobar' && capable();
+  const owner = {host, mounted: null, observer: null, isCurrent, retire: null};
+  owner.retire = () => {
+    if (utilityFoobarPreviewOwner === owner) disposeUtilityFoobarPreview(
+      'Foobar import controls were closed. Reopen Settings to check any import already submitted.');
+  };
+  utilityFoobarPreviewOwner = owner;
+  window.addEventListener('pagehide', owner.retire);
+  document.addEventListener('album-haven:policy-invalidated', owner.retire);
+  document.addEventListener('album-haven:session-changed', owner.retire);
+  owner.observer = new MutationObserver(records => {
+    const removedOwner = record => record.type === 'childList'
+      && [...record.removedNodes].some(node => [contextRoot, els.overlay, els.detail, host]
+        .some(owned => node === owned || node.contains?.(owned)));
+    const changedContext = record => record.type === 'attributes'
+      && (record.target === contextRoot && record.attributeName.startsWith('data-account-foobar-')
+        || record.target === els.overlay && record.attributeName === 'hidden');
+    if (records.some(record => removedOwner(record) || changedContext(record)) || !isCurrent()) owner.retire();
+  });
+  // The genuine utility modal is a sibling of #app-shell, not its descendant.
+  owner.observer.observe(document.documentElement, {childList: true, subtree: true,
+    attributes: true, attributeFilter: ['hidden', 'data-account-foobar-context',
+      'data-account-foobar-scope', 'data-account-foobar-matching-library-id']});
+  if (!isCurrent()) { owner.retire(); return; }
+  const version = encodeURIComponent(String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ || ''));
+  loadUtilityFoobarImportModule(version).then(module => {
+    if (!isCurrent()) { owner.retire(); return; }
+    const mounted = module.mountFoobarImport(host, {
+      fetch: (...args) => window.fetch(...args), contextRoot,
+      allows: requested => requested === action && isCurrent(),
+      isCurrent,
+      renderButton: options => window.ButtonComponent.renderButton(options),
+      renderTable: options => buildUtilityCompactTable(options),
+    });
+    if (!mounted || typeof mounted.dispose !== 'function') throw new Error('Unavailable component.');
+    if (!isCurrent()) { mounted.dispose(); owner.retire(); return; }
+    owner.mounted = mounted;
+  }).catch(() => {
+    if (utilityFoobarPreviewOwner === owner) disposeUtilityFoobarPreview(
+      'Foobar import controls are unavailable. Check any import already submitted before trying again.');
+  });
+}
+
+// Named asset-loader boundary; browser URL and lifecycle remain unchanged.
+function loadUtilityFoobarImportModule(version) {
+  return import(`/static/js/foobar-import/index.mjs?v=${version}`);
+}
+
 function renderUtilityIntegrations() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
@@ -744,12 +845,13 @@ function renderUtilityIntegrations() {
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.integrationsLoading) {
+    disposeUtilityFoobarPreview();
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading integrations...</div>';
     els.detail.innerHTML = '<div class="utility-empty-state">Loading integrations...</div>';
     return;
   }
   if (!state.utility.selectedIntegrationKey || !integrations.some((item) => String(item.key || '') === String(state.utility.selectedIntegrationKey || ''))) {
-    state.utility.selectedIntegrationKey = String(integrations[0].key || '');
+    state.utility.selectedIntegrationKey = String(integrations[0]?.key || '');
   }
   const selected = getSelectedUtilityIntegration();
   const scrollTop = els.list.scrollTop;
@@ -776,7 +878,12 @@ function renderUtilityIntegrations() {
   });
   els.list.scrollTop = scrollTop;
   filterUtilityIntegrationNavigation();
+  if (selected?.key === 'foobar' && utilityFoobarPreviewOwner?.host?.isConnected
+      && els.detail.contains(utilityFoobarPreviewOwner.host)
+      && utilityFoobarPreviewOwner.isCurrent()) return;
+  disposeUtilityFoobarPreview();
   els.detail.innerHTML = buildUtilityIntegrationDetail(selected);
+  if (selected?.key === 'foobar') mountUtilityFoobarPreview(els);
 }
 
 function getSelectedUtilityLogHistoryItem() {
@@ -803,6 +910,7 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'integrations' || state.utility.selectedIntegrationKey !== 'foobar') disposeUtilityFoobarPreview();
 
   if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
   if (activeTab !== 'log-history' && els.list?.dataset

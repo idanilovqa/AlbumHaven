@@ -4,11 +4,13 @@
 <aside class="settings-nav navigation-tree" aria-label="Settings navigation" data-settings-nav data-navigation-tree="settings">
   <div class="settings-nav-heading">
     {% call action_button('Back to page', class_name='mobile-bar-action', attributes={'data-settings-nav-close': '1'}, presentation='bare') %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5-7 7 7 7M3 12h18"/></svg>{% endcall %}
-    <h2>Admin</h2>
+    <h2>{{ 'Settings' if settings_section in ('foobar', 'foobar-history') else 'Admin' }}</h2>
   </div>
   <nav>
-    {% if navigation_actions.allows('accounts.read') %}{{ navigation_tree_item('Users', '/admin/members', 'users', settings_section != 'account', '♙', attributes={'data-settings-section': 'users'}) }}{% endif %}
+    {% if navigation_actions.allows('accounts.read') %}{{ navigation_tree_item('Users', '/admin/members', 'users', settings_section not in ('account', 'foobar', 'foobar-history'), '♙', attributes={'data-settings-section': 'users'}) }}{% endif %}
     {{ navigation_tree_item('My account', '/account', 'account', settings_section == 'account', '◇', attributes={'data-settings-section': 'account'}) }}
+    {% if navigation_actions.allows('account.self.foobar.read') %}{{ navigation_tree_item('Foobar history', '/account/foobar-history', 'foobar-history', settings_section == 'foobar-history', '◷', attributes={'data-account-foobar-history-link': '1'}) }}{% endif %}
+    {% if (account_foobar_allowed | default(false)) or navigation_actions.allows('account.self.foobar.write') %}{{ navigation_tree_item('Integrations · Foobar2000', '/account/integrations/foobar', 'foobar', settings_section == 'foobar', '↻', attributes={'data-account-foobar-link': '1'}) }}{% endif %}
     <form class="settings-logout" method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {{ navigation_tree_item('Sign Out', key='sign-out', icon='↪', action=true) }}

@@ -10,5 +10,9 @@
   {
     "nodeIdPattern": "^tests\\.py\\.test_album_top_artist_scope_artwork_postgres::test_artwork_finishes_each_actual_transaction_and_preserves_exact_explicit_members$(?![\\s\\S])",
     "reasonPattern": "^Requires genuine existing POSIX artwork acquisition$(?![\\s\\S])"
+  },
+  {
+    "nodeIdPattern": "^tests\\.py\\.test_owned_local_postgres_admission::(?:test_explicit_owned_mode_is_not_default_or_hosted|test_environment_overrides_rejected\\[(?:PGHOSTADDR-203\\.0\\.113\\.1|PGOPTIONS--c session_replication_role=replica|GITHUB_ACTIONS-true|GITHUB_RUN_ID-123|PGPASSWORD-not-a-real-password|PGSERVICE-other|PGSERVICEFILE-/tmp/other|PGPASSFILE-/tmp/unowned|ALBUM_HAVEN_OWNED_POSTGRES_MANIFEST-relative\\.json|DATABASE_APP_URL-postgresql://app@remote\\.invalid/prod|DATABASE_MIGRATOR_URL-postgresql://owner@127\\.0\\.0\\.1/album_haven_core|ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL-postgresql://app@127\\.0\\.0\\.1:45432/other)\\]|test_manifest_identity_tampering_rejected\\[(?:schema_version-True|token-bad|creator_uid--1|host-localhost|port-True|port-543|port-65536|database-album_haven_core|setup_role-postgres|app_role-postgres|readonly_role-postgres|data_directory-/tmp/other|pgpass-/tmp/other|system_identifier-different|postmaster_pid-42|server_start_epoch-1234567891|postgres_sha256-0{64}|pg_controldata_sha256-0{64})\\]|test_unsafe_modes_rejected\\[(?:root|data|path|pgpass)\\]|test_symlinks_and_hardlinks_rejected\\[(?:path|pgpass)\\]|test_missing_stale_and_extra_state_rejected\\[(?:missing_manifest|missing_pid|wrong_major|extra_key|missing_key|pid_port|pid_start|pid_data|pid_unready|pid_unix_socket)\\]|test_connected_server_identity_mismatch_rejected\\[(?:row0|row1|row2)\\]|test_foreign_private_manifest_is_rejected_before_read)$(?![\\s\\S])",
+    "reasonPattern": "^POSIX-owned disposable PostgreSQL admission is unsupported on nt$(?![\\s\\S])"
   }
 ]

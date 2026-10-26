@@ -26,6 +26,13 @@ const {
 } = COVER_LOOKUP_TEST_TARGETS;
 
 const COVER_LOOKUP_FILTERED_URL = `/?surface=albums&q=${encodeURIComponent(COVER_LOOKUP_TARGET.artist.toLowerCase())}&artist=${encodeURIComponent(COVER_LOOKUP_TARGET.artist)}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals`;
+const SPLIT_FIXTURE = Object.freeze({
+  artist: 'ДДТ',
+  album: 'Студийные записи',
+  splitAlbum: 'Студийные записи split release',
+  year: '1999',
+  filenames: ['14. Студийная запись 14.mp3', '15. Студийная запись 15.mp3', '16. Студийная запись 16.mp3'],
+});
 const USER_COVER_LINKED_FIELDS = [
   'remote_cover_url',
   'remote_cover_thumbnail_url',
@@ -1076,69 +1083,113 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
   galleryActions,
   trackModalActions,
   coverLookupActions,
+  tagEditorActions,
 }) => {
-  const currentReleases = [
-    {
-      album_id: 41001,
-      key: 'e2e::split-release-one',
-      album_artist: 'Split Fixture Artist',
-      name: 'Current Release One',
-      year: 2001,
-      edition: '',
-      track_count: 8,
-    },
-    {
-      album_id: 41002,
-      key: 'e2e::split-release-two',
-      album_artist: 'Split Fixture Artist',
-      name: 'Current Release Two',
-      year: 2002,
-      edition: 'Expanded',
-      track_count: 6,
-    },
-  ];
-  const requests = [];
-  await page.route('**/utilities/cover-lookup/gallery', async (route) => {
-    requests.push(route.request().postDataJSON());
-    if (requests.length === 1) {
-      await route.fulfill({
-        status: 409,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          ok: false,
-          error: 'This album was split—choose the current release',
-          resolution_kind: 'album_split',
-          current_releases: currentReleases,
-        }),
-      });
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, local_covers: [], other_art: [] }),
+  let splitApplied = false;
+  let taskId = '';
+  let candidateId = '';
+  try {
+    const artistUrl = `/?surface=albums&artist=${encodeURIComponent(SPLIT_FIXTURE.artist)}`;
+    const sourceIdentity = {
+      album: SPLIT_FIXTURE.album,
+      artist: SPLIT_FIXTURE.artist,
+      year: SPLIT_FIXTURE.year,
+    };
+    await galleryActions.goto(artistUrl);
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(sourceIdentity))
+      .toEqual(sourceIdentity);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    await coverLookupActions.setProviderFixtureMode('no-results');
+    const expectedCover = findFixtureCoverBySubtitle(
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
+    );
+    expect(expectedCover).not.toBeNull();
+    await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover).slice(1, 2));
+    const task = await coverLookupActions.startSearch();
+    taskId = String(task.task?.id || '').trim();
+    expect(taskId).not.toBe('');
+    await coverLookupActions.waitForModalSearchCompleted();
+    const candidates = await coverLookupActions.readRemoteCandidateSummaries();
+    candidateId = String(candidates[0]?.id || '').trim();
+    expect(candidateId).not.toBe('');
+    await coverLookupActions.closeModal();
+    await trackModalActions.closeIfOpen();
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.waitForTaskStatusById(taskId, /^[1-9]\d* covers? found$/);
+    await coverLookupActions.closeDrawer();
+
+    await tagEditorActions.openForAlbum({
+      album: SPLIT_FIXTURE.album,
+      artist: SPLIT_FIXTURE.artist,
+      expectedTrackCount: 16,
+      galleryActions,
+      trackModalActions,
+      year: SPLIT_FIXTURE.year,
     });
-  });
+    await tagEditorActions.selectTracksByFilenames(SPLIT_FIXTURE.filenames);
+    await tagEditorActions.setAlbumName(SPLIT_FIXTURE.splitAlbum);
+    await tagEditorActions.applyAndWaitForSavedFiles();
+    splitApplied = true;
+    await trackModalActions.closeIfOpen();
 
-  await galleryActions.goto(COVER_LOOKUP_FILTERED_URL);
-  await galleryActions.waitForGalleryReady();
-  expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
-    .toEqual(COVER_LOOKUP_TARGET);
-  await trackModalActions.waitForLoadedSummary();
-  await trackModalActions.openCoverLookup();
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.openTaskWithKeyboard(SPLIT_FIXTURE.album, 'Enter');
+    const selector = page.getByRole('group', {
+      name: 'This album was split—choose the current release',
+    });
+    await expect(selector).toBeVisible();
+    const requestPromise = page.waitForRequest((request) => (
+      request.method() === 'POST'
+      && new URL(request.url()).pathname === '/utilities/cover-lookup/gallery'
+    ));
+    await selector.getByRole('button', { name: new RegExp(SPLIT_FIXTURE.splitAlbum) }).click();
+    const request = await requestPromise;
 
-  const selector = page.getByRole('group', {
-    name: 'This album was split—choose the current release',
-  });
-  await expect(selector).toBeVisible();
-  await selector.getByRole('button', { name: /Current Release Two/ }).click();
-
-  await expect(coverLookupActions.coverLookup.modal).toBeVisible();
-  await expect(coverLookupActions.coverLookup.modalSubtitle).toHaveText(
-    'Split Fixture Artist - Current Release Two - 2002',
-  );
-  expect(requests[1]).toEqual({ album: currentReleases[1], task_id: '' });
-  await expect(page.getByText('Lookup task does not belong to this album')).toHaveCount(0);
+    await expect(coverLookupActions.coverLookup.modal).toBeVisible();
+    await coverLookupActions.waitForModalResultsReady();
+    await expect(selector).toHaveCount(0);
+    await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(SPLIT_FIXTURE.splitAlbum);
+    expect(request.postDataJSON()).toMatchObject({
+      album: expect.objectContaining({ name: SPLIT_FIXTURE.splitAlbum }),
+      task_id: taskId,
+    });
+    await expect(page.getByText('Lookup task does not belong to this album')).toHaveCount(0);
+    await coverLookupActions.waitForRemoteCandidateId(candidateId);
+    const saved = await coverLookupActions.selectRemoteCandidateByIdAndSave(candidateId);
+    expect(saved.requestPayload).toMatchObject({
+      album: expect.objectContaining({ name: SPLIT_FIXTURE.splitAlbum }),
+      candidate_id: candidateId,
+      task_id: taskId,
+    });
+  } finally {
+    if (await coverLookupActions.coverLookup.modal.isVisible()) {
+      await coverLookupActions.closeModal();
+    }
+    await coverLookupActions.closeDrawer();
+    await trackModalActions.closeIfOpen();
+    if (splitApplied) {
+      await tagEditorActions.openForAlbum({
+        album: SPLIT_FIXTURE.splitAlbum,
+        artist: SPLIT_FIXTURE.artist,
+        expectedTrackCount: SPLIT_FIXTURE.filenames.length,
+        galleryActions,
+        trackModalActions,
+        year: SPLIT_FIXTURE.year,
+      });
+      await tagEditorActions.selectAllTracks();
+      await tagEditorActions.setAlbumName(SPLIT_FIXTURE.album);
+      await tagEditorActions.applyAndWaitForSavedFiles();
+      await trackModalActions.closeIfOpen();
+    }
+    if (taskId) {
+      await coverLookupActions.openDrawer();
+      await coverLookupActions.clearTask(SPLIT_FIXTURE.album);
+      await coverLookupActions.closeDrawer();
+    }
+  }
 });
 
 test('FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen', { tag: '@area:cover-providers' }, async ({

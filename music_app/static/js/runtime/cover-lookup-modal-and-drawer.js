@@ -2573,8 +2573,10 @@ async function chooseCoverLookupCurrentRelease(albumId) {
     String(candidate?.album_id || '') === String(albumId || '')
   ));
   if (!release) return;
+  const taskId = state.coverLookup.modal.taskId;
   const overlay = getCoverLookupModalElements().overlay;
   await openCoverLookupModal(release, {
+    taskId,
     mobileSheet: Boolean(overlay && isCoverLookupMobileSheet(overlay)),
   });
 }

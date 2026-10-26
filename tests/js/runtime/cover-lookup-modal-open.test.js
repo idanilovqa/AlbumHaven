@@ -124,6 +124,7 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
   const oldAlbum = { album_id: 40, name: 'Old Album', album_artist: 'Artist' };
   const firstRelease = {
     album_id: 41,
+    identity_resolution: 'album_split_choice',
     key: 'artist::first release',
     name: 'First Release',
     album_artist: 'Artist',
@@ -132,6 +133,7 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
   };
   const secondRelease = {
     album_id: 42,
+    identity_resolution: 'album_split_choice',
     key: 'artist::second release',
     name: 'Second Release',
     album_artist: 'Artist',
@@ -199,8 +201,8 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
   await context.chooseCoverLookupCurrentRelease('42');
 
   assert.equal(context.state.coverLookup.modal.album.album_id, 42);
-  assert.equal(context.state.coverLookup.modal.taskId, '');
-  assert.deepEqual(requests[1], { album: secondRelease, task_id: '' });
+  assert.equal(context.state.coverLookup.modal.taskId, 'stale-task');
+  assert.deepEqual(requests[1], { album: secondRelease, task_id: 'stale-task' });
 });
 
 test('notification Cover Lookup uses a sheet on mobile without presenting a mobile page', async () => {
@@ -864,7 +866,7 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
     const f = loadCapabilityCoverRoute(actions, { initial: true });
     f.restore();
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(f.effects, ['present', 'body', 'render', 'poll', 'gallery', 'history']);
+    assert.deepEqual(f.effects, ['present', 'body', 'render', 'gallery', 'history', 'poll']);
     assert.equal(f.overlay.hidden, false);
     assert.equal(f.context.state.coverLookup.modal.album.key, 'one');
     assert.equal(vm.runInContext('coverLookupModalSession', f.context), 1);

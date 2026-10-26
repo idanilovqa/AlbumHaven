@@ -1280,7 +1280,11 @@ def test_asgi_cover_routes_reject_lookup_task_from_another_album(
         "POST",
         route_path,
         json_body={
-            "album": {**_album_payload(track_a), "album_id": 41},
+            "album": {
+                **_album_payload(track_a),
+                "album_id": 41,
+                "identity_resolution": "album_split_choice",
+            },
             "task_id": task_id,
             **extra_payload,
         },
@@ -1319,7 +1323,6 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
     )
     current_releases = [
         {
-            "album_id": 41,
             "key": "artist::first release",
             "album_artist": "Artist",
             "name": "First Release",
@@ -1328,7 +1331,6 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
             "tracks": [{"path": str(first_track)}],
         },
         {
-            "album_id": 42,
             "key": "artist::second release",
             "album_artist": "Artist",
             "name": "Second Release",
@@ -1342,8 +1344,13 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
             pass
 
         def resolve_album_id_for_track_paths(self, *, track_paths):
-            assert track_paths == {str(first_track), str(second_track)}
-            return None
+            if track_paths == {str(first_track), str(second_track)}:
+                return None
+            if track_paths == {str(first_track)}:
+                return 41
+            if track_paths == {str(second_track)}:
+                return 42
+            raise AssertionError(track_paths)
 
     class BrowseRepository:
         def __init__(self, _config):
@@ -1360,6 +1367,11 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
     )
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", BrowseRepository)
 
+    async def serialize_gallery(*_args, **_kwargs):
+        return {"ok": True, "local_covers": [], "other_art": []}
+
+    monkeypatch.setattr(asgi_routes, "_serialize_cover_gallery_from_asgi", serialize_gallery)
+
     status, _headers, body = _run_asgi_request(
         _make_wave_d_app(app),
         "POST",
@@ -1375,6 +1387,7 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
         "current_releases": [
             {
                 "album_id": 41,
+                "identity_resolution": "album_split_choice",
                 "key": "artist::first release",
                 "album_artist": "Artist",
                 "name": "First Release",
@@ -1384,6 +1397,7 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
             },
             {
                 "album_id": 42,
+                "identity_resolution": "album_split_choice",
                 "key": "artist::second release",
                 "album_artist": "Artist",
                 "name": "Second Release",
@@ -1394,6 +1408,23 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
         ],
     }
     assert "path" not in body.decode("utf-8").casefold()
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={
+            "album": {
+                **current_releases[1],
+                "album_id": 42,
+                "identity_resolution": "album_split_choice",
+            },
+            "task_id": task_id,
+        },
+    )
+
+    assert status == 200
+    assert _decode_json(body)["ok"] is True
 
 
 @pytest.mark.parametrize(

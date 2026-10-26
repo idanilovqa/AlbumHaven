@@ -417,14 +417,8 @@ def _task_matches_album_context(
     track_paths: set[str],
     album_id: int | None = None,
 ) -> bool:
-    task_track_paths = {
-        str(path or "").strip()
-        for path in list(task_payload.get("track_paths") or [])
-        if str(path or "").strip()
-    }
+    task_track_paths = _cover_lookup_task_track_paths(task_payload)
     task_album = task_payload.get("album_payload")
-    if not task_track_paths and isinstance(task_album, Mapping):
-        task_track_paths = _album_track_paths(task_album)
     if (
         album_id is not None
         and isinstance(task_album, Mapping)
@@ -436,6 +430,20 @@ def _task_matches_album_context(
     if task_track_paths & track_paths:
         return False
     return False
+
+
+def _cover_lookup_task_track_paths(
+    task_payload: Mapping[str, object],
+) -> set[str]:
+    task_track_paths = {
+        str(path or "").strip()
+        for path in list(task_payload.get("track_paths") or [])
+        if str(path or "").strip()
+    }
+    task_album = task_payload.get("album_payload")
+    if not task_track_paths and isinstance(task_album, Mapping):
+        task_track_paths = _album_track_paths(task_album)
+    return task_track_paths
 
 
 def _same_cover_lookup_generation(left: object, right: object) -> bool:
@@ -564,11 +572,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
             dict(config),
             task_id,
         ) or {}
-    task_track_paths = {
-        str(path or "").strip()
-        for path in list(task_payload.get("track_paths") or [])
-        if str(path or "").strip()
-    }
+    task_track_paths = _cover_lookup_task_track_paths(task_payload)
     album, album_context = await _resolve_album_payload_context(
         config,
         album,
@@ -667,7 +671,18 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     manual_urls = _clean_string_list(payload.get("manual_urls"))
     if manual_urls and client_surface_from_request(request) == "tv":
         return _json_response(({"ok": False, "error": "Manual cover links are unavailable on TV."}, 403))
-    requested_track_paths = _album_track_paths(album)
+    task_id = str(payload.get("task_id") or "").strip()
+    task_payload = cover_lookup_result(task_id) if task_id else {}
+    if task_id and not task_payload:
+        task_payload = await run_in_threadpool(
+            load_cover_lookup_notification,
+            dict(config),
+            task_id,
+        ) or {}
+    requested_track_paths = (
+        _album_track_paths(album)
+        or _cover_lookup_task_track_paths(task_payload)
+    )
     reservation_resource_keys = structural_tag_edit_resource_keys(
         str((album or {}).get("key") or (album or {}).get("album_ref") or ""),
         requested_track_paths,
@@ -680,7 +695,14 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     )
     queued_album = album or {}
     try:
-        album_context = resolve_album_context(config, queued_album)
+        if task_payload:
+            queued_album, album_context = await _resolve_album_payload_context(
+                config,
+                queued_album,
+                fallback_track_paths=requested_track_paths,
+            )
+        else:
+            album_context = resolve_album_context(config, queued_album)
         album_id = _album_id(queued_album)
         if album_id is not None:
             repository = PostgresLibraryBrowseRepository(config)
@@ -726,6 +748,14 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         reservation.release()
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album does not contain any tracks"}, 400))
+    if task_payload and not _task_matches_album_context(
+        task_payload,
+        track_paths=album_context.track_paths,
+        album_id=_album_id(queued_album),
+    ):
+        return _json_response(
+            ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)
+        )
     task_id = queue_cover_lookup_task(
         queued_album,
         album_context.track_paths,

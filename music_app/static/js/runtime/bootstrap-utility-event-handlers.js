@@ -779,7 +779,9 @@ async function handleUtilityBootstrapClick(event) {
     event.stopPropagation();
     const taskId = retryCoverLookupTaskButton.getAttribute('data-retry-cover-lookup-task') || '';
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
-    if (task?.album_payload) startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true });
+    if (task?.album_payload) {
+      startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true, taskId });
+    }
     return;
   }
 

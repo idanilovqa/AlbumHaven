@@ -93,7 +93,7 @@ test('failed notification retry and clear remain separate actions that do not ac
   for (const source of [handlers.replace(/\r\n/g, '\n'), handlers.replace(/\r?\n/g, '\r\n')]) {
     const retryHandler = source.match(/const retryCoverLookupTaskButton[^]*?\r?\n\s*}\r?\n\r?\n/)?.[0] || '';
     assert.match(retryHandler, /event\.stopPropagation\(\)/);
-    assert.match(retryHandler, /startCoverLookupForAlbum\(task\.album_payload, \{ backgroundOnly: true \}\)/);
+    assert.match(retryHandler, /startCoverLookupForAlbum\(task\.album_payload, \{ backgroundOnly: true, taskId \}\)/);
   }
 });
 

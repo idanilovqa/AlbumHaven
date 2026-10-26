@@ -315,6 +315,7 @@ test('starting lookup publishes visible feedback before the start request settle
     year: 2007,
   };
   let resolveStart;
+  let startRequestBody;
   const startResponse = new Promise((resolve) => { resolveStart = resolve; });
   const toastCalls = [];
   const renderSnapshots = [];
@@ -339,8 +340,11 @@ test('starting lookup publishes visible feedback before the start request settle
     console,
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
     showToast: (...args) => toastCalls.push(args),
-    fetch: async (url) => {
-      if (url === '/utilities/cover-lookup/start') return startResponse;
+    fetch: async (url, options) => {
+      if (url === '/utilities/cover-lookup/start') {
+        startRequestBody = JSON.parse(options.body);
+        return startResponse;
+      }
       throw new Error(`Unexpected request: ${url}`);
     },
     document: {
@@ -361,8 +365,10 @@ test('starting lookup publishes visible feedback before the start request settle
     });
   };
 
-  const startPromise = context.startCoverLookupForAlbum(album);
+  const startPromise = context.startCoverLookupForAlbum(album, { taskId: 'persisted-lookup' });
   await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(startRequestBody.task_id, 'persisted-lookup');
 
   assert.ok(renderSnapshots.some((snapshot) => (
     snapshot.manualBusy === true && snapshot.statusText === 'Starting cover search…'

@@ -4209,6 +4209,94 @@ def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
     assert events[5][2] == {str(current_path)}
 
 
+def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_task(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (
+        app.config["MUSIC_DIR"] / "Eden" / "Perelandra" / "01.mp3"
+    ).resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    compact_album = {
+        "key": "eden::perelandra",
+        "album_artist": "Eden",
+        "name": "Perelandra",
+        "year": 1980,
+    }
+    persisted_task = {
+        "id": "persisted-eden-lookup",
+        "status": "failed",
+        "album_payload": _album_payload(track_path),
+    }
+    captured = {}
+
+    class Reservation:
+        def release(self):
+            pass
+
+    async def acquire_reservation(_resource_keys):
+        return Reservation()
+
+    async def resolve_context(_config, album, *, fallback_track_paths=None):
+        captured["fallback_track_paths"] = fallback_track_paths
+        hydrated_album = {**album, "tracks": [{"path": str(track_path)}]}
+        return hydrated_album, asgi_routes.CoverAlbumContext(
+            album_root=track_path.parent,
+            track_paths={str(track_path)},
+        )
+
+    def queue_lookup(album, track_paths, _manual_urls, **_kwargs):
+        captured["queued_album"] = album
+        captured["queued_paths"] = track_paths
+        return "new-eden-lookup"
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "acquire_structural_tag_edit_reservation_async",
+        acquire_reservation,
+    )
+    monkeypatch.setattr(asgi_routes, "_resolve_album_payload_context", resolve_context)
+    monkeypatch.setattr(
+        asgi_routes,
+        "load_cover_lookup_notification",
+        lambda _config, task_id: persisted_task if task_id == persisted_task["id"] else None,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "cover_lookup_result",
+        lambda task_id: (
+            {"id": task_id, "status": "pending"}
+            if task_id == "new-eden-lookup"
+            else {}
+        ),
+    )
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(
+        asgi_routes,
+        "serialize_cover_lookup_task_payload",
+        lambda payload: payload,
+    )
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/start",
+        json_body={
+            "album": compact_album,
+            "task_id": persisted_task["id"],
+            "manual_urls": [],
+        },
+    )
+
+    assert status == 200, body
+    assert captured["fallback_track_paths"] == {str(track_path)}
+    assert captured["queued_paths"] == {str(track_path)}
+
+
 def test_cover_lookup_reconciliation_uses_inline_album_detail_track_rows():
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 

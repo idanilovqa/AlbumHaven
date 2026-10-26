@@ -31178,7 +31178,11 @@ async function startCoverLookupForAlbum(album, options = {}) {
     const response = await fetch('/utilities/cover-lookup/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album, manual_urls: manualUrls }),
+      body: JSON.stringify({
+        album,
+        task_id: String(options?.taskId || state.coverLookup.modal.taskId || ''),
+        manual_urls: manualUrls,
+      }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
@@ -41914,7 +41918,9 @@ async function handleUtilityBootstrapClick(event) {
     event.stopPropagation();
     const taskId = retryCoverLookupTaskButton.getAttribute('data-retry-cover-lookup-task') || '';
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
-    if (task?.album_payload) startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true });
+    if (task?.album_payload) {
+      startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true, taskId });
+    }
     return;
   }
 

@@ -9,6 +9,7 @@ from music_app.services.album_preferences import (
     parse_album_preference_command, positive_id,
 )
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
+from music_app.services.album_top_rating_intent import rating_intent_storage_ready
 from music_app.services.policy import ResourceScope
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.private_library_authority import (
@@ -126,6 +127,7 @@ class PostgresAlbumPreferencesStore:
         self._url = str(config.get('ALBUM_HAVEN_APP_DATABASE_URL') or '').strip()
         if not self._url:
             raise RuntimeError('PostgreSQL configuration is required for album preferences.')
+        self._config = config
         self._connect = connect or pooled_connection
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
@@ -162,6 +164,11 @@ class PostgresAlbumPreferencesStore:
                 if revision != command.expected_revision:
                     raise AlbumPreferenceError('album_preference_conflict', 409)
                 patch = command.patch
+                # Default-off optional listening evidence cannot make ordinary
+                # ratings depend on an unapplied schema. No probe for favorites.
+                record_intent = ('rating' in patch
+                    and self._config.get('ALBUM_HAVEN_TOP_LISTENING_PRESENTATION_ENABLED') is True
+                    and rating_intent_storage_ready(connection))
                 if current is None:
                     inserted = connection.execute('''insert into app.album_ratings
                         (account_id, library_id, album_key, rating, favorite, provenance)
@@ -183,6 +190,7 @@ class PostgresAlbumPreferencesStore:
                     preference_id = current['id']
                     changed = any(current[key] != value for key, value in patch.items())
                     changed = changed or ('rating' in patch and current['provenance'] != 'personal_rating')
+                    changed = changed or record_intent
                     if changed:
                         # SET contains ONLY supplied taste fields. Metadata and creation
                         # time are never rewritten; favorite-only preserves provenance.
@@ -201,6 +209,14 @@ class PostgresAlbumPreferencesStore:
                             (*values, *identity, preference_id, command.expected_revision)).fetchone()
                         if updated is None:
                             raise AlbumPreferenceError('album_preference_conflict', 409)
+                if record_intent:
+                    # The CAS above consumed this explicit mutation, including
+                    # same-value rerating. A duplicate expected revision cannot
+                    # refresh freshness. Null clears rather than qualifies.
+                    connection.execute('''update app.album_ratings set native_rating_intent_at=
+                        case when rating is null then null else clock_timestamp() end
+                        where account_id=%s and library_id=%s and album_key=%s and id=%s''',
+                        (*identity, preference_id))
                 # New statement after every source/DML/conflict wait. The exact locked
                 # canonical generation and active witnesses must still admit this row.
                 result = _read_locked(connection, account_id=account_id, library_id=command.library_id,

@@ -47,3 +47,4 @@ class CurrentActor:
     @classmethod
     def anonymous(cls) -> CurrentActor:
         return cls(state=ActorState.ANONYMOUS)
+

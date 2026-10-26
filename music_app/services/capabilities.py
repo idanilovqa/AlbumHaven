@@ -200,3 +200,4 @@ def client_allows_action(action: str, surface: str, *, administrator: bool) -> b
     if surface in {"private_web", "cloud_web"} and "edit" in capabilities and not administrator:
         return False
     return True
+

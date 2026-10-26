@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from music_app.services.allowed_actions import AllowedActions
 from music_app.services.auth_tokens import hash_opaque_token
 from music_app.services.listen_history import normalize_listen_history_rows
+from music_app.services.lastfm_listen_sync import build_recent_scrobble_delivery
 
 KINDS = ("tracks", "albums", "artists", "listens")
 PERIOD_LABELS = {"week": "Last week", "month": "Last month", "six": "Last 6 months",
@@ -208,7 +209,8 @@ class ActivityProjection:
 
 
 def build_activity_projection(raw_rows, *, scope, kind, window, allowed_actions_for_resource,
-                              row_key_secret=None, source_account_id=None) -> ActivityProjection:
+                              row_key_secret=None, source_account_id=None,
+                              scrobble_connection_state="unknown") -> ActivityProjection:
     if not isinstance(scope, ActivityScope) or kind not in KINDS or not isinstance(window, ActivityWindow):
         raise HomeActivityError()
     if not callable(allowed_actions_for_resource):
@@ -216,6 +218,10 @@ def build_activity_projection(raw_rows, *, scope, kind, window, allowed_actions_
     owner = scope.source_account_id if source_account_id is None else source_account_id
     if (type(owner) is not int or owner != scope.source_account_id
             and not (scope.audience == "comparison" and owner == scope.account_id)):
+        raise HomeActivityError()
+    own_occurrences = scope.audience == "own" and owner == scope.account_id and kind == "listens"
+    if own_occurrences and (type(scrobble_connection_state) is not str or
+            scrobble_connection_state not in {"connected", "disconnected", "unavailable", "unknown"}):
         raise HomeActivityError()
     secret = row_key_secret if isinstance(row_key_secret, bytes) else secrets.token_bytes(32)
     raw = {row["id"]: row for row in raw_rows if isinstance(row, dict) and type(row.get("id")) is int}
@@ -276,6 +282,19 @@ def build_activity_projection(raw_rows, *, scope, kind, window, allowed_actions_
             "artwork_url": None, "rating": None, "detail_ref": None,
             "allowed_actions": {"can_view_details": False},
         }
+        if own_occurrences:
+            # A positive receipt in the trusted ledger column is also an
+            # acceptance fence. Never translate pending/failed/missing status
+            # into not_sent or repair contradictory source provenance. Copy
+            # only for classification; keep the stored occurrence untouched.
+            delivery_facts = dict(payload)
+            if source.get("scrobble_status") == "scrobbled":
+                delivery_facts["scrobbled"] = True
+            row["scrobble_delivery"] = build_recent_scrobble_delivery(
+                delivery_facts, source_family=source.get("source_family"),
+                measurement_version=source.get("measurement_version"),
+                connection_state=scrobble_connection_state,
+            )
         existing = groups.get(key)
         if existing:
             count = existing["row"]["listen_count"] + 1
@@ -301,9 +320,34 @@ def build_activity_projection(raw_rows, *, scope, kind, window, allowed_actions_
         "complete_for_available_snapshot": True, "complete_for_requested_period": False,
         "label": "Available stored meaningful listens; complete historical coverage is not known.",
     }
-    fingerprint = hashlib.sha256(json.dumps({"events": semantic, "policy": sorted((kind, ref, allowed) for (kind, ref), allowed in decisions.items()),
-        "display": [{k: v for k, v in row.items() if k != "id"} for row in rows]}, sort_keys=True, default=str).encode()).hexdigest()
+    fingerprint_payload = {"events": semantic, "policy": sorted((kind, ref, allowed) for (kind, ref), allowed in decisions.items()),
+        "display": [{k: v for k, v in row.items() if k != "id"} for row in rows]}
+    if own_occurrences:
+        # Persist capture-time presentation with the existing receipt, not a live
+        # connection claim. Paging never reclassifies already captured rows.
+        coverage["scrobble_delivery"] = {"connection_state": scrobble_connection_state,
+            "captured_at": window.end.isoformat(), "semantics": "snapshot"}
+        fingerprint_payload["scrobble_delivery"] = coverage["scrobble_delivery"]
+    fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, default=str).encode()).hexdigest()
     return ActivityProjection(rows, len(events), coverage, fingerprint, events, groups, set(decisions))
+
+
+def _recent_scrobble_connection_state(config, *, account_id):
+    """Reduce the scoped integration owner's status to a safe presentation enum."""
+    try:
+        from music_app.services.lastfm import build_lastfm_status
+        status = build_lastfm_status(config, account_id=account_id)
+        if not isinstance(status, dict):
+            return "unavailable"
+        if status.get("connected") is False:
+            return "disconnected"
+        if status.get("connected") is True and status.get("api_configured") is True:
+            return "connected"
+    except Exception:
+        # Failure is not evidence of disconnect. Never serialize/log provider
+        # errors, usernames, credentials or configuration through this DTO.
+        pass
+    return "unavailable"
 
 
 def read_home_activity(config, *, actor, query, allowed_actions_for_resource, now=None, repository=None,
@@ -322,10 +366,26 @@ def read_home_activity(config, *, actor, query, allowed_actions_for_resource, no
     if repository is None:
         from music_app.services.home_activity_postgres import HomeActivityPostgresRepository
         repository = HomeActivityPostgresRepository(config)
+    captured_scrobble_connection = None
+    captured_scrobble_snapshot = None
     def project(raw_rows, window, row_key_secret=None, source_account_id=None):
+        nonlocal captured_scrobble_connection, captured_scrobble_snapshot
+        own_occurrences = (scope.audience == "own" and query.kind == "listens"
+            and (source_account_id is None or
+                type(source_account_id) is int and source_account_id == scope.account_id))
+        if own_occurrences and (captured_scrobble_connection is None
+                or captured_scrobble_snapshot is not row_key_secret):
+            # Repository calls projection only after its authority checks when
+            # creating a receipt. One status read covers the empty coverage call
+            # and every ledger chunk. A retried creation has a new row-secret
+            # object and gets a fresh status. Paging makes no status read.
+            captured_scrobble_connection = _recent_scrobble_connection_state(
+                config, account_id=scope.account_id)
+            captured_scrobble_snapshot = row_key_secret
         return build_activity_projection(raw_rows, scope=scope, kind=query.kind, window=window,
             allowed_actions_for_resource=allowed_actions_for_resource, row_key_secret=row_key_secret,
-            source_account_id=source_account_id)
+            source_account_id=source_account_id,
+            scrobble_connection_state=captured_scrobble_connection if own_occurrences else "unknown")
     project.policy = allowed_actions_for_resource
     project.read_action = scope.read_action
     project.scope_wide_policy = getattr(allowed_actions_for_resource, "scope_wide", False) is True

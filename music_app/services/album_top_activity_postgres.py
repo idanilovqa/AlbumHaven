@@ -81,3 +81,22 @@ def set_activity(connection, context, command, top, now):
     return {"top_ref": str(top["ref"]), "action": command.action,
         "request_key": command.request_key, "activity_revision": str(updated.revision),
         "active": updated.active, "changed": changed}
+
+
+def ensure_participant_baseline(connection, context, top_ref, *, account_id=None):
+    """Owning create/copy/grant transaction already holds account/member/Top locks.
+
+    This records first enrollment only; it grants nothing and never changes an
+    existing participant's activity, transitions or manual completion. Time is
+    sampled by the server at this mutation, not before the parent's lock wait.
+    """
+    account = context.actor.account_id if account_id is None else account_id
+    connection.execute("""with created as (
+        insert into app.album_list_activity
+            (account_id,library_id,top_ref,activity_revision,active,started_at)
+        values(%s,%s,%s,0,true,clock_timestamp()) on conflict do nothing
+        returning account_id,library_id,top_ref,started_at)
+        insert into app.album_list_activity_transitions
+            (account_id,library_id,top_ref,revision,occurred_at)
+        select account_id,library_id,top_ref,0,started_at from created""",
+        (account,context.library_id,top_ref))

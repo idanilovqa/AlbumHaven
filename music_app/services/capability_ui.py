@@ -21,6 +21,7 @@ UTILITY_TAB_ACTIONS = MappingProxyType({
     "appearance": "account.self.appearance.read",
 })
 ACTION_SELECTORS = MappingProxyType({
+    "integration.lastfm.scrobbles.submit": ("[data-recent-scrobble-retry]",),
     "library.media.read": (
         ".global-player", ".compact-player-shell", ".play-track-button",
     ),
@@ -67,6 +68,8 @@ ACTION_SELECTORS = MappingProxyType({
     "accounts.read": ('a[href="/admin/members"]',),
 })
 UI_ACTIONS = tuple(sorted({
+    "account.self.foobar.write",
+    "library.browse.read",
     *CAPABILITY_KEYS, *ACTION_SELECTORS, *UTILITY_TAB_ACTIONS.values(),
     *(action for actions in CAPABILITY_ACTIONS.values() for action in actions),
 }))
@@ -91,7 +94,13 @@ def build_capability_ui(allowed: dict[str, bool], client_surface: str) -> dict[s
         if not allowed.get(action, False)
         for selector in selectors
     ]
-    denied_tabs = [tab for tab, action in UTILITY_TAB_ACTIONS.items() if not allowed.get(action, False)]
+    # Account-owned Foobar never requires library or integration-administrator
+    # authority. Keep the accepted browse-only preview and other tabs distinct.
+    denied_tabs = [tab for tab, action in UTILITY_TAB_ACTIONS.items()
+                   if not (allowed.get(action, False)
+                           or (tab == "integrations" and (
+                               allowed.get("library.browse.read", False)
+                               or allowed.get("account.self.foobar.write", False))))]
     if client_surface == "tv":
         denied_selectors.extend((
             ".cover-lookup-manual-add", "[data-select-local-cover]", "[data-select-pasted-cover]",

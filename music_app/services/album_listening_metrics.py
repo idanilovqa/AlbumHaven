@@ -459,8 +459,8 @@ def _metrics_evidence(batch, v):
     return runs, losses, buckets
 
 
-def _project_metrics(batch, policy, target, runs, losses, buckets):
-    intervals = {member['track_id']: [] for member in batch['snapshot']['members']}
+def _raw_position_projection(snapshot, runs):
+    intervals = {member['track_id']: [] for member in snapshot['members']}
     native_frames = 0
     for run in runs:
         native_frames = _bounded(native_frames + run['frames'])
@@ -479,6 +479,11 @@ def _project_metrics(batch, policy, target, runs, losses, buckets):
             count = _bounded(count + end - start)
         known_frames = _bounded(known_frames + count)
         coverage.append({'track_id': track, 'source_intervals': union, 'known_position_frames': _metric(count)})
+    return native_frames, known_frames, coverage
+
+
+def _project_metrics(batch, policy, target, runs, losses, buckets):
+    native_frames, known_frames, coverage = _raw_position_projection(batch['snapshot'], runs)
     loss_counts = [loss['reported_positive_frames'] for loss in losses
                    if loss['reported_positive_frames'] is not None]
     lost = (_metric(max(loss_counts), 'lower_bound') if loss_counts else
@@ -1249,35 +1254,56 @@ def _candidate_union(ranges):
     return union
 
 
-def _candidate_geometry(batch, projection, sequences):
-    required = {m['track_id']: m['media_extent_frames'] for m in batch['snapshot']['members']
-                if m['required_class'] == 'required'}
-    denominator = 0
-    core_length = Fraction(0)
-    cores = {}
-    for track in projection['ordered_track_ids']:
-        if track not in required:
-            continue
-        extent = required[track]
-        denominator = _bounded(denominator + extent)
-        trim = min(Fraction(48000), Fraction(extent, 200))
-        cores[track] = (trim, extent - trim, core_length)
-        core_length = _add_fraction(core_length, extent - 2 * trim)
-    layers = {track: {} for track in required}
-    groups, tokens, uninterrupted = {}, 0, 0
-    for sequence in sequences:
-        actual_by_track = {}
-        for run in sequence:
-            if run['track_id'] in required:
-                actual_by_track.setdefault(run['track_id'], []).append(
-                    (run['source_start48'], run['source_start48'] + run['frames']))
+class _CandidateGeometryFold:
+    """Shared exact geometry owner; inputs are already admitted monotone spans.
+
+    This arithmetic layer does not admit source provenance, continuity, selected
+    membership or completeness. Old Runs and new compact spans have separate
+    adapters; neither is cast into the other's evidence type.
+    """
+    def __init__(self, required, ordered_track_ids, *, span_limit=None, local_total_tolerance=False):
+        self.required = required
+        self.denominator, self.core_length, self.cores = 0, Fraction(0), {}
+        for track in ordered_track_ids:
+            if track not in required:
+                continue
+            extent = required[track]
+            self.denominator = _bounded(self.denominator + extent)
+            # Preserve historical proposed-candidate defaults. The actual local
+            # policy splits ONE total min(1s,0.5%) allowance equally at boundaries.
+            trim = (min(Fraction(24000), Fraction(extent, 400)) if local_total_tolerance
+                    else min(Fraction(48000), Fraction(extent, 200)))
+            self.cores[track] = (trim, extent - trim, self.core_length)
+            self.core_length = _add_fraction(self.core_length, extent - 2 * trim)
+        self.layers = {track: {} for track in required}
+        self.groups, self.tokens, self.uninterrupted = {}, 0, 0
+        self.span_limit, self.span_count = span_limit, 0
+        self.open_actual, self.open_key, self.sealed = None, None, False
+
+    def begin(self, key):
+        if self.sealed or self.open_actual is not None:
+            raise ValueError('candidate_geometry_conflict')
+        self.open_actual, self.open_key = {}, key
+
+    def add(self, track, start, end):
+        if self.sealed or self.open_actual is None:
+            raise ValueError('candidate_geometry_conflict')
+        self.span_count += 1
+        if self.span_limit is not None and self.span_count > self.span_limit:
+            raise OverflowError
+        if track in self.required:
+            self.open_actual.setdefault(track, []).append((start, end))
+
+    def end(self):
+        if self.sealed or self.open_actual is None:
+            raise ValueError('candidate_geometry_conflict')
         actual, mapped, coverage = [], [], 0
-        for track in sorted(actual_by_track):
-            trim, core_end, offset = cores[track]
-            for start, end in _candidate_union(actual_by_track[track]):
+        for track in sorted(self.open_actual):
+            trim, core_end, offset = self.cores[track]
+            for start, end in _candidate_union(self.open_actual[track]):
                 actual.append((track, start, end))
                 coverage = _bounded(coverage + end - start)
-                points = layers[track]
+                points = self.layers[track]
                 points[start] = points.get(start, 0) + 1
                 points[end] = points.get(end, 0) - 1
                 lo, hi = max(start, trim), min(end, core_end)
@@ -1285,27 +1311,150 @@ def _candidate_geometry(batch, projection, sequences):
                     mapped.append((_add_fraction(offset, lo - trim),
                                    _add_fraction(offset, hi - trim)))
         core_union = _candidate_union(mapped)
-        # Validated monotone full-boundary joins cannot create an interior hole.
-        # Keep an explicit invariant guard rather than filling one with trim.
         if len(core_union) > 1:
             raise ValueError('candidate_geometry_conflict')
-        if _bounded(5 * coverage) < denominator or not core_union:
-            continue
-        tokens += 1
-        if tokens > 4096:
+        key = self.open_key
+        self.open_actual, self.open_key = None, None
+        if _bounded(5 * coverage) < self.denominator or not core_union:
+            return
+        self.tokens += 1
+        if self.tokens > 4096:
             raise OverflowError
         a, b = core_union[0]
-        uninterrupted += a == 0 and b == core_length
-        identity = (a, b, tuple(actual), a == 0, b == core_length)
-        if identity not in groups:
-            if len(groups) == 512:
+        self.uninterrupted += a == 0 and b == self.core_length
+        identity = (a, b, tuple(actual), a == 0, b == self.core_length)
+        if identity not in self.groups:
+            if len(self.groups) == 512:
                 raise OverflowError
-            groups[identity] = {'a': a, 'b': b, 'actual': tuple(actual), 'keys': []}
-        groups[identity]['keys'].append(tuple(_candidate_run_key(run) for run in sequence))
-    ordered = [groups[key] for key in sorted(groups)]
-    for group in ordered:
-        group['keys'].sort()
-    return denominator, core_length, layers, ordered, tokens, uninterrupted
+            self.groups[identity] = {'a': a, 'b': b, 'actual': tuple(actual), 'keys': []}
+        self.groups[identity]['keys'].append(key)
+
+    def finish(self):
+        if self.sealed or self.open_actual is not None:
+            raise ValueError('candidate_geometry_conflict')
+        self.sealed = True
+        ordered = [self.groups[key] for key in sorted(self.groups)]
+        for group in ordered:
+            group['keys'].sort()
+        return (self.denominator, self.core_length, self.layers, ordered,
+                self.tokens, self.uninterrupted)
+
+
+def _candidate_geometry(batch, projection, sequences):
+    required = {m['track_id']: m['media_extent_frames'] for m in batch['snapshot']['members']
+                if m['required_class'] == 'required'}
+    fold = _CandidateGeometryFold(required, projection['ordered_track_ids'])
+    for sequence in sequences:
+        # Preserve every old canonical Run key and old witness representation.
+        fold.begin(tuple(_candidate_run_key(run) for run in sequence))
+        for run in sequence:
+            fold.add(run['track_id'], run['source_start48'], run['source_start48'] + run['frames'])
+        fold.end()
+    return fold.finish()
+
+
+class _HistoryCandidateGeometry:
+    """Private compact-span arithmetic, never a successful admission provider.
+
+    Only a real whole-cut source/compatibility owner may supply extents and
+    validated monotone spans. This class neither obtains nor fabricates that
+    evidence. A missing provider must prevent its use by the future service.
+    """
+    def __init__(self, member_extents, ordered_track_ids):
+        if (type(member_extents) is not dict or not 1 <= len(member_extents) <= 512
+                or type(ordered_track_ids) is not tuple
+                or len(ordered_track_ids) != len(member_extents)):
+            raise ValueError('candidate_geometry_conflict')
+        # Bound both collections before inspection; reject bool/float aliases and
+        # unhashable IDs before any set equality or dictionary lookup can coerce
+        # them into an admitted member. Use the same exact-int law on both sides.
+        if (any(not _is_integer(track, 1) or not _is_integer(extent, 1)
+                for track, extent in member_extents.items())
+                or any(not _is_integer(track, 1) for track in ordered_track_ids)):
+            raise ValueError('candidate_geometry_conflict')
+        if (len(set(ordered_track_ids)) != len(ordered_track_ids)
+                or set(ordered_track_ids) != member_extents.keys()):
+            raise ValueError('candidate_geometry_conflict')
+        self.fold = _CandidateGeometryFold(dict(member_extents), ordered_track_ids, span_limit=65536)
+        self.keys, self.open = {}, False
+        self.order = {track: index for index, track in enumerate(ordered_track_ids)}
+        self.previous_span = None
+        self.finished, self.allocated = False, False
+        self.geometry = None
+
+    def begin(self, token_key):
+        # Scoped compact keys are formed by the source-owned support fold, not by
+        # assigning the first raw checkpoint's identity to a coalesced span.
+        valid = type(token_key) is tuple and len(token_key) == 6
+        if valid:
+            valid = _is_integer(token_key[0], 1)
+            check = _Validation()
+            check.identifier(token_key[1], 'uuid'); check.identifier(token_key[2], 'uuid')
+            check.identifier(token_key[5], 'digest')
+            for key in token_key[3:5]:
+                if type(key) is not tuple or len(key) != 6:
+                    valid = False
+                    continue
+                valid = valid and all(_is_integer(key[i], 1) for i in (0, 1, 4))
+                valid = valid and _is_integer(key[2], 0) and key[2] <= 255
+                check.identifier(key[3], 'uuid'); check.identifier(key[5], 'digest')
+            valid = valid and not check.errors
+        if not valid or self.finished or self.open:
+            raise ValueError('candidate_geometry_conflict')
+        original_range = token_key[:5]
+        if original_range in self.keys:
+            raise ValueError('candidate_geometry_conflict')
+        if len(self.keys) == 4096:
+            raise OverflowError
+        self.keys[original_range] = token_key
+        self.fold.begin(token_key)
+        self.open, self.previous_span = True, None
+
+    def add_span(self, track_id, source_lo, source_hi):
+        if (not self.open or not _is_integer(track_id, 1) or track_id not in self.fold.required
+                or not _is_integer(source_lo, 0) or not _is_integer(source_hi, 1)
+                or not source_lo < source_hi <= self.fold.required[track_id]):
+            raise ValueError('candidate_geometry_conflict')
+        if self.previous_span is not None:
+            previous_track, previous_end = self.previous_span
+            contiguous = (track_id == previous_track and source_lo == previous_end)
+            next_track = (self.order[track_id] == self.order[previous_track] + 1
+                          and previous_end == self.fold.required[previous_track] and source_lo == 0)
+            if not (contiguous or next_track):
+                raise ValueError('candidate_geometry_conflict')
+        self.fold.add(track_id, source_lo, source_hi)
+        self.previous_span = (track_id, source_hi)
+
+    def end(self):
+        if not self.open or self.previous_span is None:
+            raise ValueError('candidate_geometry_conflict')
+        self.fold.end()
+        self.open = False
+
+    def finish(self):
+        if self.finished or self.open:
+            raise ValueError('candidate_geometry_conflict')
+        self.geometry = self.fold.finish()
+        self.finished = True
+
+    def allocate_once(self):
+        if not self.finished or self.allocated:
+            raise ValueError('candidate_geometry_conflict')
+        # Set before entering non-interruptible CPU work: an exception cannot
+        # retry this object or grant duplicate token capacity. Its outer job
+        # retains the original reservation until the call actually settles.
+        self.allocated = True
+        denominator, core_length, layers, groups, tokens, uninterrupted = self.geometry
+        full, consumed, paths = _candidate_allocate(groups, core_length)
+        return dict(full=full, partial=tokens-consumed,
+                    uninterrupted_full=uninterrupted, paths=paths)
+
+    def target_projection(self, target):
+        if not self.finished or not _is_integer(target, 1):
+            raise ValueError('candidate_geometry_conflict')
+        denominator, core_length, layers, groups, tokens, uninterrupted = self.geometry
+        # A changed saved target reuses valid geometry, never old predicates.
+        return _candidate_target(layers, self.fold.required, target, denominator)
 
 
 def _candidate_target(layers, required, target, denominator):
@@ -1345,6 +1494,12 @@ def _candidate_project(batch, projection, target, runs, sequences, continuity_un
     reasons = {'qualification_pending', 'candidate_only'}
     if batch['history']['status'] != 'complete_recorded_scope':
         reasons.add('history_incomplete')
+    # A complete admitted partition can be counted without asserting that older
+    # history is complete. Observed-window arithmetic retains its separate scope.
+    # This is not recovery from a failed read: admission and partition gates stay
+    # unchanged, and the caller still owns a successful authorized selection.
+    lower_bound = ('history_incomplete' in reasons
+                   and batch['scope']['kind'] != 'observed_window')
     result_reasons = reasons | set(batch['history']['reasons']) | set(projection['reasons'])
     values = {name: None for name in ('full', 'partial', 'uninterrupted_full',
               'target_coverage', 'tracks_at_target', 'album_time_equivalents')}
@@ -1385,7 +1540,12 @@ def _candidate_project(batch, projection, target, runs, sequences, continuity_un
             result_reasons.add('continuity_unknown')
     metrics = {}
     for name, value in values.items():
-        metrics[name] = {'value': value, 'status': 'unavailable' if value is None else 'exact_recorded',
+        # Missing history can consume leftover tokens, so partial is neither an
+        # exact total nor a lower bound. Never publish the subset's leftovers.
+        if lower_bound and name == 'partial':
+            value = None
+        status = 'unavailable' if value is None else 'lower_bound' if lower_bound else 'exact_recorded'
+        metrics[name] = {'value': value, 'status': status,
                          'reasons': sorted(reasons | dependencies[name])}
     result = {field: deepcopy(batch[field]) for field in
               ('actor_id', 'library_id', 'local_album_key', 'evidence_revision', 'scope')}
@@ -1434,3 +1594,462 @@ def compute_album_listening_candidates(batch, traversal, target=5):
         if error.args == ('candidate_geometry_conflict',):
             return _failure('evidence_conflict')
         raise
+
+
+# N7 position admission is a distinct, observed-window contract. It neither
+# fabricates Stage B events nor upgrades browser reports to decoder attestation.
+_POSITION_FIELDS = ('version actor_id library_id observation_id owner window selected_album '
+    'snapshot mappings ordered_track_ids runs positions losses observation_status timing_status retirement_status')
+_POSITION_RUN_FIELDS = ('actor_id library_id local_album_key track_id capture_parent_uuid '
+    'checkpoint_sequence run_index checkpoint_digest timeline_uuid source_start48 frames output_start '
+    'ordinal_start epoch binding_serial v1_session_uuid anchor_before anchor_after quality occurrence')
+_POSITION_SIDE_FIELDS = ('capture_parent_uuid checkpoint_sequence run_index parent_id checkpoint_id '
+    'original_album_id current_album_id generation stream_id source_base48 continuity_serial')
+_POSITION_GAP_FIELDS = 'ordinal_start ordinal_end positive_frames output_start output_end epoch reasons'
+_POSITION_MAX_BYTES = 1048576
+_POSITION_DOMAIN = b'album-haven:album-position-observation:v1\0'
+
+
+class _PositionInputError(ValueError):
+    pass
+
+
+def _position_limits(value):
+    if type(value) is not dict:
+        return False
+    for key, maximum in (('runs', 256), ('positions', 256), ('losses', 2),
+                         ('mappings', 1), ('ordered_track_ids', 512)):
+        if _too_many(value.get(key), maximum):
+            return True
+    snapshot = value.get('snapshot')
+    if type(snapshot) is dict and _too_many(snapshot.get('members'), 512):
+        return True
+    # Outer list caps above precede even these small nested checks.
+    for loss in value.get('losses', ()) if type(value.get('losses')) is list else ():
+        if type(loss) is dict and _too_many(loss.get('reasons'), 6):
+            return True
+    return False
+
+
+def _position_capture_run(run, position):
+    keys = ('source_start48 frames output_start ordinal_start epoch binding_serial '
+            'anchor_before anchor_after quality').split()
+    result = {key: run[key] for key in keys}
+    result.update({key: position[key] for key in
+                   ('generation', 'stream_id', 'source_base48', 'continuity_serial')})
+    return result
+
+
+def _position_key(value):
+    return value['capture_parent_uuid'], value['checkpoint_sequence'], value['run_index']
+
+
+def _position_content_digest(value):
+    # All callers have bounded and validated the complete graph first.
+    import hashlib
+    import json
+    encoder = json.JSONEncoder(sort_keys=True, separators=(',', ':'),
+                               ensure_ascii=False, allow_nan=False)
+    digest = hashlib.sha256(_POSITION_DOMAIN)
+    size = 0
+    for chunk in encoder.iterencode(value):
+        encoded = chunk.encode('utf-8', errors='strict')
+        size += len(encoded)
+        if size > _POSITION_MAX_BYTES:
+            raise _PositionInputError('resource_limit')
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+
+def _position_safe(value, minimum=0):
+    return _is_integer(value, minimum) and value <= 9007199254740991
+
+
+def _position_gap_fields(loss, v):
+    # N17 consumes the same bounded N9 gap vocabulary, without importing any
+    # application package into this standalone pure metrics module.
+    valid = True
+    for key in ('ordinal_start', 'ordinal_end', 'positive_frames', 'output_start', 'output_end'):
+        valid = v.require(_position_safe(loss[key], 1 if key == 'positive_frames' else 0),
+                          'invalid_integer') and valid
+    if loss['epoch'] is not None:
+        v.require(_position_safe(loss['epoch'], 1), 'invalid_integer')
+    reasons = loss['reasons']
+    if v.require(type(reasons) is list):
+        allowed = ('buffer_credit', 'queue_capacity', 'binding_capacity',
+                   'timing_discontinuity', 'owner_reset', 'numeric_limit')
+        valid_reasons = all(type(reason) is str and reason in allowed for reason in reasons)
+        v.require(bool(reasons) and valid_reasons, 'invalid_namespace')
+        if valid_reasons:
+            v.require(reasons == sorted(set(reasons)))
+    if valid:
+        v.require(loss['ordinal_end'] - loss['ordinal_start'] >= loss['positive_frames']
+                  and loss['output_end'] - loss['output_start'] >= loss['positive_frames'])
+
+
+def _position_native_fields(run, v):
+    for key in ('source_start48', 'frames', 'output_start', 'ordinal_start', 'epoch', 'binding_serial'):
+        v.require(_position_safe(run[key], 1 if key in ('frames', 'epoch', 'binding_serial') else 0),
+                  'invalid_integer')
+    for key in ('source_start48', 'output_start', 'ordinal_start'):
+        if _is_integer(run[key], 0) and _is_integer(run['frames'], 1):
+            v.require(_position_safe(run[key] + run['frames']), 'invalid_integer')
+    for key in ('anchor_before', 'anchor_after'):
+        if type(run[key]) is list and len(run[key]) == 2:
+            v.require(all(_position_safe(number, 1) for number in run[key]), 'invalid_integer')
+
+
+def _position_causal_laws(native, v):
+    # Necessary N7/N9/N14 laws, not session/extent authority. The real reader
+    # independently uses the genuine parser and repository edge validator.
+    for index, run in enumerate(native):
+        v.require(run['continuity_serial'] <= run['ordinal_start'] + 1, 'evidence_conflict')
+        if not index:
+            continue
+        before = native[index - 1]
+        ordinal_gap = run['ordinal_start'] - before['ordinal_start'] - before['frames']
+        output_gap = run['output_start'] - before['output_start'] - before['frames']
+        v.require(ordinal_gap >= 0 and output_gap >= 0, 'evidence_conflict')
+        v.require(run['epoch'] >= before['epoch'] and run['generation'] >= before['generation']
+                  and run['continuity_serial'] >= before['continuity_serial'], 'evidence_conflict')
+        if run['generation'] != before['generation']:
+            v.require(run['epoch'] > before['epoch'], 'evidence_conflict')
+        v.require(run['continuity_serial'] - before['continuity_serial'] <= ordinal_gap + 1,
+                  'evidence_conflict')
+        if run['continuity_serial'] == before['continuity_serial']:
+            v.require(run['generation'] == before['generation'] and output_gap == ordinal_gap,
+                      'evidence_conflict')
+
+
+
+def _prepare_album_position_observation(value, target=5, *, verify_digest=True):
+    if _position_limits(value):
+        raise _PositionInputError('resource_limit')
+    v = _Validation()
+    if not v.record(value, _POSITION_FIELDS):
+        raise _PositionInputError(v.first())
+    v.scope_fields(value)
+    v.require(_is_integer(target, 1), 'invalid_target')
+    v.enum(value['version'], ('album-position-observation-v1',))
+    v.identifier(value['observation_id'], 'digest')
+    for key, expected in (('observation_status', 'complete_as_observed'),
+                          ('timing_status', 'unknown'), ('retirement_status', 'unknown')):
+        v.enum(value[key], (expected,))
+    owner, window, album = value['owner'], value['window'], value['selected_album']
+    if v.record(owner, 'owner_id device_uuid owner_uuid'):
+        v.integer(owner['owner_id'], 1)
+        for key in ('device_uuid', 'owner_uuid'):
+            v.identifier(owner[key], 'uuid')
+        v.require(owner['owner_uuid'] != '00000000-0000-0000-0000-000000000000',
+                  'invalid_identifier')
+    if v.record(window, 'ordinal_lo ordinal_hi output_lo output_hi'):
+        coordinates_valid = True
+        for coordinate in window.values():
+            coordinates_valid = v.require(_position_safe(coordinate), 'invalid_integer') and coordinates_valid
+        if coordinates_valid:
+            v.require(window['ordinal_lo'] < window['ordinal_hi']
+                      and window['output_lo'] < window['output_hi'])
+    if v.record(album, 'local_album_id local_album_key'):
+        v.integer(album['local_album_id'], 1)
+        v.identifier(album['local_album_key'])
+    _validate_snapshot(value['snapshot'], v)
+    lists_valid = True
+    for key in ('runs', 'positions', 'losses', 'mappings', 'ordered_track_ids'):
+        lists_valid = v.require(type(value[key]) is list) and lists_valid
+    if not lists_valid:
+        raise _PositionInputError(v.first())
+
+    for mapping in value['mappings']:
+        v.mapping(mapping)
+    for track in value['ordered_track_ids']:
+        v.integer(track, 1)
+    for run in value['runs']:
+        if not v.record(run, _POSITION_RUN_FIELDS):
+            continue
+        _validate_run(run, v)
+        _position_native_fields(run, v)
+        v.require(run['occurrence'] is None)
+        v.require(_is_integer(run['run_index'], 0) and run['run_index'] <= 255,
+                  'invalid_integer')
+        v.require(_is_integer(run['checkpoint_sequence'], 1)
+                  and run['checkpoint_sequence'] <= 9007199254740991, 'invalid_integer')
+    for pos in value['positions']:
+        if not v.record(pos, _POSITION_SIDE_FIELDS):
+            continue
+        v.identifier(pos['capture_parent_uuid'], 'uuid')
+        for key in ('parent_id', 'checkpoint_id', 'current_album_id'):
+            v.integer(pos[key], 1)
+        if pos['original_album_id'] is not None:
+            v.integer(pos['original_album_id'], 1)
+        for key in ('checkpoint_sequence', 'generation', 'stream_id', 'continuity_serial'):
+            v.require(_is_integer(pos[key], 1) and pos[key] <= 9007199254740991, 'invalid_integer')
+        v.require(_is_integer(pos['source_base48'], 0)
+                  and pos['source_base48'] <= 9007199254740991, 'invalid_integer')
+        v.require(_is_integer(pos['run_index'], 0) and pos['run_index'] <= 255, 'invalid_integer')
+    for loss in value['losses']:
+        if not v.record(loss, 'parent checkpoint_id sequence digest gap_index ' + _POSITION_GAP_FIELDS):
+            continue
+        if v.record(loss['parent'], 'parent_id capture_uuid original_track_id original_album_id'):
+            parent = loss['parent']
+            v.identifier(parent['capture_uuid'], 'uuid')
+            for key in ('parent_id', 'original_track_id'):
+                v.integer(parent[key], 1)
+            if parent['original_album_id'] is not None:
+                v.integer(parent['original_album_id'], 1)
+        v.integer(loss['checkpoint_id'], 1)
+        v.require(_is_integer(loss['sequence'], 1) and loss['sequence'] <= 9007199254740991,
+                  'invalid_integer')
+        v.identifier(loss['digest'], 'digest')
+        v.require(_is_integer(loss['gap_index'], 0) and loss['gap_index'] <= 7, 'invalid_integer')
+        _position_gap_fields(loss, v)
+    if v.errors:
+        raise _PositionInputError(v.first())
+
+    runs = {_position_key(r): r for r in _deduplicate(
+        value['runs'], 'capture_parent_uuid checkpoint_sequence run_index', v)}
+    positions = {_position_key(p): p for p in _deduplicate(
+        value['positions'], 'capture_parent_uuid checkpoint_sequence run_index', v)}
+    v.require(runs.keys() == positions.keys(), 'evidence_conflict')
+    if v.errors:
+        raise _PositionInputError(v.first())
+    ordered = sorted(runs, key=lambda k: (runs[k]['ordinal_start'], runs[k]['output_start'], *k))
+    snapshot = value['snapshot']
+    tracks = {m['track_id']: m for m in snapshot['members']}
+    v.require(len(set(value['ordered_track_ids'])) == len(value['ordered_track_ids'])
+              and set(value['ordered_track_ids']) == tracks.keys(), 'invalid_snapshot')
+    v.require(snapshot['library_id'] == value['library_id']
+              and snapshot['local_album_key'] == album['local_album_key'], 'scope_mismatch')
+    for mapping in value['mappings']:
+        v.require(_same_scope(mapping, value, 'actor_id library_id')
+                  and mapping['local_album_key'] == album['local_album_key'], 'scope_mismatch')
+    if snapshot['mapping_id'] is not None:
+        matching = [m for m in value['mappings'] if m['mapping_id'] == snapshot['mapping_id']]
+        v.require(bool(matching), 'mapping_missing')
+        for mapping in matching:
+            v.require(mapping['catalog_album_ref'] == snapshot['catalog_album_ref'], 'scope_mismatch')
+
+    parent_ids, parent_records, v1_links, receipts, checkpoint_ids, bindings = {}, {}, {}, {}, {}, {}
+    native = []
+    def associate(parent_id, capture_uuid, track, original_album, checkpoint, sequence, digest):
+        _retain(parent_ids, parent_id, capture_uuid, v)
+        _retain(parent_records, capture_uuid, (parent_id, track, original_album), v)
+        _retain(receipts, (parent_id, sequence), (checkpoint, digest), v, 'checkpoint_digest_conflict')
+        _retain(checkpoint_ids, checkpoint, (parent_id, sequence, digest), v, 'checkpoint_digest_conflict')
+
+    for key in ordered:
+        run, pos = runs[key], positions[key]
+        v.require(_same_scope(run, value, 'actor_id library_id')
+                  and run['local_album_key'] == album['local_album_key']
+                  and pos['current_album_id'] == album['local_album_id']
+                  and run['track_id'] in tracks
+                  and run['timeline_uuid'] == owner['owner_uuid'], 'scope_mismatch')
+        v.require(run['ordinal_start'] < window['ordinal_hi']
+                  and run['ordinal_start'] + run['frames'] > window['ordinal_lo'], 'evidence_conflict')
+        member = tracks.get(run['track_id'])
+        if member is not None and member['media_extent_frames'] is not None:
+            v.require(run['source_start48'] + run['frames'] <= member['media_extent_frames'],
+                      'evidence_conflict')
+        associate(pos['parent_id'], key[0], run['track_id'], pos['original_album_id'],
+                  pos['checkpoint_id'], key[1], run['checkpoint_digest'])
+        _retain(v1_links, key[0], run['v1_session_uuid'], v)
+        _retain(bindings, run['binding_serial'],
+                (pos['parent_id'], pos['generation'], pos['stream_id'], pos['source_base48']), v)
+        v.require(run['source_start48'] >= pos['source_base48'], 'evidence_conflict')
+        native.append(_position_capture_run(run, pos))
+    losses = {}
+    for loss in value['losses']:
+        parent = loss['parent']
+        associate(parent['parent_id'], parent['capture_uuid'], parent['original_track_id'],
+                  parent['original_album_id'], loss['checkpoint_id'], loss['sequence'], loss['digest'])
+        _retain(losses, (parent['parent_id'], loss['checkpoint_id'], loss['gap_index']), loss, v)
+        v.require((loss['ordinal_start'] < window['ordinal_hi'] and loss['ordinal_end'] > window['ordinal_lo'])
+                  or (loss['output_start'] < window['output_hi'] and loss['output_end'] > window['output_lo']),
+                  'evidence_conflict')
+    if not v.errors:
+        _position_causal_laws(native, v)
+    if v.errors:
+        raise _PositionInputError(v.first())
+    normalized = deepcopy(value)
+    normalized.pop('observation_id')
+    normalized['runs'] = [deepcopy(runs[key]) for key in ordered]
+    normalized['positions'] = [deepcopy(positions[key]) for key in ordered]
+    normalized['losses'] = [deepcopy(losses[key]) for key in sorted(losses)]
+    normalized['snapshot']['members'].sort(key=lambda member: member['track_id'])
+    digest = _position_content_digest(normalized)
+    if verify_digest and value['observation_id'] != digest:
+        raise _PositionInputError('evidence_conflict')
+    normalized['observation_id'] = digest
+    return normalized
+
+
+def _seal_album_position_observation(value):
+    """Internal adapter content identity, not a proof or authority capability."""
+    try:
+        return _prepare_album_position_observation(value, verify_digest=False)
+    except _PositionInputError as error:
+        return _failure(error.args[0])
+
+
+def _position_partition(value):
+    runs, positions, window = value['runs'], value['positions'], value['window']
+    members = {m['track_id']: m for m in value['snapshot']['members']}
+    order = {track: i for i, track in enumerate(value['ordered_track_ids'])}
+    reasons, groups, sequences = set(), [], []
+    if not runs:
+        reasons.add('no_positive_positions')
+    elif (runs[0]['ordinal_start'] != window['ordinal_lo']
+          or runs[-1]['ordinal_start'] + runs[-1]['frames'] != window['ordinal_hi']
+          or runs[0]['output_start'] != window['output_lo']
+          or runs[-1]['output_start'] + runs[-1]['frames'] != window['output_hi']):
+        reasons.add('boundary_alignment_unknown')
+    if value['losses']:
+        reasons.add('reported_loss_overlap')
+    if value['snapshot']['status'] != 'observed':
+        reasons.add('snapshot_unavailable')
+    for index, (run, pos) in enumerate(zip(runs, positions)):
+        ref = dict(zip(('capture_parent_uuid', 'checkpoint_sequence', 'run_index'), _position_key(run)))
+        same_group, extend, wrap = False, False, None
+        if index:
+            left, prior = runs[index - 1], positions[index - 1]
+            adjacent = (left['ordinal_start'] + left['frames'] == run['ordinal_start']
+                        and left['output_start'] + left['frames'] == run['output_start'])
+            if not adjacent:
+                reasons.add('positive_positions_missing')
+            same_group = (adjacent and pos['generation'] == prior['generation']
+                          and pos['continuity_serial'] == prior['continuity_serial'])
+            if same_group:
+                end = left['source_start48'] + left['frames']
+                same_track = left['track_id'] == run['track_id']
+                extent = members[left['track_id']]['media_extent_frames']
+                next_track = order[run['track_id']] == order[left['track_id']] + 1
+                album_wrap = (order[left['track_id']] == len(order) - 1
+                              and order[run['track_id']] == 0)
+                if same_track and run['source_start48'] == end:
+                    extend = True
+                elif same_track and run['source_start48'] < end:
+                    wrap = 'source_wrap'
+                elif (not same_track and extent is not None
+                      and members[run['track_id']]['media_extent_frames'] is not None and end == extent
+                      and run['source_start48'] == 0 and (next_track or album_wrap)):
+                    extend = next_track
+                    if not next_track:
+                        wrap = 'album_wrap'
+                else:
+                    reasons.add('source_geometry_unknown')
+        if not same_group:
+            groups.append(dict(owner_id=value['owner']['owner_id'],
+                continuity_serial=pos['continuity_serial'], generation=pos['generation'],
+                run_refs=[], wraps=[], lifetime_start='unknown', lifetime_end='unknown'))
+        groups[-1]['run_refs'].append(ref)
+        if wrap:
+            groups[-1]['wraps'].append(dict(kind=wrap, before_track_id=left['track_id'],
+                after_track_id=run['track_id'], source_from48=end,
+                source_to48=run['source_start48'], after=ref))
+        if extend:
+            sequences[-1].append(run)
+        else:
+            sequences.append([run])
+    projection = dict(ordered_track_ids=value['ordered_track_ids'],
+                      partition_status='unknown' if reasons else 'complete', reasons=sorted(reasons))
+    return projection, sequences, groups
+
+
+def compute_album_position_candidates(observation, target=5):
+    """Observed N7 reported coordinates, never lifetime or hearing qualification.
+
+    Authority, current inventory scope and immutable extent admission are external
+    premises. The inventory-only reader intentionally supplies no exact extents.
+    """
+    try:
+        value = _prepare_album_position_observation(observation, target)
+        projection, sequences, groups = _position_partition(value)
+        native, known, coverage = _raw_position_projection(value['snapshot'], value['runs'])
+        batch = dict(actor_id=value['actor_id'], library_id=value['library_id'],
+            local_album_key=value['selected_album']['local_album_key'],
+            evidence_revision=value['observation_id'],
+            scope=dict(kind='observed_window', owner=deepcopy(value['owner']),
+                       window=deepcopy(value['window'])),
+            snapshot=value['snapshot'], history=dict(status='partial', reasons=['history_partial']))
+        result = _candidate_project(batch, projection, target, value['runs'], sequences,
+                                    bool(projection['reasons']))
+        result['metrics'].update(native_recorded_frames=_metric(native),
+            native_recorded_seconds=_metric(_rational(Fraction(native, 48000))),
+            known_position_frames=_metric(known), track_coverage=coverage,
+            reported_lost_frames=_metric(reason='loss_time_unknown'))
+        result.update(version=value['version'], observation_id=value['observation_id'],
+            observation_status='complete_as_observed', timing_status='unknown',
+            retirement_status='unknown', immutable_source_coverage_status='unknown',
+            coordinate_basis='browser_reported_track_coordinates',
+            measurement_protocol='app-rendered-position-v2',
+            measurement_provenance='browser-reported-rendered-positions', history_status='partial',
+            non_additive_across_observations=True,
+            raw_interval_scope='whole_ordinal_intersecting_runs',
+            uninterrupted_full_basis='observed_window_monotone_continuous_output_passes',
+            observed_continuity_groups=groups,
+            observed_runs=value['runs'], observed_positions=value['positions'],
+            observed_losses=value['losses'])
+        return result
+    except _PositionInputError as error:
+        return _failure(error.args[0])
+    except OverflowError:
+        return _failure('resource_limit')
+    except ValueError as error:
+        if error.args == ('candidate_geometry_conflict',):
+            return _failure('evidence_conflict')
+        raise
+
+
+
+def compute_local_edition_recorded_metrics(members, runs):
+    """Actual local reader projection; supported intervals, never imported counts.
+
+    Caller supplies current complete membership and server-associated versions.
+    Distinct file versions never share intervals. This first visible projection
+    does not yet allocate Full/partial sessions or assert lifetime completeness.
+    """
+    if (type(members) is not list or not 1 <= len(members) <= 512
+            or type(runs) is not list or len(runs) > 4096):
+        return {'status':'unavailable','reason':'resource_limit'}
+    ids=[m.get('track_id') for m in members if type(m) is dict]
+    if len(ids)!=len(members) or len(set(ids))!=len(ids) or any(not _is_integer(i,1) for i in ids):
+        return {'status':'unavailable','reason':'invalid_membership'}
+    per_track={identity:dict(recorded_frames=0,versions={}) for identity in ids}
+    total=0;unknown=0
+    for run in runs:
+        if type(run) is not dict or run.get('track_id') not in per_track:
+            return {'status':'unavailable','reason':'invalid_run'}
+        frames=run.get('frames');start=run.get('source_start48')
+        if not _is_integer(frames,1) or not _is_integer(start,0):
+            return {'status':'unavailable','reason':'invalid_run'}
+        total+=frames;entry=per_track[run['track_id']];entry['recorded_frames']+=frames
+        if total>9007199254740991:return {'status':'unavailable','reason':'resource_limit'}
+        version=run.get('local_version');extent=run.get('extent_frames48')
+        if (type(version) is not str or re.fullmatch('[a-f0-9]{64}',version) is None
+                or not _is_integer(extent,1) or start+frames>extent):
+            unknown+=1;continue
+        group=entry['versions'].setdefault(version,dict(extent=extent,ranges=[]))
+        if group['extent']!=extent:return {'status':'unavailable','reason':'conflicting_extent'}
+        group['ranges'].append((start,start+frames))
+    tracks=[]
+    for member in members:
+        identity=member['track_id'];entry=per_track[identity];best=None
+        for version,group in entry['versions'].items():
+            covered=0;end=0
+            for lo,hi in sorted(group['ranges']):
+                covered+=max(0,hi-max(lo,end));end=max(end,hi)
+            candidate=(Fraction(covered,group['extent']),covered,group['extent'])
+            if best is None or candidate[0]>best[0]:best=candidate
+        tracks.append(dict(track_id=str(identity),recorded_frames=entry['recorded_frames'],
+            covered_frames=None if best is None else best[1],
+            extent_frames48=None if best is None else best[2],
+            coverage_status='unknown' if best is None else 'supported_lower_bound'))
+    return dict(status='partial',recorded_frames=total,tracks=tracks,
+        tracks_with_supported_coverage=sum(t['coverage_status']!='unknown' for t in tracks),
+        unsupported_run_count=unknown,full=None,listened='unknown',
+        history_status='partial',basis='local-edition-recorded-v1')
+
+
+LOCAL_FULL_POLICY = 'local-edition-overlap-total-margin-v1'
+
+

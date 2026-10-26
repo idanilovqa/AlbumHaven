@@ -6,6 +6,7 @@ from music_app.services.capabilities import grant_keys_for_action
 from music_app.services.collection_member_authority import collection_member_context
 from music_app.services.owned_album_tops import ACCESS, BROWSE, MAX_TOP_ITEMS, AlbumTopError
 from music_app.services.social_cursors import decode_social_cursor, encode_social_cursor
+from music_app.services.album_top_activity_postgres import ensure_participant_baseline
 
 
 def member_context(connection, context, account_id, *, lock=False):
@@ -55,12 +56,14 @@ def grant_access(owner, connection, context, top, account_id, role, constraints)
     ref = str(prior['ref']) if prior else str(uuid4())
     if prior is None:
         connection.execute('''insert into app.album_list_access_grants
-            (ref,top_ref,library_id,account_id,role) values(%s,%s,%s,%s,%s)''',
+            (ref,top_ref,library_id,account_id,role,created_at) values(%s,%s,%s,%s,%s,clock_timestamp())''',
             (ref, top['ref'], context.library_id, account_id, role))
     elif prior['role'] != role:
         connection.execute('''update app.album_list_access_grants set role=%s
             where ref=%s and top_ref=%s and library_id=%s''',
             (role, ref, top['ref'], context.library_id))
+    if prior is None:
+        ensure_participant_baseline(connection, context, top['ref'], account_id=account_id)
     if role == 'editor':
         invalidate(connection, top['ref'], account_id=account_id, status='approved')
     return prior is None or prior['role'] != role, {'grant_ref': ref}

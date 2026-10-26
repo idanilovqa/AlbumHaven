@@ -724,6 +724,23 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     await coverLookupActions.closeDrawer();
   }
 
+  const repeated = notifications[0];
+  expect(await galleryActions.selectAlbumDetailsByIdentity(repeated.identity)).toEqual(repeated.identity);
+  await trackModalActions.waitForLoadedSummary();
+  await trackModalActions.openCoverLookup();
+  await coverLookupActions.waitForModalReady();
+  await coverLookupActions.setProviderFixtureMode('normal');
+  await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover).slice(1));
+  const repeatedStart = await coverLookupActions.startSearch();
+  expect(String(repeatedStart.task?.id || '').trim()).toBe(repeated.taskId);
+  await coverLookupActions.closeModal();
+  await trackModalActions.close();
+  await coverLookupActions.openDrawer();
+  await coverLookupActions.waitForDrawerOpen();
+  await expect(coverLookupActions.coverLookup.taskCardById(repeated.taskId)).toHaveCount(1);
+  await coverLookupActions.waitForTaskStatusById(repeated.taskId, /^(?:\d+ )?covers found$/u);
+  await coverLookupActions.closeDrawer();
+
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
   await page.setViewportSize({ width: 390, height: 844 });

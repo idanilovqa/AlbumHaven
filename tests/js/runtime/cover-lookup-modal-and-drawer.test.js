@@ -41,6 +41,20 @@ function loadHelper(overrides = {}) {
   return context;
 }
 
+require('node:test')('Cover Lookup album link opens the current resolved album details', () => {
+  const album = { album_artist: 'Current Artist', name: 'Current Album', year: 2026 };
+  const calls = [];
+  const context = loadHelper({
+    openTrackModal: (value) => calls.push(['open', value]),
+  });
+  context.state.coverLookup.modal.album = album;
+  context.closeCoverLookupModal = () => calls.push(['close']);
+
+  context.openCoverLookupAlbumDetails();
+
+  assert.deepEqual(calls, [['close'], ['open', album]]);
+});
+
 for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', 'Cover Art Archive'], ['spotify', 'SPOTIFY']]) {
   require('node:test')(`remote ${source} cover cards separate semantic labels from decorative badges`, () => {
     const context = loadHelper({ escapeHtml: value => String(value ?? '') });

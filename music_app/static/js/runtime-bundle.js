@@ -28843,6 +28843,13 @@ function buildCoverLookupAlbumSubtitle(album) {
   return [album.album_artist || '', album.name || '', album.year || ''].filter(Boolean).join(' - ');
 }
 
+function openCoverLookupAlbumDetails() {
+  const album = state.coverLookup.modal.album;
+  if (!album) return;
+  closeCoverLookupModal();
+  openTrackModal(album);
+}
+
 function buildCoverLookupCurrentReleaseLabel(release) {
   return [
     release?.album_artist || '',
@@ -42254,6 +42261,12 @@ async function handleUtilityBootstrapClick(event) {
   if (event.target.closest('[data-close-cover-lookup-modal="1"]')) {
     event.preventDefault();
     closeCoverLookupModal();
+    return;
+  }
+
+  if (event.target.closest('[data-open-cover-lookup-album-details="1"]')) {
+    event.preventDefault();
+    openCoverLookupAlbumDetails();
     return;
   }
 

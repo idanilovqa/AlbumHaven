@@ -779,8 +779,17 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
         identity.album,
         identity.year,
       ].filter(Boolean).join(' - '));
-      if (swipeFirst && index === 0) await coverLookupActions.swipeNotificationMobileSheetDown();
-      else await coverLookupActions.closeModal();
+      if (index === 1) {
+        await coverLookupActions.coverLookup.modalSubtitle.click();
+        const details = await trackModalActions.waitForLoadedSummary();
+        expect(details.title).toContain(identity.album);
+        expect(details.subtitle).toContain(identity.artist);
+        await trackModalActions.close();
+      } else if (swipeFirst && index === 0) {
+        await coverLookupActions.swipeNotificationMobileSheetDown();
+      } else {
+        await coverLookupActions.closeModal();
+      }
       await coverLookupActions.waitForDrawerOpen();
       expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
     }

@@ -267,6 +267,13 @@ function buildCoverLookupAlbumSubtitle(album) {
   return [album.album_artist || '', album.name || '', album.year || ''].filter(Boolean).join(' - ');
 }
 
+function openCoverLookupAlbumDetails() {
+  const album = state.coverLookup.modal.album;
+  if (!album) return;
+  closeCoverLookupModal();
+  openTrackModal(album);
+}
+
 function buildCoverLookupCurrentReleaseLabel(release) {
   return [
     release?.album_artist || '',

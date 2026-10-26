@@ -37,9 +37,21 @@
   font-size: 1.08rem;
 }
 .cover-lookup-modal-subtitle {
+  display: block;
   margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
+  font-family: inherit;
   font-size: 0.86rem;
+  text-align: left;
+  cursor: pointer;
+}
+.cover-lookup-modal-subtitle:hover,
+.cover-lookup-modal-subtitle:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
 }
 .cover-lookup-search-action {
   display: grid;

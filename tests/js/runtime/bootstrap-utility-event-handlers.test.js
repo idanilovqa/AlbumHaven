@@ -66,6 +66,13 @@ test('split release choices use the shared Cover Lookup rebind action', () => {
     /closest\('\[data-cover-lookup-current-release\]'\)[\s\S]*?chooseCoverLookupCurrentRelease\([\s\S]*?getAttribute\('data-cover-lookup-current-release'\)/,
   );
 });
+
+test('Cover Lookup album link uses the shared album-details navigation action', () => {
+  assert.match(
+    helperSource,
+    /closest\('\[data-open-cover-lookup-album-details="1"\]'\)[\s\S]*?openCoverLookupAlbumDetails\(\)/,
+  );
+});
 const utilityListBuildersSource = fs.readFileSync(utilityListBuildersPath, 'utf8');
 const utilityLoadersSource = fs.readFileSync(utilityLoadersPath, 'utf8');
 const utilityRenderersSource = fs.readFileSync(path.join(

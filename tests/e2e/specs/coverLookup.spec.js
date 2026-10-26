@@ -189,6 +189,17 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
+    await coverLookupActions.startSearch();
+    await coverLookupActions.closeModal();
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.waitForDrawerOpen();
+    await coverLookupActions.waitForTaskStatus(
+      USER_OWNED_IMPROVEMENT_TARGET.album,
+      /^[1-9]\d* covers? found$/,
+    );
+    await coverLookupActions.closeDrawer();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
     await coverLookupActions.chooseComposerImages([pickerPath]);
     await expect(lookup.pendingAttachmentByName(pickerName)).toBeVisible();
     await lookup.manualExtractButton.click();

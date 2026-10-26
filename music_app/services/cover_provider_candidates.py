@@ -121,14 +121,10 @@ DISPLAY_ONLY_REMOTE_SOURCES = {
 
 def is_remote_cover_candidate_selectable(
     *,
-    source: object,
     art_kind: object,
 ) -> bool:
     normalized_art_kind = str(art_kind or "cover").strip() or "cover"
-    return normalized_art_kind == "cover" or (
-        str(source or "").strip().casefold() == "discogs"
-        and normalized_art_kind == "other"
-    )
+    return normalized_art_kind in {"cover", "other"}
 
 CURRENT_USE_CANDIDATE_DEBUG_FIELDS = frozenset({
     "album_url",
@@ -452,7 +448,6 @@ def cover_candidate_to_lookup_match(candidate: CoverCandidate, *, lookup_group: 
         "query_mode": query_mode,
         "variant": variant,
         "display_only": source_display_only or not is_remote_cover_candidate_selectable(
-            source=candidate.source,
             art_kind=art_kind,
         ),
         "art_kind": art_kind,

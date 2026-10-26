@@ -1685,6 +1685,19 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
       discogs_detail_requests: completedProviderEvidence.discogs_detail_requests,
     });
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
+
+    const archiveSecondaryCard = coverLookupActions.coverLookup
+      .providerOtherArtCards('cover_art_archive')
+      .first();
+    await expect(archiveSecondaryCard).toBeVisible();
+    const archiveSecondaryCandidateId = String(
+      await archiveSecondaryCard.getAttribute('data-select-remote-cover') || '',
+    ).trim();
+    expect(archiveSecondaryCandidateId).not.toBe('');
+    const savedSecondary = await coverLookupActions.selectRemoteCandidateByIdAndSave(
+      archiveSecondaryCandidateId,
+    );
+    expect(savedSecondary.payload.optimistic_remote_source).toBe('cover_art_archive');
   });
 });
 

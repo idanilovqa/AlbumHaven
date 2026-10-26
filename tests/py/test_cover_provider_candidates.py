@@ -156,7 +156,7 @@ def test_cover_candidate_to_lookup_match_preserves_current_use_payload_contract_
         "album_url": "https://musicbrainz.example/release/1",
         "query_mode": "release-group",
         "variant": "front",
-        "display_only": True,
+        "display_only": False,
         "art_kind": "other",
         "art_label": "Back cover",
         "debug": {
@@ -448,10 +448,10 @@ def test_cover_candidate_to_lookup_match_marks_only_spotify_display_only(
     ("source", "expected_display_only"),
     [
         ("discogs", False),
-        ("cover_art_archive", True),
+        ("cover_art_archive", False),
     ],
 )
-def test_cover_candidate_to_lookup_match_allows_only_discogs_secondary_art_selection(
+def test_cover_candidate_to_lookup_match_allows_secondary_art_selection_from_every_provider(
     source: str,
     expected_display_only: bool,
 ):

@@ -3339,14 +3339,19 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   const discogsBooklet = bodyElement.innerHTML.indexOf('data-select-remote-cover="discogs-booklet"');
   const caaHeading = bodyElement.innerHTML.indexOf('>Cover Art Archive<');
   const caaFront = bodyElement.innerHTML.indexOf('data-select-remote-cover="caa-front"');
-  const caaBookletUrl = bodyElement.innerHTML.indexOf('caa-booklet.jpg');
+  const caaBooklet = bodyElement.innerHTML.indexOf('data-select-remote-cover="caa-booklet"');
   assert.ok(discogsHeading >= 0, 'Discogs should have its own provider heading');
   assert.ok(discogsHeading < discogsFront && discogsFront < discogsBooklet && discogsBooklet < caaHeading);
-  assert.ok(caaHeading < caaFront && caaFront < caaBookletUrl);
+  assert.ok(caaHeading < caaFront && caaFront < caaBooklet);
   assert.match(bodyElement.innerHTML, /data-cover-lookup-provider-group="discogs"/);
   assert.match(bodyElement.innerHTML, /data-cover-lookup-provider-group="cover_art_archive"/);
   assert.doesNotMatch(bodyElement.innerHTML, /is-preview-only[^>]*data-select-remote-cover="discogs-booklet"/);
-  assert.match(bodyElement.innerHTML, /data-cover-lookup-other-remote-art="1" data-cover-lookup-item-key="remote:caa-booklet"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /is-preview-only[^>]*data-select-remote-cover="caa-booklet"/);
+  assert.equal(
+    (bodyElement.innerHTML.match(/data-cover-lookup-other-remote-art="1"/g) || []).length,
+    2,
+    'selectable secondary art should retain its semantic artwork marker',
+  );
   assert.equal(
     (bodyElement.innerHTML.match(/class="cover-lookup-art-preview-image"[^>]*loading="lazy"/g) || []).length,
     4,

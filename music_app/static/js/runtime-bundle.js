@@ -29794,10 +29794,7 @@ function normalizeCoverLookupCandidateUrl(value) {
 
 function isSelectableRemoteCoverCandidate(candidate) {
   const artKind = String(candidate?.art_kind || 'cover');
-  return artKind === 'cover' || (
-    String(candidate?.source || '').toLowerCase() === 'discogs'
-    && artKind === 'other'
-  );
+  return artKind === 'cover' || artKind === 'other';
 }
 
 function sanitizeCoverLookupPossibleMatches(value) {
@@ -30335,8 +30332,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const itemKeyAttr = itemIdentity
     ? `data-cover-lookup-item-key="${escapeHtml(`${kind}:${itemIdentity}`)}"`
     : '';
+  const otherRemoteArtAttr = isOtherRemoteArt ? 'data-cover-lookup-other-remote-art="1"' : '';
   const selectAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
-    ? 'data-cover-lookup-other-remote-art="1"'
+    ? ''
     : kind === 'pasted'
     ? `data-select-pasted-cover="${escapeHtml(item.id || '')}"`
     : kind === 'local'
@@ -30373,7 +30371,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
   return `
     <div class="cover-lookup-art-card-shell">
-      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
+      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
         ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}

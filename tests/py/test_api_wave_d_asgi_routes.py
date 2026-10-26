@@ -2932,7 +2932,7 @@ def test_asgi_cover_lookup_save_remote_honors_serialized_provider_storage_policy
     assert queued_image["display_only"] is expected_display_only
 
 
-def test_asgi_cover_lookup_save_remote_allows_explicit_discogs_secondary_art_selection(
+def test_asgi_cover_lookup_save_remote_allows_explicit_secondary_art_selection_from_any_provider(
     app,
     monkeypatch,
 ):
@@ -2945,11 +2945,11 @@ def test_asgi_cover_lookup_save_remote_allows_explicit_discogs_secondary_art_sel
     app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     candidate = cover_candidate_to_lookup_match(
         CoverCandidate(
-            source="discogs",
-            url="https://images.example/discogs-booklet.jpg",
+            source="cover_art_archive",
+            url="https://images.example/caa-booklet.jpg",
             debug_payload={"art_kind": "other", "art_label": "Booklet"},
         ),
-        lookup_group="services",
+        lookup_group="cover_art_archive",
     )
     candidate["display_only"] = True  # Existing snapshots used the old preview-only policy.
     task_id, _ = cover_lookup_tasks.create_cover_lookup_task(

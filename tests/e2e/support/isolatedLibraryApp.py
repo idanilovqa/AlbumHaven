@@ -4224,6 +4224,16 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 1800,
             "candidate_fixture_mode": "artist-conjunction",
         })
+        self.cover_lookup_split_identity_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "cover_id": "ddt-studio-recordings-split",
+            "artist": "ДДТ",
+            "album": "Студийные записи",
+            "year": 1999,
+            "width": 1600,
+            "height": 1600,
+            "candidate_fixture_mode": "split-identity",
+        })
         self.cover_lookup_selection_concurrency_specs = [
             prepare_provider_artwork_spec({
                 **dict(source),
@@ -4250,6 +4260,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             self.cover_lookup_same_art_improvement_spec,
             self.cover_lookup_alternate_improvement_spec,
             self.cover_lookup_artist_conjunction_spec,
+            self.cover_lookup_split_identity_spec,
             *self.cover_lookup_selection_concurrency_specs,
         ]
         self.itunes_search_delay_lock = threading.Lock()
@@ -4444,6 +4455,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "metallica-mismatch",
             "service-deadline",
             "artist-conjunction",
+            "split-identity",
             "automatic-coverless",
             "automatic-scan",
             "same-art-improvement",
@@ -4847,6 +4859,8 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             return [dict(spec) for spec in self.server.cover_lookup_matching_specs]
         if mode == "artist-conjunction":
             return [dict(self.server.cover_lookup_artist_conjunction_spec)]
+        if mode == "split-identity":
+            return [dict(self.server.cover_lookup_split_identity_spec)]
         if mode in {"selection-concurrency-a", "selection-concurrency-b"}:
             index = 0 if mode.endswith("-a") else 1
             if _normalize_provider_query("E2E Rarity Artist Queued Album Rename Fixture") in normalized_query:

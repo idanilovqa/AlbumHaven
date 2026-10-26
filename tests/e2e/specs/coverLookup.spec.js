@@ -1102,12 +1102,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
-    await coverLookupActions.setProviderFixtureMode('normal');
-    const expectedCover = findFixtureCoverBySubtitle(
-      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
-    );
-    expect(expectedCover).not.toBeNull();
-    await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover).slice(1, 2));
+    await coverLookupActions.setProviderFixtureMode('split-identity');
     const task = await coverLookupActions.startSearch();
     taskId = String(task.task?.id || '').trim();
     expect(taskId).not.toBe('');

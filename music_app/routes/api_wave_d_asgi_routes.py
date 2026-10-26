@@ -241,6 +241,23 @@ async def _resolve_album_payload_context(
         for path in (fallback_track_paths or set())
         if str(path or "").strip()
     }
+    album_key = str(
+        normalized_album.get("_persisted_album_key")
+        or normalized_album.get("key")
+        or normalized_album.get("album_ref")
+        or ""
+    ).strip().casefold()
+    if (
+        album_key == "unknown artist::"
+        and fallback_paths
+        and fallback_paths < _album_track_paths(normalized_album)
+    ):
+        normalized_album.pop("id", None)
+        normalized_album.pop("album_id", None)
+        normalized_album["tracks"] = [
+            {"path": path} for path in sorted(fallback_paths)
+        ]
+        normalized_album["_cover_lookup_task_scoped_context"] = True
     resolved_context = resolve_album_context(config, normalized_album)
     if resolved_context is not None:
         return normalized_album, resolved_context
@@ -1416,9 +1433,6 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             task_id = UUID(snapshot_generation).hex
         except ValueError:
             pass
-    album, album_context = await _resolve_album_payload_context(config, album or {})
-    if album_context is None:
-        return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
     task_payload = cover_lookup_result(task_id)
     if not task_payload and task_id:
         try:
@@ -1429,6 +1443,20 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             task_payload = cover_lookup_result(normalized_task_id)
             if task_payload:
                 task_id = normalized_task_id
+        if not task_payload:
+            task_payload = await run_in_threadpool(
+                load_cover_lookup_notification,
+                dict(config),
+                task_id,
+            ) or {}
+    task_track_paths = _cover_lookup_task_track_paths(task_payload)
+    album, album_context = await _resolve_album_payload_context(
+        config,
+        album or {},
+        fallback_track_paths=task_track_paths,
+    )
+    if album_context is None:
+        return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
     selected_match = None
     notification_action_taken = is_terminal_cover_lookup_task(task_payload)
     if task_payload:
@@ -1537,15 +1565,20 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     update_cover_lookup_task(
         task_id,
         config=config,
-        status="running",
-        progress=92,
-        progress_label="Saving selected cover art...",
-        selected_candidate_id=candidate_id,
-        notification_completed_at=str(
-            task_payload.get("notification_completed_at") or task_payload.get("finished_at") or ""
-        ).strip(),
-        message="Saving selected cover art...",
-        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+        **{
+            **dict(task_payload),
+            "status": "running",
+            "progress": 92,
+            "progress_label": "Saving selected cover art...",
+            "selected_candidate_id": candidate_id,
+            "notification_completed_at": str(
+                task_payload.get("notification_completed_at")
+                or task_payload.get("finished_at")
+                or ""
+            ).strip(),
+            "message": "Saving selected cover art...",
+            "job_contract": build_cover_lookup_job_contract("save_remote_selection"),
+        },
     )
     response_task_payload = serialize_cover_lookup_task_payload(
         cover_lookup_result(task_id)

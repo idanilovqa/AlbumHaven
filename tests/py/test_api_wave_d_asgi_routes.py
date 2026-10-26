@@ -56,6 +56,16 @@ def postgres_runtime_fakes(app, monkeypatch):
         def load_notifications(self):
             return list(persisted_notifications)
 
+        def load_notification(self, task_id):
+            return next(
+                (
+                    dict(task)
+                    for task in persisted_notifications
+                    if str(task.get("id") or "") == str(task_id or "")
+                ),
+                None,
+            )
+
         def count_notifications(self):
             active_count = sum(
                 1 for task in persisted_notifications if task.get("status") in {"pending", "running"}
@@ -1163,6 +1173,100 @@ def test_asgi_cover_lookup_save_remote_rehydrates_compact_notification_album(
     assert status == 200, _decode_json(body)
     assert hydrated_album_ids == [41]
     assert queued_calls[0][2] == {str(track_path)}
+
+
+def test_asgi_cover_lookup_save_remote_scopes_persisted_unknown_album_notification(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    album_root = (app.config["MUSIC_DIR"] / "Unknown Artist" / "Unknown Album").resolve()
+    task_track = album_root / "01.flac"
+    unrelated_track = album_root / "99.flac"
+    album_root.mkdir(parents=True, exist_ok=True)
+    task_track.write_bytes(b"task track")
+    unrelated_track.write_bytes(b"unrelated track")
+    task_id = "bcfeb05cdbaf494db4473d62216817ba"
+    persisted_task = {
+        "id": task_id,
+        "status": "completed",
+        "album_payload": {
+            "id": 419738,
+            "album_id": 419738,
+            "key": "yaruga::vaiga::2020",
+            "name": "Vaiga",
+            "album_artist": "Yaruga",
+            "year": 2020,
+            "tracks": [{"path": str(task_track)}],
+        },
+        "track_paths": [str(task_track)],
+        "possible_matches": [
+            {
+                "id": "yaruga-cover",
+                "art_kind": "cover",
+                "url": "https://images.example/yaruga.jpg",
+                "source": "manual",
+                "source_label": "Manual URL",
+            }
+        ],
+    }
+    queued_calls: list[tuple[object, ...]] = []
+
+    class FakeSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(task_track)}
+            return 417655
+
+    cover_lookup_tasks.reset_cover_lookup_runtime_state()
+    monkeypatch.setattr(
+        asgi_routes,
+        "load_cover_lookup_notification",
+        lambda _config, requested_task_id: (
+            persisted_task if requested_task_id == task_id else None
+        ),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        FakeSnapshotRepository,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *args, **_kwargs: queued_calls.append(args),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": {
+                "id": 417655,
+                "album_id": 417655,
+                "key": "unknown artist::",
+                "name": "Unknown Album",
+                "album_artist": "Unknown Artist",
+                "tracks": [
+                    {"path": str(task_track)},
+                    {"path": str(unrelated_track)},
+                ],
+            },
+            "task_id": task_id,
+            "candidate_id": "yaruga-cover",
+        },
+    )
+
+    assert status == 200, _decode_json(body)
+    assert queued_calls[0][2] == {str(task_track)}
+    restored_task = cover_lookup_tasks.cover_lookup_result(task_id)
+    assert restored_task["album_payload"]["name"] == "Vaiga"
+    assert restored_task["possible_matches"][0]["id"] == "yaruga-cover"
 
 
 def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider_search(

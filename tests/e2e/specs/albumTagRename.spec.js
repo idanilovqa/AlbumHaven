@@ -316,7 +316,10 @@ test('FTC-COVERS-038 persisted lookup survives an album identity rename and app 
     await expect(
       restarted.coverLookupActions.coverLookup.remoteCoverCardById(candidateId),
     ).toBeVisible();
-    await restarted.coverLookupActions.closeModal();
+    await restarted.coverLookupActions.selectRemoteCandidateById(candidateId);
+    const saved = await restarted.coverLookupActions.saveSelectedRemoteCandidate();
+    expect(saved.requestPayload.candidate_id).toBe(candidateId);
+    await restarted.coverLookupActions.waitForTaskStatusById(taskId, 'Art chosen');
     await restarted.coverLookupActions.clearTaskAndExpectImmediateRemoval(card.title);
     await restarted.coverLookupActions.closeDrawer();
 

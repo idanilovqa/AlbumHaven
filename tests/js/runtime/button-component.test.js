@@ -243,7 +243,14 @@ test('ActionButton CSS owns one 34px theme-aware surface and inert disabled trea
   assert.match(css, /\.action-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
   assert.doesNotMatch(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*outline-color:/s);
   assert.match(css, /\.action-button:focus-visible\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /\.action-button:disabled,[^{]*\.action-button\[aria-disabled='true'\]\s*\{[^}]*opacity:[^;}]+;[^}]*cursor:\s*not-allowed/s);
+  const disabledRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selectors]) => {
+    const members = selectors.split(',').map(selector => selector.trim());
+    return members.includes('.action-button:disabled') && members.includes(".action-button[aria-disabled='true']");
+  });
+  assert.equal(disabledRules.length, 1, 'both disabled states share one inert rule');
+  assert.match(disabledRules[0][2], /opacity:\s*0\.38;/);
+  assert.match(disabledRules[0][2], /cursor:\s*not-allowed;/);
+  assert.match(disabledRules[0][2], /box-shadow:\s*none;/);
   assert.match(css, /\.action-button--round\s*\{[^}]*border-radius:\s*50%/s);
   assert.match(css, /\.action-button__icon\.ui-icon\s*\{[^}]*display:\s*block[^}]*stroke:\s*currentColor[^}]*fill:\s*none/s);
   assert.match(css, /\.action-button--destructive:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)[^{]*\{[^}]*border-color:\s*var\(--alert-error-edge[^}]*outline-color:\s*var\(--alert-error-focus/s);

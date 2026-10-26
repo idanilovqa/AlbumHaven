@@ -3,15 +3,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const {createNativeHomeRuntime: createDomPlatform} = require('./account-goals-dom-platform.cjs');
+const SEARCH_CONTEXT = 'a'.repeat(64);
+const RECENT_SCOPE_KEY = `albumhaven.recentSearches.v1:${JSON.stringify(['fixture-account', 'fixture-library', SEARCH_CONTEXT])}`;
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'bootstrap-gallery-event-handlers.js');
-const helperSource = fs.readFileSync(helperPath, 'utf8');
 const viewStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-state-helpers.js');
 const viewStateHelperSource = fs.readFileSync(viewStateHelperPath, 'utf8');
 const modalHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js');
 const modalHelperSource = fs.readFileSync(modalHelperPath, 'utf8');
-const galleryMainStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-state.js');
-const galleryMainStateHelperSource = fs.readFileSync(galleryMainStateHelperPath, 'utf8');
 
 function createContext(options = {}) {
   const productionUrlContext = {
@@ -66,13 +66,18 @@ function createContext(options = {}) {
   };
   const cachedRootView = options.cachedRootView || null;
   const cachedSelectedArtistView = options.cachedSelectedArtistView || null;
-  const searchInput = {
-    value: options.searchInputValue ?? '',
-  };
+  const {document: platformDocument} = createDomPlatform();
+  const searchInput = platformDocument.createElement('input');
+  searchInput.id = 'search-input'; searchInput.value = options.searchInputValue ?? '';
+  platformDocument.body.append(searchInput);
+  const shell = platformDocument.createElement('div'); shell.id = 'app-shell';
+  Object.assign(shell.dataset, {nativeAccountId: 'fixture-account', nativeLibraryId: 'fixture-library', privateUiContext: SEARCH_CONTEXT});
+  platformDocument.body.append(shell);
   const trackModal = {
     hidden: options.trackModalHidden ?? true,
   };
   const context = {
+    URL, URLSearchParams,
     window: {
       location: new URL(options.currentUrl || 'http://localhost/?surface=albums&artist=A.C.T'),
     },
@@ -80,7 +85,7 @@ function createContext(options = {}) {
       getElementById(id) {
         if (id === 'search-input') return searchInput;
         if (id === 'track-modal') return trackModal;
-        return null;
+        return platformDocument.getElementById(id);
       },
       querySelectorAll(selector) {
         return selector === '.utility-loop-speed-menu'
@@ -330,8 +335,14 @@ function createContext(options = {}) {
   };
 
   vm.createContext(context);
-  vm.runInContext(galleryMainStateHelperSource, context, { filename: galleryMainStateHelperPath });
-  vm.runInContext(helperSource, context, { filename: helperPath });
+  const observedBoundaries = Object.fromEntries(['buildApiUrl', 'getSessionStorageItem', 'setSessionStorageItem'].map(name => [name, context[name]]));
+  // Evaluate complete actual owners in served order, retaining observation seams afterward.
+  for (const file of ['view-state-helpers.js', 'browser-storage-helpers.js', 'gallery-main-state.js',
+    'search-shorthand-model.js', 'bootstrap-gallery-event-handlers.js', 'private-ui-transport.js']) {
+    const filename = path.join(path.dirname(helperPath), file);
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), context, {filename});
+  }
+  Object.assign(context, observedBoundaries);
   return { context, calls };
 }
 
@@ -655,11 +666,8 @@ test('rapid lightbox wheel input keeps one stable untransformed zoom origin', ()
 });
 
 function createSidebarArtistEvent(artist = 'Broadcast') {
-  const button = {
-    getAttribute(name) {
-      return name === 'data-sidebar-artist' ? artist : null;
-    },
-  };
+  const button = createDomPlatform().document.createElement('a');
+  button.setAttribute('data-sidebar-artist', artist);
   let prevented = false;
   return {
     event: {
@@ -3410,7 +3418,7 @@ test('recordRecentSearchQuery keeps eight nonblank queries in newest-first order
 
 test('readRecentSearchQueries rehydrates and normalizes a valid session storage value', () => {
   const { context, calls } = createContext();
-  context.sessionStorageItems.set('albumhaven.recentSearches.v1', JSON.stringify([
+  context.sessionStorageItems.set(RECENT_SCOPE_KEY, JSON.stringify([
     '  Joseph  ',
     'The Neal Morse Band',
     'joseph',
@@ -3435,7 +3443,7 @@ test('readRecentSearchQueries rehydrates and normalizes a valid session storage 
     'Eighth',
   ]);
   assert.deepEqual(calls.getSessionStorageItem, [{
-    key: 'albumhaven.recentSearches.v1',
+    key: RECENT_SCOPE_KEY,
     fallback: '',
   }]);
 });
@@ -4553,6 +4561,7 @@ test('syncSearchClear injects the selected artist into a cached preview sidebar 
       related_filter_artists: [],
       primary_filter_active: false,
       search_context: null,
+      private_search: false,
       primary_artist_groups: [{
         artist: 'Neal Morse',
         artist_display: 'Neal Morse',
@@ -4753,3 +4762,12 @@ for (const query of ['Devin', '']) {
     assert.equal(context.state.ui.artistsDrawerOpen, false);
   });
 }
+
+
+test('unscoped legacy history seed cannot enter the current private Search scope', () => {
+  const {context, calls} = createContext();
+  context.sessionStorageItems.set('albumhaven.recentSearches.v1', JSON.stringify(['Legacy private query']));
+  assert.deepEqual(JSON.parse(JSON.stringify(context.readRecentSearchQueries())), []);
+  assert.deepEqual(calls.getSessionStorageItem, [{key: RECENT_SCOPE_KEY, fallback: ''}]);
+  assert.equal(calls.setSessionStorageItem.length, 0);
+});

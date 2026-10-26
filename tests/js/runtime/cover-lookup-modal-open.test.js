@@ -3,6 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
+// Evaluate the whole privacy owner without mounting a separate Settings surface.
+const settingsBoundary = vm.createContext({window: {}, structuredClone});
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/settings-navigation.js'), 'utf8'), settingsBoundary);
 
 const helperPath = path.join(
   __dirname,
@@ -255,7 +259,17 @@ test('gallery responses cannot overwrite another album or a newer gallery reques
 function loadCapabilityCoverRoute(actions, { initial = false, parent = false } = {}) {
   const effects = [];
   const album = { key: 'one', name: 'Album', album_artist: 'Artist' };
-  const overlay = { hidden: true };
+  const {document, context} = createNativeHomeRuntime();
+  document.readyState = 'loading';
+  document.createComment = text => {const node = new context.Node(8); node.data = String(text); return node;};
+  const overlay = document.createElement('div'); overlay.id = 'cover-lookup-modal'; overlay.hidden = true;
+  document.body.append(overlay);
+  const navigation = document.createElement('nav'); navigation.id = 'mobile-navigation'; document.body.append(navigation);
+  const bootstrap = document.createElement('script'); bootstrap.id = 'capability-bootstrap';
+  bootstrap.textContent = JSON.stringify({allowed_actions: actions, denied_selectors: ['#cover-lookup-modal']});
+  document.body.append(bootstrap);
+  const addBodyClass = document.body.classList.add;
+  document.body.classList.add = (...tokens) => {effects.push('body'); addBodyClass(...tokens);};
   const descriptor = { kind: 'cover-lookup', albumKey: 'one', title: 'Album' };
   const parentPage = { kind: 'album', albumKey: 'one', title: 'Album' };
   const location = { href: 'https://example.test/?surface=albums&mobile_page=cover-lookup&mobile_album=one' };
@@ -264,23 +278,21 @@ function loadCapabilityCoverRoute(actions, { initial = false, parent = false } =
     replaceState(value, _title, url) { this.state = value; location.href = String(url); effects.push('history'); },
     pushState() { assert.fail('restoration must not push a new history entry'); },
   };
-  const document = {
-    readyState: 'loading', addEventListener() {}, createComment: () => ({}),
-    documentElement: { dataset: {}, style: { setProperty() {} } },
-    body: { classList: { add: () => effects.push('body'), remove() {} } },
-    getElementById: id => ({
-      'mobile-navigation': {}, 'cover-lookup-modal': overlay,
-      'capability-bootstrap': { textContent: JSON.stringify({ allowed_actions: actions,
-        denied_selectors: ['#cover-lookup-modal'] }) },
-    }[id] || null),
-  };
-  const context = vm.createContext({
-    window: { document, innerWidth: 390, location, history, addEventListener() {},
-      matchMedia: () => ({ addEventListener() {} }) },
-    document, URL, console, HTMLButtonElement: class {},
-    state: { utility: { activeTab: 'appearance' }, coverLookup: { tasks: [], modal: { pastedImages: [], retained: true } } },
+  Object.assign(context, {
+    innerWidth: 390, location, history, HTMLButtonElement: context.HTMLElement, structuredClone,
+    addEventListener: document.addEventListener.bind(document),
+    removeEventListener: document.removeEventListener.bind(document),
+    dispatchEvent: document.dispatchEvent.bind(document),
+    matchMedia: () => new EventTarget(),
+    AlbumHavenSettingsNavigation: settingsBoundary.window.AlbumHavenSettingsNavigation,
+    state: { modalReleases: [], modalReleaseIndex: 0, utility: { activeTab: 'appearance' }, coverLookup: { tasks: [], modal: { pastedImages: [], retained: true } } },
     getIndexedAlbum: () => album, buildTrackPathSignature: () => 'one',
   });
+  // Actual served owners: no Album dialog or global player exists in this DOM.
+  for (const name of ['track-modal-lightbox-helpers.js', 'player-and-waveform.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname,
+      '../../../music_app/static/js/runtime', name), 'utf8'), context);
+  }
   if (actions !== undefined) vm.runInContext(fs.readFileSync(path.join(__dirname,
     '../../../music_app/static/js/capability-ui.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,
@@ -333,3 +345,22 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
     assert.equal(new URL(f.location.href).searchParams.get('mobile_page'), 'cover-lookup');
   });
 }
+
+
+test('denied Cover Lookup history sanitation strips private preferences without mutating its input', async () => {
+  const f = loadCapabilityCoverRoute({'library.covers.lookup': false}, {initial: true});
+  const privateRow = {label: 'retained', canonical_track_ref: 'private-track',
+    track_preference: {love_tier: 'loved'}, track_preference_state: 'ready',
+    track_preference_overlay: {rating: 5}, can_edit_preferences: true};
+  const original = f.history.state;
+  original.rows = [privateRow]; original.alias = privateRow;
+  const before = JSON.stringify(original);
+  assert.equal(f.context.getPlayerElements().player, null, 'absence is resolved by the real DOM accessor');
+  f.restore(); await Promise.resolve();
+  assert.deepEqual(f.effects, ['history']);
+  assert.notEqual(f.history.state, original);
+  assert.deepEqual(Object.keys(f.history.state.rows[0]), ['label']);
+  assert.equal(f.history.state.rows[0], f.history.state.alias);
+  assert.equal(JSON.stringify(original), before); assert.equal(original.rows[0], privateRow);
+  assert.equal(f.overlay.hidden, true); assert.equal(f.context.state.coverLookup.modal.retained, true);
+});

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createHash} = require('node:crypto');
 const directory = path.resolve(__dirname, '../../../music_app/static/js/runtime');
 const trackRef = 'inventory-track:1:17';
 const uuid = '11111111-1111-4111-8111-111111111111';
@@ -14,19 +15,24 @@ const activity = (audience = 'friend') => ({kind: 'activity', track_ref: trackRe
   row_ref: `activity_${'a'.repeat(64)}`});
 function setup() {
   const state = {player: {current: null, playbackQueue: null}}, scope = {actor: 'actor', library: 'library', token: 'session'};
+  const shell = {dataset: {get nativeAccountId() {return scope.actor;},
+    get nativeLibraryId() {return scope.library;},
+    get privateUiContext() {return createHash('sha256').update(scope.token).digest('hex');}}};
   const context = vm.createContext({state, AbortController, Object, Promise, Map, Set, WeakMap,
     window: {AlbumHavenCapabilities: {allows: () => true}}, playerTrackSelectionToken: 0,
-    TrackActionsRuntime: {scope: () => ({...scope}), canPlay: row => Boolean(row?.path)},
-    PrivateUITransport: {subscribe: () => () => {}}, getPlayerPlaybackSnapshot: () => ({ended: true}),
+    document: {getElementById: id => id === 'app-shell' ? shell : null},
+    activateSharedTrackButton() {throw new Error('Queue must retain its native playback boundary');},
+    fetch() {throw new Error('Unexpected private transport request');},
+    getPlayerPlaybackSnapshot: () => ({ended: true}),
     streamingEngineState: () => ({roles: {current: null}}),
   });
-  for (const name of ['explicit-queue-planner.js', 'explicit-queue-runtime.js'])
+  for (const name of ['private-ui-transport.js', 'track-actions.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js'])
     vm.runInContext(fs.readFileSync(path.join(directory, name), 'utf8'), context);
   const target = {path: '/private/lineage.flac', title: 'Track', source_readable: true,
-    inventory_track_ref: trackRef, playback_state: {can_start_here: true}};
+    inventory_track_ref: trackRef, availability: 'local', playback_state: {can_start_here: true}};
   const api = context.window.AlbumHavenExplicitQueue;
   const enqueue = async provenance => (await api.enqueue([{display: {title: 'Track'}, isCurrent: () => true,
-    resolve: async () => target, resolvePlaylistItem: async () => ({...target, source_provenance: provenance})}], 'end'))[0];
+    resolveMetadata: async () => target, resolve: async () => target, resolvePlaylistItem: async () => ({...target, source_provenance: provenance})}], 'end'))[0];
   return {context, target, api, enqueue};
 }
 for (const [name, factory] of [['inventory', inventory], ['playlist', playlist], ['friend Activity', activity], ['own Activity', () => activity('own')]]) {

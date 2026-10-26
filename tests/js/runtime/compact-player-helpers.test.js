@@ -46,11 +46,33 @@ function loadQueueController(t, initialIndex = 0) {
     previous: {},
     next: {},
   };
+  const scope = Object.freeze({ account: 'synthetic-account', library: 'synthetic-library' });
+  const engine = { roles: { current: null } };
+  let activeAttempt = null;
   const context = {
     window: { setTimeout, clearTimeout },
+    console: { warn: (_message, error) => errors.push(error) },
+    isPlaybackLockedByAnotherTab: () => false,
+    capturePlaybackOwnershipScope: () => scope,
+    isPlaybackOwnershipScopeCurrent: value => value === scope,
+    isPlaybackOwnershipHandleCurrent: handle => handle === true,
+    releasePlaybackOwnership: () => true,
+    bindPlaybackOwnershipAttempt() {},
+    commitPlaybackOwnership() {},
+    cancelPlaybackAttempt(attempt) { if (activeAttempt === attempt) activeAttempt = null; },
+    isStreamingPlaybackAttemptCurrent: attempt => attempt != null && attempt === activeAttempt,
+    streamingEngineState: () => engine,
+    beginStreamingPlayerListenSession() {},
     state: { player: { current: tracks[initialIndex], playbackQueue: { tracks, currentIndex: initialIndex } } },
     canStartPlaybackInThisTab: () => true,
-    startStreamingTrack: track => new Promise((resolve, reject) => starts.push({ track, resolve, reject })),
+    startStreamingTrack: (track, options) => new Promise((resolve, reject) => {
+      const attempt = activeAttempt = {};
+      options.onStartAttempt(attempt);
+      starts.push({ track, reject, resolve(role) {
+        if (activeAttempt === attempt) engine.roles.current = role;
+        resolve(role);
+      } });
+    }),
     observeStreamingFacadeCallback: result => result.catch(error => errors.push(error)),
   };
   context.getPlayerPlaybackSnapshot = () => ({ src: context.state.player.current?.src, paused: false });
@@ -293,6 +315,7 @@ test('compact controller reduces a folded follow-sidebar player to the rail cont
   Object.assign(context, {
     state: { player: { current: null, playbackQueue: null } },
     getPlayerPlaybackSnapshot: () => ({ paused: true, src: '' }),
+    isPlaybackLockedByAnotherTab: () => false,
     document: {
       documentElement: root, activeElement: null,
       getElementById: id => id === 'app-shell' ? shell : id === 'shell-navigation-rail' ? tree : null,

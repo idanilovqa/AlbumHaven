@@ -1,3 +1,4 @@
+import {normalizeRecentScrobbleDelivery} from './recent-scrobble-delivery.mjs';
 import {detailSelection} from './resource-target.mjs';
 
 // Provider-owned account/history projections. This module has no transport or
@@ -199,13 +200,29 @@ function activityRevocations(previous, result) {
   const reconciled = previous.rows.map(row => denied.has(row.id) ? deniedActivityRow(row) : row);
   return reconciled.some((row, index) => row !== previous.rows[index]) ? freeze({...previous, rows: freeze(reconciled)}) : null;
 }
-function activityData(data) {
+function activityData(data, context) {
   if (!object(data)) invalid();
   const normalizedRows = rows(data.rows, row => {
     const identity = historyIdentity(row), track = ['track', 'listen'].includes(row.kind);
     if (row.source_readable === false) return deniedActivityRow(identity);
+    const delivery = context?.account_ref === null && context.kind === 'listens' && row.kind === 'listen'
+      ? normalizeRecentScrobbleDelivery(row.scrobble_delivery) : null;
     return freeze({ ...identity,
       source_readable: true,
+      ...(delivery ? {scrobble_delivery: delivery} : {}),
+      ...(row.source_readable === true && delivery?.show_status === true
+        && ['delivery_unconfirmed', 'unknown'].includes(delivery.state)
+        && object(row.lastfm_assessment) && Object.keys(row.lastfm_assessment).length === 5
+        && ['state', 'accepted', 'proves_not_sent', 'can_resend', 'provider_snapshot_guaranteed'].every(key => Object.hasOwn(row.lastfm_assessment, key))
+        && ['unbound_attempt', 'incomplete_observation', 'not_observed', 'possible_observation', 'ambiguous_observation'].includes(row.lastfm_assessment.state)
+        && ['accepted', 'proves_not_sent', 'can_resend', 'provider_snapshot_guaranteed'].every(key => row.lastfm_assessment[key] === false)
+        ? {lastfm_assessment: freeze({state: row.lastfm_assessment.state, accepted: false,
+          proves_not_sent: false, can_resend: false, provider_snapshot_guaranteed: false})} : {}),
+      ...(context?.account_ref === null && context.kind === 'listens' && row.kind === 'listen'
+        && ['remote_only','in_app'].includes(row.lastfm_observation?.source)
+        && row.lastfm_observation.correlation === (row.lastfm_observation.source === 'remote_only' ? 'unmatched' : 'exact_observed_tuple')
+        && typeof row.lastfm_observation.uncertain === 'boolean'
+        ? {lastfm_observation:freeze({source:row.lastfm_observation.source,correlation:row.lastfm_observation.correlation,uncertain:row.lastfm_observation.uncertain})} : {}),
       album_target: row.album_target?.kind === 'album' ? detailSelection(row.album_target) : null,
       artist_target: row.artist_target?.kind === 'artist' ? detailSelection(row.artist_target) : null,
       listen_count: nullableNumber(row.listen_count), last_listened_at: timestamp(row.last_listened_at),
@@ -224,7 +241,12 @@ function activityData(data) {
       source_label: text(row.source_label), detail_ref: reference(row.detail_ref) ? row.detail_ref : null,
       allowed_actions: actions(row.allowed_actions, ['can_view_details']) });
   }, 'id');
-  return freeze({ rows: normalizedRows, pagination: activityPagination(data, normalizedRows.length),
+  return freeze({ rows: normalizedRows,
+    ...(context?.account_ref === null && context.kind === 'listens' && data.lastfm_observations?.enabled === true
+      ? {lastfm_observations:freeze({enabled:true,connected:data.lastfm_observations.connected === true,
+        observation_state:['not_imported','disconnected','binding_unavailable','partial','observed_ranges','uncertain'].includes(data.lastfm_observations.observation_state) ? data.lastfm_observations.observation_state : 'partial', complete_history:false,provider_snapshot_guaranteed:false,
+        uncertain_rows:Number.isSafeInteger(data.lastfm_observations.uncertain_rows) && data.lastfm_observations.uncertain_rows >= 0 ? data.lastfm_observations.uncertain_rows : 0})} : {}),
+    pagination: activityPagination(data, normalizedRows.length),
     snapshot_ref: reference(data.snapshot_ref) ? data.snapshot_ref : null,
     total_listens: nullableNumber(data.total_listens), period_label: text(data.period_label),
     range_label: text(data.range_label), next_cursor: cursor(data.next_cursor) });
@@ -256,7 +278,7 @@ const emptyData = {
   profile: () => false,
 };
 const normalizeData = { recent: recentData, friends: friendsData, members: membersData, activity: activityData, comparison: comparisonData, profile: profileData };
-function readResult(channel, result) {
+function readResult(channel, result, context) {
   let status = 'ready', data = result;
   if (object(result) && Object.hasOwn(result, 'status')) {
     ({ status, data } = result);
@@ -264,7 +286,7 @@ function readResult(channel, result) {
     if (status === 'denied' || status === 'unavailable') return resource(status);
     if (status === 'empty' && data == null) return resource('empty');
   }
-  const normalized = normalizeData[channel](data);
+  const normalized = normalizeData[channel](data, context);
   const empty = emptyData[channel](normalized);
   if (status === 'empty' && !empty) invalid();
   return resource(empty ? 'empty' : 'ready', normalized);
@@ -294,6 +316,7 @@ export function createHomeFriendsController({ readRecent, providers = {}, onFrie
   let currentProviders = providerSet(providers), state = initialState(null), disposed = false;
   const listeners = new Set(), requests = new Map();
   let activityQuery = null;
+  let lastActivityRequest = null;
   const activityCursors = new Set();
 
   function publish(patch) {
@@ -387,7 +410,7 @@ export function createHomeFriendsController({ readRecent, providers = {}, onFrie
     catch (error) { result = Promise.reject(error); }
     return Promise.resolve(result).then(value => {
       if (!active()) return state[channel];
-      let next = readResult(channel, value);
+      let next = readResult(channel, value, args);
       if (channel === 'profile') {
         if (!profilePerson(state, args.account_ref) || state.selectedProfileRef !== args.account_ref) next = resource('denied');
         else if (next.data?.account_ref !== undefined && next.data.account_ref !== args.account_ref) invalid();
@@ -444,6 +467,7 @@ export function createHomeFriendsController({ readRecent, providers = {}, onFrie
       publish({ ...patch, activity: resource('denied') }); return Promise.resolve(state.activity);
     }
     activityQuery = freeze({ account_ref: state.selectedFriendRef, kind, period });
+    lastActivityRequest = {...activityQuery, scopeKey: state.scopeKey};
     return read('activity', currentProviders.readActivity, { ...activityQuery, cursor: nextCursor });
   }
   function navigateActivity(page = null) {
@@ -479,7 +503,7 @@ export function createHomeFriendsController({ readRecent, providers = {}, onFrie
         const redacted = activityRevocations(state.activity.data, value);
         if (redacted) revokedActivity = resource(state.activity.status, redacted);
       }
-      const next = readResult('activity', value);
+      const next = readResult('activity', value, args);
       if (next.status === 'denied' || next.status === 'unavailable') {
         const patch = resetActivity(next.status); publish(patch); return patch.activity;
       }
@@ -655,6 +679,12 @@ export function createHomeFriendsController({ readRecent, providers = {}, onFrie
       return true;
     },
     loadActivity,
+    refreshOwnListenActivity() {
+      const query = lastActivityRequest;
+      if (disposed || !query || query.scopeKey !== state.scopeKey || query.account_ref !== null
+        || query.kind !== 'listens' || state.selectedFriendRef !== null || state.selectedProfileRef !== null) return Promise.resolve(false);
+      return loadActivity({kind: 'listens', period: query.period});
+    },
     loadActivityPage: page => Number.isSafeInteger(page) ? navigateActivity(page) : Promise.resolve(false),
     loadMoreActivity: () => navigateActivity(),
     retryActivityNavigation: () => state.activityNavigation.status === 'error'

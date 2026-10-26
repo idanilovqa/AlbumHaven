@@ -3,7 +3,7 @@
 const ExplicitQueueRuntime = (() => {
   let scopeToken=null, planner=null, serial=0, session=0, generation=0, snapshot=null, ownershipEpoch=0;
   let prepared=null, refreshController=null, pendingStart=null, snapshotFacts='', successorCache=null, metadataRequest=0;
-  const sources=new Map(), listeners=new Set(), trackKeys=new WeakMap(), queues=new WeakMap();
+  const sources=new Map(), listeners=new Set(), trackKeys=new WeakMap(), queues=new WeakMap(), startRollbacks=new WeakMap();
   const aborted=()=>Object.assign(new Error('Queue action was superseded.'),{name:'AbortError'});
   const notify=()=>{snapshot=null;for(const listener of [...listeners])try{listener();}catch{/* Paint cannot change playback. */}};
   const playback=()=>typeof getPlayerPlaybackSnapshot==='function'?getPlayerPlaybackSnapshot():{};
@@ -32,7 +32,9 @@ const ExplicitQueueRuntime = (() => {
     if(signal.aborted||!sourceCurrent(source,false)||source.authorityEpoch!==authorityEpoch)throw aborted();
     if(!target||target.source_readable===false||target.allowed_actions?.can_read===false)
       throw Object.assign(new Error('This queued source is unreadable.'),{status:403});
-    return Object.freeze({...target});
+    const retained={...target};
+    if(target.albumListeningIntent&&typeof bindAlbumListeningIntent==='function')bindAlbumListeningIntent(retained,target.albumListeningIntent);
+    return Object.freeze(retained);
   }
   function acceptMetadata(source,target,batch,freshPlayTarget=null) {
     bindIdentity(source,target);
@@ -64,6 +66,18 @@ const ExplicitQueueRuntime = (() => {
   function commitStop(capture) {
     if(!isStopCurrent(capture))return null;
     const refresh=refreshController,start=pendingStart;
+    const rollback=start&&startRollbacks.get(start);
+    // Undo only this captured, not-yet-audible selection before abort dispatch.
+    // A changed scope, planner, selection, native queue or current media belongs
+    // to another owner and must never be restored by this retired attempt.
+    if(capture.scope.token===scopeToken&&rollback&&rollback.owner===planner
+      &&planner.getSnapshot()===rollback.installed&&state.player.playbackQueue===rollback.selectedQueue
+      &&state.player.current===rollback.previousCurrent&&playerTrackSelectionToken===rollback.selectionToken) {
+      planner.restore(rollback.installed,{...rollback.previous,halted:rollback.installed.halted||rollback.previous.halted});
+      state.player.playbackQueue=rollback.previousQueue;
+      if(rollback.previousQueue&&rollback.previousIndex!==undefined)rollback.previousQueue.currentIndex=rollback.previousIndex;
+    }
+    if(start)startRollbacks.delete(start);
     refreshController=null;pendingStart=null;prepared=null;successorCache=null;generation++;
     if(capture.scope.token!==scopeToken) {
       sources.clear();scopeToken=capture.scope.token;
@@ -162,9 +176,11 @@ const ExplicitQueueRuntime = (() => {
     if(!context||context.ended)return null;
     if(context.source==='explicit') {
       const item=planner.getSnapshot().entries.find(entry=>entry.id===context.entryId),target=sources.get(item?.trackId)?.target;
-      return target?{src:`/track?path=${encodeURIComponent(target.path)}`,path:target.path,title:target.title,
+      const result=target?{src:`/track?path=${encodeURIComponent(target.path)}`,path:target.path,title:target.title,
         artist:target.artist||target.secondary_artist,album:target.album_title,durationSeconds:target.duration_seconds,
         explicitEntryId:context.entryId,inventory_track_ref:target.inventory_track_ref}:null;
+      return result&&target.albumListeningIntent&&typeof bindAlbumListeningIntent==='function'
+        ?bindAlbumListeningIntent(result,target.albumListeningIntent):result;
     }
     return context.nativeTracks?.[context.index]||null;
   }
@@ -243,7 +259,7 @@ const ExplicitQueueRuntime = (() => {
       if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority(before,automatic))return null;
       if(!track){prepared=null;return null;}
       prepared={before,next:candidate,track,generation:token};
-      await scheduleStreamingContinuity(track);
+      await scheduleStreamingContinuity(track,{isCurrent:()=>!controller.signal.aborted&&token===generation&&sameContext(before,describe())});
       return track;
     } finally {if(refreshController===controller)refreshController=null;}
   }
@@ -452,9 +468,13 @@ const ExplicitQueueRuntime = (() => {
         if(options.signal?.aborted||controller.signal.aborted||token!==generation||actor!==TrackActionsRuntime.scope().token
           ||options.isCurrent&&options.isCurrent()!==true||planner.getSnapshot()!==value)throw aborted();
         const context=planner.start(id,current),track=payload(context);if(!context||!track)throw aborted();
-        install(context);installed=planner.getSnapshot();const authorityEpoch=source.authorityEpoch;notify();
+        const previousCurrent=state.player.current;
+        install(context);installed=planner.getSnapshot();const authorityEpoch=source.authorityEpoch;
+        const rollback={owner:planner,previous:value,installed,previousQueue,previousCurrent,
+          selectedQueue:state.player.playbackQueue,selectionToken:playerTrackSelectionToken};
+        startRollbacks.set(controller,rollback);notify();
         selectedToken=playerTrackSelectionToken;
-        const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,onSelectionAdmitted:token=>{selectedToken=token;},isCurrent:()=>
+        const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,onSelectionAdmitted:token=>{selectedToken=token;rollback.selectionToken=token;},isCurrent:()=>
           actor===TrackActionsRuntime.scope().token&&pendingStart===controller&&sourceCurrent(source)&&source.readable!==false&&source.authorityEpoch===authorityEpoch
           &&planner.getSnapshot()===installed&&(!options.isCurrent||options.isCurrent()===true)});
         started=await starting;
@@ -464,6 +484,7 @@ const ExplicitQueueRuntime = (() => {
           &&pendingStart===controller&&state.player.playbackQueue?.explicitContext?.entryId===id) {
           planner.restore(planner.getSnapshot(),{...value,halted:planner.getSnapshot().halted||value.halted});state.player.playbackQueue=previousQueue;notify();
         }
+        startRollbacks.delete(controller);
         if(pendingStart===controller)pendingStart=null;options.signal?.removeEventListener('abort',cancel);
       }
     },
@@ -491,8 +512,11 @@ const ExplicitQueueRuntime = (() => {
       const next=planner.advance(before,successor(before,false)),selected=planner.getSnapshot();install(next);
       const selectedQueue=state.player.playbackQueue,previousIndex=before.index;
       const selectedEntry=selected.entries.find(entry=>entry.id===selected.currentId),selectedSource=sources.get(selectedEntry?.trackId),authorityEpoch=selectedSource?.authorityEpoch;
+      const rollback={owner:planner,previous,installed:selected,previousQueue,previousIndex,previousCurrent:state.player.current,
+        selectedQueue,selectionToken:playerTrackSelectionToken};
+      startRollbacks.set(controller,rollback);
       notify();let started=false,selectedToken=null;
-      try {selectedToken=playerTrackSelectionToken;const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,onSelectionAdmitted:token=>{selectedToken=token;},isCurrent:()=>
+      try {selectedToken=playerTrackSelectionToken;const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,onSelectionAdmitted:token=>{selectedToken=token;rollback.selectionToken=token;},isCurrent:()=>
         pendingStart===controller&&!controller.signal.aborted&&actor===TrackActionsRuntime.scope().token
         &&(!selectedSource||sourceCurrent(selectedSource)&&selectedSource.readable!==false&&selectedSource.authorityEpoch===authorityEpoch)
         &&planner.getSnapshot()===selected&&state.player.playbackQueue===selectedQueue});
@@ -500,7 +524,7 @@ const ExplicitQueueRuntime = (() => {
       finally {if(!started&&pendingStart===controller&&actor===TrackActionsRuntime.scope().token
         &&planner.getSnapshot().currentId===selected.currentId&&state.player.playbackQueue===selectedQueue&&playerTrackSelectionToken===selectedToken) {
         planner.restore(planner.getSnapshot(),{...previous,halted:planner.getSnapshot().halted||previous.halted});state.player.playbackQueue=previousQueue;if(previousQueue)previousQueue.currentIndex=previousIndex;notify();}
-        if(pendingStart===controller)pendingStart=null;}
+        startRollbacks.delete(controller);if(pendingStart===controller)pendingStart=null;}
     },
     ownsProgression(){sync();return planner.getSnapshot().entries.length>0||Boolean(planner.getSnapshot().currentId);},
     peek(){sync();const next=preview();return prepared&&sameContext(prepared.before,describe())&&sameContext(prepared.next,next)?prepared.track:null;},

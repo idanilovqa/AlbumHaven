@@ -1,4 +1,6 @@
+import {mountLastfmHistoryControls} from './lastfm-history-controls.mjs';
 import {trackLoveHtml} from './track-preference.mjs';
+import {canOfferRecentScrobbleRetry} from './recent-scrobble-delivery.mjs';
 import {mountButton, mountChoice} from './native-controls.mjs';
 import {metric, ratingMetricHtml, safeServerArtworkUrl} from './model.mjs';
 import {mountResourceDetail} from './resource-detail.mjs';
@@ -22,6 +24,8 @@ export function mountActivityPanel(host, runtime, initial) {
   const node = (parent, tag, className, text) => {const element = host.ownerDocument.createElement(tag); if (className) element.className = className; if (text !== undefined) element.textContent = text; parent.append(element); return element;};
   host.classList.add('home-activity'); host.setAttribute('aria-label', 'Listening results');
   const controls = node(host, 'div', 'home-activity__controls'), orderHost = node(controls, 'span'), directionHost = node(controls, 'span'), sortedNote = node(controls, 'span', 'home-friends__muted'), columnsHost = node(controls, 'span');
+  const historyImportHost = node(host, 'section', 'home-activity__lastfm-history');
+  const historyImport = mountLastfmHistoryControls(historyImportHost, runtime);
   const selectionActions = node(host, 'div'), artistHost = node(host, 'div'), listenedHost = node(host, 'div', 'home-activity__listened-albums'), cardHost = node(host, 'div'), tableHost = node(host, 'div'), errorHost = node(host, 'div'), detailHost = node(host, 'aside', 'home-activity__selection');
   let orderChoice, directionButton, unsubscribePlayback;
   const acquired = new Set(), retired = Symbol('retired activity');
@@ -38,6 +42,7 @@ export function mountActivityPanel(host, runtime, initial) {
     clean(() => tableHost.removeEventListener('click', click)); clean(() => cardHost.removeEventListener('click', click)); clean(() => host.removeEventListener('keydown', keydown, true));
     const unsubscribe = unsubscribePlayback; unsubscribePlayback = null; clean(() => unsubscribe?.());
     for (const owner of [...acquired].reverse()) clean(() => release(owner));
+    clean(() => historyImport.dispose());
     clean(() => props?.listenedAlbumsRef?.(null)); clean(() => host.replaceChildren());
     if (failure) throw failure;
   }
@@ -83,6 +88,17 @@ export function mountActivityPanel(host, runtime, initial) {
     }
     if (tracks()) {
       const row = chooseTrack(event.target.closest('[data-home-activity-row]')?.dataset.homeActivityRow); if (!row) return;
+      const retry = event.target.closest('[data-recent-scrobble-retry]');
+      if (retry) {
+        event.preventDefault(); event.stopPropagation();
+        if (retry.disabled || event.detail > 1 || !canOfferRecentScrobbleRetry(runtime, row, context)) return;
+        const value = props.value, ownedContext = context, submit = runtime.retryRecentScrobble;
+        const owns = () => current(row) && props.value === value && context === ownedContext && runtime.retryRecentScrobble === submit;
+        retry.disabled = true; retry.setAttribute('aria-disabled', 'true'); showError('');
+        const failed = failure => {if (owns() && failure?.name !== 'AbortError') showError('Delivery needs a fresh history check. Do not resend until history refreshes.');};
+        try {Promise.resolve(submit.call(runtime, row, context)).catch(failed);} catch (failure) {failed(failure);}
+        paint(); return;
+      }
       const action = event.target.closest('[data-home-activity-play],[data-track-love]');
       if (action) {event.preventDefault(); event.stopPropagation(); if (!action.disabled && !(event.detail > 1)) {if (action.hasAttribute('data-track-love')) {showError(''); love.cycle(row);} else play(row);} return;}
       const selectButton = event.target.closest('[data-home-activity-select]');
@@ -95,6 +111,7 @@ export function mountActivityPanel(host, runtime, initial) {
     if (disposed) return; if (rendering) {rerender = true; return;} if (pendingProps) return; rendering = true; frameRevision = ownershipRevision;
     try {
       const kind = props.kind, isTracks = tracks(), value = props.value, selected = selectedRow(); check();
+      historyImport.update({context, coverage:value?.data?.lastfm_observations}); check();
       const selectedId = selected?.id ?? null, escape = runtime.escapeHtml, zone = runtime.preferredTimeZone?.(); check();
       const sortKey = `${order}:${ascending}`; if (lastSortRows !== rows || lastSortKey !== sortKey) {sorted = projectActivityRows(rows, order, ascending); lastSortRows = rows; lastSortKey = sortKey;}
       orderChoice.update({label: 'Activity order', value: order, onChange: changeOrder, options: [['server', 'Server order'], ['last_listened_at', 'Last listened'], ['listen_count', 'Listens'], ['title', 'Name'], ...(isTracks ? [['duration_seconds', 'Length']] : [])]}); check();

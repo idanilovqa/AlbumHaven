@@ -16,6 +16,7 @@ function captureNativeAlbumQueueSources(album, rows) {
   const scope=TrackActionsRuntime.scope(),albumRef=getAlbumPlaybackQueueRef(album);
   if(!scope.actor||!scope.library||!albumRef||!Array.isArray(rows)||!rows.length)return null;
   const detailRef=`queue-album-source:${++explicitQueueAlbumSourceSerial}`;
+  const listeningIntent=typeof createAlbumListeningIntent==='function'?createAlbumListeningIntent(album):null;
   let request=null;
   const load=signal=>{
     if(request&&request.signal===signal)return request.promise;
@@ -57,7 +58,8 @@ function captureNativeAlbumQueueSources(album, rows) {
         if(track?.source_readable===false||track?.allowed_actions?.can_read===false)throw Object.assign(new Error('This Album track is unavailable.'),{status:403});
         if(!track||track.path!==path||track.source_readable===false||track.playback_state?.can_start_here!==true
           ||['missing','unknown','unresolved'].includes(track.availability))throw new Error('This Album track is unavailable.');
-        return {...track,...explicitQueueAlbumMetadata(fresh,track)};
+        const resolved={...track,...explicitQueueAlbumMetadata(fresh,track)};
+        return typeof bindAlbumListeningIntent==='function'?bindAlbumListeningIntent(resolved,listeningIntent):resolved;
       },
       async resolvePlaylistItem({signal}={}) {
         const fresh=await load(signal);
@@ -168,7 +170,8 @@ async function refreshExplicitQueueReturnTrack(context, track, {signal} = {}) {
     const row=(queue.albumSnapshot.track_rows||[]).find(value=>value.path===track.path);
     const captures=captureNativeAlbumQueueSources(queue.albumSnapshot,[row||track]);
     const fresh=await captures[0].resolve({signal});
-    return {...track,title:fresh.title,artist:fresh.artist,album:fresh.album_title,durationSeconds:fresh.duration_seconds};
+    const refreshed={...track,title:fresh.title,artist:fresh.artist,album:fresh.album_title,durationSeconds:fresh.duration_seconds};
+    return typeof bindAlbumListeningIntent==='function'?bindAlbumListeningIntent(refreshed,track.albumListeningIntent||fresh.albumListeningIntent):refreshed;
   }
   throw new Error('This playback context cannot be refreshed.');
 }

@@ -18,6 +18,8 @@ import {createAlbumTopBackendProviders} from '../album-tops/backend-providers.mj
 import {mountLibraryNavigation} from './library-navigation.mjs';
 import {mountSearchResults} from '../search-results/native.mjs';
 import {mountArtistPage} from '../artist-page/native.mjs';
+import {createFoobarHistoryOwner} from '../foobar-history/owner.mjs';
+import {createFoobarHistoryNativeActions} from '../foobar-history/native-actions.mjs';
 
 let requestedProviders = null, providers = {}, providerGeneration = 0, activeController = null, homeOwner = null, mountedRuntime = null;
 let friendNotifications = null, ownedHomeProviders = null, presencePublisher = null, notificationsView = null;
@@ -25,8 +27,8 @@ function bindProviders(runtime) {
   // The native resolver can inspect private media authority. Only its sanitized
   // activity reader crosses into the Home controller.
   if (requestedProviders === null && window.AlbumHavenPrivateUITransport) requestedProviders = ownedHomeProviders = createHomeBackendProviders(window.AlbumHavenPrivateUITransport, {runtime});
-  const {readActivity, resolveActivityTrack, resolveActivityNativeTarget, ...publicProviders} = requestedProviders || {};
-  return {...publicProviders, readActivity: runtime?.configureActivityProvider?.({readActivity, resolveActivityTrack, resolveActivityNativeTarget}) ?? null};
+  const {readActivity, resolveActivityTrack, resolveActivityNativeTarget, retryActivityScrobble, canRetryActivityScrobble, lastfmHistoryCommand, ...publicProviders} = requestedProviders || {};
+  return {...publicProviders, readActivity: runtime?.configureActivityProvider?.({readActivity, resolveActivityTrack, resolveActivityNativeTarget, retryActivityScrobble, canRetryActivityScrobble, lastfmHistoryCommand}) ?? null};
 }
 // The Home controller follows account/provider lifetime. Its view follows the
 // native history entry; leaving Home retires both immediately.
@@ -39,7 +41,7 @@ function createHomeOwner(host, runtime) {
     if (activeController === previous.controller) activeController = null;
     let failure;
     for (const release of [previous.unsubscribe, previous.releaseNotifications, () => previous.view?.dispose(),
-      () => previous.goalsOwner?.dispose(), () => previous.controller.dispose()]) {
+      () => previous.foobarHistoryOwner?.dispose(), () => previous.goalsOwner?.dispose(), () => previous.controller.dispose()]) {
       try {release?.();} catch (error) {failure ||= error;}
     }
     if (failure) throw failure;
@@ -61,8 +63,17 @@ function createHomeOwner(host, runtime) {
           controller.setScope(shell.scopeKey);
           session = {controller, scopeKey: shell.scopeKey, generation: providerGeneration,
             view: null, entryKey: null, initialized: false, payload: undefined,
-            notifications: null, releaseNotifications: null, goalsOwner: null, goalsTransport};
+            notifications: null, releaseNotifications: null, goalsOwner: null, goalsTransport, foobarHistoryOwner: null};
           const owned = session;
+          const foobarRoot = host.ownerDocument.getElementById('app-shell');
+          if (shell.authenticated === true && foobarRoot?.dataset.accountFoobarHistoryAllowed === 'true') {
+            try {owned.foobarHistoryOwner = createFoobarHistoryOwner({
+              fetch: (...args) => window.fetch(...args), contextRoot: foobarRoot,
+              allows: action => action === 'account.self.foobar.read' && foobarRoot.dataset.accountFoobarHistoryAllowed === 'true',
+              isCurrent: () => session === owned && !disposed && runtime.snapshot().visible
+                && runtime.snapshot().scopeKey === owned.scopeKey && host.ownerDocument.getElementById('app-shell') === foobarRoot,
+            });} catch (error) {retireSession(); throw error;}
+          }
           if (owned.goalsTransport) {
             try {owned.goalsOwner = createGoalsOwner({transport: owned.goalsTransport, sourceTransport: owned.goalsTransport, document:host.ownerDocument,
               isCurrent: () => session === owned && !disposed && runtime.snapshot().visible && runtime.snapshot().scopeKey === owned.scopeKey});}
@@ -74,7 +85,27 @@ function createHomeOwner(host, runtime) {
         const current = session, entryKey = shell.entryKey ?? 'initial';
         const props = {runtime, controller: current.controller, state: current.controller.getSnapshot(), shell,
           readDetail: providers.readDetail, readNowPlaying: providers.readNowPlaying,
-          goalsTransport: current.goalsTransport, goalsSourceTransport: current.goalsTransport, goalsOwner: current.goalsOwner};
+          goalsTransport: current.goalsTransport, goalsSourceTransport: current.goalsTransport, goalsOwner: current.goalsOwner,
+          foobarHistoryOwner: current.foobarHistoryOwner,
+          createFoobarNativeActions: options => {
+            // TrackActionsRuntime is the actual classic-script lexical owner,
+            // not a window property. Missing media runtime leaves display intact.
+            const tracks = typeof TrackActionsRuntime === 'undefined' ? null : TrackActionsRuntime;
+            const transport = window.AlbumHavenPrivateUITransport;
+            if (!tracks || !transport) return null;
+            const accountRoot = host.ownerDocument.getElementById('app-shell');
+            const accountContext = accountRoot?.dataset.accountFoobarContext;
+            const viewCurrent = options.isCurrent;
+            return createFoobarHistoryNativeActions({...options, tracks, transport, isCurrent: () =>
+              viewCurrent() && session === current && !disposed && current.generation === providerGeneration
+              && accountRoot?.isConnected === true && host.ownerDocument.getElementById('app-shell') === accountRoot
+              && accountRoot.dataset.accountFoobarContext === accountContext
+              && accountRoot.dataset.accountFoobarScope === 'account-foobar-v1'
+              && accountRoot.dataset.accountFoobarHistoryAllowed === 'true'
+              && window.AlbumHavenPrivateUITransport === transport && TrackActionsRuntime === tracks
+              && runtime.snapshot().visible && runtime.snapshot().scopeKey === current.scopeKey
+              && (runtime.snapshot().entryKey ?? 'initial') === entryKey});
+          }};
         const stillCurrent = () => {
           const latest = runtime.snapshot();
           return session === current && current.generation === providerGeneration && latest.visible
@@ -115,6 +146,11 @@ function createHomeOwner(host, runtime) {
     } finally {updating = false;}
   }
   const unsubscribe = runtime.subscribe(reconcile);
+  const unsubscribeScrobble = runtime.subscribeRecentScrobbleRefresh?.(scopeKey => {
+    const current = session, snapshot = runtime.snapshot();
+    if (!disposed && current && snapshot.visible && current.scopeKey === scopeKey && snapshot.scopeKey === scopeKey)
+      void current.controller.refreshOwnListenActivity();
+  });
   return {
     update: reconcile,
     reconfigure(change) {
@@ -122,7 +158,7 @@ function createHomeOwner(host, runtime) {
       try {retireSession(); change();}
       finally {configurationDepth--; reconcile();}
     },
-    dispose() {if (disposed) return; disposed = true; unsubscribe?.(); retireSession();},
+    dispose() {if (disposed) return; disposed = true; unsubscribeScrobble?.(); unsubscribe?.(); retireSession();},
   };
 }
 function renderRoot() {homeOwner?.update();}

@@ -416,6 +416,26 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+    "case": "FTC-TAGS-027 loads every disc when expanding an indexed album folder",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "family:ordinary-shared-release"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "tag-editor-folder-expansion-uses-authoritative-album-root",
+      "tag-editor-folder-expansion-includes-every-disc"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
     "case": "FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 preserve featured credits and exclude guest and Interview albums from family galleries",
     "profile": "functional-core",
     "setupScope": "isolated",

@@ -20,6 +20,34 @@ const SOUNDTRACK_GUEST = 'Soundtrack Signal Guest';
 const SOUNDTRACK_OWNER = 'Sia / Soundtrack Signal Guest';
 const SOUNDTRACK_LEAD_SOLO = 'Sia Soundtrack Solo';
 
+test('FTC-TAGS-027 loads every disc when expanding an indexed album folder', { tag: '@area:tag-edit' }, async ({
+  galleryActions,
+  searchToolbarActions,
+  stepLogger,
+  tagEditorActions,
+}) => {
+  await stepLogger.step('Open the indexed two-disc release in Edit Tags', async () => {
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    await searchToolbarActions.search(CONTROL_SHARED_ALBUM, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(CONTROL_SHARED_ALBUM);
+    await galleryActions.waitForAlbumVisible(CONTROL_SHARED_ALBUM);
+    await galleryActions.openAlbumTagEditorFromContextMenu(CONTROL_SHARED_ALBUM);
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 18 });
+  });
+
+  await stepLogger.step('Resolve the album root and retain files from both discs', async () => {
+    await tagEditorActions.loadAllFilesFromFolder({ expectedTrackCount: 18 });
+
+    const paths = await tagEditorActions.readTrackPaths();
+    expect(paths.some((path) => /[\\/]Disc 1[\\/]/u.test(path))).toBe(true);
+    expect(paths.some((path) => /[\\/]Disc 2[\\/]/u.test(path))).toBe(true);
+    expect(await tagEditorActions.readFolderPath()).toMatch(
+      /[\\/]Non-Compilation Cross-Credits$/u,
+    );
+  });
+});
+
 test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 preserve featured credits and exclude guest and Interview albums from family galleries', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions, artistPageSettingsActions, galleryActions, navigationPanelActions, page,
   searchToolbarActions, stepLogger, tagEditorActions, trackModalActions,

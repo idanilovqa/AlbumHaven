@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 import psycopg
 
+from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
 from tests.e2e.support import isolatedPostgres
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory
@@ -69,7 +70,10 @@ def issue(service, fixture):
 def configure_native_app(app, fixture, actor=None):
     actor = actor or fixture.actor
     app.state.config.update(fixture.config)
-    app.state.auth_policy_config = {"hmac": fixture.config["hmac"]}
+    app.state.auth_policy_config = {
+        "hmac": fixture.config["hmac"],
+        "trusted_origins": ["http://testserver"],
+    }
     app.state.media_host_library_id = actor.current_library_id
     app.state.current_actor_resolver = SimpleNamespace(resolve=lambda _token: actor)
 
@@ -883,6 +887,7 @@ def test_short_listen_stages_reload_handoff_without_completion(playback_inventor
     claim = service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track={
         "playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None,
     })
+    csrf = issue_session_csrf("s" * 43, playback_app.state.auth_policy_config)
 
     status, _, body = run_asgi_request(playback_app, "POST", "/playback/state/handoff", json_body={
         "protocol": 1,
@@ -893,6 +898,7 @@ def test_short_listen_stages_reload_handoff_without_completion(playback_inventor
             "token": base64.urlsafe_b64encode(b"short-listen-handoff-token-00001").rstrip(b"=").decode(),
         },
         "completion": None,
+        "csrf_token": csrf,
     })
 
     assert status == 200, decode_json(body)
@@ -961,6 +967,7 @@ def test_finalized_handoff_completion_commits_before_provider_and_replays_once(
         "claimToken": claim["claimToken"],
         "handoff": {"id": handoff_id, "token": opaque_test_token("completion-handoff")},
         "completion": completion,
+        "csrf_token": issue_session_csrf("s" * 43, playback_app.state.auth_policy_config),
     }
 
     canonical_replay = {**request, "completion": dict(reversed(list(completion.items())))}
@@ -1029,6 +1036,178 @@ def test_finalized_handoff_completion_commits_before_provider_and_replays_once(
         json_body={**request, "completion": existing_completion},
     )
     assert status == 409
+
+
+@pytest.mark.parametrize(
+    ("changes", "case"),
+    [
+        ({"title": {"value": "Track"}}, "title-object"),
+        ({"duration_seconds": "120"}, "duration-string"),
+        ({"duration_seconds": 0, "duration": []}, "duration-alias-list"),
+        ({"started_at_unix": [1792939200]}, "started-at-unix-list"),
+        ({"started_at_unix": 0, "timestamp": [1792939200]}, "timestamp-alias-list"),
+        ({"measured_listened_seconds": 10 ** 400}, "measured-listened-overflow"),
+        ({"sequence": 2 ** 63}, "sequence-pg-bigint-overflow"),
+        ({"finished_fully": "false"}, "finished-fully-string"),
+        ({"title": "", "track": {"value": "Track"}}, "track-alias-object"),
+        ({"album_artist": "", "albumArtist": {"value": "Owner"}}, "album-artist-alias-object"),
+        ({"segments": {"start_seconds": 0, "end_seconds": 70}}, "segments-object"),
+        ({"segments": [{"start_seconds": "0", "end_seconds": 70}]}, "segment-scalar"),
+        ({"request_origin": []}, "request-origin-list"),
+        ({
+            "request_origin": {
+                "client_kind": [],
+                "origin_type": "browser_tab",
+                "origin_id": "tab-1",
+            },
+        }, "request-origin-scalar"),
+    ],
+)
+def test_malformed_handoff_completion_is_rejected_before_any_side_effect(
+    playback_inventory, playback_app, monkeypatch, changes, case,
+):
+    from music_app.routes import playback_control_asgi as routes
+    from music_app.services import measured_listen_history
+
+    fixture = playback_inventory
+    configure_native_app(playback_app, fixture)
+    now = datetime.now(timezone.utc)
+    _, _, client_id, claim = active_private_web_claim(fixture, now)
+    completion = {
+        "path": fixture.paths[1],
+        "title": "Track",
+        "artist": "Owner",
+        "album": "Album",
+        "album_artist": "Owner",
+        "duration_seconds": 120,
+        "started_at": (now - timedelta(seconds=70)).isoformat(),
+        "started_at_unix": int((now - timedelta(seconds=70)).timestamp()),
+        "ended_at": now.isoformat(),
+        "measurement_version": "rendered-pcm-v1",
+        "device_id": str(uuid4()),
+        "session_id": str(uuid4()),
+        "sequence": 1,
+        "finalized": True,
+        "measured_listened_seconds": 70,
+        "max_measured_contiguous_seconds": 70,
+        "total_listened_seconds": 70,
+        "max_contiguous_seconds": 70,
+        "completion_reason": "pagehide",
+        "finished_fully": False,
+        "skipped": True,
+        "scrobble_eligible": True,
+        "scrobbled": False,
+        "segments": [{"start_seconds": 0, "end_seconds": 70}],
+        "request_origin": {
+            "client_kind": "private_web",
+            "origin_type": "browser_tab",
+            "origin_id": "tab-1",
+        },
+        **changes,
+    }
+    fingerprint_calls = []
+    persistence_calls = []
+    provider_calls = []
+    real_persist = routes.persist_measured_playback_completion
+
+    def digest(*args, **kwargs):
+        fingerprint_calls.append((args, kwargs))
+        return b"f" * 32
+
+    def persist(*args, **kwargs):
+        persistence_calls.append((args, kwargs))
+        return real_persist(*args, **kwargs)
+
+    def provider_session(*args, **kwargs):
+        provider_calls.append("session")
+        return None
+
+    def provider_completion(*args, **kwargs):
+        provider_calls.append("completion")
+        return {"ok": True}, 200
+
+    monkeypatch.setattr(measured_listen_history, "playback_handoff_completion_digest", digest)
+    monkeypatch.setattr(routes, "persist_measured_playback_completion", persist)
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", provider_session)
+    monkeypatch.setattr(routes, "record_playback_session_complete", provider_completion)
+
+    def claim_state():
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            return connection.execute(
+                "select client_id, expires_at, pending_handoff_id, "
+                "pending_handoff_expires_at, pending_completion_digest "
+                "from app.playback_claims where account_id = %s and library_id = %s",
+                (fixture.actor.account_id, fixture.actor.current_library_id),
+            ).fetchone()
+
+    before = claim_state()
+    escaped = None
+    try:
+        status, _, _ = run_asgi_request(
+            playback_app,
+            "POST",
+            "/playback/state/handoff",
+            json_body={
+                "protocol": 1,
+                "clientId": client_id,
+                "claimToken": claim["claimToken"],
+                "handoff": {
+                    "id": str(uuid4()),
+                    "token": opaque_test_token("invalid-" + case[:20]),
+                },
+                "completion": completion,
+                "csrf_token": issue_session_csrf("s" * 43, playback_app.state.auth_policy_config),
+            },
+        )
+    except Exception as error:
+        escaped = error
+        status = None
+
+    assert fingerprint_calls == []
+    assert persistence_calls == []
+    assert provider_calls == []
+    assert claim_state() == before
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as count from integration.listen_history "
+            "where account_id = %s and library_id = %s",
+            (fixture.actor.account_id, fixture.actor.current_library_id),
+        ).fetchone()["count"] == 0
+    assert escaped is None
+    assert status == 400
+
+
+def test_playback_completion_accepts_valid_track_payload_aliases():
+    from music_app.services.measured_listen_history import validate_playback_completion
+    from music_app.services.playback_session_payloads import normalize_playback_track_payload
+
+    completion = {
+        "title": "",
+        "track": "Track",
+        "album_artist": "",
+        "albumArtist": "Owner",
+        "duration_seconds": 0,
+        "duration": 120,
+        "started_at_unix": 0,
+        "timestamp": 1792939200,
+    }
+
+    validate_playback_completion(completion)
+
+    assert normalize_playback_track_payload(completion) == {
+        "artist": "",
+        "track": "Track",
+        "album": "",
+        "album_artist": "Owner",
+        "duration": 120,
+        "track_number": "",
+        "timestamp": 1792939200,
+        "request_origin": {
+            "client_kind": "private_web",
+            "origin_type": "browser_tab",
+            "origin_id": "",
+        },
+    }
 
 
 def test_delayed_provider_reloads_durable_completion_instead_of_using_stale_receipt(monkeypatch):
@@ -1238,7 +1417,7 @@ def test_claim_migration_is_additive_to_existing_account_and_media_rows(playback
     fixture = playback_inventory
     tables = ("app.accounts", "library.libraries", "library.library_memberships",
               "library.library_roots", "library.local_tracks", "library.local_track_files")
-    migration = Path(__file__).parents[2] / "migrations" / "postgres" / "0087_create_playback_claims.sql"
+    migration = Path(__file__).parents[2] / "migrations" / "postgres" / "0099_create_playback_claims.sql"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         before = {table: connection.execute(f"select to_jsonb(r) as row from {table} r order by id").fetchall()
                   for table in tables}
@@ -1261,7 +1440,7 @@ def test_handoff_migration_preserves_rows_enforces_shape_and_retains_runtime_acc
     fixture = playback_inventory
     now = datetime(2026, 10, 25, tzinfo=timezone.utc)
     service, track, client_id, claim = active_private_web_claim(fixture, now)
-    migration = Path(__file__).parents[2] / "migrations" / "postgres" / "0088_add_playback_claim_handoffs.sql"
+    migration = Path(__file__).parents[2] / "migrations" / "postgres" / "0100_add_playback_claim_handoffs.sql"
     preserved_tables = (
         "app.accounts",
         "library.libraries",

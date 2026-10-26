@@ -29,6 +29,72 @@ const responseHelperPath = path.join(
 );
 const responseHelperSource = fs.readFileSync(responseHelperPath, 'utf8');
 
+test('initial selected artist is revealed when the complete sidebar arrives', () => {
+  const { context, sidebarList, activeLink, scrollContainer } = createHarness();
+  const markupContext = vm.createContext({});
+  vm.runInContext(fs.readFileSync(path.join(
+    path.dirname(helperPath), 'render-markup-helpers.js',
+  ), 'utf8'), markupContext);
+  context.resolveSidebarVirtualWindow = markupContext.resolveSidebarVirtualWindow;
+  context.__testState.ui.pendingSidebarRevealArtist = '';
+  context.__testState.view.artists_sidebar = [{ artist: 'First Artist', count: 1 }];
+  sidebarList.querySelector = () => null;
+  scrollContainer.scrollTop = 0;
+  context.__testRenderSidebar();
+
+  const artists = Array.from({ length: 2080 }, (_, index) => ({
+    artist: `Artist ${index}`, count: 1,
+  }));
+  artists.push({ artist: 'Bottom Artist', count: 1 });
+  context.__testState.view.artists_sidebar = artists;
+  sidebarList.querySelector = () => {
+    const window = sidebarList.albumHavenSidebarVirtualWindow;
+    return window?.start <= 2080 && window?.end > 2080 ? activeLink : null;
+  };
+  context.__testRenderSidebar();
+
+  const window = sidebarList.albumHavenSidebarVirtualWindow;
+  assert.ok(window.start <= 2080 && window.end > 2080,
+    'the selected artist must be materialized after full hydration');
+  assert.ok(scrollContainer.scrollTop > 0, 'the selected row must be revealed');
+  assert.equal(context.__testState.ui.pendingSidebarRevealArtist, '');
+  scrollContainer.scrollTop = 0;
+  sidebarList.albumHavenSidebarVirtualScrollTop = 0;
+  context.__testRenderSidebar();
+  assert.ok(sidebarList.albumHavenSidebarVirtualWindow.end <= 2080,
+    'later manual scrolling must not be pulled back to the selected artist');
+});
+
+test('same-selected hydration preserves a queued reveal until the selected row can mount', () => {
+  const { context, sidebarList, activeLink, scrollContainer } = createHarness();
+  const markupContext = vm.createContext({});
+  vm.runInContext(fs.readFileSync(path.join(
+    path.dirname(helperPath), 'render-markup-helpers.js',
+  ), 'utf8'), markupContext);
+  context.resolveSidebarVirtualWindow = markupContext.resolveSidebarVirtualWindow;
+  const artists = Array.from({ length: 2080 }, (_, index) => ({
+    artist: `Artist ${index}`, count: 1,
+  }));
+  artists.push({ artist: 'Bottom Artist', count: 1 });
+  sidebarList.querySelector = () => {
+    const window = sidebarList.albumHavenSidebarVirtualWindow;
+    return window?.start <= 2080 && window?.end > 2080 ? activeLink : null;
+  };
+
+  context.__testApplyViewPayload({
+    query: 'bottom',
+    selected_artist: 'Bottom Artist',
+    artists_sidebar: artists,
+  });
+
+  assert.equal(context.__testState.ui.pendingSidebarRevealArtist, 'Bottom Artist');
+  context.__testRenderSidebar();
+  assert.ok(sidebarList.albumHavenSidebarVirtualWindow.start <= 2080);
+  assert.ok(sidebarList.albumHavenSidebarVirtualWindow.end > 2080);
+  assert.ok(scrollContainer.scrollTop > 0);
+  assert.equal(context.__testState.ui.pendingSidebarRevealArtist, '');
+});
+
 class FakeElement {
   constructor(rect = {}) {
     this.rect = rect;
@@ -109,6 +175,13 @@ globalThis.__testState = state;
 globalThis.__testRenderSidebar = renderSidebar;
 globalThis.__testApplyViewPayload = applyViewPayload;`, context);
   context.resolveSidebarArtists = () => context.__testState.view.artists_sidebar;
+  context.resolveSidebarVirtualWindow = artists => ({
+    virtualized: false,
+    start: 0,
+    end: artists.length,
+    before: 0,
+    after: 0,
+  });
   context.buildSidebarStructureSignature = () => 'stable-sidebar';
   context.applySidebarSelectionMarkup = () => {};
   context.resolveViewSurface = () => 'albums';

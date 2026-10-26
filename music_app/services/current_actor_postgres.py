@@ -47,13 +47,19 @@ class PostgresCurrentActorResolver:
         self._connect = connect or _connect
 
     def resolve(self, raw_session_token: object) -> CurrentActor:
-        session = self._sessions.resolve_session(raw_session_token)
-        if session is None:
-            return CurrentActor.anonymous()
-        if not isinstance(session, ResolvedBrowserSession):
-            raise RuntimeError("Current actor session context is invalid.")
-
         with self._connect(self._database_url) as connection:
+            transaction = getattr(connection, "transaction", None)
+            if not callable(transaction):
+                raise RuntimeError("Current actor resolution requires transaction support.")
+            with transaction():
+                session = self._sessions.resolve_session(
+                    raw_session_token,
+                    connection=connection,
+                )
+            if session is None:
+                return CurrentActor.anonymous()
+            if not isinstance(session, ResolvedBrowserSession):
+                raise RuntimeError("Current actor session context is invalid.")
             rows = connection.execute(
                 """
                 select app.accounts.id as account_id,

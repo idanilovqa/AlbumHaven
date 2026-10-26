@@ -169,7 +169,7 @@ def build_non_album_album_groups(entries: list[dict[str, object]]) -> list[dict[
     for entry in entries:
         exception_type = normalize_exception_value(entry.get("exception_type"))
         album_name = repair_display_text(str(entry.get("album") or "")) or str(entry.get("album") or "")
-        if not exception_type and has_meaningful_album_name(album_name) and not is_loose_track_album_value(album_name):
+        if not exception_type and not entry.get("local_album_membership_problem") and has_meaningful_album_name(album_name) and not is_loose_track_album_value(album_name):
             continue
         artist = _normalized_artist(entry)
         exception_label = exception_type or "Loose Tracks"
@@ -288,6 +288,7 @@ def build_non_album_track_list(
             and not is_loose_track_album_value(album_value)
             and not exception_type
             and not is_direct_artist_file
+            and not entry.get("local_album_membership_problem")
         ):
             continue
         year = _normalized_year(entry.get("year"))
@@ -305,9 +306,28 @@ def build_non_album_track_list(
             "track_number": entry.get("track_number"),
             "disc_number": entry.get("disc_number"),
             "exception_type": exception_type or "",
+            **(
+                {"custom_collection_name": str(entry.get("custom_collection_name") or "").strip()}
+                if str(entry.get("custom_collection_name") or "").strip()
+                else {}
+            ),
+            **(
+                {"library_category": str(
+                    entry.get("library_root_category") or entry.get("library_category") or ""
+                ).strip()}
+                if str(entry.get("library_root_category") or entry.get("library_category") or "").strip()
+                else {}
+            ),
             "edition": str(entry.get("edition") or ""),
             "album_rating": entry.get("album_rating"),
-            "reason_label": exception_type or "Unmarked",
+            "reason_label": exception_type or entry.get("local_album_membership_problem") or "Unmarked",
+            "is_problematic": bool(
+                entry.get("local_album_membership_problem")
+                or not has_meaningful_album_name(album_value)
+                or is_loose_track_album_value(album_value)
+            ),
+            **({"local_album_membership_problem": entry["local_album_membership_problem"]}
+               if entry.get("local_album_membership_problem") else {}),
             "display_path": _display_path(path, root_paths),
             "duration_seconds": entry.get("duration_seconds"),
         })

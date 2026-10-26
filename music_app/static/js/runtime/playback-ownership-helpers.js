@@ -163,6 +163,7 @@ function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = nul
       protocol: 1,
       clientId: getPlaybackOwnershipTabId(),
       claimToken: claim.claimToken,
+      csrf_token: window.readSessionCsrfCookie?.() || '',
       handoff: { id: handoff.id, token: handoff.token },
       completion,
     })], { type: 'application/json' }));

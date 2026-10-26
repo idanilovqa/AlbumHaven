@@ -3,10 +3,24 @@ import { CDPDocumentEvents } from './cdpDocumentEvents.js';
 function readViewDataRequest(request, sequence) {
   const requestUrl = new URL(request.url());
   if (!['/view-data', '/home-data'].includes(requestUrl.pathname)) return null;
+  const scopeParams = new URLSearchParams(requestUrl.searchParams);
+  for (const key of ['payload_tier', 'gallery_offset', 'gallery_cursor', 'omit_sidebar']) {
+    scopeParams.delete(key);
+  }
+  scopeParams.sort();
   return {
+    gallery: requestUrl.pathname === '/view-data'
+      && ['', 'albums', 'library'].includes(requestUrl.searchParams.get('surface') || ''),
+    append: Boolean(requestUrl.searchParams.get('gallery_cursor'))
+      || Number(requestUrl.searchParams.get('gallery_offset') || 0) > 0,
+    scope: `${requestUrl.pathname}?${scopeParams}`,
+    categoryScope: JSON.stringify(requestUrl.searchParams.getAll('category').sort()),
+    search: Boolean(String(requestUrl.searchParams.get('q') || '').trim()),
+    payloadTier: String(requestUrl.searchParams.get('payload_tier') || '').trim().toLowerCase(),
     full: !['sidebar', 'search_preview'].includes(
       String(requestUrl.searchParams.get('payload_tier') || '').trim().toLowerCase(),
     ),
+
     sequence,
     url: request.url(),
   };
@@ -86,7 +100,13 @@ export function matchesAccumulatedRootProjection(payload, projection, allowLater
 }
 
 export function readAppliedAlbumTargetEvidence(observation, projection, bootstrap, expected) {
-  const payload = observation.latestFullPayload;
+  // A sidebar-only clear drops the current full response, but the product may
+  // restore its already-loaded family without another request.
+  const retainedFamily = !observation.latestFullPayload && projection?.authoritativeMountedFamily === true
+    && projection.selected_artist && !projection.query && !projection.locationQuery
+    && projection.locationArtist === projection.selected_artist
+    ? observation.retainedFamilyPayload : null;
+  const payload = observation.latestFullPayload || retainedFamily;
   const rootAnchor = matchesAccumulatedRootProjection(payload, projection) ? payload
     : matchesAccumulatedRootProjection(bootstrap, projection, true) ? bootstrap : null;
   const observed = readCanonicalAlbumTargetEvidence(observation, expected);
@@ -101,13 +121,21 @@ export function readAppliedAlbumTargetEvidence(observation, projection, bootstra
     && String(payload.selected_artist || '') === String(projection.selected_artist || '');
   const localSelection = sameFilters && (sameQuery || (!projection.query && projection.selected_artist
     && !projection.locationQuery && projection.locationArtist === projection.selected_artist));
+  let unprovenFamilyIdentity = false;
   const inventory = (view) => {
     const groups = new Map();
     for (const field of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
       for (const group of view?.[field] || []) {
         const artist = String(group.artist || group.artist_display || '').trim();
         const albums = groups.get(artist) || new Set();
-        for (const album of group.albums || []) albums.add(String(album.key || album.name || album.title || ''));
+        for (const album of group.albums || []) {
+          const identity = String(album.key || album.request_key || album.identity_key || album.album_ref || '').trim();
+          const name = String(album.name || album.title || '').trim();
+          if (retainedFamily && (!artist || !identity || !name)) unprovenFamilyIdentity = true;
+          albums.add(retainedFamily
+            ? JSON.stringify([identity, name])
+            : String(album.key || album.name || album.title || ''));
+        }
         groups.set(artist, albums);
       }
     }
@@ -117,20 +145,22 @@ export function readAppliedAlbumTargetEvidence(observation, projection, bootstra
   const appliedGroups = inventory(projection);
   const familyScope = localSelection && projection.authoritativeMountedFamily === true
     && Boolean(projection.selected_artist);
-  const completeFamily = familyScope && appliedGroups.size > 0 && [...appliedGroups].every(([artist, albums]) => {
+  const completeFamily = familyScope && !unprovenFamilyIdentity && appliedGroups.size > 0 && [...appliedGroups].every(([artist, albums]) => {
     const sourceAlbums = sourceGroups.get(artist);
     return sourceAlbums?.size === albums.size && [...albums].every(album => sourceAlbums.has(album));
   });
   const sourceMatch = rootAnchor
     ? readCanonicalAlbumTargetEvidence({ latestFullPayload: rootAnchor }, expected).canonicalMatch
-    : observed.canonicalMatch && (!familyScope || appliedGroups.has(String(expected.artist || '').trim()));
-  const acceptedScope = Boolean(rootAnchor || sameScope || localSelection);
+    : (retainedFamily ? readCanonicalAlbumTargetEvidence({ latestFullPayload: retainedFamily }, expected).canonicalMatch
+      : observed.canonicalMatch) && (!familyScope || appliedGroups.has(String(expected.artist || '').trim()));
+  const acceptedScope = Boolean(retainedFamily ? completeFamily : rootAnchor || sameScope || localSelection);
   return {
     ...(acceptedScope ? applied : observed),
     canonicalMatch: Boolean(sourceMatch || applied.canonicalMatch),
     canonicalReadyMatch: Boolean(acceptedScope && applied.canonicalMatch && (rootAnchor || sourceMatch)),
     canonicalInventoryComplete: Boolean(rootAnchor ? projection.gallery_page.has_more === false
-      : (sameScope || completeFamily) && observed.canonicalInventoryComplete),
+      : (sameScope || completeFamily) && (retainedFamily
+        ? completeFamily && hasCompleteCanonicalAlbumInventory(retainedFamily) : observed.canonicalInventoryComplete)),
     canonicalQuery: String((acceptedScope ? projection?.query : payload?.query) || ''),
   };
 }
@@ -173,6 +203,10 @@ export function readCanonicalAlbumTargetEvidence(observation = {}, expected = {}
   const expectedAlbum = String(expected.album || '').trim();
   const expectedArtist = String(expected.artist || '').trim();
   const fullGroups = readCanonicalArtistGroups(observation.latestFullPayload);
+  const pageGroups = observation.observedGalleryGroups || [];
+  const familyAlbums = observation.observedFamilyAlbums || [];
+  const presenceGroups = [...fullGroups, ...pageGroups,
+    ...familyAlbums.map((album) => ({ artist: album.artist, albums: [album.name] }))];
   const mutationPayloads = Array.isArray(observation.completedCanonicalMutationPayloads)
     ? observation.completedCanonicalMutationPayloads
     : [observation.latestCompletedSaveTaskPayload].filter(Boolean);
@@ -189,21 +223,26 @@ export function readCanonicalAlbumTargetEvidence(observation = {}, expected = {}
   const completedSaveTaskMatch = completedAlbums.some(
     (album) => album.artist === expectedArtist && album.name === expectedAlbum,
   );
+  const observedMatch = presenceGroups.some(
+    (group) => group.artist === expectedArtist && group.albums.includes(expectedAlbum),
+  );
   const observedAlbums = [...new Set([
-    ...fullGroups.flatMap((group) => group.albums),
+    ...presenceGroups.flatMap((group) => group.albums),
     ...completedAlbums.map((album) => album.name),
   ])];
   const observedArtists = [...new Set([
-    ...fullGroups.map((group) => group.artist),
+    ...presenceGroups.map((group) => group.artist),
     ...completedAlbums.map((album) => album.artist),
   ].filter(Boolean))];
 
   return {
+
     canonicalInventoryComplete: hasCompleteCanonicalAlbumInventory(observation.latestFullPayload),
-    canonicalMatch: fullMatch || completedSaveTaskMatch,
+    canonicalMatch: observedMatch || completedSaveTaskMatch,
+
     canonicalSource: completedSaveTaskMatch
       ? 'completed-save-task'
-      : (fullMatch ? 'full-view' : ''),
+      : (fullMatch ? 'full-view' : (observedMatch ? 'observed-gallery' : '')),
     observedAlbums,
     observedArtists,
   };
@@ -214,6 +253,9 @@ export class ProductionViewObserver {
     this.events = events;
     this.activeRequests = new Map();
     this.latestFullPayload = null;
+    this.latestGalleryPage = null;
+    this.latestGalleryPageError = null;
+    this.latestGalleryRequestSequence = 0;
     this.latestFullPayloadError = null;
     this.latestFullRequestSequence = 0;
     this.latestFullRequestUrl = '';
@@ -227,13 +269,36 @@ export class ProductionViewObserver {
     this.pendingPayloadReads = new Map();
     this.requestDetails = new WeakMap();
     this.stateRevision = 0;
+    this.topologyRevision = 0;
+    this.galleryScope = null;
+    this.galleryArtistTopologies = new Map();
+    this.observedGalleryGroups = new Map();
+    this.observedFamilyAlbums = new Map();
+    this.retainedFamilyPayload = null;
+    this.categoryScope = null;
+    this.galleryGeneration = 0;
+    this.mutationGeneration = 0;
+    this.galleryPayloadObserved = false;
+    this.bootstrapPresenceEligible = false;
 
     this.documentGeneration = 0;
     const resetDocumentObservation = () => {
       this.documentGeneration += 1;
+      this.topologyRevision += 1;
+      this.galleryArtistTopologies.clear();
+      this.observedGalleryGroups.clear();
+      this.clearFamilyEvidence();
+      this.categoryScope = null;
+      this.galleryGeneration += 1;
+      this.galleryPayloadObserved = false;
+      this.galleryScope = null;
+      this.bootstrapPresenceEligible = true;
       this.authorityGeneration += 1;
       this.activeRequests.clear();
       this.latestFullPayload = null;
+      this.latestGalleryPage = null;
+      this.latestGalleryPageError = null;
+      this.latestGalleryRequestSequence = 0;
       this.latestFullPayloadError = null;
       this.latestFullRequestSequence = 0;
       this.latestFullRequestUrl = '';
@@ -246,6 +311,7 @@ export class ProductionViewObserver {
     events.on('documentcommitted', resetDocumentObservation);
     events.on('request', (request) => {
       if (isSaveTaskRequest(request)) {
+        this.bootstrapPresenceEligible = false;
         const sequence = this.nextSaveTaskRequestSequence + 1;
         this.nextSaveTaskRequestSequence = sequence;
         this.latestSaveTaskRequestSequence = sequence;
@@ -265,7 +331,38 @@ export class ProductionViewObserver {
       const detail = readViewDataRequest(request, this.nextRequestSequence + 1);
       if (!detail) return;
       detail.documentGeneration = this.documentGeneration;
+      detail.mutationGeneration = this.mutationGeneration;
       this.nextRequestSequence = detail.sequence;
+      this.bootstrapPresenceEligible = false;
+      const galleryScopeChanged = detail.gallery
+        && this.galleryScope !== null && this.galleryScope !== detail.scope;
+      if (detail.full
+        || (detail.gallery && !detail.append && detail.payloadTier !== 'search_preview')
+        || galleryScopeChanged) {
+        this.topologyRevision += 1;
+        this.galleryArtistTopologies.clear();
+        this.observedGalleryGroups.clear();
+        this.galleryGeneration += 1;
+        this.galleryPayloadObserved = false;
+        this.latestFullPayload = null;
+        this.latestFullRequestSequence = 0;
+        this.latestFullPayloadRead = null;
+        this.latestFullPayloadError = null;
+      }
+      if (detail.gallery) {
+        if (this.categoryScope !== detail.categoryScope) this.clearFamilyEvidence();
+        this.categoryScope = detail.categoryScope;
+        if (galleryScopeChanged) {
+          this.authorityGeneration += 1;
+          this.latestCompletedSaveTaskPayload = null;
+          this.completedCanonicalMutationPayloads = [];
+        }
+        this.galleryScope = detail.scope;
+        this.latestGalleryRequestSequence = detail.sequence;
+        this.latestGalleryPage = null;
+        this.latestGalleryPageError = null;
+      }
+      detail.galleryGeneration = this.galleryGeneration;
       this.requestDetails.set(request, detail);
       this.activeRequests.set(request, detail);
       this.stateRevision += 1;
@@ -294,8 +391,25 @@ export class ProductionViewObserver {
           .then((payload) => {
             if (detail.sequence !== this.latestSaveTaskRequestSequence) return;
             if (detail.authorityGeneration !== this.authorityGeneration) return;
+            if (detail.documentGeneration !== this.documentGeneration) return;
+            if (payload?.ok !== true || String(payload?.status || '').trim().toLowerCase() !== 'completed') return;
+            // A completed write invalidates pre-write reads even when no album remains.
+            if (this.latestFullPayload || this.galleryPayloadObserved || this.observedFamilyAlbums.size) {
+              this.topologyRevision += 1;
+            }
+            this.mutationGeneration += 1;
+            this.galleryArtistTopologies.clear();
+            this.clearFamilyEvidence();
+            this.observedGalleryGroups.clear();
+            this.galleryPayloadObserved = false;
+            this.latestFullPayload = null;
+            this.latestGalleryPage = null;
             const acceptedAlbums = readCompletedSaveTaskAlbums(payload);
-            if (acceptedAlbums.length === 0) return;
+            if (acceptedAlbums.length === 0) {
+              this.latestCompletedSaveTaskPayload = null;
+              this.completedCanonicalMutationPayloads = [];
+              return;
+            }
             const acceptedIdentities = new Set(acceptedAlbums.map((album) => album.identity));
             const existingIndex = this.completedCanonicalMutationPayloads.findIndex((current) => {
               const currentIdentities = readCompletedSaveTaskAlbums(current)
@@ -304,8 +418,12 @@ export class ProductionViewObserver {
                 && currentIdentities.every((identity) => acceptedIdentities.has(identity));
             });
             if (existingIndex >= 0) {
+              if (JSON.stringify(this.completedCanonicalMutationPayloads[existingIndex].updated_albums) !== JSON.stringify(payload.updated_albums)) {
+                this.topologyRevision += 1;
+              }
               this.completedCanonicalMutationPayloads[existingIndex] = payload;
             } else {
+              this.topologyRevision += 1;
               this.completedCanonicalMutationPayloads.push(payload);
             }
             this.latestCompletedSaveTaskPayload = payload;
@@ -313,6 +431,7 @@ export class ProductionViewObserver {
           .catch((error) => {
             if (detail.documentGeneration !== this.documentGeneration) return;
             if (detail.authorityGeneration !== this.authorityGeneration) return;
+            this.clearFamilyEvidence();
             this.latestFullPayloadError = String(
               error?.message || error || `Unable to parse save-task payload for ${detail.url}`,
             );
@@ -323,12 +442,41 @@ export class ProductionViewObserver {
           });
         return;
       }
-      if (!detail?.full) return;
+      if (!detail || (!detail.full && !detail.gallery)) return;
+      if (detail.mutationGeneration !== this.mutationGeneration
+        || detail.galleryGeneration !== this.galleryGeneration) return;
       if (!response.ok()) {
-        if (detail.documentGeneration === this.documentGeneration
-          && detail.sequence === this.latestFullRequestSequence) {
-          this.latestFullPayloadError = `HTTP ${response.status()} for ${detail.url}`;
-          this.stateRevision += 1;
+        const recordHttpFailure = () => {
+          if (detail.mutationGeneration !== this.mutationGeneration || detail.galleryGeneration !== this.galleryGeneration) return;
+          if (detail.gallery && detail.documentGeneration === this.documentGeneration
+            && detail.sequence === this.latestGalleryRequestSequence) {
+            this.clearFamilyEvidence();
+            this.latestGalleryPageError = `HTTP ${response.status()} for ${detail.url}`;
+            this.stateRevision += 1;
+          }
+          if (detail.documentGeneration === this.documentGeneration
+            && detail.sequence === this.latestFullRequestSequence) {
+            this.clearFamilyEvidence();
+            this.latestFullPayloadError = `HTTP ${response.status()} for ${detail.url}`;
+            this.stateRevision += 1;
+          }
+        };
+        if (response.status() === 503 || (response.status() === 409 && detail.append)) {
+          this.pendingPayloadReads.set(detail.sequence, detail);
+          Promise.resolve(response.json())
+            .then(payload => {
+              const recoverable = response.status() === 409
+                ? payload?.restart_required === true
+                : ['search_projection_pending', 'gallery_projection_pending'].includes(payload?.code);
+              if (!recoverable) recordHttpFailure();
+            })
+            .catch(recordHttpFailure)
+            .finally(() => {
+              this.pendingPayloadReads.delete(detail.sequence);
+              this.stateRevision += 1;
+            });
+        } else {
+          recordHttpFailure();
         }
         return;
       }
@@ -337,18 +485,57 @@ export class ProductionViewObserver {
       const payloadRead = Promise.resolve(response.json())
         .then((payload) => {
           if (detail.documentGeneration !== this.documentGeneration
+            || detail.mutationGeneration !== this.mutationGeneration
+            || detail.galleryGeneration !== this.galleryGeneration) return;
+          if (detail.gallery) {
+            if (detail.sequence === this.latestGalleryRequestSequence) {
+              this.latestGalleryPage = payload?.gallery_page || null;
+            }
+            this.galleryPayloadObserved = true;
+            for (const group of readCanonicalArtistGroups(payload)) {
+              const current = this.observedGalleryGroups.get(group.artist);
+              this.observedGalleryGroups.set(group.artist, {
+                artist: group.artist,
+                albums: [...new Set([...(current?.albums || []), ...group.albums])],
+              });
+            }
+            for (const group of payload?.artist_groups || []) {
+              this.galleryArtistTopologies.set(String(group.artist || group.artist_display || '').trim(),
+                JSON.stringify((group.albums || []).map((album) => [
+                  album.key, album.name || album.title, album.year, album.track_count_preview,
+                ])));
+            }
+          }
+          if (!detail.full) return;
+          if (detail.documentGeneration !== this.documentGeneration
               || detail.sequence !== this.latestFullRequestSequence) return;
           const payloadTier = String(payload?.payload_tier || 'full').trim().toLowerCase();
+
           if (!['full', 'gallery_page'].includes(payloadTier)) {
             this.latestFullPayloadError = `Expected authoritative production view payload, received ${payloadTier || 'unknown'}`;
+
             return;
           }
           this.latestFullPayload = payload;
           this.latestFullPayloadError = null;
+          this.clearFamilyEvidence();
+          // Local family restoration reuses these exact server-returned identities.
+          // The retained source can certify an exact mounted family, never a root page.
+          if (detail.gallery && detail.search) {
+            this.retainFamilyAlbums(payload);
+          }
         })
         .catch((error) => {
+          if (detail.mutationGeneration !== this.mutationGeneration
+            || detail.galleryGeneration !== this.galleryGeneration) return;
+          if (detail.gallery && detail.documentGeneration === this.documentGeneration
+              && detail.sequence === this.latestGalleryRequestSequence) {
+            this.clearFamilyEvidence();
+            this.latestGalleryPageError = String(error?.message || error || 'Unable to parse gallery continuation');
+          }
           if (detail.documentGeneration === this.documentGeneration
               && detail.sequence === this.latestFullRequestSequence) {
+            this.clearFamilyEvidence();
             this.latestFullPayloadError = String(error?.message || error || 'Unable to parse production view payload');
           }
         })
@@ -369,8 +556,17 @@ export class ProductionViewObserver {
     events.on('requestfailed', (request) => {
       const detail = this.requestDetails.get(request);
       finishRequest(request);
+      if (detail && (detail.mutationGeneration !== this.mutationGeneration
+        || detail.galleryGeneration !== this.galleryGeneration)) return;
+      if (detail?.gallery && detail.documentGeneration === this.documentGeneration
+          && detail.sequence === this.latestGalleryRequestSequence) {
+        this.clearFamilyEvidence();
+        this.latestGalleryPageError = `Request failed for ${detail.url}`;
+        this.stateRevision += 1;
+      }
       if (detail?.full && detail.documentGeneration === this.documentGeneration
           && detail.sequence === this.latestFullRequestSequence) {
+        this.clearFamilyEvidence();
         this.latestFullPayloadError = `Request failed for ${detail.url}`;
         this.stateRevision += 1;
       }
@@ -380,6 +576,47 @@ export class ProductionViewObserver {
   async initialize() {
     await this.events.initialize();
     return this;
+  }
+
+  clearFamilyEvidence() {
+    this.observedFamilyAlbums.clear();
+    this.retainedFamilyPayload = null;
+  }
+
+  retainFamilyAlbums(payload) {
+    if (hasCompleteCanonicalAlbumInventory(payload) && payload.family_artist_groups?.length) {
+      this.retainedFamilyPayload = payload;
+    }
+    let changed = false;
+    for (const group of payload?.family_artist_groups || []) {
+      const artist = String(group?.artist || group?.artist_display || '').trim();
+      for (const album of group?.albums || []) {
+        const identity = String(album?.key || album?.request_key || album?.identity_key || album?.album_ref || '').trim();
+        const name = String(album?.name || album?.title || '').trim();
+        if (!artist || !identity || !name) continue;
+        const previous = this.observedFamilyAlbums.get(identity);
+        if (previous?.artist === artist && previous?.name === name) continue;
+        this.observedFamilyAlbums.set(identity, { artist, identity, name });
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  acceptBootstrapPresence(payload, stateRevision) {
+    if (!this.bootstrapPresenceEligible || this.stateRevision !== stateRevision
+      || this.activeRequests.size || this.pendingPayloadReads.size
+      || this.latestFullPayloadError || this.latestGalleryPageError) return false;
+    // Inline evidence stays category-bound; completeness requires an exact mounted family.
+    // Never promote it to an observed full response or revive it after a request.
+    if (Array.isArray(payload?.visible_library_categories)) {
+      this.categoryScope = JSON.stringify([...payload.visible_library_categories].sort());
+      if (this.retainFamilyAlbums(payload)) {
+        this.topologyRevision += 1;
+        this.stateRevision += 1;
+      }
+    }
+    return true;
   }
 
   async dispose() {
@@ -397,6 +634,15 @@ export class ProductionViewObserver {
         && [...this.activeRequests.values()].every(detail => isRootGalleryContinuationUrl(detail.url))
         && [...this.pendingPayloadReads.values()].every(detail => isRootGalleryContinuationUrl(detail.url)),
       latestFullPayload: this.latestFullPayload,
+      canonicalScopeComplete: this.latestFullPayload !== null,
+      galleryPayloadObserved: this.galleryPayloadObserved,
+      observedGalleryGroups: [...this.observedGalleryGroups.values()],
+      observedFamilyAlbums: [...this.observedFamilyAlbums.values()],
+      retainedFamilyPayload: this.retainedFamilyPayload,
+      latestGalleryPage: this.latestGalleryPage,
+      latestGalleryPageError: this.latestGalleryPageError,
+      galleryBusy: [...this.activeRequests.values()].some((detail) => detail.gallery)
+        || this.pendingPayloadReads.has(this.latestGalleryRequestSequence),
       latestFullPayloadError: this.latestFullPayloadError,
       requestGeneration: this.latestFullRequestSequence,
       latestFullRequestUrl: this.latestFullRequestUrl,
@@ -404,6 +650,9 @@ export class ProductionViewObserver {
       completedCanonicalMutationPayloads: [...this.completedCanonicalMutationPayloads],
       pendingPayloadReadCount: this.pendingPayloadReads.size,
       stateRevision: this.stateRevision,
+      topologyRevision: this.topologyRevision,
+      galleryArtistTopologies: Object.fromEntries(this.galleryArtistTopologies),
+      bootstrapPresenceEligible: this.bootstrapPresenceEligible,
     };
   }
 

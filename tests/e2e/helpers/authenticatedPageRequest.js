@@ -1,4 +1,5 @@
 const SESSION_COOKIE = '__Host-album_haven_session';
+const SESSION_CSRF_COOKIE = '__Host-album_haven_csrf';
 
 function cookieMatchesHost(cookie, hostname) {
   const domain = String(cookie?.domain || '').replace(/^\./u, '').toLowerCase();
@@ -26,7 +27,12 @@ function serializeCookies(cookies, target) {
     });
 }
 
-async function authenticatedPageOptions(page, url, options = {}) {
+function hasHeader(headers, expectedName) {
+  const normalizedExpectedName = expectedName.toLowerCase();
+  return Object.keys(headers).some((name) => name.toLowerCase() === normalizedExpectedName);
+}
+
+async function authenticatedPageOptions(page, url, options = {}, { mutation = false } = {}) {
   const current = new URL(page.url());
   const target = new URL(url, current);
   if (target.origin !== current.origin) {
@@ -38,10 +44,24 @@ async function authenticatedPageOptions(page, url, options = {}) {
     throw new Error('Authenticated functional request is missing the browser session cookie.');
   }
   const headers = { ...(options.headers || {}) };
-  if (Object.keys(headers).some((name) => name.toLowerCase() === 'cookie')) {
+  if (hasHeader(headers, 'cookie')) {
     throw new Error('Authenticated functional requests manage the Cookie header.');
   }
   headers.Cookie = serialized.join('; ');
+  if (mutation) {
+    const csrfCookie = cookies.find((cookie) => (
+      cookie?.name === SESSION_CSRF_COOKIE
+      && cookieMatchesHost(cookie, target.hostname)
+      && cookieMatchesPath(cookie, target.pathname)
+    ));
+    if (!csrfCookie?.value) {
+      throw new Error('Authenticated mutation request is missing the browser CSRF cookie.');
+    }
+    if (!hasHeader(headers, 'origin')) headers.Origin = target.origin;
+    if (!hasHeader(headers, 'x-album-haven-csrf')) {
+      headers['X-Album-Haven-CSRF'] = String(csrfCookie.value);
+    }
+  }
   return { target: target.toString(), options: { ...options, headers } };
 }
 
@@ -50,7 +70,12 @@ export async function authenticatedPageGet(page, url, options = {}) {
   return page.request.get(request.target, request.options);
 }
 
+export async function authenticatedPagePost(page, url, options = {}) {
+  const request = await authenticatedPageOptions(page, url, options, { mutation: true });
+  return page.request.post(request.target, request.options);
+}
+
 export async function authenticatedPagePut(page, url, options = {}) {
-  const request = await authenticatedPageOptions(page, url, options);
+  const request = await authenticatedPageOptions(page, url, options, { mutation: true });
   return page.request.put(request.target, request.options);
 }

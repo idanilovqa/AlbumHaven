@@ -258,6 +258,7 @@ def test_build_artist_membership_groups_member_match_includes_canonicalized_coll
                 {
                     "name": "Exit in Darkness",
                     "album_artist": "Compilation",
+                    "artist_relationship": "owned",
                 },
             ],
         },
@@ -432,6 +433,7 @@ def test_build_artist_membership_groups_keeps_shared_selected_artist_album_under
                 {
                     "name": "Exit in Darkness",
                     "album_artist": "Mono / A.A. Williams",
+                    "artist_relationship": "owned",
                 },
             ],
         },
@@ -442,10 +444,74 @@ def test_build_artist_membership_groups_keeps_shared_selected_artist_album_under
                 {
                     "name": "Exit in Darkness",
                     "album_artist": "Mono / A.A. Williams",
+                    "artist_relationship": "owned",
                 },
             ],
         },
     ]
+
+
+def test_build_artist_membership_groups_marks_owner_and_track_only_guest_relationships():
+    album = SimpleNamespace(
+        key="want-to-fight",
+        name="Хочу бороться",
+        album_artist="На ногу свело!",
+        artists=["На ногу свело!", "25/17"],
+        year=2025,
+        release_date="2025-01-01",
+        is_compilation=False,
+    )
+
+    album_payload_cache = {}
+    groups = api_view_payload_helpers._build_artist_membership_groups(
+        [album],
+        ["На ногу свело!", "25/17"],
+        {
+            "На ногу свело!": "На ногу свело!",
+            "25/17": "25/17",
+        },
+        {
+            "На ногу свело!": ["На ногу свело!"],
+            "25/17": ["25/17"],
+        },
+        album_payload_cache=album_payload_cache,
+        album_serializer=lambda current_album: {
+            "name": current_album.name,
+            "album_artist": current_album.album_artist,
+        },
+    )
+
+    assert groups == [
+        {
+            "artist": "На ногу свело!",
+            "artist_display": "На ногу свело!",
+            "albums": [
+                {
+                    "name": "Хочу бороться",
+                    "album_artist": "На ногу свело!",
+                    "artist_relationship": "owned",
+                },
+            ],
+        },
+        {
+            "artist": "25/17",
+            "artist_display": "25/17",
+            "albums": [
+                {
+                    "name": "Хочу бороться",
+                    "album_artist": "На ногу свело!",
+                    "artist_relationship": "featured",
+                },
+            ],
+        },
+    ]
+    assert album_payload_cache == {
+        "want-to-fight": {
+            "name": "Хочу бороться",
+            "album_artist": "На ногу свело!",
+        },
+    }
+    assert groups[0]["albums"][0] is not groups[1]["albums"][0]
 
 
 def test_build_artist_membership_groups_keeps_distinct_payloads_for_multiple_keyless_albums():
@@ -488,8 +554,8 @@ def test_build_artist_membership_groups_keeps_distinct_payloads_for_multiple_key
             "artist": "Mono",
             "artist_display": "Mono",
             "albums": [
-                {"name": "First Release"},
-                {"name": "Second Release"},
+                {"name": "First Release", "artist_relationship": "owned"},
+                {"name": "Second Release", "artist_relationship": "owned"},
             ],
         },
     ]

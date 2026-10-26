@@ -26,6 +26,12 @@ def _load_checkpoint():
     return module
 
 
+def test_checkpoint_preserves_generated_preview_storage_migration_seed():
+    checkpoint = _load_checkpoint()
+
+    assert ("app", "generated_preview_storage") in checkpoint.MIGRATION_OWNED_TABLES
+
+
 class _Transaction:
     def __init__(self, events: list[str]):
         self.events = events

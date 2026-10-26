@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const performanceRunner = require('../../scripts/run-performance-playwright.cjs');
+const { resolveTimingBudget } = require('../../scripts/performance-times-contract.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const performanceContract = JSON.parse(fs.readFileSync(
@@ -21,6 +22,7 @@ const performanceConfigs = new Set([
   'playwright.performance.config.cjs',
   'playwright.scan-performance.config.cjs',
 ]);
+const artistFamilyBudget = resolveTimingBudget('artist-family.treeNealSelectionMs', 'ci');
 
 function usePreloadedFixtureEnv(t, targetName) {
   const target = performanceRunner.PERFORMANCE_TARGETS[targetName];
@@ -101,7 +103,7 @@ function runArtistFamilyCiPolicy(t, attempts) {
       });
     }
     if (normalizedPath.endsWith('/artistFamilyLocal/latest-run.json')) {
-      const passed = attempt.actual <= 850;
+      const passed = attempt.actual <= artistFamilyBudget.hardCeiling;
       return JSON.stringify({
         runId: `artist-family-attempt-${activeAttempt}`,
         caseId: performanceRunner.PERFORMANCE_TARGETS['artist-family'].metricCasePattern,
@@ -117,13 +119,13 @@ function runArtistFamilyCiPolicy(t, attempts) {
               contractName: 'ci',
               units: 'ms',
               actual: attempt.actual,
-              targetMaximum: 650,
-              graceMs: 200,
-              hardCeiling: 850,
-              allowedMaximum: 850,
+              targetMaximum: artistFamilyBudget.targetMaximum,
+              graceMs: artistFamilyBudget.graceMs,
+              hardCeiling: artistFamilyBudget.hardCeiling,
+              allowedMaximum: artistFamilyBudget.hardCeiling,
               passed,
               performanceStatus: passed
-                ? (attempt.actual <= 650 ? 'target-met' : 'grace-used')
+                ? (attempt.actual <= artistFamilyBudget.targetMaximum ? 'target-met' : 'grace-used')
                 : 'hard-fail',
             }],
           },
@@ -161,10 +163,16 @@ test('performance runner mirrors the reviewed target inventory and approved fixt
   for (const [name, contractTarget] of contractTargets) {
     const runnerTarget = runnerTargets.get(name);
     assert.equal(runnerTarget.fixtureProfile, contractTarget.fixtureProfile, name);
-    assert.equal(runnerTarget.specPath, contractTarget.cases[0].test, name);
+    for (const ownedCase of contractTarget.cases) {
+      assert.equal(
+        ownedCase.test === runnerTarget.specPath
+          || ownedCase.test.startsWith(`${runnerTarget.specPath}/`),
+        true,
+        `${name}: ${ownedCase.test}`,
+      );
+    }
   }
 });
-
 test('every discovered performance case has reviewed ownership selected by its runner target', () => {
   const discoveredCases = new Set(
     testDataMatrix
@@ -235,7 +243,7 @@ test('every reviewed performance target invokes Playwright with one worker', () 
 
 test('a passing first performance run completes without recovery', (t) => {
   const result = runArtistFamilyCiPolicy(t, [
-    { processStatus: 0, actual: 800 },
+    { processStatus: 0, actual: 200 },
   ]);
 
   assert.deepEqual(result.attemptRecords.map((record) => record.attemptNumber), [1]);
@@ -286,8 +294,8 @@ test('a missing-metrics failure is authoritative and does not trigger timing rec
 
 test('a valid CI timing hard failure recovers on attempt two and retains both attempts', (t) => {
   const result = runArtistFamilyCiPolicy(t, [
-    { processStatus: 1, actual: 851 },
-    { processStatus: 0, actual: 800 },
+    { processStatus: 1, actual: 301 },
+    { processStatus: 0, actual: 200 },
   ]);
 
   assert.deepEqual(result.attemptRecords.map((record) => record.attemptNumber), [1, 2]);
@@ -300,9 +308,9 @@ test('a valid CI timing hard failure recovers on attempt two and retains both at
 
 test('a valid CI timing hard failure may recover on the final third attempt', (t) => {
   const result = runArtistFamilyCiPolicy(t, [
-    { processStatus: 1, actual: 851 },
-    { processStatus: 1, actual: 900 },
-    { processStatus: 0, actual: 650 },
+    { processStatus: 1, actual: 301 },
+    { processStatus: 1, actual: 350 },
+    { processStatus: 0, actual: 100 },
   ]);
 
   assert.deepEqual(result.attemptRecords.map((record) => record.attemptNumber), [1, 2, 3]);
@@ -314,9 +322,9 @@ test('a valid CI timing hard failure may recover on the final third attempt', (t
 
 test('three valid CI timing hard failures are terminal', (t) => {
   const result = runArtistFamilyCiPolicy(t, [
-    { processStatus: 1, actual: 851 },
-    { processStatus: 1, actual: 900 },
-    { processStatus: 1, actual: 1000 },
+    { processStatus: 1, actual: 301 },
+    { processStatus: 1, actual: 350 },
+    { processStatus: 1, actual: 400 },
   ]);
 
   assert.deepEqual(result.attemptRecords.map((record) => record.attemptNumber), [1, 2, 3]);
@@ -325,4 +333,3 @@ test('three valid CI timing hard failures are terminal', (t) => {
   assert.equal(result.finalStatus, 'failed');
   assert.equal(result.recoveryUsed, true);
 });
-

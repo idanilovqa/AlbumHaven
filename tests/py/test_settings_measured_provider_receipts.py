@@ -117,6 +117,39 @@ def test_sent_unconfirmed_receipt_survives_next_sequence_without_resubmission(le
     assert rows(ledger)[0]['metadata']['source_payload']['scrobble_submission_state'] in ('sent','uncertain')
 
 
+def test_retry_receipt_survives_higher_sequence_resume_after_pause(ledger):
+    owner = ledger['own']
+    paused = payload(ledger, finalized=False)
+    stored = history.append_listen_history_entry(
+        ledger['config'], paused,
+        account_id=owner['account_id'], library_id=owner['library_id'],
+    )
+    receipt = {
+        'scrobble_retry_count': 3,
+        'scrobble_retry_exhausted': True,
+        'scrobble_reauthentication_required': True,
+    }
+    history.update_listen_history_entry(
+        ledger['config'], stored['id'], receipt,
+        account_id=owner['account_id'], library_id=owner['library_id'],
+    )
+
+    resumed = {
+        **paused,
+        'sequence': 2,
+        'measured_listened_seconds': 75,
+        'max_measured_contiguous_seconds': 70,
+        'finalized': True,
+    }
+    history.append_listen_history_entry(
+        ledger['config'], resumed,
+        account_id=owner['account_id'], library_id=owner['library_id'],
+    )
+
+    source_payload = rows(ledger)[0]['metadata']['source_payload']
+    assert {key: source_payload[key] for key in receipt} == receipt
+
+
 @pytest.mark.parametrize('code', [11, 16, 29, 9])
 def test_explicit_provider_rejection_can_retry_without_duplicating_acceptance(ledger, monkeypatch, code):
     from music_app.services.lastfm import LastfmError

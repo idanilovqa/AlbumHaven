@@ -47,11 +47,15 @@ test('FTC-GALLERY-030 counts each Mulan soundtrack track once across artist cred
     await searchToolbarActions.waitForQuery('');
     await navigationPanelActions.selectSidebarArtistByName(ARTIST);
     await navigationPanelActions.waitForSidebarSelection(ARTIST);
-    await galleryActions.waitForAlbumVisible(ALBUM);
+    await galleryActions.waitForSelectedArtistGallery(ARTIST, { queryValue: '' });
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.scrollToAlbumUnderHeading(ARTIST, ALBUM);
+    await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
     await checkCard();
     await page.reload();
     await galleryActions.waitForGalleryReady();
-    await galleryActions.waitForAlbumVisible(ALBUM);
+    await galleryActions.scrollToAlbumUnderHeading(ARTIST, ALBUM);
+    await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
     await checkCard();
   });
 });

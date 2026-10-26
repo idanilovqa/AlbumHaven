@@ -226,7 +226,11 @@ def _post_lastfm(config: dict[str, Any], method: str, params: dict[str, Any]) ->
     api_secret = str(config.get("LASTFM_API_SECRET") or "").strip()
     api_root = str(config.get("LASTFM_API_ROOT") or "").strip()
     if not api_key or not api_secret or not api_root:
-        raise LastfmError("Last.fm API credentials are not configured on the server.")
+        raise LastfmError(
+            "Last.fm API credentials are not configured on the server.",
+            retryable=True,
+            error_kind="configuration_error",
+        )
 
     payload = {
         "method": method,

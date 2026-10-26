@@ -8,8 +8,12 @@ import uuid
 
 VERSION = "rendered-pcm-v1"
 SOURCE = "rendered_local_listen_session"
-_SERVER_FIELDS = {"id", "recorded_at", "scrobbled", "scrobble_error",
-                  "scrobble_retryable", "sync_problem"}
+_SERVER_FIELDS = {
+    "id", "recorded_at", "scrobbled", "scrobble_error", "scrobble_retryable",
+    "scrobble_reauthentication_required", "scrobble_submission_state",
+    "scrobble_retry_count", "scrobble_retry_exhausted", "last_scrobble_attempt_at",
+    "scrobbled_at", "sync_problem",
+}
 _HANDOFF_FINGERPRINT_DOMAIN = b"album-haven:playback-handoff-completion:v1:json\0"
 NO_HANDOFF_COMPLETION_DIGEST = hashlib.sha256(
     b"album-haven:playback-handoff-completion:v1:null"
@@ -20,6 +24,70 @@ class MeasuredListenError(ValueError):
     def __init__(self, message, status_code=400):
         super().__init__(message)
         self.status_code = status_code
+
+
+def _is_nonnegative_number(value):
+    if type(value) not in (int, float) or value < 0:
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def validate_playback_completion(entry):
+    """Reject malformed measured-completion JSON before any coercion."""
+    if not isinstance(entry, dict):
+        raise MeasuredListenError("Invalid playback completion")
+
+    string_fields = (
+        "path", "track_ref", "title", "track", "artist", "album", "album_artist",
+        "albumArtist", "cover_path", "track_number", "trackNumber", "started_at",
+        "ended_at", "completion_reason", "measurement_version", "device_id", "session_id",
+        "library_track_id", "canonical_track_id", "canonical_release_id",
+        "client_kind", "origin_type", "origin_id", "clientId", "clientSurface",
+        "claimToken",
+    )
+    numeric_fields = (
+        "duration_seconds", "duration", "started_at_unix", "timestamp",
+        "total_listened_seconds",
+        "max_contiguous_seconds", "measured_listened_seconds",
+        "max_measured_contiguous_seconds",
+    )
+    boolean_fields = (
+        "finalized", "finished_fully", "skipped", "scrobble_eligible", "scrobbled",
+    )
+    if any(key in entry and type(entry[key]) is not str for key in string_fields):
+        raise MeasuredListenError("Invalid playback completion")
+    if any(key in entry and not _is_nonnegative_number(entry[key]) for key in numeric_fields):
+        raise MeasuredListenError("Invalid playback completion")
+    if "sequence" in entry and (
+        type(entry["sequence"]) is not int
+        or not 0 <= entry["sequence"] <= 2**63 - 1
+    ):
+        raise MeasuredListenError("Invalid playback completion")
+    if any(key in entry and type(entry[key]) is not bool for key in boolean_fields):
+        raise MeasuredListenError("Invalid playback completion")
+
+    if "segments" in entry:
+        segments = entry["segments"]
+        if type(segments) is not list:
+            raise MeasuredListenError("Invalid playback completion")
+        for segment in segments:
+            if type(segment) is not dict or set(segment) != {"start_seconds", "end_seconds"}:
+                raise MeasuredListenError("Invalid playback completion")
+            start = segment["start_seconds"]
+            end = segment["end_seconds"]
+            if (not _is_nonnegative_number(start) or not _is_nonnegative_number(end)
+                    or end < start):
+                raise MeasuredListenError("Invalid playback completion")
+
+    if "request_origin" in entry:
+        origin = entry["request_origin"]
+        fields = {"client_kind", "origin_type", "origin_id"}
+        if (type(origin) is not dict or set(origin) != fields
+                or any(type(origin[key]) is not str for key in fields)):
+            raise MeasuredListenError("Invalid playback completion")
 
 
 def normalize_measurement(entry, *, account_id, library_id):
@@ -114,7 +182,7 @@ def append_measured(adapter, entry, *, account_id, library_id, connection=None):
                     or (current["finalized"] and not item["finalized"])):
                 raise MeasuredListenError("Listen counters cannot regress", 409)
             # Provider state belongs to the server's exact-row update path.
-            for key in ("scrobbled", "scrobble_error", "scrobble_retryable", "sync_problem", "scrobble_submission_state"):
+            for key in _SERVER_FIELDS:
                 if key in previous:
                     item[key] = previous[key]
         item.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())

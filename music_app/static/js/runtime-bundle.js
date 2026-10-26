@@ -22,6 +22,9 @@
     return '';
   };
 
+  const readSessionCsrfCookie = () => readCookie(csrfCookieName);
+  window.readSessionCsrfCookie = readSessionCsrfCookie;
+
   const fetchSameOriginRead = async (input, init) => {
     try {
       return await originalFetch(input, init);
@@ -46,7 +49,7 @@
         : originalFetch(input, init);
     }
     if (url.origin !== window.location.origin) return originalFetch(input, init);
-    const csrfToken = readCookie(csrfCookieName);
+    const csrfToken = readSessionCsrfCookie();
     if (!csrfToken) {
       return originalFetch(input, init);
     }
@@ -359,7 +362,9 @@ const DEFAULT_STATUS_STATE = Object.freeze({
   relations_phase: 'Idle',
   relations_source: 'local',
   covers_in_progress: false,
+  covers_cancelable: false,
   covers_processed: 0,
+  covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
   covers_current_folder: '',
@@ -1334,6 +1339,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       source.initial_view_partial,
       initialViewPartialFallback,
     ),
+    gallery_page: isRuntimePlainObject(source.gallery_page) ? { ...source.gallery_page } : null,
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
@@ -1405,6 +1411,17 @@ function buildSelectedArtistChronologicalArtistGroups(primaryGroups = [], family
   }];
 }
 
+function expandCompactSelectedArtistGroups(payload) {
+  if (!payload || payload.artist_groups_from_selected_sections !== true
+      || Array.isArray(payload.artist_groups)) return payload;
+  payload.artist_groups = buildSelectedArtistRuntimeArtistGroups(
+    payload,
+    Array.isArray(payload.primary_artist_groups) ? payload.primary_artist_groups : [],
+    Array.isArray(payload.family_artist_groups) ? payload.family_artist_groups : [],
+  );
+  return payload;
+}
+
 function buildSelectedArtistRuntimeArtistGroups(view, primaryGroups = [], familyGroups = []) {
   if (normalizeRuntimeSelectedArtistFamilyDisplayMode(view?.selected_artist_family_display_mode ?? view?.artist_page?.family_display_mode) === 'chronological') {
     return buildSelectedArtistChronologicalArtistGroups(primaryGroups, familyGroups);
@@ -1442,7 +1459,9 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
     relations_phase: normalizeRuntimeString(source.relations_phase, base.relations_phase),
     relations_source: normalizeRuntimeString(source.relations_source, base.relations_source),
     covers_in_progress: normalizeRuntimeBoolean(source.covers_in_progress, base.covers_in_progress),
+    covers_cancelable: normalizeRuntimeBoolean(source.covers_cancelable, base.covers_cancelable),
     covers_processed: normalizeRuntimeNumber(source.covers_processed, base.covers_processed),
+    covers_completed: normalizeRuntimeNumber(source.covers_completed, normalizeRuntimeNumber(source.covers_processed, base.covers_processed)),
     covers_total: normalizeRuntimeNumber(source.covers_total, base.covers_total),
     covers_downloaded: normalizeRuntimeNumber(source.covers_downloaded, base.covers_downloaded),
     covers_current_folder: normalizeRuntimeString(source.covers_current_folder, base.covers_current_folder),
@@ -1464,6 +1483,7 @@ function normalizeBootstrapPayload(payload, fallbackBootstrap = null) {
       scanMode: 'idle',
       relationsInProgress: false,
     coversInProgress: false,
+  coversCancelable: false,
     partialView: false,
     ...(isRuntimePlainObject(defaults) ? defaults : {}),
     ...(isRuntimePlainObject(fallbackBootstrap) ? fallbackBootstrap : {}),
@@ -1546,6 +1566,7 @@ function normalizeBootstrapPayload(payload, fallbackBootstrap = null) {
     scanMode: normalizeRuntimeString(source.scanMode, base.scanMode),
     relationsInProgress: normalizeRuntimeBoolean(source.relationsInProgress, base.relationsInProgress),
     coversInProgress: normalizeRuntimeBoolean(source.coversInProgress, base.coversInProgress),
+    coversCancelable: normalizeRuntimeBoolean(source.coversCancelable, base.coversCancelable),
     partialView: normalizeRuntimeBoolean(source.partialView, base.partialView),
     startupPreview: {
       ...startupPreviewBase,
@@ -1708,6 +1729,29 @@ function applyViewPayload(payload, options = {}) {
       ? nextView.loaded_library_categories
       : previousView.non_album_library_categories || nextView.loaded_library_categories)
   )];
+  const previousNonAlbumCategories = previousView.non_album_library_categories
+    || previousView.loaded_library_categories || previousView.visible_library_categories || [];
+  const nextNonAlbumCategories = nextView.non_album_library_categories
+    || nextView.loaded_library_categories || nextView.visible_library_categories || [];
+  const sameNonAlbumScope = (
+    String(previousView.selected_artist || '').trim() === String(nextView.selected_artist || '').trim()
+    && String(previousView.query || '').trim() === String(nextView.query || '').trim()
+    && previousNonAlbumCategories.length === nextNonAlbumCategories.length
+    && previousNonAlbumCategories.every((category) => nextNonAlbumCategories.includes(category))
+  );
+  if (
+    nextView.non_album_tracks_deferred
+    && !previousView.non_album_tracks_deferred
+    && (
+      previousView.non_album_tracks?.length
+      || previousView.library_non_album_tracks?.length
+    )
+    && sameNonAlbumScope
+  ) {
+    nextView.non_album_tracks = previousView.non_album_tracks;
+    nextView.library_non_album_tracks = previousView.library_non_album_tracks;
+    nextView.non_album_tracks_deferred = false;
+  }
   if (nextView.gallery_page && !options.rootGalleryContinuation && !nextPayload?.gallery_page_scope) {
     // Source hydration may retain the navigation URL. Continuations must follow
     // the actual loaded page scope, not those retained browser parameters.
@@ -1764,9 +1808,11 @@ function applyViewPayload(payload, options = {}) {
       && String(nextView.selected_artist || '').trim(),
     );
     const selectedArtistChanged = Boolean(selectionChanged && nextSelectedArtist);
-    state.ui.pendingSidebarRevealArtist = (clearedSearchWithSelection || selectedArtistChanged)
-      ? String(nextView.selected_artist || '')
-      : '';
+    if (clearedSearchWithSelection || selectedArtistChanged) {
+      state.ui.pendingSidebarRevealArtist = String(nextView.selected_artist || '');
+    } else if (!nextSelectedArtist) {
+      state.ui.pendingSidebarRevealArtist = '';
+    }
   }
   state.view = nextView;
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
@@ -1827,8 +1873,12 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
-  state.loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
-  if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
+  const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
+  const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
+  state.loopCreateAllowed = loopCreateAllowed;
+  if (loopCreateCapabilityChanged && typeof syncLoopCreateCapability === 'function') {
+    syncLoopCreateCapability();
+  }
   return nextStatus;
 }
 
@@ -2077,10 +2127,21 @@ function buildApiUrl(view, options = {}) {
       .some(key => params.has(key))) {
     params.set('gallery_page_size', '50');
   }
+  const galleryAnchorArtist = String(options.galleryAnchorArtist || '').trim();
+  if (galleryAnchorArtist) params.set('gallery_anchor_artist', galleryAnchorArtist);
   if (options.omitSidebar) params.set('omit_sidebar', '1');
   if (options.rootSidebar) params.set('root_sidebar', '1');
   if (String(options.payloadTier || '').trim()) {
     params.set('payload_tier', String(options.payloadTier).trim());
+  } else if (resolvedSurface === 'albums' && view.selected_artist && !view.query && !options.rootSidebar) {
+    params.set('payload_tier', 'gallery_summary');
+  } else if (
+    options.rootFullPayload
+    && resolvedSurface === 'albums'
+    && !view.query
+    && !view.selected_artist
+  ) {
+    params.set('payload_tier', 'full');
   }
   const qs = params.toString();
   return `/view-data${qs ? `?${qs}` : ''}`;
@@ -2145,6 +2206,162 @@ function pushBrowserViewState(view, stateSnapshot = view) {
 }
 
 // END js/runtime/browser-navigation-helpers.js
+
+// BEGIN js/runtime/discovery-center-navigation.js
+
+/* Discovery Center owns tab navigation inside its mounted shell page. */
+(() => {
+  'use strict';
+
+  function create({ document, window, fetch, DOMParser }) {
+    if (!document.querySelector('[data-discovery-center-page-kind]')) return null;
+    const historyPositionKey = 'albumHavenDiscoveryPosition';
+    const readHistoryPosition = () => Number.isSafeInteger(window.history.state?.[historyPositionKey])
+      ? window.history.state[historyPositionKey] : null;
+    let currentPosition = readHistoryPosition() ?? 0;
+    window.history.replaceState({
+      ...window.history.state,
+      [historyPositionKey]: currentPosition,
+    }, '', window.location.href);
+    let currentUrl = window.location.href;
+    let restoringPosition = null;
+    let sequence = 0;
+    let pending = null;
+
+    const resolveUrl = (value) => {
+      try {
+        const url = new URL(value, window.location.href);
+        return url.origin === window.location.origin && url.pathname === '/news' ? url : null;
+      } catch (_error) {
+        return null;
+      }
+    };
+
+    const setBusy = (busy) => {
+      const page = document.querySelector('[data-discovery-center-page-kind]');
+      if (!page) return;
+      if (busy) page.setAttribute('aria-busy', 'true');
+      else page.removeAttribute('aria-busy');
+    };
+
+    async function navigate(value, { historyMode = 'push' } = {}) {
+      const url = resolveUrl(value);
+      if (!url) return false;
+      const ownSequence = ++sequence;
+      pending?.abort();
+      pending = new AbortController();
+      setBusy(true);
+      try {
+        const response = await fetch(url.href, {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { Accept: 'text/html' },
+          signal: pending.signal,
+        });
+        if (ownSequence !== sequence) return false;
+        const responseUrl = new URL(response.url || url.href, url.href);
+        const loginRedirect = response.redirected
+          && responseUrl.origin === window.location.origin
+          && responseUrl.pathname === '/login';
+        if (response.status === 401 || loginRedirect) {
+          window.location.assign('/login');
+          return false;
+        }
+        const destination = resolveUrl(responseUrl.href);
+        if (!response.ok || !destination
+          || !response.headers.get('content-type')?.includes('text/html')) {
+          throw new Error('Discovery Center request failed.');
+        }
+        const parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
+        if (ownSequence !== sequence) return false;
+        const incoming = parsed.querySelector('[data-discovery-center-page-kind]');
+        const current = document.querySelector('[data-discovery-center-page-kind]');
+        if (!incoming || !current) throw new Error('Discovery Center content is missing.');
+        current.replaceWith(incoming);
+        document.title = parsed.title || document.title;
+        if (historyMode === 'push') {
+          window.history.pushState({
+            ...window.history.state,
+            [historyPositionKey]: currentPosition + 1,
+          }, '', destination.href);
+        } else if (historyMode === 'replace') {
+          window.history.replaceState({
+            ...window.history.state,
+            [historyPositionKey]: currentPosition,
+          }, '', destination.href);
+        }
+        currentPosition = readHistoryPosition() ?? currentPosition;
+        currentUrl = destination.href;
+        return true;
+      } catch (error) {
+        if (ownSequence === sequence && error.name !== 'AbortError') {
+          console.error('[AlbumHaven] Discovery Center navigation failed.', error);
+          window.showToast?.('Discovery Center could not be loaded. Please try again.');
+        }
+        return false;
+      } finally {
+        if (ownSequence === sequence) {
+          pending = null;
+          setBusy(false);
+        }
+      }
+    }
+
+    const onClick = (event) => {
+      if (event.defaultPrevented || event.button !== 0
+        || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const link = event.target?.closest?.('[data-discovery-center-page-kind] a[href]');
+      if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
+      const url = resolveUrl(link.href);
+      if (!url) return;
+      event.preventDefault();
+      void navigate(url.href);
+    };
+
+    const onPopState = async (event) => {
+      const url = resolveUrl(window.location.href);
+      if (!url) return;
+      event.stopImmediatePropagation?.();
+      if (restoringPosition !== null) {
+        if (readHistoryPosition() === restoringPosition) {
+          currentPosition = restoringPosition;
+          currentUrl = window.location.href;
+          restoringPosition = null;
+        }
+        return;
+      }
+      const targetPosition = readHistoryPosition();
+      const priorPosition = currentPosition;
+      if (await navigate(url.href, { historyMode: 'none' })) {
+        currentPosition = targetPosition ?? priorPosition;
+        currentUrl = url.href;
+        return;
+      }
+      if (targetPosition !== null && targetPosition !== priorPosition) {
+        restoringPosition = priorPosition;
+        window.history.go(priorPosition - targetPosition);
+      } else {
+        window.history.replaceState(window.history.state, '', currentUrl);
+      }
+    };
+
+    document.addEventListener('click', onClick);
+    window.addEventListener('popstate', onPopState, true);
+    return { navigate };
+  }
+
+  window.AlbumHavenDiscoveryNavigation = { create };
+  if (typeof document !== 'undefined') {
+    window.AlbumHavenDiscoveryNavigation.instance = create({
+      document,
+      window,
+      fetch: window.fetch?.bind(window) || fetch,
+      DOMParser: window.DOMParser || DOMParser,
+    });
+  }
+})();
+
+// END js/runtime/discovery-center-navigation.js
 
 // BEGIN js/runtime/browser-storage-helpers.js
 
@@ -2842,6 +3059,14 @@ function formatDurationCompact(totalSeconds) {
 }
 
 
+function scanStageElapsedDetail(data = {}, stage = '') {
+  const elapsed = stage === 'covers'
+    ? Number(data.covers_elapsed_seconds)
+    : Number(data.scan_stage_elapsed_seconds?.[stage]);
+  return Number.isFinite(elapsed) ? `elapsed ${formatDurationCompact(elapsed)}` : '';
+}
+
+
 function buildScanEstimateParts(data = {}) {
   const parts = [];
   const remainingSeconds = Number(data.scan_estimated_remaining_seconds || 0);
@@ -2855,7 +3080,7 @@ function buildScanEstimateParts(data = {}) {
     parts.push(`elapsed ${formatDurationCompact(elapsedSeconds)}`);
   }
   if (albumFoldersTotal > 0) {
-    parts.push(`${albumFoldersProcessed} of ${albumFoldersTotal} album folders`);
+    parts.push(`${albumFoldersProcessed} of ${albumFoldersTotal} albums`);
   }
   return parts;
 }
@@ -2910,12 +3135,17 @@ function buildLoaderStatusLines(data, options = {}) {
       detail: `${Number(data.relations_processed || 0)} of ${Number(data.relations_total || 0)} artists (${data.relations_source || 'local'})`,
     });
   }
-  if (data.covers_in_progress) {
+  if (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished')) {
     const currentFolder = String(data.covers_current_folder || '').split(/[\\/]/).pop();
     lines.push({
-      title: 'Updating cover art',
-      detail: `${Number(data.covers_processed || 0)} of ${Number(data.covers_total || 0)} folders checked${currentFolder ? ` - ${currentFolder}` : ''}`,
+      title: data.covers_in_progress ? (data.covers_phase === 'preparing' ? 'Preparing cover search' : 'Fetching covers')
+        : data.covers_outcome === 'failed' ? 'Cover search failed'
+        : data.covers_outcome === 'cancelled' ? 'Cover search cancelled' : 'Cover search finished',
+      detail: buildCoverProgressDetail(data, currentFolder),
     });
+    if (data.covers_phase !== 'preparing' && !data.status_connection_lost && data.covers_spotify_quota_exceeded) {
+      lines.push({ title: 'Spotify', detail: 'Spotify quota reached — skipped for this run' });
+    }
   }
   if (!lines.length) {
     lines.push(options.scanPageVisible ? {
@@ -2929,9 +3159,52 @@ function buildLoaderStatusLines(data, options = {}) {
   return lines;
 }
 
+function buildCoverProgressDetail(data, currentAlbum = '') {
+  if (data.status_connection_lost) return 'Progress unavailable — reconnecting. Last reported counts may be outdated.';
+  const total = Number(data.covers_total);
+  const processed = Number(data.covers_completed ?? data.covers_processed);
+  const known = Number.isFinite(total) && total > 0 && Number.isFinite(processed) && processed >= 0;
+  const parts = [data.covers_phase === 'preparing' ? 'Preparing cover search' : known
+    ? `${processed} of ${total} albums checked (${Math.min(100, Math.round(processed / total * 100))}%)`
+    : data.covers_outcome === 'completed' && total === 0 ? 'No albums needed a cover search' : 'Progress unavailable'];
+  if (Number.isFinite(Number(data.covers_downloaded)) && data.covers_downloaded != null) {
+    parts.push(`${Number(data.covers_downloaded)} covers fetched`);
+  }
+  if (data.covers_outcome === 'failed') parts.unshift('Cover search failed');
+  if (data.covers_outcome === 'cancelled') parts.unshift('Cover search cancelled');
+  if (data.covers_elapsed_seconds != null && Number.isFinite(Number(data.covers_elapsed_seconds))) {
+    parts.push(`elapsed ${formatDurationCompact(data.covers_elapsed_seconds)}`);
+  }
+  const eta = Number(data.covers_estimated_remaining_seconds);
+  if (data.covers_in_progress && data.covers_phase !== 'preparing') {
+    parts.push(data.covers_estimated_remaining_seconds != null && Number.isFinite(eta) && eta >= 0
+      ? `ETA ${formatDurationCompact(eta)}` : 'ETA calculating…');
+  }
+  if (currentAlbum) parts.push(currentAlbum);
+  return parts.join(' · ');
+}
+
 // END js/runtime/loader-status-helpers.js
 
 // BEGIN js/runtime/status-ui-helpers.js
+
+let lastStatusPresentationSignature = null;
+
+function stableStatusPresentationSignature(value) {
+  const normalize = (current) => {
+    if (Array.isArray(current)) return current.map(normalize);
+    if (!current || typeof current !== 'object') return current;
+    return Object.keys(current).sort().reduce((result, key) => {
+      result[key] = normalize(current[key]);
+      return result;
+    }, {});
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function invalidateStatusIndicatorPresentation() {
+  lastStatusPresentationSignature = null;
+}
 
 function buildStatusIndicatorTitleParts(data = {}) {
   const progressText = {
@@ -2975,11 +3248,14 @@ function buildStatusIndicatorTitleParts(data = {}) {
     }
     parts.push(`${data.relations_phase}: ${Number(data.relations_processed || 0)} / ${Number(data.relations_total || 0)} (${data.relations_source})`);
   }
-  if (data.covers_in_progress) {
+  if (data.covers_in_progress && data.covers_phase === 'preparing') {
+    parts.push('Preparing cover search');
+  } else if (data.covers_in_progress) {
     if (!progressText.value) {
-      progressText.value = `${Number(data.covers_processed || 0)} / ${Number(data.covers_total || 0)}`;
+      progressText.value = `${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)}`;
     }
-    parts.push(`Updating cover art: ${Number(data.covers_processed || 0)} / ${Number(data.covers_total || 0)} covers updated`);
+    parts.push(`Updating cover art: ${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)} cover searches completed`);
+    if (data.covers_spotify_quota_exceeded) parts.push('Spotify quota reached — skipped for this run');
     parts.push(`Downloaded covers: ${Number(data.covers_downloaded || 0)}`);
     if (data.covers_current_folder) {
       parts.push(`Current album folder: ${data.covers_current_folder}`);
@@ -3133,15 +3409,16 @@ function syncStatusContextMenu() {
   if (!fetchOrCancelButton) return menu;
   const scanBusy = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress);
   const coverBusy = Boolean(state.status?.covers_in_progress);
+  const coverCancelable = Boolean(state.status?.covers_cancelable);
   const coverQueued = Boolean(state.status?.pending_cover_refresh_after_scan);
   const initialFullScanBusy = scanBusy && Number(state.status?.album_total || 0) <= 0;
-  if (coverBusy) {
+  if (coverBusy && coverCancelable) {
     syncStatusContextButtonPresentation(fetchOrCancelButton, {
       action: 'cancel-cover-scan',
       label: 'Cancel Album Cover Scan',
       disabled: false,
     });
-  } else if (coverQueued) {
+  } else if (coverBusy || coverQueued) {
     syncStatusContextButtonPresentation(fetchOrCancelButton, {
       action: 'fetch-covers-queued',
       label: 'Fetching Covers Is Queued',
@@ -3198,6 +3475,8 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
+  if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
   syncStatusContextMenu();
   const indicator = document.getElementById('scan-indicator');
@@ -3221,6 +3500,7 @@ function updateStatusIndicator(data) {
   }
 
   renderLibraryLoader(normalizedStatus);
+  lastStatusPresentationSignature = presentationSignature;
 }
 
 // END js/runtime/status-ui-helpers.js
@@ -3275,6 +3555,39 @@ const activeErrorToasts = new Map();
 const floatingNotifications = new Map();
 let floatingNotificationCleanup = null;
 let floatingNotificationFrame = null;
+const NOTIFICATION_COLLISION_SURFACE_SELECTOR = '.app-bar, .global-player, [role="dialog"], [aria-modal="true"]';
+const NOTIFICATION_MODAL_CONTROL_SELECTOR = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
+
+function isNotificationModalSurface(node) {
+  const ariaModal = node?.getAttribute?.('aria-modal');
+  return node?.getAttribute?.('role') === 'dialog'
+    || (ariaModal != null && ariaModal !== 'false');
+}
+
+function notificationSurfaceIsHidden(node) {
+  return Boolean(node?.hidden || node?.closest?.('[hidden], [inert], [aria-hidden="true"]'));
+}
+
+function getNotificationCollisionNodes() {
+  const surfaces = Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || []);
+  const fixed = surfaces.filter(node => !isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
+  const activeModal = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node)).at(-1);
+  if (activeModal) fixed.push(...Array.from(activeModal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])
+    .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
+  return fixed;
+}
+
+function getNotificationObservationTargets() {
+  const targets = new Set();
+  for (const surface of Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || [])) {
+    targets.add(surface);
+    if (isNotificationModalSurface(surface) && surface.parentElement
+        && surface.parentElement !== document.body && surface.parentElement !== document.documentElement) {
+      targets.add(surface.parentElement);
+    }
+  }
+  return targets;
+}
 
 function findClearNotificationPosition(size, preferred, viewport, obstacles, gap = 8) {
   const left = viewport.left + gap, top = viewport.top + gap;
@@ -3327,23 +3640,12 @@ function placeFloatingNotifications() {
   const viewport = { left: visual?.offsetLeft || 0, top: visual?.offsetTop || 0 };
   viewport.right = viewport.left + (visual?.width || window.innerWidth);
   viewport.bottom = viewport.top + (visual?.height || window.innerHeight);
-  const isNotification = node => [...floatingNotifications.keys()].some(root => root === node || root.contains(node));
-  const selector = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
-  const obstacles = [];
-  document.querySelectorAll(selector).forEach(node => {
-    if (isNotification(node) || node.matches(':disabled') || node.closest('[inert], [hidden], [aria-hidden="true"], [aria-disabled="true"]')) return;
-    const style = getComputedStyle(node), rect = node.getBoundingClientRect();
-    // Transparent range inputs still receive pointer input over their waveform canvas.
-    if (style.visibility !== 'visible' || !rect.width || !rect.height) return;
+  const obstacles = getNotificationCollisionNodes().flatMap(node => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || !rect.width || !rect.height) return [];
     const left = Math.max(viewport.left, rect.left), right = Math.min(viewport.right, rect.right);
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
-    if (right <= left || bottom <= top) return;
-    const points = [[(left + right) / 2, (top + bottom) / 2], [left + 1, top + 1], [right - 1, top + 1], [left + 1, bottom - 1], [right - 1, bottom - 1]];
-    const visible = points.some(([x, y]) => {
-      const hit = document.elementsFromPoint(x, y).find(element => !isNotification(element));
-      return hit && (hit === node || node.contains(hit));
-    });
-    if (visible) obstacles.push({ left, right, top, bottom });
+    return right > left && bottom > top ? [{ left, right, top, bottom }] : [];
   });
   for (const [node, entry] of floatingNotifications) {
     if (!node.isConnected || node.hidden) { unregisterFloatingNotification(node); continue; }
@@ -3352,8 +3654,8 @@ function placeFloatingNotifications() {
       node.style.setProperty('--notification-available-width', availableWidth);
     }
     let size = { width: node.offsetWidth, height: node.offsetHeight };
-    const centered = entry.origin === 'top-center';
-    const bottom = entry.origin === 'bottom-right';
+    const centered = entry.lane === 'top-center';
+    const bottom = entry.lane === 'bottom-right';
     const playerHeight = entry.abovePlayer ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--player-height')) || 0 : 0;
     const preferred = {
       left: centered ? viewport.left + (viewport.right - viewport.left - size.width) / 2 : viewport.right - size.width - 16,
@@ -3393,17 +3695,19 @@ function placeFloatingNotifications() {
 
 function registerFloatingNotification(node, options = {}) {
   // Keep notification delivery available when the host has no geometry APIs.
-  if (!node?.getBoundingClientRect || !document.elementsFromPoint) { options.onPlaced?.(); return; }
-  floatingNotifications.set(node, { origin: 'top-right', ...options });
+  if (!node?.getBoundingClientRect || !document.querySelectorAll) { options.onPlaced?.(); return; }
+  const lane = options.lane || 'top-right';
+  floatingNotifications.set(node, { ...options, lane });
   node.classList.add('floating-notification-positioned');
+  node.setAttribute('data-notification-lane', lane);
   node.setAttribute('data-notification-deferred', '');
   if (!floatingNotificationCleanup) {
-    const insideNotification = target => [...floatingNotifications.keys()].some(root => root === target || root.contains(target));
-    const mutation = new MutationObserver(records => {
-      if (records.some(record => !insideNotification(record.target))) scheduleFloatingNotificationPlacement();
-    });
-    mutation.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'disabled', 'aria-disabled', 'aria-hidden'] });
+    const mutation = new MutationObserver(scheduleFloatingNotificationPlacement);
     const resize = new ResizeObserver(scheduleFloatingNotificationPlacement);
+    for (const target of getNotificationObservationTargets()) {
+      mutation.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'aria-modal'] });
+      resize.observe(target);
+    }
     floatingNotifications.forEach((_entry, root) => resize.observe(root));
     const targets = [[window, 'resize'], [document, 'scroll'], [document, 'load'], [document.fonts, 'loadingdone'], [window.visualViewport, 'resize'], [window.visualViewport, 'scroll'], [document, 'transitionend'], [document, 'animationend']].filter(([target]) => target);
     targets.forEach(([target, event]) => target.addEventListener(event, scheduleFloatingNotificationPlacement, true));
@@ -3422,6 +3726,7 @@ function unregisterFloatingNotification(node) {
   floatingNotificationCleanup?.resize.unobserve(node);
   floatingNotifications.delete(node);
   node?.classList?.remove('floating-notification-positioned');
+  node?.removeAttribute?.('data-notification-lane');
   node?.removeAttribute?.('data-notification-deferred');
   if (!floatingNotifications.size) { floatingNotificationCleanup?.dispose(); floatingNotificationCleanup = null; }
   else scheduleFloatingNotificationPlacement();
@@ -3457,9 +3762,10 @@ async function dismissLibraryWatcherWarning(button) {
       const response = await fetch('/account/library-warning/dismiss', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
       });
-      if (!response.ok) throw new Error(response.status === 409
-        ? 'The library warning changed. Please review the latest warning.'
-        : 'Unable to dismiss the warning. Please try again.');
+      if (!response.ok) {
+        if (response.status === 409) return false;
+        throw new Error('Unable to dismiss the warning. Please try again.');
+      }
       state.ui.dismissedLibraryWarningToken = token;
       if (libraryWatcherHealth?.warning_token === token) {
         libraryWatcherHealth = { ...libraryWatcherHealth, dismissed: true };
@@ -3523,14 +3829,24 @@ function syncLibraryWatcherWarning(data = {}) {
     }
   });
   layer.appendChild(libraryWatcherWarning);
-  registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });
+  registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });
 }
 
-function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
+function buildFloatingNotificationAlertHtml(
+  message,
+  variant,
+  actionsHtml = '',
+  messageId = '',
+  compact = false,
+  title = '',
+) {
   const severity = normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
-    title: compact ? '' : severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    title: compact
+      ? ''
+      : String(title || '').trim()
+        || (severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update'),
     message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
     className: compact ? 'on-page-alert--compact' : '',
   });
@@ -3554,7 +3870,7 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
   toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
+  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
     scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
       toast.classList.remove('is-visible');
@@ -3573,13 +3889,26 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
   const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
   const showLogHistoryLink = options.logHistoryLink === true
     && (!capabilities || capabilities.allows('library.logs.read'));
-  const actionsHtml = ButtonComponent.renderButton({
-    label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
-  }) + ButtonComponent.renderButton({
-    label: 'Dismiss', className: 'on-page-alert__dismiss',
-    attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
-  });
-  alert.innerHTML = buildFloatingNotificationAlertHtml(options.html ? '' : message, variant, actionsHtml, 'repair-alert-message');
+  const actions = [];
+  if (showLogHistoryLink) {
+    actions.push(ButtonComponent.renderButton({
+      label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
+    }));
+  }
+  if (options.dismissible !== false) {
+    actions.push(ButtonComponent.renderButton({
+      label: 'Dismiss', className: 'on-page-alert__dismiss',
+      attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
+    }));
+  }
+  alert.innerHTML = buildFloatingNotificationAlertHtml(
+    options.html ? '' : message,
+    variant,
+    actions.join(''),
+    'repair-alert-message',
+    false,
+    options.title,
+  );
   const messageEl = document.getElementById('repair-alert-message');
   const logHistoryLink = document.getElementById('repair-alert-log-history');
   if (!messageEl) return;
@@ -3607,7 +3936,7 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
   alert.hidden = false;
   state.repairAlertPresentationVersion = Number(state.repairAlertPresentationVersion || 0) + 1;
   const presentationVersion = state.repairAlertPresentationVersion;
-  registerFloatingNotification(alert, { origin: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
+  registerFloatingNotification(alert, { lane: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
     scheduleBrowserAnimationFrame(() => {
       if (state.repairAlertPresentationVersion !== presentationVersion) return;
       alert.classList.add('is-visible');
@@ -3704,6 +4033,68 @@ function resolveSidebarArtistCount(view = {}, sidebarArtists = []) {
   return sidebarArtists.length;
 }
 
+const SIDEBAR_VIRTUALIZATION_THRESHOLD = 200;
+const SIDEBAR_VIRTUAL_WINDOW_SIZE = 160;
+const SIDEBAR_VIRTUAL_OVERSCAN = 40;
+const SIDEBAR_VIRTUAL_ROW_EXTENT = 47;
+
+function getSidebarVirtualSpacerHeight(rowCount) {
+  return Math.max(0, rowCount * SIDEBAR_VIRTUAL_ROW_EXTENT - 6);
+}
+
+function resolveSidebarVirtualWindow(sidebarArtists = [], options = {}) {
+  const total = sidebarArtists.length;
+  if (total <= SIDEBAR_VIRTUALIZATION_THRESHOLD) {
+    return { virtualized: false, start: 0, end: total, before: 0, after: 0 };
+  }
+  const maxStart = Math.max(0, total - SIDEBAR_VIRTUAL_WINDOW_SIZE);
+  const scrollTop = Math.max(0, Number(options.scrollTop) || 0);
+  const visibleStart = Math.floor(scrollTop / SIDEBAR_VIRTUAL_ROW_EXTENT);
+  const visibleCount = Math.max(
+    1,
+    Math.ceil((Number(options.viewportHeight) || SIDEBAR_VIRTUAL_ROW_EXTENT) / SIDEBAR_VIRTUAL_ROW_EXTENT),
+  );
+  const previousWindow = options.previousWindow;
+  const retainedMargin = Math.floor(SIDEBAR_VIRTUAL_OVERSCAN / 2);
+  if (
+    !options.forceSelected
+    && previousWindow?.virtualized
+    && (previousWindow.start === 0 || visibleStart >= previousWindow.start + retainedMargin)
+    && (
+      previousWindow.end === total
+      || visibleStart + visibleCount <= previousWindow.end - retainedMargin
+    )
+  ) {
+    return {
+      virtualized: true,
+      start: previousWindow.start,
+      end: previousWindow.end,
+      before: getSidebarVirtualSpacerHeight(previousWindow.start),
+      after: getSidebarVirtualSpacerHeight(total - previousWindow.end),
+    };
+  }
+  let start = Math.max(
+    0,
+    visibleStart - SIDEBAR_VIRTUAL_OVERSCAN,
+  );
+  const selectedArtist = String(options.selectedArtist || '').trim();
+  if (options.forceSelected && selectedArtist) {
+    const selectedIndex = sidebarArtists.findIndex(item => String(item?.artist || '') === selectedArtist);
+    if (selectedIndex >= 0) {
+      start = selectedIndex - Math.floor(SIDEBAR_VIRTUAL_WINDOW_SIZE / 2);
+    }
+  }
+  start = Math.min(maxStart, Math.max(0, start));
+  const end = Math.min(total, start + SIDEBAR_VIRTUAL_WINDOW_SIZE);
+  return {
+    virtualized: true,
+    start,
+    end,
+    before: getSidebarVirtualSpacerHeight(start),
+    after: getSidebarVirtualSpacerHeight(total - end),
+  };
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -3716,11 +4107,18 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     ? Boolean(options.allArtistsActiveOverride)
     : Boolean(activeSurface === 'albums' && (view.all_artists_active || (!view.query && !selectedArtist)));
   const renderItem = window.NavigationTree.renderItem;
+  const virtualWindow = options.virtualWindow?.virtualized
+    ? options.virtualWindow
+    : { virtualized: false, start: 0, end: sidebarArtists.length, before: 0, after: 0 };
+  const visibleArtists = sidebarArtists.slice(virtualWindow.start, virtualWindow.end);
   let html = showAllArtistsLink ? renderItem({
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
   }) : '';
-  html += sidebarArtists.map(item => renderItem({
+  if (virtualWindow.virtualized && virtualWindow.before > 0) {
+    html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
+  }
+  html += visibleArtists.map((item, offset) => renderItem({
     label: item.artist_display || item.artist, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
@@ -3728,8 +4126,17 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
       selected_artist: item.artist,
       all_artists_active: Boolean(view.query) ? Boolean(view.all_artists_active) : false,
     }),
-    attributes: { 'data-nav': '1', 'data-sidebar-artist': item.artist },
+    attributes: {
+      'data-nav': '1',
+      'data-sidebar-artist': item.artist,
+      ...(virtualWindow.virtualized
+        ? { 'data-sidebar-virtual-index': virtualWindow.start + offset }
+        : {}),
+    },
   })).join('');
+  if (virtualWindow.virtualized && virtualWindow.after > 0) {
+    html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="after" aria-hidden="true" style="height:${virtualWindow.after}px"></div>`;
+  }
   return html;
 }
 
@@ -3743,7 +4150,10 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
-  return `${showAllArtistsLink}\u001d${artistSignature}`;
+  const virtualWindow = options.virtualWindow?.virtualized
+    ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
+    : 'all';
+  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -3827,7 +4237,8 @@ function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
-  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
+  const focusable = config.focusable === true ? ' tabindex="0"' : '';
+  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
 }
 
 function buildAlertLabelAttributes(attributes = {}) {
@@ -3966,6 +4377,59 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
+const LIBRARY_SOURCE_MARKERS = Object.freeze({
+  hoard: Object.freeze({
+    label: 'Hoard',
+    drawing: '<path d="M5 22v-7A10 10 0 0 1 15 5h18a10 10 0 0 1 10 10v7H5Zm1 0v19h36V22M5 18h38M13 6v12m22-12v12M13 23v17m22-17v17M8 41v3m32-3v3"/><rect x="19" y="21" width="10" height="13" rx="2"/><path d="M21 21v-3a3 3 0 0 1 6 0v3M24 26v3"/><path d="M9 12h.1M39 12h.1M9 28h.1M39 28h.1M9 35h.1M39 35h.1"/>',
+  }),
+  new_arrivals: Object.freeze({
+    label: 'New Arrivals',
+    drawing: '<path d="M17 14a9 9 0 0 1 8-4h11a9 9 0 0 1 9 9v15H27V19a9 9 0 0 0-9-9M27 34h-9M30 34v12m3-12v12M34 15V2h7v4h-7"/><circle cx="16" cy="26" r="11"/><circle cx="16" cy="26" r="3"/><path d="M17 18a8 8 0 0 1 7 7M17 21a5 5 0 0 1 4 4M8 33l-6 5q8 3 16-1"/><path d="m8 5 1.2 3.8L13 10l-3.8 1.2L8 15l-1.2-3.8L3 10l3.8-1.2Z" fill="currentColor" stroke="none"/>',
+  }),
+});
+
+function normalizeLibrarySourceCategories(categories = []) {
+  const values = Array.isArray(categories) ? categories : [];
+  const normalized = new Set(values.map((value) => {
+    const category = String(value || '').trim().toLowerCase();
+    return category === 'main_library' ? 'main' : category;
+  }));
+  return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.has(category));
+}
+
+function resolveAlbumSourceMarkerCategories(album = {}) {
+  const provenance = Array.isArray(album?.root_provenance?.categories)
+    ? album.root_provenance.categories
+    : [];
+  return normalizeLibrarySourceCategories(provenance.length
+    ? provenance
+    : [album?.library_root_category || album?.source || 'main_library']);
+}
+
+function buildLibrarySourceGlyphHtml(category) {
+  const marker = LIBRARY_SOURCE_MARKERS[String(category || '')];
+  return marker
+    ? `<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">${marker.drawing}</svg>`
+    : '';
+}
+
+function buildAlbumSourceMarkerItemsHtml(categories = []) {
+  return normalizeLibrarySourceCategories(categories)
+    .filter((category) => LIBRARY_SOURCE_MARKERS[category])
+    .map((category) => {
+      const marker = LIBRARY_SOURCE_MARKERS[category];
+      return `<span class="album-details-source-marker album-details-source-marker--${category}" role="img" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}</span>`;
+    })
+    .join('');
+}
+
+function buildAlbumCoverSourceMarkersHtml(album = {}) {
+  const items = buildAlbumSourceMarkerItemsHtml(resolveAlbumSourceMarkerCategories(album));
+  return items
+    ? `<div class="album-details-source-markers album-details-cover-source-markers">${items}</div>`
+    : '';
+}
+
 function buildFilterPillHtml(config = {}) {
   const label = String(config.label || '');
   const selected = Boolean(config.selected);
@@ -3984,6 +4448,7 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
+  const isSearch = Boolean(String(config.query ?? (typeof state !== 'undefined' ? state.view?.query : '') ?? '').trim());
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
@@ -3991,7 +4456,7 @@ function buildGalleryBarHtml(config = {}) {
   const summary = isArtist
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
-  const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
+  const info = isArtist && !isSearch ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
   return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
@@ -4025,7 +4490,8 @@ function buildGalleryDividerHtml(config = {}) {
 }
 
 function buildFamilyArtistHeaderHtml(config = {}) {
-  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2><button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+  const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildGalleryRatingHtml(config = {}) {
@@ -4040,10 +4506,11 @@ function buildGalleryRatingHtml(config = {}) {
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
   const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
 
 // END js/runtime/gallery-main-components.js
@@ -4061,7 +4528,8 @@ const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
 function createGalleryMainState(overrides = {}) {
   const galleryState = {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
-    albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
+    albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep', 'compilation'],
+    showFeaturedOn: overrides.showFeaturedOn !== false,
     view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
@@ -4087,6 +4555,8 @@ function reduceGalleryMainState(current, action = {}) {
   const next = createGalleryMainState(current || {});
   if (action.type === 'toggle-source' && Object.hasOwn(next.sources, action.source)) {
     next.sources[action.source] = !next.sources[action.source];
+  } else if (action.type === 'toggle-featured-on') {
+    next.showFeaturedOn = !next.showFeaturedOn;
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -4166,6 +4636,7 @@ function filterGalleryModel({ groups = [], filterState = createGalleryMainState(
     const albums = (Array.isArray(group.albums) ? group.albums : []).filter((album) => (
       resolveGalleryAlbumSources(album).some((source) => filterState.sources?.[source] !== false)
       && selectedTypes.has(classifyGalleryReleaseType(album))
+      && (filterState.showFeaturedOn !== false || String(album.artist_relationship || '').trim().toLowerCase() !== 'featured')
     ));
     return albums.length ? [{ ...group, albums }] : [];
   });
@@ -4273,8 +4744,9 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
   if (view.query) return rootTotals;
   if (filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length
-    || filterState.albumTypes?.length !== 2
-    || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep')
+    || filterState.albumTypes?.length !== 3
+    || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep') || !filterState.albumTypes.includes('compilation')
+    || filterState.showFeaturedOn === false
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
   )) return rootTotals;
@@ -4292,15 +4764,36 @@ function buildGalleryCardHtml(config = {}) {
   const displayMode = ['list', 'cards', 'covers'].includes(config.displayMode) ? config.displayMode : 'cards';
   const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
+  const sourceCategories = normalizeLibrarySourceCategories(config.sourceCategories);
+  const sourceColors = { main: 'var(--gallery-artbox-hover-frame, #fff)', hoard: 'var(--library-source-hoard)', new_arrivals: 'var(--library-source-arrivals)' };
+  const sourceGradient = sourceCategories.length
+    ? `conic-gradient(${sourceCategories.map((category, index) => `${sourceColors[category]} ${index * 100 / sourceCategories.length}% ${(index + 1) * 100 / sourceCategories.length}%`).join(', ')})`
+    : 'none';
+  const sourceAction = (category, label, glyphHtml) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" aria-label="${label}" ${openAttributes}>${glyphHtml}<span>${label}</span></button>`;
+  const sourceActions = [
+    sourceCategories.includes('hoard') ? sourceAction('hoard', 'Hoard', buildLibrarySourceGlyphHtml('hoard')) : '',
+    sourceCategories.includes('new_arrivals') ? sourceAction('new_arrivals', 'New Arrivals', buildLibrarySourceGlyphHtml('new_arrivals')) : '',
+  ].join('');
+  const duplicateAction = config.hasDuplicateFiles
+    ? sourceAction('duplicate', 'Duplicate files', '<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><path d="M24 6 45 42H3Z"/><path d="M24 18v11m0 6v1"/></svg>')
+    : '';
   return `
-    <section class="album-card" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
+    <section class="album-card" data-library-sources="${sourceCategories.join(' ')}" style="--library-source-gradient:${sourceGradient}" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
       </button>
+      ${duplicateAction ? `<div class="gallery-card__source-overlay">${duplicateAction}</div>` : ''}
+      ${sourceActions ? `<div class="gallery-card__source-actions gallery-card__source-actions--artwork">${sourceActions}</div>` : ''}
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
         ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
-        : buildGalleryCardInfoHtml({ ...config, openAttributes })}
+        : buildGalleryCardInfoHtml({
+            ...config,
+            openAttributes,
+            sourceActionsHtml: sourceActions
+            ? `<div class="gallery-card__source-actions gallery-card__source-actions--details">${sourceActions}</div>`
+              : '',
+          })}
     </section>
   `;
 }
@@ -4367,11 +4860,19 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const titleId = escapeHtml(config.titleId || 'track-modal-title');
   const subtitleId = escapeHtml(config.subtitleId || 'track-modal-subtitle');
   const actionHtml = String(config.actionsHtml || '');
+  const qualityAlertHtml = config.poorArtQuality === true
+    ? buildSmallAlertHtml({
+      severity: 'warning',
+      message: 'Poor art quality',
+      className: 'album-details-header__quality-alert',
+      focusable: true,
+    })
+    : '';
   if (variant === 'copy') {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
     const eyebrow = escapeHtml(config.eyebrow || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
@@ -4394,7 +4895,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -4495,11 +4996,25 @@ function syncMobileAlbumComposition(album) {
   overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
   let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
+  let rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
+  const mobileHeader = document.getElementById('mobile-page-header');
+  const freshSourceMarkers = cover.querySelector(':scope > .album-details-cover-source-markers');
+  const retainedSourceMarkers = overview?.querySelector('.album-details-cover-source-markers')
+    || mobileHeader?.querySelector(':scope > .album-details-cover-source-markers');
+  if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
+    retainedSourceMarkers.remove();
+  }
+  const sourceMarkers = freshSourceMarkers || retainedSourceMarkers;
   if (inline && !overview) {
     overview = document.createElement('div');
     overview.className = 'mobile-album-overview';
     cover.before(overview);
     overview.appendChild(cover);
+  }
+  if (inline && !rail) {
+    rail = document.createElement('div');
+    rail.className = 'mobile-album-overview__rail';
+    overview.prepend(rail);
   }
   if (inline && !identity) {
     identity = document.createElement('div');
@@ -4507,6 +5022,11 @@ function syncMobileAlbumComposition(album) {
   }
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
+  if (sourceMarkers) {
+    if (inline && rail) rail.appendChild(sourceMarkers);
+    else if (mobile && mobileHeader) mobileHeader.appendChild(sourceMarkers);
+    else cover.appendChild(sourceMarkers);
+  }
   if (identity) {
     identity.hidden = !inline;
     if (inline) {
@@ -4517,6 +5037,7 @@ function syncMobileAlbumComposition(album) {
         title: album.name || 'Album',
         eyebrow: centered ? [artist, album.year].filter(Boolean).join(' • ') : artist,
         subtitle: centered ? '' : [album.year, album.total_duration_display].filter(Boolean).join(' • '),
+        poorArtQuality: album.poor_art_quality === true,
       });
       // B has exactly two visible lines. Keep the shared header builder unchanged.
       identity.querySelector('.album-details-header__secondary').hidden = centered;
@@ -4907,6 +5428,8 @@ const state = {
   coverLookup: {
     drawerOpen: false,
     tasks: [],
+    notificationCounts: null,
+    tasksNextCursor: null,
     pollingTimer: 0,
     selectionTimer: 0,
     taskOpenSelectionGesture: null,
@@ -5002,6 +5525,73 @@ function getPreferredUserTimeZone() {
   return getDetectedBrowserTimeZone();
 }
 
+function resolveSidebarScrollContainer(sidebarList) {
+  if (
+    sidebarList instanceof HTMLElement
+    && sidebarList.clientHeight > 0
+    && sidebarList.scrollHeight > sidebarList.clientHeight + 1
+  ) {
+    return sidebarList;
+  }
+  const sidebar = sidebarList?.closest?.('.sidebar');
+  return sidebar instanceof HTMLElement ? sidebar : null;
+}
+
+function ensureSidebarVirtualScrollListeners(sidebarList) {
+  if (!(sidebarList instanceof HTMLElement)) return;
+  const sidebar = sidebarList.closest?.('.sidebar');
+  for (const scrollContainer of [sidebarList, sidebar]) {
+    if (
+      !(scrollContainer instanceof HTMLElement)
+      || typeof scrollContainer.addEventListener !== 'function'
+      || scrollContainer.albumHavenSidebarVirtualScrollBound
+    ) continue;
+    scrollContainer.addEventListener('scroll', () => {
+      sidebarList.albumHavenSidebarVirtualScrollTop = scrollContainer.scrollTop;
+      const previousWindow = sidebarList.albumHavenSidebarVirtualWindow;
+      const nextWindow = resolveSidebarVirtualWindow(
+        sidebarList.albumHavenSidebarArtistsSource || [],
+        {
+          scrollTop: scrollContainer.scrollTop,
+          viewportHeight: scrollContainer.clientHeight,
+          previousWindow,
+        },
+      );
+      if (
+        previousWindow
+        && nextWindow.start === previousWindow.start
+        && nextWindow.end === previousWindow.end
+      ) return;
+      if (sidebarList.albumHavenSidebarVirtualRenderScheduled) return;
+      sidebarList.albumHavenSidebarVirtualRenderScheduled = true;
+      scheduleBrowserAnimationFrame(() => {
+        sidebarList.albumHavenSidebarVirtualRenderScheduled = false;
+        renderSidebar();
+      });
+    }, { passive: true });
+    scrollContainer.albumHavenSidebarVirtualScrollBound = true;
+  }
+}
+
+function captureSidebarFocus(sidebarList) {
+  const activeLink = document.activeElement?.closest?.('.artist-link');
+  if (!activeLink || !sidebarList?.contains?.(activeLink)) return null;
+  if (activeLink.getAttribute?.('data-sidebar-all-artists') === '1') {
+    return { allArtists: true, artist: '' };
+  }
+  const artist = String(activeLink.getAttribute?.('data-sidebar-artist') || '');
+  return artist ? { allArtists: false, artist } : null;
+}
+
+function restoreSidebarFocus(sidebarList, focusIdentity) {
+  if (!focusIdentity) return;
+  const link = focusIdentity.allArtists
+    ? sidebarList.querySelector?.('[data-sidebar-all-artists="1"]')
+    : Array.from(sidebarList.querySelectorAll?.('[data-sidebar-artist]') || [])
+      .find(item => item.getAttribute?.('data-sidebar-artist') === focusIdentity.artist);
+  link?.focus?.({ preventScroll: true });
+}
+
 
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
@@ -5041,29 +5631,47 @@ function renderSidebar() {
       || (!String(effectiveView.query || '').trim() && !String(effectiveView.selected_artist || '').trim())
     )
   );
+  const scrollContainer = resolveSidebarScrollContainer(el);
+  if (!el.albumHavenSidebarVirtualWindow && !effectiveAllArtistsActive) {
+    // Keep the initial selection pending when startup has only a sidebar subset.
+    state.ui.pendingSidebarRevealArtist = String(effectiveView.selected_artist || '').trim();
+  }
+  const virtualWindow = resolveSidebarVirtualWindow(sidebarArtists, {
+    scrollTop: el.albumHavenSidebarVirtualScrollTop ?? scrollContainer?.scrollTop ?? 0,
+    viewportHeight: scrollContainer?.clientHeight ?? 0,
+    selectedArtist: effectiveView.selected_artist,
+    previousWindow: el.albumHavenSidebarVirtualWindow,
+    forceSelected: Boolean(state.ui.pendingSidebarRevealArtist)
+      || !el.albumHavenSidebarVirtualWindow,
+  });
   const sidebarRenderOptions = {
     view: effectiveView,
     usingSidebarOverride: Boolean(sidebarOverride && sidebarOverride.length),
     showAllArtistsOverride: sidebarOverride ? sidebarShowAllArtistsOverride : null,
     selectedArtistOverride: effectiveView.selected_artist,
     allArtistsActiveOverride: effectiveAllArtistsActive,
+    virtualWindow,
   };
+  el.dataset.sidebarVirtualized = virtualWindow.virtualized ? 'true' : 'false';
   const structureSignature = buildSidebarStructureSignature(sidebarArtists, sidebarRenderOptions);
   if (el.dataset.sidebarStructureSignature === structureSignature) {
     applySidebarSelectionMarkup(el, sidebarRenderOptions);
   } else {
+    const focusIdentity = captureSidebarFocus(el);
     el.innerHTML = buildSidebarHtml(v, sidebarArtists, sidebarRenderOptions);
     el.dataset.sidebarStructureSignature = structureSignature;
+    restoreSidebarFocus(el, focusIdentity);
   }
   el.albumHavenSidebarArtistsSource = sidebarArtists;
+  el.albumHavenSidebarVirtualWindow = virtualWindow;
   el.albumHavenSidebarShowAllArtists = sidebarRenderOptions.showAllArtistsOverride !== null
     ? Boolean(sidebarRenderOptions.showAllArtistsOverride)
     : v.show_all_artists_sidebar_link !== false;
   el.albumHavenActiveSidebarLink = el.querySelector('.artist-link.active');
+  ensureSidebarVirtualScrollListeners(el);
   scheduleBrowserAnimationFrame(() => {
     const activeLink = el.querySelector('.artist-link.active');
     if (activeLink instanceof HTMLElement) {
-      const scrollContainer = el.closest('.sidebar');
       if (!(scrollContainer instanceof HTMLElement)) return;
       const activeRect = activeLink.getBoundingClientRect();
       // Folded trees have zero-size rows; keep the reveal for their visible layout.
@@ -5116,6 +5724,12 @@ function resolveLibraryScanPhaseStates(data = {}) {
   const states = Object.fromEntries(stages.map(stage => [stage, 'future']));
   const phase = String(data.scan_phase || '').trim().toLowerCase();
   const outcome = String(data.scan_outcome || '').trim().toLowerCase();
+  if (!data.scan_in_progress && !data.relations_in_progress
+      && String(data.covers_run_mode || '').startsWith('manual')
+      && (data.covers_in_progress || data.covers_phase === 'finished')) {
+    return { discover: 'inactive', metadata: 'inactive', relations: 'inactive',
+      covers: data.covers_in_progress ? 'current' : data.covers_outcome === 'completed' ? 'complete' : 'future' };
+  }
   let currentStage = '';
   if (data.relations_in_progress || (data.scan_in_progress && phase === 'finalizing')) currentStage = 'relations';
   else if (data.covers_in_progress) currentStage = 'covers';
@@ -5131,7 +5745,7 @@ function resolveLibraryScanPhaseStates(data = {}) {
   if (['cancelled', 'failed'].includes(outcome)) {
     if (Number(data.scan_total || 0) > 0 || Number(data.scan_processed || 0) > 0) states.discover = 'complete';
     if (Number(data.scan_total || 0) > 0 && Number(data.scan_processed || 0) >= Number(data.scan_total || 0)) states.metadata = 'complete';
-    if (Number(data.covers_total || 0) > 0 && Number(data.covers_processed || 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
+    if (Number(data.covers_total || 0) > 0 && Number(data.covers_completed ?? data.covers_processed ?? 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
     if (Number(data.relations_total || 0) > 0 && Number(data.relations_processed || 0) >= Number(data.relations_total || 0)) states.relations = 'complete';
   }
   return states;
@@ -5309,7 +5923,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   title.textContent = ready
     ? 'Your local library is ready.'
     : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
-      ? 'Scanning the library'
+      ? (coverBusy && !data.scan_in_progress ? (data.covers_phase === 'preparing' ? 'Preparing cover search' : 'Fetching covers') : 'Scanning the library')
       : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
   if (scanSummary) scanSummary.textContent = status.textContent;
@@ -5320,6 +5934,34 @@ function renderLibraryLoader(data = {}, options = {}) {
       item.classList.toggle('is-current', stateName === 'current');
       item.classList.toggle('is-complete', stateName === 'complete');
       item.classList.toggle('is-future', stateName === 'future');
+      item.classList.toggle('is-inactive', stateName === 'inactive');
+      const stage = String(item.getAttribute('data-scan-stage') || '');
+      let detail = '';
+      if ((data.covers_in_progress || data.covers_phase === 'finished') && !data.scan_in_progress && String(data.covers_run_mode || '').startsWith('manual') && ['discover', 'metadata', 'relations'].includes(stage) && !data.relations_in_progress) {
+        detail = 'Not needed for this cover-only run';
+        item.classList.remove('is-complete');
+      } else if (stage === 'covers' && (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished'))) {
+        detail = buildCoverProgressDetail(data);
+      } else if (stage === 'relations' && data.relations_in_progress) {
+        detail = `${Number(data.relations_processed || 0)} of ${Number(data.relations_total || 0)} artists`;
+      } else if (stage === 'discover' && data.scan_in_progress && stateName === 'current') {
+        detail = `${Number(data.scan_total || 0)} files found`;
+      } else if (stage === 'metadata' && data.scan_in_progress && stateName === 'current') {
+        detail = buildScanEstimateParts(data)
+          .filter(part => !part.startsWith('elapsed '))
+          .join(' · ');
+      }
+      const stageElapsed = scanStageElapsedDetail(data, stage);
+      if (stageElapsed && !detail.includes('elapsed ')) {
+        detail = [detail, stageElapsed].filter(Boolean).join(' · ');
+      }
+      let subprogress = item.querySelector?.('[data-stage-progress]');
+      if (!subprogress && detail && typeof document.createElement === 'function') {
+        subprogress = document.createElement('span');
+        subprogress.setAttribute('data-stage-progress', '');
+        item.appendChild(subprogress);
+      }
+      if (subprogress) subprogress.textContent = detail;
     });
   }
   progress.innerHTML = lines.slice(1).map((line) => `
@@ -6126,6 +6768,10 @@ function updateGalleryMainControls() {
     button.disabled = true;
     button.setAttribute('aria-disabled', 'true');
   });
+  document.querySelectorAll('[data-gallery-featured-on]').forEach((button) => {
+    button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
+    button.disabled = false;
+  });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
   });
@@ -6141,7 +6787,9 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = getVisibleNonAlbumTracks().length > 0;
+    const enabled = Boolean(button.dataset.libraryWide === '1' && state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
+      libraryWide: button.dataset.libraryWide === '1',
+    }).length > 0;
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
   });
@@ -6245,6 +6893,10 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
+  const isSearch = Boolean(String(state.view.query || '').trim());
+  if (isSearch && galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) {
+    closeGalleryMainSurface(false);
+  }
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -6287,7 +6939,8 @@ function updateGalleryMainChrome() {
   } else {
     name.textContent = context.artist;
     summary.textContent = galleryMainPlural(context.albumCount, 'album');
-    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (isSearch) oldInfo?.remove();
+    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
@@ -6337,19 +6990,20 @@ function transitionGalleryMain(action) {
   }
   if (action.type === 'toggle-source') window.AlbumHavenDevicePreferences?.write('gallerySources', nextState.sources);
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
-  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
+  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: previousView === nextState.view });
   if (typeof syncMobileHome === 'function') syncMobileHome();
   if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
   if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
     const hydrationUrl = buildApiUrl(buildGallerySourceHydrationView({
       currentView: state.view,
       hydrationCategories,
-    }), { omitSidebar: true });
+    }), { omitSidebar: false });
     void fetchAndRender(hydrationUrl, false, {
       preserveScroll: true,
       preserveAbsoluteScroll: true,
       preserveGalleryOptionsMenu: true,
-      preserveSidebarState: true,
+      preserveSidebarState: false,
+      fallbackToAllArtistsWhenSelectionMissing: true,
       preserveGalleryBrowseLocationState: true,
       skipPendingViewTransition: true,
     });
@@ -6357,6 +7011,7 @@ function transitionGalleryMain(action) {
 }
 
 function openGalleryArtistInfo(anchor) {
+  if (String(state.view.query || '').trim()) return;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
@@ -6386,6 +7041,8 @@ function handleGalleryMainClick(event) {
   }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
+  const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
+  if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -6405,11 +7062,22 @@ function handleGalleryMainClick(event) {
   const familyAnchor = event.target.closest?.('[data-gallery-bar-action="artist-family"]');
   if (familyAnchor) { event.preventDefault(); openGalleryMainSurface('artist-family', familyAnchor, document.getElementById('artist-family-panel')); return true; }
   const typeAnchor = event.target.closest?.('[data-gallery-bar-action="album-types"]');
-  if (typeAnchor) { event.preventDefault(); openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu')); return true; }
+  if (typeAnchor) {
+    event.preventDefault();
+    openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu'));
+    if (state.view?.non_album_tracks_deferred && typeof hydrateDeferredNonAlbumTracks === 'function') {
+      void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
+        console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+      });
+    }
+    return true;
+  }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();
-    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') openNonAlbumModal();
+    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') {
+      openNonAlbumModal({ libraryWide: nonAlbum.dataset.libraryWide === '1' });
+    }
     return true;
   }
   if (event.target.closest?.('[data-gallery-customize-preview]')) { event.preventDefault(); return true; }
@@ -6694,7 +7362,8 @@ const STREAMING_WORKLET_URL = '/static/js/audio-worklets/gapless-playback-proces
 const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_FRAMES = 48_000;
 const STREAMING_CREDIT_LOW_WATER_FRAMES = 12_000;
-const STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES = STREAMING_CREDIT_LOW_WATER_FRAMES;
+const STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES = 2 * STREAMING_SAMPLE_RATE;
+const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 const STREAMING_QUEUED_NEXT_PREPARE_FRAMES = 3 * STREAMING_SAMPLE_RATE;
 const STREAMING_REPLACEMENT_PREPARE_FRAMES = 2 * STREAMING_SAMPLE_RATE;
 const STREAMING_SEEK_PREPARE_FRAMES = 12_000;
@@ -6716,6 +7385,56 @@ function publishStreamingDiagnostics() {
     'data-streaming-diagnostics',
     JSON.stringify(getStreamingPlaybackSnapshot()),
   );
+}
+
+async function performInterruptedStreamingPlaybackRecovery(expectedContext) {
+  const engine = streamingEngineState();
+  const context = engine.context;
+  const current = engine.roles.current;
+  if (!context || !current) return 'inactive';
+  if (expectedContext && context !== expectedContext) return 'stale';
+  if (engine.snapshot.paused || engine.snapshot.ended) return 'paused';
+  if (context.state === 'running') return 'continued';
+  if (context.state !== 'suspended' && context.state !== 'interrupted') return 'failed';
+
+  const generation = engine.generation;
+  const streamId = current.streamId;
+  const startRequestId = engine.startRequestId;
+  let resumed = false;
+  try {
+    resumed = await resumeStreamingPlayback(startRequestId, null, current);
+  } catch (_error) {
+    resumed = false;
+  }
+  if (engine.context !== context
+      || engine.generation !== generation
+      || engine.roles.current?.streamId !== streamId
+      || engine.startRequestId !== startRequestId) return 'stale';
+  if (resumed && context.state === 'running') {
+    publishStreamingDiagnostics();
+    return 'resumed';
+  }
+  if (context.state !== 'suspended' && context.state !== 'interrupted') return 'failed';
+
+  engine.snapshot.paused = true;
+  if (engine.mode !== 'error') engine.mode = 'paused';
+  engine.node?.port?.postMessage?.({ type: 'pause', generation });
+  publishStreamingDiagnostics();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  return 'gesture-required';
+}
+
+function reconcileInterruptedStreamingPlayback(expectedContext = null) {
+  const engine = streamingEngineState();
+  if (engine.interruptionRecoveryPromise) return engine.interruptionRecoveryPromise;
+  const recovery = performInterruptedStreamingPlaybackRecovery(expectedContext);
+  const trackedRecovery = recovery.finally(() => {
+    if (engine.interruptionRecoveryPromise === trackedRecovery) {
+      engine.interruptionRecoveryPromise = null;
+    }
+  });
+  engine.interruptionRecoveryPromise = trackedRecovery;
+  return trackedRecovery;
 }
 
 function streamingRoleForId(streamId) {
@@ -6960,6 +7679,81 @@ function failStreamingEngine(source, event, reason) {
   void cleanup.catch((error) => console.error('Streaming cleanup failed', error));
 }
 
+function refreshPlayerAfterStreamingTransportChange() {
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+async function recoverUnexpectedStreamingSocketClose(socket, event) {
+  const engine = streamingEngineState();
+  if (engine.socket !== socket) return;
+  const current = engine.roles.current;
+  const startRequestId = engine.startRequestId;
+  const recovery = current ? {
+    track: current.track,
+    startSeconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
+    attempt: Math.max(0, Number(current.transportRecoveryAttempt) || 0),
+  } : null;
+  const wasPlaying = Boolean(current && !engine.snapshot.paused && !engine.snapshot.ended);
+  const detail = [event?.code, event?.reason]
+    .filter((value) => value !== undefined && value !== '')
+    .join(' ');
+  setStreamingError('socket', { message: detail || 'Playback socket closed unexpectedly' });
+
+  let cleanupError = null;
+  try {
+    await beginStreamingCleanup('socket-closed', {
+      preserveError: true,
+      socketAlreadyClosed: true,
+    });
+  } catch (error) {
+    cleanupError = error;
+    engine.diagnostics.lastCleanupError = {
+      name: error?.name || 'Error',
+      message: error?.message || String(error),
+    };
+  }
+
+  if (!recovery || engine.startRequestId !== startRequestId) {
+    refreshPlayerAfterStreamingTransportChange();
+    return;
+  }
+  engine.pendingTransportRecovery = recovery;
+  Object.assign(engine.snapshot, {
+    currentTime: recovery.startSeconds,
+    duration: Number(recovery.track?.durationSeconds) || 0,
+    paused: true,
+    ended: false,
+    src: String(recovery.track?.src || ''),
+    readyState: 0,
+  });
+  if (cleanupError
+      || !wasPlaying
+      || recovery.attempt >= STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS) {
+    engine.mode = 'error';
+    refreshPlayerAfterStreamingTransportChange();
+    return;
+  }
+
+  engine.pendingTransportRecovery = null;
+  delete engine.diagnostics.lastError;
+  try {
+    const recovered = await startStreamingTrack(recovery.track, {
+      startSeconds: recovery.startSeconds,
+      autoplay: true,
+      transportRecoveryAttempt: recovery.attempt + 1,
+    });
+    if (recovered) {
+      engine.diagnostics.transportReconnects =
+        (Number(engine.diagnostics.transportReconnects) || 0) + 1;
+    }
+  } catch (error) {
+    engine.pendingTransportRecovery = recovery;
+    setStreamingError('socket', error);
+    engine.snapshot.paused = true;
+  }
+  refreshPlayerAfterStreamingTransportChange();
+}
+
 function observeStreamingFacadeCallback(result, source) {
   if (!result || typeof result.then !== 'function') return;
   void result.catch((error) => {
@@ -6994,8 +7788,10 @@ function deferStreamingContinuity(track, options, generation, currentStreamId) {
 
 function protectedQueuedContinuityReady(engine, current, options) {
   if (options?.kind !== 'queued-next') return true;
+  const currentAudible = current?.firstFrameNotified === true
+    || (current?.seekTarget !== true && current?.boundaryNotified === true);
   return (current?.replacementPromotion !== true || !engine.pendingPromotion)
-    && (current.firstFrameNotified === true || current.boundaryNotified === true)
+    && currentAudible
     && !engine.snapshot.paused
     && !engine.roles.continuity
     && (current.eosReceived === true
@@ -7823,6 +8619,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     roleState.firstFrameNotified = true;
+    if (roleState.role === 'current') roleState.transportRecoveryAttempt = 0;
     if (!engine.diagnostics.firstFrameAtMs) {
       engine.diagnostics.firstFrameAtMs = performance.now();
     }
@@ -7854,6 +8651,21 @@ function handleStreamingWorkletMessage(message) {
       }
     }
     if (roleState.role === 'current') maybeSchedulePendingStreamingContinuity();
+    return;
+  }
+  if (message.type === 'buffering-start') {
+    if (roleState.role !== 'current' || engine.diagnostics.buffering) return;
+    engine.diagnostics.buffering = true;
+    engine.mode = 'buffering';
+    grantStreamingCredit(roleState, STREAMING_MAX_CREDIT_FRAMES);
+    publishStreamingDiagnostics();
+    return;
+  }
+  if (message.type === 'buffering-end') {
+    if (roleState.role !== 'current' || !engine.diagnostics.buffering) return;
+    engine.diagnostics.buffering = false;
+    if (!engine.snapshot.paused && engine.mode !== 'error') engine.mode = 'playing';
+    publishStreamingDiagnostics();
     return;
   }
   if (message.type === 'underrun') {
@@ -7929,6 +8741,9 @@ async function prepareStreamingPlaybackEngine() {
     try {
       context = new AudioContextType({ sampleRate: STREAMING_SAMPLE_RATE });
       engine.context = context;
+      if (typeof observeBrowserPlaybackAudioContext === 'function') {
+        observeBrowserPlaybackAudioContext(context);
+      }
       await context.audioWorklet.addModule(STREAMING_WORKLET_URL);
       node = new AudioWorkletNode(context, STREAMING_PROCESSOR_NAME, {
         numberOfInputs: 0,
@@ -7949,7 +8764,12 @@ async function prepareStreamingPlaybackEngine() {
       socket.onopen = flushStreamingControls;
       socket.onerror = (event) => {
         if (engine.socket !== socket) return;
-        failStreamingEngine('socket', event, 'socket-error');
+        const detail = event?.error?.message || event?.message || 'Playback socket error';
+        engine.diagnostics.lastSocketError = {
+          message: String(detail),
+          atMs: performance.now(),
+        };
+        publishStreamingDiagnostics();
       };
       socket.onclose = (event) => {
         if (engine.expectedSocketClose === socket) {
@@ -7957,13 +8777,8 @@ async function prepareStreamingPlaybackEngine() {
           return;
         }
         if (engine.socket !== socket) return;
-        const detail = [event?.code, event?.reason].filter((value) => value !== undefined && value !== '').join(' ');
-        setStreamingError('socket', { message: detail || 'Playback socket closed unexpectedly' });
-        const cleanup = beginStreamingCleanup('socket-closed', {
-          preserveError: true,
-          socketAlreadyClosed: true,
-        });
-        void cleanup.catch((error) => console.error('Streaming cleanup failed', error));
+        void recoverUnexpectedStreamingSocketClose(socket, event)
+          .catch((error) => console.error('Streaming socket recovery failed', error));
       };
       socket.onmessage = ({ data }) => {
         if (data instanceof ArrayBuffer) {
@@ -8086,8 +8901,10 @@ async function startStreamingTrack(track, {
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
   onAutoplayStarted = null,
+  transportRecoveryAttempt = null,
 } = {}) {
   const engine = streamingEngineState();
+  if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
   settleStreamingReplacementCushionWaiter(false);
@@ -8200,6 +9017,7 @@ async function startStreamingTrack(track, {
   engine.waveformReadyIdentity = null;
   engine.mode = 'starting';
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
@@ -8218,6 +9036,7 @@ async function startStreamingTrack(track, {
   });
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
+  current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
   if (typeof probeCachedWaveformPeaks === 'function') {
     try {
       const cachedWaveformProbe = probeCachedWaveformPeaks(
@@ -8346,6 +9165,18 @@ async function resumeStreamingPlayback(
   const engine = streamingEngineState();
   const startRequestId = expectedStartRequestId
     ?? (Number(engine.startRequestId) || 0);
+  const pendingRecovery = engine.pendingTransportRecovery;
+  if (pendingRecovery && !engine.context && !engine.roles.current) {
+    engine.pendingTransportRecovery = null;
+    delete engine.diagnostics.lastError;
+    const recovered = await startStreamingTrack(pendingRecovery.track, {
+      startSeconds: pendingRecovery.startSeconds,
+      autoplay: true,
+      onAutoplayStarted: onPlaybackStarted,
+      transportRecoveryAttempt: 0,
+    });
+    return Boolean(recovered && !engine.snapshot.paused);
+  }
   if (!engine.context || !engine.node) await prepareStreamingPlaybackEngine();
   if ((Number(engine.startRequestId) || 0) !== startRequestId) return false;
   const context = engine.context;
@@ -8594,6 +9425,7 @@ async function cleanupStreamingResources(reason, {
     delete engine.diagnostics.lastError;
   }
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
@@ -8677,6 +9509,7 @@ function beginStreamingCleanup(reason, options = {}) {
 }
 
 async function stopStreamingPlayback(reason = 'stopped', options = {}) {
+  streamingEngineState().pendingTransportRecovery = null;
   return beginStreamingCleanup(reason, options);
 }
 function getStreamingPlaybackSnapshot() {
@@ -8734,6 +9567,7 @@ Object.defineProperty(window, '__ALBUM_HAVEN_STREAMING_DIAGNOSTICS__', {
 
 const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
 const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
+const ARTIST_TREE_TOGGLE_STARTING_EVENT = 'album-haven:artist-tree-toggle-starting';
 let cancelPendingArtistTreeResize = null;
 
 function isArtistsDrawerElement(value) {
@@ -8905,7 +9739,11 @@ function toggleArtistTreeFold() {
   const { button, navigationButton, rail } = getArtistTreeFoldElements();
   const moveFocusWithinRail = Boolean(rail?.contains?.(document.activeElement));
   const wasFolded = Boolean(state.ui.artistTreeFolded);
-  state.ui.artistTreeFolded = !wasFolded;
+  const nextFolded = !wasFolded;
+  window.dispatchEvent(new CustomEvent(ARTIST_TREE_TOGGLE_STARTING_EVENT, {
+    detail: { folded: nextFolded },
+  }));
+  state.ui.artistTreeFolded = nextFolded;
   state.ui.shellLayoutPreferences = {
     ...(state.ui.shellLayoutPreferences || {}),
     artistTreeFolded: state.ui.artistTreeFolded,
@@ -9107,7 +9945,7 @@ function attachAccountMenu(component, options = {}) {
 
 const VIEWPORT_REFOCUS_SUPPRESSION_GRACE_MS = 400;
 const VIEWPORT_REFOCUS_HOVER_UNLOCK_COUNT = 2;
-const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
+const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #artist-tree-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
 const VIEWPORT_REFOCUS_INTENT_SELECTOR = '.album-card, [data-album-key], [data-track-path], [data-version-context-key], .artist-link, .album-title-button, .button, .icon-button, .play-track-button, .gallery-options-menu-item, .related-chip, a, button, input, select, textarea, label';
 const COVER_LOOKUP_REFOCUS_GUARDED_SELECTOR = '[data-select-local-cover], [data-select-pasted-cover], [data-select-remote-cover]';
 
@@ -10031,6 +10869,7 @@ function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = nul
       protocol: 1,
       clientId: getPlaybackOwnershipTabId(),
       claimToken: claim.claimToken,
+      csrf_token: window.readSessionCsrfCookie?.() || '',
       handoff: { id: handoff.id, token: handoff.token },
       completion,
     })], { type: 'application/json' }));
@@ -10311,6 +11150,7 @@ function hideAlbumCardContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   menu.dataset.albumKey = '';
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
 function showAlbumCardContextMenu(x, y, album) {
@@ -10325,8 +11165,10 @@ function showAlbumCardContextMenu(x, y, album) {
     : {};
   const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
   const moveActions = getAvailableAlbumMoveActions(album);
+  const canEditTags = Boolean(album?.allowed_actions?.['library.files.edit_tags']);
   menu.innerHTML = [
     '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
+    `<button type="button" class="album-card-context-menu-item" data-album-card-action="edit-tags"${canEditTags ? '' : ' disabled aria-disabled="true"'}>Edit Tags</button>`,
     ...moveActions.map((item) => (
       `<button type="button" class="album-card-context-menu-item" data-album-card-action="${escapeHtml(item.action)}">${escapeHtml(getAlbumMoveActionLabel(item))}</button>`
     )),
@@ -10335,6 +11177,40 @@ function showAlbumCardContextMenu(x, y, album) {
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
   ].join('');
   menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideAlbumCardContextMenu);
+  }
+}
+
+function ensureArtistTreeContextMenu() {
+  let menu = document.getElementById('artist-tree-context-menu');
+  if (menu) return menu;
+  menu = document.createElement('div');
+  menu.id = 'artist-tree-context-menu';
+  menu.className = 'album-card-context-menu';
+  menu.hidden = true;
+  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>';
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function hideArtistTreeContextMenu() {
+  const menu = document.getElementById('artist-tree-context-menu');
+  if (!menu) return;
+  menu.hidden = true;
+  menu.dataset.artist = '';
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+}
+
+function showArtistTreeContextMenu(x, y, artist) {
+  const menu = ensureArtistTreeContextMenu();
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.dataset.artist = String(artist || '');
+  menu.hidden = false;
+  if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideArtistTreeContextMenu);
+  }
 }
 
 function ensureVersionPickerModal() {
@@ -10452,7 +11328,7 @@ function closeVersionPickerModal() {
   }
 }
 
-function getVisibleNonAlbumTracks() {
+function getVisibleNonAlbumTracks(options = {}) {
   const view = state.view;
   const mainState = state.gallery?.mainState;
   if (mainState) {
@@ -10462,8 +11338,12 @@ function getVisibleNonAlbumTracks() {
       || ['main_library', 'new_arrivals', 'hoard'];
     if (!activeSources.length || !gallerySourceScopesEqual(activeSources, payloadSources)) return [];
   }
-  const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
-  const selectedArtist = String(view.selected_artist || '').trim();
+  const tracks = options.libraryWide && Array.isArray(view.library_non_album_tracks)
+    ? view.library_non_album_tracks
+    : Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
+  const selectedArtist = options.libraryWide
+    ? ''
+    : String(view.selected_artist || '').trim();
   if (!selectedArtist) return tracks;
   const artistKey = (value) => String(value || '').trim().toLocaleLowerCase();
   const artists = new Set([
@@ -10498,6 +11378,45 @@ function getVisibleNonAlbumTracks() {
 
 function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
+}
+
+let deferredNonAlbumHydrationPromise = null;
+
+async function hydrateDeferredNonAlbumTracks(options = {}) {
+  const view = state.view || {};
+  if (!view.non_album_tracks_deferred) return view.non_album_tracks || [];
+  if (deferredNonAlbumHydrationPromise) return deferredNonAlbumHydrationPromise;
+
+  const requestedArtist = String(view.selected_artist || '');
+  const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
+  requestUrl.searchParams.set('include_non_album', '1');
+  if (options.libraryWide === true) {
+    requestUrl.searchParams.set('include_library_wide_non_album', '1');
+  }
+  deferredNonAlbumHydrationPromise = (async () => {
+    const response = await fetch(`${requestUrl.pathname}${requestUrl.search}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
+    }
+    if (String(state.view?.selected_artist || '') !== requestedArtist) {
+      return state.view?.non_album_tracks || [];
+    }
+    state.view.non_album_tracks = Array.isArray(payload.non_album_tracks)
+      ? payload.non_album_tracks
+      : [];
+    state.view.library_non_album_tracks = Array.isArray(payload.library_non_album_tracks)
+      ? payload.library_non_album_tracks
+      : state.view.non_album_tracks;
+    state.view.non_album_tracks_deferred = false;
+    if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+    return state.view.non_album_tracks;
+  })().finally(() => {
+    deferredNonAlbumHydrationPromise = null;
+  });
+  return deferredNonAlbumHydrationPromise;
 }
 
 function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
@@ -10535,25 +11454,50 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       displayPath: displayPath || trackPath,
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
-      isProblematic: Boolean(problematicAlbum),
+      isProblematic: Boolean(problematicAlbum || item.is_problematic),
     };
   });
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
+  const exceptionType = (item) => String(
+    Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
+      ? item.exception_type
+      : item?.reason_label || '',
+  ).trim();
+  const knownTypes = new Set(['Non-album rarity', 'Interview', '']);
+  const dynamicDefinitions = [];
+  const seenDynamicKeys = new Set();
+  items.forEach((item) => {
+    const type = exceptionType(item);
+    if (knownTypes.has(type)) return;
+    const collectionName = type === 'Custom Collection'
+      ? String(item?.custom_collection_name || '').trim()
+      : '';
+    const key = `${type}\u0000${collectionName}`;
+    if (seenDynamicKeys.has(key)) return;
+    seenDynamicKeys.add(key);
+    dynamicDefinitions.push({
+      key: `custom-${dynamicDefinitions.length + 1}`,
+      title: collectionName ? `${type} — ${collectionName}` : type,
+      exceptionType: type,
+      collectionName,
+    });
+  });
   const sectionDefinitions = [
     { key: 'non-album-rarity', title: 'Non-album rarity', exceptionType: 'Non-album rarity' },
     { key: 'interview', title: 'Interviews', exceptionType: 'Interview' },
+    ...dynamicDefinitions,
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
   const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
-      String(
-        Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
-          ? item.exception_type
-          : item.reason_label || '',
-      ).trim() === section.exceptionType
+      exceptionType(item) === section.exceptionType
+      && (
+        section.collectionName === undefined
+        || String(item?.custom_collection_name || '').trim() === section.collectionName
+      )
     ));
     if (!sectionItems.length) return null;
     const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
@@ -10565,6 +11509,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     groups,
     showPath: true,
     forceGroupLabels: true,
+    collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
     totalLength: formatAlbumDuration(totalSeconds),
@@ -10652,14 +11597,17 @@ function hideGalleryOptionsMenu() {
   if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('sources')) closeGalleryMainSurface(false);
 }
 
-function openNonAlbumModal() {
+function openNonAlbumModal(options = {}) {
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
-  const looseTracks = getVisibleNonAlbumTracks();
-  const subtitle = state.view.selected_artist
+  const libraryWide = options.libraryWide === true;
+  state.ui.nonAlbumLibraryWide = libraryWide;
+  const hydrationPending = Boolean(state.view?.non_album_tracks_deferred);
+  const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
+  const subtitle = !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-    : 'Non-album tracks found in the artist folders currently displayed.';
+    : 'Non-album tracks found in the selected library sources.';
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       variant: 'copy',
@@ -10671,17 +11619,38 @@ function openNonAlbumModal() {
     });
   }
   if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
-  els.table.innerHTML = looseTracks.length
-    ? buildNonAlbumTrackSectionsMarkup(looseTracks)
-    : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  els.table.innerHTML = hydrationPending
+    ? '<div class="utility-empty-state">Loading loose tracks…</div>'
+    : looseTracks.length
+      ? buildNonAlbumTrackSectionsMarkup(looseTracks)
+      : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
+    const summary = details.querySelector?.('summary');
+    const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+    syncExpanded();
+    details.addEventListener?.('toggle', syncExpanded);
+  });
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   attachSharedPlayer();
+  if (hydrationPending) {
+    hydrateDeferredNonAlbumTracks({ libraryWide })
+      .then(() => {
+        if (!els.overlay.hidden) openNonAlbumModal(options);
+      })
+      .catch((error) => {
+        if (!els.overlay.hidden) {
+          els.table.innerHTML = `<div class="utility-empty-state">${escapeHtml(error.message || 'Unable to load loose tracks.')}</div>`;
+        }
+      });
+  }
 }
 
 function openNonAlbumTagEditor() {
   if (typeof isMobileClient === 'function' && isMobileClient()) return;
-  const tracks = getVisibleNonAlbumTracks();
+  const tracks = getVisibleNonAlbumTracks({
+    libraryWide: state.ui?.nonAlbumLibraryWide === true,
+  });
   if (!tracks.length) {
     showRepairAlert('No tracks to edit.', 'error');
     return;
@@ -11012,7 +11981,16 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
     return false;
   }
   imageElement.setAttribute('data-cover-visual-state', 'ready');
+  imageElement.removeAttribute('data-gallery-cover-object-retry');
   imageElement.removeAttribute('aria-hidden');
+  const releaseObjectUrl = () => {
+    if (
+      typeof galleryCoverPreviewCache !== 'undefined'
+      && typeof galleryCoverPreviewCache.releaseImageObjectUrl === 'function'
+    ) {
+      galleryCoverPreviewCache.releaseImageObjectUrl(imageElement);
+    }
+  };
   if (typeof imageElement.decode === 'function') {
     const decodedSource = String(imageElement.currentSrc || imageElement.src || '');
     Promise.resolve(imageElement.decode()).then(() => {
@@ -11028,7 +12006,9 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
       imageElement.setAttribute('data-cover-decoded-at-ms', String(performance.now()));
     }).catch(() => {
       // The existing image error path remains authoritative for failed cover decoding.
-    });
+    }).finally(releaseObjectUrl);
+  } else {
+    releaseObjectUrl();
   }
   return true;
 }
@@ -11037,6 +12017,33 @@ function handleAlbumDisplayCoverImageError(imageElement) {
   if (!imageElement) return false;
   if (imageElement instanceof HTMLImageElement) {
     markAlbumDisplayCoverImagePending(imageElement);
+  }
+  const currentSource = imageElement instanceof HTMLImageElement
+    ? String(imageElement.currentSrc || imageElement.src || '').trim()
+    : '';
+  const productionUrl = imageElement instanceof HTMLImageElement && typeof imageElement.getAttribute === 'function'
+    ? String(imageElement.getAttribute('data-production-cover-src') || '').trim()
+    : '';
+  if (
+    imageElement instanceof HTMLImageElement
+    && typeof galleryCoverPreviewCache !== 'undefined'
+    && typeof galleryCoverPreviewCache.releaseImageObjectUrl === 'function'
+  ) {
+    galleryCoverPreviewCache.releaseImageObjectUrl(imageElement);
+  }
+  if (
+    currentSource.startsWith('blob:')
+    && productionUrl
+    && imageElement.getAttribute('data-gallery-cover-object-retry') !== '1'
+    && typeof galleryCoverLoadScheduler !== 'undefined'
+    && typeof galleryCoverLoadScheduler.enqueue === 'function'
+  ) {
+    imageElement.setAttribute('data-gallery-cover-object-retry', '1');
+    galleryCoverLoadScheduler.enqueue(productionUrl, {
+      image: imageElement,
+      priority: String(imageElement.getAttribute('data-gallery-cover-priority') || 'near'),
+    });
+    return false;
   }
   if (typeof imageElement.getAttribute === 'function') {
     rememberFailedLocalDisplayCoverPath(imageElement.getAttribute('data-cover-path') || '');
@@ -11590,7 +12597,12 @@ function renderTrackModalLoadingState(album) {
     els.duplicateTabs.hidden = true;
     els.duplicateTabs.innerHTML = '';
   }
-  els.list.innerHTML = '<li class="track-modal-loading-row">Loading album details...</li>';
+  els.list.innerHTML = `
+    <li class="track-modal-loading-row" role="status" aria-live="polite">
+      <span class="library-loader-spinner" aria-hidden="true"></span>
+      <span>Loading album details...</span>
+    </li>
+  `;
   if (els.footer) {
     els.footer.hidden = true;
     els.footer.textContent = '';
@@ -11661,7 +12673,6 @@ function scheduleTrackModalCleanupAfterPaint(generation, coverLoadSuspensionToke
 }
 
 function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
-  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   state.modalReleases = Array.isArray(releaseSet?.releases) && releaseSet.releases.length
@@ -11675,6 +12686,9 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof renderTrackModalTabs === 'function') renderTrackModalTabs(els);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
+  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
 }
 
 function suspendGalleryCoverLoadsForTrackModal() {
@@ -12029,6 +13043,27 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
+async function refreshOpenTrackModalAfterInventoryMutation() {
+  const els = getTrackModalElements();
+  const openAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (!els.overlay || els.overlay.hidden || !openAlbum) return false;
+  const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
+  if (!albumKey) return false;
+  const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
+  const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+  const currentAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (
+    els.overlay.hidden
+    || !currentAlbum
+    || (
+      String(getAlbumRequestKey(currentAlbum) || '').trim() !== albumKey
+      && getTrackModalAlbumVersionKey(currentAlbum) !== albumVersionKey
+    )
+  ) return false;
+  refreshOpenTrackModalVersionState(albumKey, refreshedAlbum);
+  return true;
+}
+
 function queueTrackModalAlbumDetailsPrewarm(albumKey) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return;
@@ -12072,16 +13107,19 @@ function cancelTrackModalAlbumDetailsPrewarms() {
 
 function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit = 2) {
   if (!(containerEl instanceof HTMLElement) || !(scrollEl instanceof HTMLElement)) return;
+  const boundedLimit = Math.max(0, Number(limit) || 0);
+  if (!boundedLimit) return;
   const scrollRect = scrollEl.getBoundingClientRect();
   const visibleButtons = [];
-  containerEl.querySelectorAll('.album-title-button[data-open-tracklist="1"][data-album-key]').forEach((button) => {
-    if (!(button instanceof HTMLElement)) return;
+  for (const button of containerEl.querySelectorAll('.album-title-button[data-open-tracklist="1"][data-album-key]')) {
+    if (!(button instanceof HTMLElement)) continue;
     const rect = button.getBoundingClientRect();
-    if (!(rect.width > 0 && rect.height > 0)) return;
-    if (rect.bottom <= scrollRect.top || rect.top >= scrollRect.bottom) return;
+    if (!(rect.width > 0 && rect.height > 0)) continue;
+    if (rect.bottom <= scrollRect.top || rect.top >= scrollRect.bottom) continue;
     visibleButtons.push(button);
-  });
-  if (!visibleButtons.length || visibleButtons.length > limit) return;
+    if (visibleButtons.length >= boundedLimit) break;
+  }
+  if (!visibleButtons.length) return;
   visibleButtons.forEach((button) => {
     const albumKey = String(button.getAttribute('data-album-key') || '').trim();
     if (!albumKey) return;
@@ -12106,11 +13144,9 @@ function preloadTrackModalArtwork(album) {
 }
 
 function openTrackModal(album, options = {}) {
-  if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   trackModalCleanupGeneration += 1;
-  preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
   }
@@ -12146,6 +13182,7 @@ function openTrackModal(album, options = {}) {
     return;
   }
   invalidatePendingTrackModalLoad();
+  preloadTrackModalArtwork(albumWithPlaybackContext);
   // Edition hydration must not rebuild the tabs around a different base name.
   const preserved = options.releaseSet;
   const preservedAlbum = preserved?.releases?.[preserved.selectedIndex];
@@ -12163,6 +13200,8 @@ function openTrackModal(album, options = {}) {
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
   attachSharedPlayer();
 }
 
@@ -12234,6 +13273,26 @@ function resolveTrackModalActionAlbum(button) {
   }
   if (currentAlbum) return currentAlbum;
   return findIndexedTrackModalLogicalRelease(fallbackAlbum) || fallbackAlbum;
+}
+
+async function resolveHydratedTrackModalActionAlbum(button) {
+  const album = resolveTrackModalActionAlbum(button);
+  if (!album || !albumRequiresHydration(album)) return album;
+  const albumKey = String(
+    getTrackModalButtonAlbumKey(button)
+    || getAlbumRequestKey(album)
+    || getAlbumIdentity(album)
+    || album.key
+    || '',
+  ).trim();
+  if (!albumKey) return null;
+  try {
+    return await loadTrackModalAlbumDetails(albumKey);
+  } catch (error) {
+    console.error('[AlbumHaven][AlbumDetails] Failed to load full album details for action.', error);
+    showToast('Unable to load album details.', 'error', 3200);
+    return null;
+  }
 }
 
 function resolveTrackModalDuplicateSourceAlbum(button) {
@@ -14040,6 +15099,8 @@ function formatLogHistoryTimestamp(value) {
 // Root browsing has authoritative navigation and totals but only a bounded page
 // of albums. Continuations never own the foreground/search request slot.
 let rootGalleryPageRequest = null;
+const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
+const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -14082,6 +15143,17 @@ function buildRootGalleryPageUrl(view) {
   return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
 }
 
+function retainRootGalleryAnchorMetadata(currentPage = {}, nextPage = {}) {
+  if (String(nextPage.anchor_artist || '').trim()) return nextPage;
+  if (!String(currentPage.anchor_artist || '').trim()) return nextPage;
+  return {
+    ...nextPage,
+    anchor_artist: currentPage.anchor_artist,
+    anchor_offset: currentPage.anchor_offset,
+    anchor_group_artist: currentPage.anchor_group_artist,
+  };
+}
+
 async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
@@ -14089,9 +15161,16 @@ async function loadNextRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 2 * scroll.clientHeight) return false;
+    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+      > ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
+    semanticScrollAnchor: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.() || null,
+    semanticScrollOwnerGeneration: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.getUserScrollIntentGeneration?.(),
     viewRevision: readViewStateRevision(),
     url: buildRootGalleryPageUrl(view),
     cursor: page.next_cursor,
@@ -14105,29 +15184,69 @@ async function loadNextRootGalleryPage() {
     && buildRootGalleryPageUrl(state.view) === request.url
     && state.view.gallery_page.next_cursor === request.cursor
     && state.view.gallery_page.revision === request.revision;
+  const ownsRootBrowseIdentity = () => rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && isPagedRootGallery()
+    && buildRootGalleryPageUrl(state.view) === request.url;
   const url = new URL(request.url, window.location.href);
   url.searchParams.set('gallery_page_size', '50');
   url.searchParams.set('gallery_cursor', request.cursor);
   url.searchParams.set('omit_sidebar', '1');
   try {
-    let response = await fetch(`${url.pathname}${url.search}`, {
-      headers: { Accept: 'application/json' }, signal: request.controller.signal,
-    });
+    let response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
     let restarted = false;
+    let recoveryCoverage = 0;
+    let recoveryStartArtist = '';
+    let recoveryEndArtist = '';
+    let recoveryArtists = [];
     if (response.status === 409) {
+      let recoveryRequestCount = 1;
+      const fetchRecoveryResponse = async () => {
+        if (recoveryRequestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
+          throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+        }
+        recoveryRequestCount += 1;
+        return fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      };
       const conflict = await response.json();
-      if (!ownsResponse() || conflict?.restart_required !== true) return false;
-      // Catalog changes invalidate the cursor. Replace atomically with one fresh
-      // bounded page; keep the old cards visible until that response arrives.
+      if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
+      // Catalog changes invalidate the cursor. Recover the retained window
+      // atomically; keep its cards visible until all required pages arrive.
       url.searchParams.delete('gallery_cursor');
       url.searchParams.delete('omit_sidebar');
-      response = await fetch(`${url.pathname}${url.search}`, {
-        headers: { Accept: 'application/json' }, signal: request.controller.signal,
-      });
+      const retainedGroups = state.view.artist_groups || [];
+      recoveryArtists = retainedGroups.map(group => String(group.artist || '').trim()).filter(Boolean);
+      recoveryCoverage = retainedGroups.reduce((count, group) => count + (group.albums || []).length, 0);
+      recoveryStartArtist = String(retainedGroups[0]?.artist || '').trim();
+      recoveryEndArtist = String(retainedGroups.at(-1)?.artist || '').trim();
+      if (recoveryStartArtist && (scroll.scrollTop > 0 || state.view.gallery_page?.anchor_artist)) {
+        url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
+      }
+      response = await fetchRecoveryResponse();
+      for (let index = 1; response.status === 400 && url.searchParams.has('gallery_anchor_artist'); index += 1) {
+        const failure = await response.json();
+        if (!ownsRootBrowseIdentity()) return false;
+        const message = String(failure?.error || failure?.detail || 'Unable to refresh gallery.');
+        if (message !== 'Gallery artist anchor is unavailable.' || index >= retainedGroups.length) {
+          throw new Error(message);
+        }
+        recoveryStartArtist = String(retainedGroups[index]?.artist || '').trim();
+        if (!recoveryStartArtist) throw new Error(message);
+        url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
+        response = await fetchRecoveryResponse();
+      }
       restarted = true;
     }
-    const data = await readGalleryResponse(response, ownsResponse);
-    if (!ownsResponse()) return false;
+    const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
+    let data = await readGalleryResponse(response, ownsDataResponse);
+    if (restarted && ownsDataResponse()) {
+      data = await collectRootGalleryRefresh(
+        data, `${url.pathname}${url.search}`, recoveryCoverage,
+        request.controller, ownsDataResponse, recoveryStartArtist, recoveryEndArtist, recoveryArtists,
+        restarted,
+      );
+    }
+    if (!ownsDataResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
@@ -14147,7 +15266,13 @@ async function loadNextRootGalleryPage() {
         },
       } : {}),
       artist_groups: artistGroups,
-      gallery_page: data.gallery_page,
+      gallery_page: restarted
+        ? data.gallery_page
+        : {
+          ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
+          previous_cursor: state.view.gallery_page?.previous_cursor || null,
+          has_previous: Boolean(state.view.gallery_page?.has_previous),
+        },
       initial_view_partial: false,
     }, {
       trackSidebarReveal: false,
@@ -14155,7 +15280,12 @@ async function loadNextRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    const renderOptions = { preserveScroll: true, preserveMountedGalleryChildren: true };
+    const renderOptions = {
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    };
     if (restarted) renderView(renderOptions);
     else renderArtistGroups(renderOptions);
     // Fill only the visible buffer, including a short initial page. Rechecking
@@ -14172,6 +15302,85 @@ async function loadNextRootGalleryPage() {
   }
 }
 
+async function loadPreviousRootGalleryPage() {
+  const view = state.view;
+  const page = view?.gallery_page;
+  const scroll = document.getElementById('albums-scroll');
+  if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
+    || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
+    || !scroll || scroll.clientHeight <= 0
+    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
+
+  const request = {
+    controller: new AbortController(),
+    semanticScrollAnchor: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.() || null,
+    semanticScrollOwnerGeneration: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.getUserScrollIntentGeneration?.(),
+    cursor: page.previous_cursor,
+    revision: page.revision,
+    viewRevision: Number(state.ui.viewStateRevision || 0),
+    url: buildRootGalleryPageUrl(view),
+  };
+  rootGalleryPageRequest = request;
+  const ownsResponse = () => (
+    rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && Number(state.ui.viewStateRevision || 0) === request.viewRevision
+    && buildRootGalleryPageUrl(state.view) === request.url
+    && state.view.gallery_page?.previous_cursor === request.cursor
+    && state.view.gallery_page?.revision === request.revision
+  );
+
+  try {
+    const url = new URL(request.url, window.location.href);
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_cursor', request.cursor);
+    url.searchParams.set('gallery_page_direction', 'previous');
+    url.searchParams.set('omit_sidebar', '1');
+    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+    if (response.status === 409 || !ownsResponse()) return false;
+    const data = await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse() || !Array.isArray(data.artist_groups)
+      || data.gallery_page?.revision !== request.revision
+      || (data.gallery_page?.has_previous && !data.gallery_page.previous_cursor)
+      || data.gallery_page?.previous_cursor === request.cursor) return false;
+
+    const currentPage = state.view.gallery_page;
+    applyViewPayload({
+      ...state.view,
+      artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),
+      gallery_page: {
+        ...currentPage,
+        previous_cursor: data.gallery_page.previous_cursor || null,
+        has_previous: Boolean(data.gallery_page.has_previous),
+      },
+      initial_view_partial: false,
+    }, {
+      trackSidebarReveal: false,
+      preserveSidebarState: true,
+      preserveGalleryBrowseLocationState: true,
+      rootGalleryContinuation: true,
+    });
+    renderArtistGroups({
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    });
+    return true;
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
+    }
+    return false;
+  } finally {
+    if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
+  }
+}
+
 const STARTUP_FOLLOWUP_RETRY_DELAY_MS = 100;
 const STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS = 350;
 const STARTUP_FOLLOWUP_MAX_AGE_MS = 1000;
@@ -14181,6 +15390,7 @@ const SCAN_COMPLETION_VIEW_REFRESH_RETRY_DELAYS_MS = Object.freeze([1000, 3000])
 const COVER_COMPLETION_VIEW_REFRESH_RETRY_DELAYS_MS = Object.freeze([1000, 3000]);
 const BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT = 2;
 const STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS = 25;
+const STATUS_POLL_FOREGROUND_IDLE_MAX_WAIT_MS = 1200;
 const STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS = 100;
 let pendingSidebarRenderFrameId = 0;
 let libraryStatusAction = null;
@@ -14444,6 +15654,7 @@ async function performPendingScanCompletionViewRefresh() {
     const refreshApplied = await refreshCurrentViewAfterBackgroundCompletion({
       preserveScroll: true,
       restartIfSameUrl: true,
+      shouldApplyResponse: data => data?.view_data_source !== 'transient_scan_state',
     });
     if (!refreshApplied) {
       throw new Error('The post-scan gallery refresh lost view-state ownership before it could apply.');
@@ -14573,9 +15784,10 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshApplied = await fetchAndRender(buildApiUrl(state.view), false, {
+    const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
+      preserveMountedGalleryChildren: true,
     });
     if (refreshApplied) return true;
     if (
@@ -14644,6 +15856,19 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  const renderOptions = { ...options };
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (
+    options.preserveAbsoluteScroll === true
+    && options.absoluteScrollPositionApplied === true
+    && galleryScroll
+  ) {
+    // The immediate mobile return already restored these coordinates. A later
+    // response can prepend content, so preserve the visible album from here.
+    renderOptions.preserveAbsoluteScroll = false;
+    delete renderOptions.absoluteScrollPosition;
+    delete renderOptions.absoluteScrollPositionApplied;
+  }
   const preserveMountedSelectedViewNodes = Boolean(
     options.preserveMountedGalleryChildren === true
     && options.retainMountedSelectedViewState
@@ -14688,7 +15913,7 @@ function renderView(options = {}) {
     renderRelated();
   }
   if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
-    renderArtistGroups(options);
+    renderArtistGroups(renderOptions);
   } else if (typeof updateGalleryMainChrome === 'function') {
     // Retained cards do not imply that search or artist context is unchanged.
     updateGalleryMainChrome();
@@ -14796,7 +16021,15 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
       state.awaitingInitialDataRefresh = false;
       return;
     }
-    if (String(state.view.query || '').trim() || String(state.view.selected_artist || '').trim()) {
+    const retainedView = normalizedFollowup.options?.retainMountedSelectedViewState;
+    const retainsSelectedSidebar = Boolean(
+      normalizedFollowup.options?.startupHydrationTier === 'sidebar'
+      && retainedView
+      && String(retainedView.query || '').trim() === String(state.view.query || '').trim()
+      && String(retainedView.selected_artist || '').trim() === String(state.view.selected_artist || '').trim()
+    );
+    if (!retainsSelectedSidebar
+      && (String(state.view.query || '').trim() || String(state.view.selected_artist || '').trim())) {
       clearStartupHydrationFollowup();
       state.awaitingInitialDataRefresh = false;
       return;
@@ -14850,12 +16083,44 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+async function fetchGalleryViewResponse(url, signal) {
+  const response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+  return retryPendingGalleryViewResponse(response, url, signal);
+}
+
+async function retryPendingGalleryViewResponse(response, url, signal) {
+  const deadline = Date.now() + 60000;
+  while (true) {
+    if (response.status !== 503) return response;
+    const pending = await response.clone().json().catch(() => null);
+    if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;
+    await new Promise((resolve, reject) => {
+      let timer;
+      const abort = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        reject(Object.assign(new Error('Gallery request cancelled'), { name: 'AbortError' }));
+      };
+      if (signal?.aborted) return abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      timer = setTimeout(() => {
+        signal?.removeEventListener('abort', abort);
+        resolve();
+      }, 1000);
+    });
+    response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+  }
+}
+
 async function readGalleryResponse(response, ownsResponse) {
   if (response.status === 401) {
     if (ownsResponse()) window.location.assign('/login');
     throw new Error('Sign in again to continue.');
   }
-  const data = await response.json();
+  const responsePayload = await response.json();
+  const data = typeof expandCompactSelectedArtistGroups === 'function'
+    ? expandCompactSelectedArtistGroups(responsePayload)
+    : responsePayload;
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
   }
@@ -14867,8 +16132,9 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   const url = new URL(apiUrl, 'http://localhost');
   if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums'
     || !url.searchParams.has('gallery_page_size')
+    || (url.searchParams.has('payload_tier') && url.searchParams.get('payload_tier') !== 'full')
     || ['q', 'artist', 'genre', 'mood', 'style', 'duration_min', 'duration_max',
-      'related_artist', 'primary_filter', 'gallery_cursor', 'payload_tier', 'root_sidebar']
+      'related_artist', 'primary_filter', 'gallery_cursor', 'root_sidebar']
       .some(key => url.searchParams.has(key))) return 0;
   const scope = state.view.gallery_page_scope || state.view;
   if (String(scope.gallery_scope || '') !== String(url.searchParams.get('gallery_scope') || '')) return 0;
@@ -14878,15 +16144,167 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
 }
 
-async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse) {
-  let payload = data;
+async function recoverRootGalleryRefreshFirstPage(
+  apiUrl, response, retainedArtists, controller, ownsResponse,
+  { omitSidebar = true, allowRevisionRestart = true } = {},
+) {
+  const requestedArtist = String(
+    new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist') || '',
+  ).trim();
+  const artists = [...new Set(retainedArtists)].filter(Boolean);
+  if (response && requestedArtist) {
+    const requestedIndex = artists.indexOf(requestedArtist);
+    if (requestedIndex >= 0) artists.splice(requestedIndex, 1);
+    artists.unshift(requestedArtist);
+  }
+  let artistIndex = 0;
+  let currentResponse = response;
+  let currentUrl = apiUrl;
   let restarted = false;
+  let requestCount = currentResponse ? 1 : 0;
+  const fetchArtist = async artist => {
+    if (requestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
+      throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+    }
+    requestCount += 1;
+    const url = new URL(apiUrl, 'http://localhost');
+    url.searchParams.delete('gallery_cursor');
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_anchor_artist', artist);
+    if (omitSidebar) url.searchParams.set('omit_sidebar', '1');
+    else url.searchParams.delete('omit_sidebar');
+    const nextUrl = `${url.pathname}${url.search}`;
+    const nextResponse = await fetchGalleryViewResponse(nextUrl, controller?.signal);
+    return ownsResponse() ? { response: nextResponse, url: nextUrl } : null;
+  };
+  if (!currentResponse) {
+    if (!artists.length) {
+      throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+    }
+    const initial = await fetchArtist(artists[artistIndex]);
+    if (!initial) return null;
+    currentResponse = initial.response;
+    currentUrl = initial.url;
+  }
+  while (ownsResponse()) {
+    if (currentResponse.status === 409) {
+      if (!allowRevisionRestart) return { restart: true, response: currentResponse };
+      if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
+      restarted = true;
+      const retry = await fetchArtist(artists[artistIndex]);
+      if (!retry) return null;
+      currentResponse = retry.response;
+      currentUrl = retry.url;
+      continue;
+    }
+    if (currentResponse.status === 400) {
+      const failure = await currentResponse.json();
+      if (!ownsResponse()) return null;
+      const message = String(failure?.error || failure?.detail || 'Unable to refresh gallery.');
+      if (message !== 'Gallery artist anchor is unavailable.') throw new Error(message);
+      artistIndex += 1;
+      if (artistIndex >= artists.length) break;
+      const alternate = await fetchArtist(artists[artistIndex]);
+      if (!alternate) return null;
+      currentResponse = alternate.response;
+      currentUrl = alternate.url;
+      continue;
+    }
+    return { response: currentResponse, url: currentUrl, restarted };
+  }
+  throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+}
+
+async function resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse) {
+  const result = await recoverRootGalleryRefreshFirstPage(
+    apiUrl, null, [...retainedArtists].reverse(), controller, ownsResponse,
+    { allowRevisionRestart: false },
+  );
+  if (!result || result.restart) return result;
+  const payload = await readGalleryResponse(result.response, ownsResponse);
+  if (!ownsResponse()) return null;
+  const page = payload?.gallery_page;
+  const canonicalArtist = String(page?.anchor_group_artist || '').trim();
+  const group = payload?.artist_groups?.find(item => String(item.artist || '').trim() === canonicalArtist);
+  if (!canonicalArtist || !Number.isInteger(page?.anchor_offset) || page.anchor_offset < 0 || !group?.albums?.length) {
+    throw new Error('Root gallery refresh endpoint metadata is unavailable.');
+  }
+  return { artist: canonicalArtist, offset: page.anchor_offset, length: group.albums.length, revision: page.revision };
+}
+
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, retainedStartArtist, retainedEndArtist = '', retainedArtists = [retainedEndArtist], revisionRestarted = false) {
+  const completeArtistPages = Boolean(new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist'));
+  let payload = data;
+  let restarted = revisionRestarted;
+  let endpointArtist = retainedEndArtist;
+  let endpointResolved = false;
+  let endpointLength = 0;
   const cursors = new Set();
   let remainingPages = Math.ceil(coverage / 50);
+  const restartRefresh = async (conflictResponse = { status: 409 }) => {
+    if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
+    restarted = true;
+    endpointArtist = retainedEndArtist;
+    endpointResolved = false;
+    endpointLength = 0;
+    cursors.clear();
+    remainingPages = Math.ceil(coverage / 50);
+    const recovered = await recoverRootGalleryRefreshFirstPage(
+      apiUrl, conflictResponse, retainedArtists, controller, ownsResponse,
+      { omitSidebar: false },
+    );
+    if (!recovered) {
+      payload = null;
+      return;
+    }
+    payload = await readGalleryResponse(recovered.response, ownsResponse);
+  };
   while (ownsResponse()) {
     const page = payload?.gallery_page;
-    const count = (payload?.artist_groups || []).reduce((sum, group) => sum + (group.albums || []).length, 0);
-    if (!page?.has_more || count >= coverage) return payload;
+    const groups = payload?.artist_groups || [];
+    const retainedStart = groups.findIndex(group => String(group.artist || '').trim() === retainedStartArtist);
+    // Anchored responses include leading context, which must not displace the
+    // trailing portion of the window being refreshed.
+    const count = groups.slice(Math.max(0, retainedStart))
+      .reduce((sum, group) => sum + (group.albums || []).length, 0);
+    // Anchored pages contain complete artist groups, including album removals.
+    const retainedEndPresent = !endpointArtist || groups.some(group => (
+      String(group.artist || '').trim() === endpointArtist
+    ));
+    const endpointGroup = groups.find(group => String(group.artist || '').trim() === endpointArtist);
+    const endpointComplete = endpointResolved
+      ? (endpointGroup?.albums?.length || 0) >= endpointLength
+      : completeArtistPages || Boolean(page?.anchor_artist) || !endpointArtist;
+    if (!page?.has_more || (count >= coverage && retainedEndPresent && endpointComplete)) return payload;
+    if (!endpointResolved && ((!retainedEndPresent && remainingPages <= 0)
+      || (count >= coverage && !endpointComplete))) {
+      const endpoint = await resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse);
+      if (!ownsResponse()) return null;
+      if (endpoint.restart || String(endpoint.revision || '') !== String(page?.revision || '')) {
+        await restartRefresh(endpoint.restart ? endpoint.response : undefined);
+        continue;
+      }
+      endpointArtist = endpoint.artist;
+      endpointResolved = true;
+      endpointLength = endpoint.length;
+      if ((groups.find(group => String(group.artist || '').trim() === endpointArtist)?.albums?.length || 0) < endpointLength) {
+        const startArtist = String(page?.anchor_group_artist || retainedStartArtist).trim();
+        const startIndex = groups.findIndex(group => String(group.artist || '').trim() === startArtist);
+        let startOffset = 0;
+        if (page?.anchor_artist) {
+          const leadingCount = groups.slice(0, startIndex).reduce((sum, group) => sum + (group.albums || []).length, 0);
+          if (startIndex < 0 || !Number.isInteger(page.anchor_offset) || page.anchor_offset < leadingCount) {
+            throw new Error('Root gallery refresh start metadata is unavailable.');
+          }
+          // An alias can resolve inside its rendered group. Use the earliest
+          // possible start, so that uncertainty cannot undercount needed pages.
+          startOffset = Math.max(0, page.anchor_offset - leadingCount - ((groups[startIndex].albums || []).length - 1));
+        }
+        const loaded = groups.reduce((sum, group) => sum + (group.albums || []).length, 0);
+        remainingPages = Math.ceil((endpoint.offset + endpoint.length - startOffset - loaded) / 50);
+      }
+      continue;
+    }
     const cursor = String(page.next_cursor || '');
     if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
       throw new Error('Root gallery refresh did not advance within its loaded coverage.');
@@ -14896,23 +16314,12 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     url.searchParams.set('gallery_page_size', '50');
     url.searchParams.set('gallery_cursor', cursor);
     url.searchParams.set('omit_sidebar', '1');
-    const response = await fetch(`${url.pathname}${url.search}`, {
-      headers: { Accept: 'application/json' }, signal: controller?.signal,
-    });
+    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
     if (!ownsResponse()) return null;
     const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
     if (!ownsResponse()) return null;
     if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
-      if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
-      restarted = true;
-      cursors.clear();
-      remainingPages = Math.ceil(coverage / 50);
-      url.searchParams.delete('gallery_cursor');
-      url.searchParams.delete('omit_sidebar');
-      const restartResponse = await fetch(`${url.pathname}${url.search}`, {
-        headers: { Accept: 'application/json' }, signal: controller?.signal,
-      });
-      payload = await readGalleryResponse(restartResponse, ownsResponse);
+      await restartRefresh(response.status === 409 ? response : undefined);
       continue;
     }
     if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
@@ -14921,7 +16328,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     payload = {
       ...payload,
       artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups),
-      gallery_page: next.gallery_page,
+      gallery_page: retainRootGalleryAnchorMetadata(payload.gallery_page, next.gallery_page),
     };
   }
   return null;
@@ -14939,10 +16346,23 @@ async function fetchAndRender(url, push = true, options = {}) {
   }
   const canInterruptCurrent = requestOptions.interruptCurrent !== false;
   const restartIfSameUrl = requestOptions.restartIfSameUrl === true;
-  const apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
+  let apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
   const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
+  const retainedArtists = (state.view?.artist_groups || []).map(group => String(group.artist || '').trim()).filter(Boolean);
+  const retainedStartArtist = retainedArtists[0] || '';
+  const retainedEndArtist = retainedArtists.at(-1) || '';
+  if (rootRefreshCoverage > 0 && state.view?.gallery_page?.anchor_artist && retainedStartArtist) {
+    const refreshUrl = new URL(apiUrl, 'http://localhost');
+    if (!refreshUrl.searchParams.has('gallery_anchor_artist')) {
+      // A jump's original target may precede a rename or follow prepended pages.
+      // Refresh the retained window, rather than navigating back to that target.
+      refreshUrl.searchParams.set('gallery_anchor_artist', retainedStartArtist);
+      apiUrl = `${refreshUrl.pathname}${refreshUrl.search}`;
+    }
+  }
+  const retainedRootGalleryPage = rootRefreshCoverage > 0 ? state.view?.gallery_page : null;
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''
   ).replace(/\+/g, ' ');
@@ -14978,6 +16398,8 @@ async function fetchAndRender(url, push = true, options = {}) {
       String(state.ui.activeViewRequestUrl || '') === apiUrl
       && Number(state.ui.activeViewRequestTagEditMutationRevision || 0)
         === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      && Number(state.ui.activeViewRequestCoverMutationRevision || 0)
+        === Number(state.ui.albumCoverMutationRevision || 0)
     ) {
       const activeController = state.ui.activeViewRequestController;
       if (
@@ -15027,9 +16449,13 @@ async function fetchAndRender(url, push = true, options = {}) {
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
+  const requestCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0);
+  const requestModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  const requestModalCoverAuthority = requestModalAlbum ? { ...requestModalAlbum } : null;
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
+  state.ui.activeViewRequestCoverMutationRevision = requestCoverMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
   state.ui.activeViewRequestPush = Boolean(push);
   state.ui.activeViewRequestStartupRefresh = Boolean(requestOptions.startupRefresh);
@@ -15061,12 +16487,57 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
-    const response = await fetch(apiUrl, {
-      headers: { Accept: 'application/json' },
-      signal: controller?.signal,
-    });
-    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
+    let response = await fetch(apiUrl, { headers: { Accept: 'application/json' }, signal: controller?.signal });
+    if (response.status === 503) {
+      response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
+    }
+    const ownsInitialResponse = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision);
+    let firstPageRevisionRestarted = false;
     if (rootRefreshCoverage > 0) {
+      const recovered = await recoverRootGalleryRefreshFirstPage(
+        apiUrl, response, retainedArtists, controller, ownsInitialResponse,
+        { omitSidebar: false },
+      );
+      if (!recovered) return false;
+      response = recovered.response;
+      apiUrl = recovered.url;
+      firstPageRevisionRestarted = recovered.restarted === true;
+    }
+    let data = await readGalleryResponse(response, ownsInitialResponse);
+    const selectedArtist = String(data?.selected_artist || '').trim();
+    const selectedArtistStillVisible = Array.isArray(data?.artists_sidebar)
+      && data.artists_sidebar.some((item) => (
+        String(item?.artist_display || item?.artist || '').trim() === selectedArtist
+      ));
+    if (
+      requestOptions.fallbackToAllArtistsWhenSelectionMissing === true
+      && selectedArtist
+      && !String(data?.query || '').trim()
+      && Array.isArray(data?.artists_sidebar)
+      && !selectedArtistStillVisible
+    ) {
+      const fallbackUrl = new URL(apiUrl, 'http://localhost');
+      for (const name of [
+        'artist', 'related_artist', 'primary_filter', 'family_display',
+        'selected_artist_family_display_mode', 'gallery_anchor_artist',
+        'gallery_cursor', 'gallery_page_direction',
+      ]) fallbackUrl.searchParams.delete(name);
+      fallbackUrl.searchParams.set('all_artists', '1');
+      apiUrl = `${fallbackUrl.pathname}${fallbackUrl.search}`;
+      response = await fetch(apiUrl, {
+        headers: { Accept: 'application/json' },
+        signal: controller?.signal,
+      });
+      if (response.status === 503) {
+        response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
+      }
+      data = await readGalleryResponse(response, ownsInitialResponse);
+    }
+    if (rootRefreshCoverage > 0) {
+      data = {
+        ...data,
+        gallery_page: retainRootGalleryAnchorMetadata(retainedRootGalleryPage, data.gallery_page),
+      };
       const ownsRefresh = () => {
         if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
           || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
@@ -15076,7 +16547,10 @@ async function fetchAndRender(url, push = true, options = {}) {
           return false;
         }
       };
-      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
+      data = await collectRootGalleryRefresh(
+        data, apiUrl, rootRefreshCoverage, controller, ownsRefresh,
+        retainedStartArtist, retainedEndArtist, retainedArtists, firstPageRevisionRestarted,
+      );
       if (!data || !ownsRefresh()) return false;
     }
     markStartupFollowup('payload_received', requestOptions, {
@@ -15092,6 +16566,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
+    // Artwork published after this request started owns the album cover state.
+    if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
+      return false;
+    }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
       let shouldApplyResponse = false;
       try {
@@ -15102,6 +16580,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       if (!shouldApplyResponse) return false;
     }
     const startupHydrationTier = String(requestOptions.startupHydrationTier || 'full');
+    if (data.gallery_page && !requestOptions.startupRefresh) state.awaitingInitialDataRefresh = false;
     if (
       requestOptions.startupRefresh
       && startupHydrationTier !== 'sidebar'
@@ -15149,7 +16628,46 @@ async function fetchAndRender(url, push = true, options = {}) {
         preserveMountedGalleryChildren: true,
       }
       : requestOptions;
+    const responseModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+    const requestKnownAlbum = !requestModalAlbum && responseModalAlbum
+      && typeof flattenVisibleAlbums === 'function'
+      ? flattenVisibleAlbums().find((album) => album.key === responseModalAlbum.key)
+      : null;
+    const responseModalCoverAuthority = requestModalCoverAuthority || requestKnownAlbum;
+    // Save replaces the known album object even when its selected bytes and
+    // legacy selection fields are unchanged. Check before applying this view.
+    const responseOwnsModalAlbum = Boolean(responseModalAlbum?.key && responseModalCoverAuthority
+      && (!requestModalAlbum || responseModalAlbum === requestModalAlbum)
+      && ['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
+        'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source'].every(
+        (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
+      ));
     applyViewPayload(payloadToApply, responseApplyOptions);
+    const previousAppliedInventoryMutationRevision = Number(
+      state.ui.appliedViewInventoryMutationRevision,
+    );
+    const appliedInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    const appliedNewInventoryRevision = Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0
+      && (
+        !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
+        || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
+      );
+    if (Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0) {
+      state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
+      const observedInventoryMutationRevision = Number(
+        state.status?.inventory_mutation_revision,
+      );
+      if (
+        state.ui.pendingInventoryMutationViewRefresh
+        && isCanonicalFullViewPayload(data, requestOptions)
+        && Number.isSafeInteger(observedInventoryMutationRevision)
+        && appliedInventoryMutationRevision >= observedInventoryMutationRevision
+      ) {
+        state.ui.pendingInventoryMutationViewRefresh = false;
+      }
+    }
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
       artistCount: Number(state.view?.artist_count || 0),
@@ -15173,8 +16691,35 @@ async function fetchAndRender(url, push = true, options = {}) {
     );
     renderView({
       ...responseApplyOptions,
+      ...(responseApplyOptions.preserveScroll === true && hasMountedGalleryContent
+        ? { preserveMountedGalleryChildren: true }
+        : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
+    if (appliedNewInventoryRevision
+        && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+      invalidateAllHydratedTrackModalAlbumDetails();
+      if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
+        await refreshOpenTrackModalAfterInventoryMutation();
+      }
+    }
+    const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+    if (responseOwnsModalAlbum && currentModalAlbum === responseModalAlbum
+        && typeof refreshOpenTrackModalVersionState === 'function'
+        && typeof flattenVisibleAlbums === 'function'
+        && typeof albumRequiresHydration === 'function') {
+      const canonicalAlbum = [data.primary_artist_groups, data.family_artist_groups, data.artist_groups]
+        .flatMap((groups) => (Array.isArray(groups) ? groups : []))
+        .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []))
+        .find((album) => (
+          album.key === currentModalAlbum.key && !albumRequiresHydration(album)
+          && (Object.prototype.hasOwnProperty.call(album, 'cover_path')
+            || Object.prototype.hasOwnProperty.call(album, 'remote_cover_url'))
+        ));
+      if (canonicalAlbum && !retainedMountedSelectedViewState) {
+        refreshOpenTrackModalVersionState(currentModalAlbum.key, canonicalAlbum);
+      }
+    }
     if (
       requestOptions.preserveGalleryOptionsMenu === true
       && state.gallery?.menuOpen
@@ -15205,10 +16750,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       && data?.ok !== false
       && (
         (requestOptions.startupRefresh
-          && (
-            startupHydrationTier !== 'sidebar'
-            || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
-          ))
+          && !String(requestOptions.startupHydrationFollowupEndpoint || '').trim())
         || isCanonicalFullViewPayload(data, requestOptions)
       )
     ) {
@@ -15216,13 +16758,19 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     if (
       requestOptions.startupRefresh
-      && startupHydrationTier === 'sidebar'
       && String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
     ) {
+      const followupHydrationTier = startupHydrationTier === 'sidebar' ? 'full' : 'sidebar';
       queueStartupHydrationFollowup(
         requestOptions.startupHydrationFollowupEndpoint,
         {
-          startupHydrationTier: 'full',
+          startupHydrationTier: followupHydrationTier,
+          ...(followupHydrationTier === 'sidebar'
+            ? {
+              retainMountedSelectedViewState: { ...state.view },
+              skipPendingViewTransition: true,
+            }
+            : {}),
         },
       );
     }
@@ -15322,11 +16870,7 @@ async function fetchAndRender(url, push = true, options = {}) {
         // The one-shot post-scan refresh now owns the active request slot.
       } else if (await dispatchPendingCoverCompletionViewRefresh()) {
         // The one-shot post-cover refresh now owns the active request slot.
-      } else if (
-        pendingStartupHydrationFollowup
-        && !String(state.view.query || '').trim()
-        && !String(state.view.selected_artist || '').trim()
-      ) {
+      } else if (pendingStartupHydrationFollowup) {
         dispatchStartupHydrationFollowup(
           pendingStartupHydrationFollowup,
           STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS,
@@ -15462,10 +17006,15 @@ function resumeScanPageGalleryCoverLoads() {
 
 function openScanPage() {
   if (!state.ui.scanPageReturnContext) {
+    const galleryScroll = document.getElementById('albums-scroll');
     state.ui.scanPageReturnContext = {
       view: JSON.parse(JSON.stringify(state.view || {})),
       searchDraftQuery: String(state.ui.searchDraftQuery ?? state.view?.query ?? ''),
       url: typeof window !== 'undefined' ? String(window.location?.href || '') : '',
+      galleryScrollPosition: galleryScroll ? {
+        scrollTop: Number(galleryScroll.scrollTop || 0),
+        scrollLeft: Number(galleryScroll.scrollLeft || 0),
+      } : null,
     };
   }
   suspendScanPageGalleryCoverLoads();
@@ -15570,7 +17119,16 @@ function closeScanPage() {
   if (retainedGalleryCardsRemainMounted) {
     renderView({ preserveMountedGallery: true });
   } else {
-    renderView();
+    renderView(returnContext.galleryScrollPosition ? {
+      preserveScroll: true,
+      preserveAbsoluteScroll: true,
+      absoluteScrollPosition: returnContext.galleryScrollPosition,
+    } : undefined);
+  }
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (galleryScroll && returnContext.galleryScrollPosition) {
+    galleryScroll.scrollTop = returnContext.galleryScrollPosition.scrollTop;
+    galleryScroll.scrollLeft = returnContext.galleryScrollPosition.scrollLeft;
   }
   resumeScanPageGalleryCoverLoads();
 }
@@ -15797,14 +17355,37 @@ async function pollStatus() {
       && coverScheduler?.isForegroundIdle?.() === false
       && typeof coverScheduler.whenForegroundIdle === 'function'
     ) {
-      await coverScheduler.whenForegroundIdle();
-      if (ownsStatus()) nextPollDelay = STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS;
-      return;
+      let idleDeadlineId = 0;
+      const foregroundIdleBeforeDeadline = await Promise.race([
+        coverScheduler.whenForegroundIdle().then(() => true),
+        new Promise((resolve) => {
+          idleDeadlineId = scheduleBrowserTimeout(
+            () => resolve(false),
+            STATUS_POLL_FOREGROUND_IDLE_MAX_WAIT_MS,
+          );
+        }),
+      ]);
+      if (foregroundIdleBeforeDeadline) {
+        clearBrowserTimeout(idleDeadlineId);
+        if (ownsStatus()) nextPollDelay = STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS;
+        return;
+      }
     }
     const response = await fetch('/status');
     const data = await readGalleryResponse(response, ownsStatus);
+    if (startedDuringPendingStart && sequence === statusPollSequence
+        && readRevision === statusReadRevision && libraryStatusAction?.coverPreparation
+        && data.covers_in_progress && data.covers_phase === 'preparing'
+        && data.covers_run_mode === 'manual-bulk'
+        && data.scan_generation === knownStatus.scan_generation
+        && !data.scan_in_progress && !data.relations_in_progress) {
+      updateStatusIndicator({ ...state.status,
+        covers_elapsed_seconds: data.covers_elapsed_seconds,
+        status_connection_lost: false });
+      return;
+    }
     if (!ownsStatus()) return;
-    updateStatusIndicator(data);
+    updateStatusIndicator({ ...data, status_connection_lost: false });
     const normalizedStatus = state.status;
     const currentInventoryRevision = Number(
       normalizedStatus.inventory_mutation_revision || 0,
@@ -15815,7 +17396,13 @@ async function pollStatus() {
       if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
         invalidateAllHydratedTrackModalAlbumDetails();
       }
-      state.ui.pendingInventoryMutationViewRefresh = true;
+      const appliedViewInventoryRevision = Number(
+        state.ui.appliedViewInventoryMutationRevision,
+      );
+      if (!Number.isSafeInteger(appliedViewInventoryRevision)
+        || appliedViewInventoryRevision < currentInventoryRevision) {
+        state.ui.pendingInventoryMutationViewRefresh = true;
+      }
     }
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
@@ -15960,7 +17547,10 @@ async function pollStatus() {
         await loadProblematicFiles(true);
         if (!ownsStatus()) return;
       }
-      showToast('Album covers updated.', 'success', 3200);
+      const coverOutcome = String(normalizedStatus.covers_outcome || '').trim().toLowerCase();
+      if (!['completed', 'cancelled', 'failed'].includes(coverOutcome)) {
+        showToast('Cover search was interrupted.', 'warning', 4800);
+      }
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;
@@ -15994,7 +17584,16 @@ async function pollStatus() {
     }
     nextPollDelay = currentStatusPollDelay();
   } catch (error) {
-    if (ownsStatus()) nextPollDelay = 3000;
+    if (ownsStatus()) {
+      nextPollDelay = 3000;
+      state.status = { ...state.status, status_connection_lost: true };
+      if (typeof invalidateStatusIndicatorPresentation === 'function') {
+        invalidateStatusIndicatorPresentation();
+      }
+      if (typeof renderLibraryLoader === 'function') {
+        renderLibraryLoader(state.status);
+      }
+    }
   } finally {
     // A newer poll owns its continuation. Discarded work must not stop polling
     // or postpone an earlier action read that is already scheduled.
@@ -16730,7 +18329,14 @@ async function downloadUtilityLogHistory() {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
   anchor.href = url; anchor.download = `album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
 }
 
 function openUtilityLogHistoryQuery(exportAfter = false) {
@@ -16954,6 +18560,7 @@ function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const showPath = Boolean(config.showPath);
   const forceGroupLabels = Boolean(config.forceGroupLabels);
+  const collapsibleGroups = Boolean(config.collapsibleGroups);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
@@ -16986,6 +18593,9 @@ function buildAlbumTrackTableHtml(config = {}) {
       overflow: 'none',
       mobile: 'preserve',
     });
+    if (collapsibleGroups && showLabel) {
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
+    }
     const heading = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
@@ -18818,6 +20428,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   const mutation = {
     taskId: normalizedTaskId,
     albumKey: selectedKey,
+    originalTrackPaths: Array.from(getAlbumTrackPaths(originalAlbum)),
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
@@ -18841,12 +20452,16 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (survivingKeys.has(selectedKey)) {
       state.utility.selectedProblematicKey = selectedKey;
     } else {
+      const retainedAlbum = findAlbumByTrackPaths(
+        items,
+        new Set(Array.isArray(mutation.originalTrackPaths) ? mutation.originalTrackPaths : []),
+      );
       const priorKeys = Array.isArray(mutation.priorKeys) ? mutation.priorKeys : [];
       const selectedIndex = priorKeys.indexOf(selectedKey);
       const previousSurvivor = selectedIndex > 0
         ? priorKeys.slice(0, selectedIndex).reverse().find((key) => survivingKeys.has(key))
         : '';
-      state.utility.selectedProblematicKey = previousSurvivor || String(items[0]?.key || '');
+      state.utility.selectedProblematicKey = String(retainedAlbum?.key || previousSurvivor || items[0]?.key || '');
     }
     const survivorKey = String(state.utility.selectedProblematicKey || '');
     const survivor = items.find((album) => String(album?.key || '') === survivorKey) || null;
@@ -18943,6 +20558,139 @@ async function refreshLoadedProblematicFilesAfterSaveCompletion() {
   return true;
 }
 
+async function reconcileCommittedTagEditDestination(terminalPayload, context = {}) {
+  const status = String(
+    terminalPayload?.status || terminalPayload?.save_task_status || '',
+  ).trim().toLowerCase();
+  const destinationArtist = String(terminalPayload?.destination_artist || '').trim();
+  const destinationAlbumKey = String(
+    terminalPayload?.destination_album_key || '',
+  ).trim();
+  const destinationAlbumId = Number(terminalPayload?.destination_album_id || 0);
+  const shouldApplyResponse = typeof context.shouldApplyResponse === 'function'
+    ? context.shouldApplyResponse
+    : () => true;
+  if (
+    status !== 'completed'
+    || !destinationArtist
+    || !shouldApplyResponse(terminalPayload)
+  ) return false;
+
+  const orphanedArtists = new Set(
+    (Array.isArray(terminalPayload?.orphaned_source_artists)
+      ? terminalPayload.orphaned_source_artists
+      : [])
+      .map((artist) => String(artist || '').trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  const selectedArtistKey = selectedArtist.toLocaleLowerCase();
+  if (
+    !selectedArtist
+    || (
+      selectedArtistKey !== destinationArtist.toLocaleLowerCase()
+      && !orphanedArtists.has(selectedArtistKey)
+    )
+  ) return false;
+
+  const activeQuery = String(state.view?.query || '').trim();
+  const destinationView = {
+    ...state.view,
+    selected_artist: destinationArtist,
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    ...(activeQuery ? {
+      search_context: {
+        ...(state.view?.search_context || {}),
+        selected_artist: destinationArtist,
+        selected_artist_source: 'requested_artist',
+      },
+    } : {}),
+  };
+  const refreshed = await fetchAndRender(
+    buildApiUrl(destinationView, { rootFullPayload: true }),
+    false,
+    {
+      ...(context.renderOptions || {}),
+      restartIfSameUrl: true,
+      shouldApplyResponse,
+    },
+  );
+  if (
+    !refreshed
+    || !shouldApplyResponse(terminalPayload)
+    || String(state.view?.selected_artist || '').trim() !== destinationArtist
+  ) return false;
+
+  if (destinationAlbumKey) {
+    const updatedDestinationAlbums = (
+      Array.isArray(terminalPayload?.updated_albums) ? terminalPayload.updated_albums : []
+    ).filter((album) => (
+      getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+      || (
+        destinationAlbumId > 0
+        && Number(album?.album_id || 0) === destinationAlbumId
+      )
+    ));
+    const destinationVisible = collectVisibleAlbumsUnique().some((album) => (
+      getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+      || updatedDestinationAlbums.some((updatedAlbum) => (
+        albumsShareTrackPath(album, getAlbumTrackPaths(updatedAlbum))
+        || albumsShareLogicalReleaseIdentity(album, updatedAlbum)
+      ))
+    ));
+    if (!destinationVisible) return false;
+  }
+
+  const destinationSidebarKey = destinationArtist.toLocaleLowerCase();
+  const sidebarArtists = Array.isArray(state.view?.artists_sidebar)
+    ? state.view.artists_sidebar
+    : [];
+  if (!sidebarArtists.some((item) => (
+    String(item?.artist || '').trim().toLocaleLowerCase() === destinationSidebarKey
+  ))) {
+    const destinationGroup = [
+      ...(state.view?.primary_artist_groups || []),
+      ...(state.view?.artist_groups || []),
+    ].find((group) => (
+      String(group?.artist || group?.artist_display || '').trim().toLocaleLowerCase()
+        === destinationSidebarKey
+    ));
+    const albumCount = Number(destinationGroup?.album_count || destinationGroup?.count || 0)
+      || Math.max(1, Array.isArray(destinationGroup?.albums) ? destinationGroup.albums.length : 0);
+    state.view.artists_sidebar = [
+      ...sidebarArtists,
+      { artist: destinationArtist, count: albumCount },
+    ].sort((left, right) => String(left?.artist || '').localeCompare(
+      String(right?.artist || ''),
+      undefined,
+      { sensitivity: 'base' },
+    ));
+  }
+
+  if (orphanedArtists.size) {
+    state.view.artists_sidebar = (state.view.artists_sidebar || []).filter((item) => (
+      !orphanedArtists.has(String(item?.artist || '').trim().toLocaleLowerCase())
+    ));
+    for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
+      state.view[key] = (state.view[key] || []).filter((group) => (
+        !orphanedArtists.has(
+          String(group?.artist || group?.artist_display || '').trim().toLocaleLowerCase(),
+        )
+      ));
+    }
+  }
+  if (typeof buildUrl === 'function' && window?.history?.replaceState) {
+    window.history.replaceState(
+      { ...window.history.state, ...state.view },
+      '',
+      buildUrl(state.view),
+    );
+  }
+  return true;
+}
+
 async function watchSaveTask(taskId, context = {}) {
   const normalizedId = String(taskId || '').trim();
   if (!normalizedId) return;
@@ -18991,7 +20739,7 @@ async function watchSaveTask(taskId, context = {}) {
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
   const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
-  const absoluteScrollPosition = context.absoluteScrollPosition
+  let absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
     ? {
@@ -18999,19 +20747,58 @@ async function watchSaveTask(taskId, context = {}) {
       scrollTop: Number(context.absoluteScrollPosition.scrollTop),
     }
     : null;
-  const renderOptions = context.preserveAbsoluteScroll === true
+  let absoluteScrollOwnerGeneration = Number.isSafeInteger(
+    context.absoluteScrollOwnerGeneration,
+  )
+    ? context.absoluteScrollOwnerGeneration
+    : null;
+  let renderOptions = context.preserveAbsoluteScroll === true
     ? {
       preserveScroll: true,
       preserveAbsoluteScroll: true,
       ...(absoluteScrollPosition ? { absoluteScrollPosition } : {}),
     }
     : { preserveScroll: true };
+  const refreshAbsoluteScrollForUserIntent = () => {
+    if (
+      !Number.isSafeInteger(absoluteScrollOwnerGeneration)
+      || context.preserveAbsoluteScroll !== true
+      || (!originStillOwnsView() && !currentViewMatchesOriginRequest())
+      || typeof virtualGrid === 'undefined'
+      || typeof virtualGrid?.getUserScrollIntentGeneration !== 'function'
+      || typeof document === 'undefined'
+      || typeof document.getElementById !== 'function'
+    ) return false;
+    const currentGeneration = virtualGrid.getUserScrollIntentGeneration();
+    if (
+      !Number.isSafeInteger(currentGeneration)
+      || currentGeneration === absoluteScrollOwnerGeneration
+    ) return false;
+    const galleryScroll = document.getElementById('albums-scroll');
+    if (
+      !galleryScroll
+      || !Number.isFinite(Number(galleryScroll.scrollTop))
+      || !Number.isFinite(Number(galleryScroll.scrollLeft))
+    ) return false;
+    absoluteScrollPosition = {
+      scrollLeft: Number(galleryScroll.scrollLeft),
+      scrollTop: Number(galleryScroll.scrollTop),
+    };
+    absoluteScrollOwnerGeneration = currentGeneration;
+    renderOptions = { ...renderOptions, absoluteScrollPosition };
+    return true;
+  };
+  const currentRenderOptions = () => {
+    refreshAbsoluteScrollForUserIntent();
+    return renderOptions;
+  };
   const currentViewRenderOptions = () => (
     originStillOwnsView() || currentViewMatchesOriginRequest()
-      ? { ...renderOptions, preserveGalleryOptionsMenu: true }
+      ? { ...currentRenderOptions(), preserveGalleryOptionsMenu: true }
       : { preserveScroll: true, preserveGalleryOptionsMenu: true }
   );
   const restoreOwnedAbsoluteScroll = () => {
+    refreshAbsoluteScrollForUserIntent();
     if (
       !absoluteScrollPosition
       || (!originStillOwnsView() && !currentViewMatchesOriginRequest())
@@ -19031,7 +20818,7 @@ async function watchSaveTask(taskId, context = {}) {
     galleryScroll.scrollTop = absoluteScrollPosition.scrollTop;
     return true;
   };
-  const providedTerminalPayload = context.terminalPayload
+  let providedTerminalPayload = context.terminalPayload
     && typeof context.terminalPayload === 'object'
     && !Array.isArray(context.terminalPayload)
     ? {
@@ -19048,8 +20835,11 @@ async function watchSaveTask(taskId, context = {}) {
       ).trim().toLowerCase(),
     }
     : null;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const consumesProvidedTerminalPayload = attempt === 0 && providedTerminalPayload;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const consumesProvidedTerminalPayload = Boolean(
+      providedTerminalPayload
+      && (attempt === 0 || providedTerminalPayload.status === 'completed'),
+    );
     try {
       let data = providedTerminalPayload;
       if (!consumesProvidedTerminalPayload) {
@@ -19063,12 +20853,42 @@ async function watchSaveTask(taskId, context = {}) {
       }
       const responseTaskId = String(data.task_id || '').trim();
       if (responseTaskId && responseTaskId !== normalizedId) {
+        providedTerminalPayload = null;
         await waitForBrowserTimeout(500);
         continue;
       }
       if (data.status === 'completed') {
+        const committedInventoryMutationRevision = Number(data.inventory_mutation_revision);
+        const responseContainsCommittedInventoryMutation = (responseData) => (
+          !Number.isSafeInteger(committedInventoryMutationRevision)
+          || committedInventoryMutationRevision <= 0
+          || (
+            Number(responseData?.inventory_mutation_revision) >= committedInventoryMutationRevision
+            && responseData?.gallery_page?.projection_stale !== true
+          )
+        );
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         await refreshLoadedProblematicFilesAfterSaveCompletion();
+        let destinationViewReconciled = false;
+        if (data.destination_artist && canReconcileOriginView()) {
+          try {
+            destinationViewReconciled = await reconcileCommittedTagEditDestination(
+              data,
+              {
+                renderOptions: currentViewRenderOptions(),
+                shouldApplyResponse: responseData => (
+                  !mutationWasSuperseded()
+                  && responseContainsCommittedInventoryMutation(responseData)
+                ),
+              },
+            );
+          } catch (destinationError) {
+            console.warn(
+              '[AlbumHaven][SaveTask] Saved tags, but failed to open the committed destination artist.',
+              destinationError,
+            );
+          }
+        }
         const finalizedAlbums = applyExplicitFinalizedAlbumArtistEdits(
           Array.isArray(data.updated_albums) ? data.updated_albums : [],
           context.tagEdits,
@@ -19106,15 +20926,37 @@ async function watchSaveTask(taskId, context = {}) {
           && !finalizedAlbumsCoverOriginalMembership
         );
         let modalUpdatedAlbums = finalizedAlbums;
-        let viewRefreshed = false;
+        let viewRefreshed = destinationViewReconciled;
         let viewReconciledLocally = false;
+        const currentViewContainsAffectedAlbum = () => {
+          const affectedAlbums = [originalAlbum, ...finalizedAlbums].filter(Boolean);
+          if (!affectedAlbums.length) return true;
+          return collectVisibleAlbumsUnique().some((visibleAlbum) => (
+            affectedAlbums.some((affectedAlbum) => {
+              const visibleAliases = getAlbumRuntimeIdentityAliases(visibleAlbum);
+              const sharesRuntimeIdentity = Array.from(
+                getAlbumRuntimeIdentityAliases(affectedAlbum),
+              ).some((alias) => visibleAliases.has(alias));
+              return sharesRuntimeIdentity
+                || albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(affectedAlbum))
+                || albumsShareLogicalReleaseIdentity(visibleAlbum, affectedAlbum);
+            })
+          ));
+        };
         if (data.requires_view_refresh) {
           if (
+            !viewRefreshed
+            &&
             canReconcileOriginView()
             && finalizedAlbums.length
             && (
               !structuralTagEditRequiresCanonicalView
               || finalizedAlbumsHaveCanonicalRuntimeIdentities
+            )
+            && !(
+              structuralPartialMembershipRequiresCanonicalRefresh
+              && Number.isSafeInteger(committedInventoryMutationRevision)
+              && committedInventoryMutationRevision > 0
             )
           ) {
             try {
@@ -19129,7 +20971,7 @@ async function watchSaveTask(taskId, context = {}) {
               );
               if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
               renderView({
-                ...renderOptions,
+                ...currentRenderOptions(),
                 preserveMountedGalleryChildren: true,
               });
               viewReconciledLocally = true;
@@ -19141,11 +20983,14 @@ async function watchSaveTask(taskId, context = {}) {
             }
           }
           if (
+            !viewRefreshed
+            &&
             (
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
             && !mutationWasSuperseded()
+            && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
               let refreshView = state.view;
@@ -19173,7 +21018,7 @@ async function watchSaveTask(taskId, context = {}) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
               viewRefreshed = await fetchAndRender(
-                buildApiUrl(refreshView),
+                buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -19182,9 +21027,22 @@ async function watchSaveTask(taskId, context = {}) {
                     ? { retainMountedGalleryIfEquivalent: true }
                     : {}),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: () => !mutationWasSuperseded(),
+                  shouldApplyResponse: responseData => (
+                    !mutationWasSuperseded()
+                    && responseContainsCommittedInventoryMutation(responseData)
+                  ),
                 },
               );
+              if (
+                !viewRefreshed
+                && Number.isSafeInteger(committedInventoryMutationRevision)
+                && committedInventoryMutationRevision > 0
+                && !mutationWasSuperseded()
+                && (originStillOwnsView() || currentViewContainsAffectedAlbum())
+              ) {
+                await waitForBrowserTimeout(500);
+                continue;
+              }
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
                 window.history.replaceState(
                   { ...window.history.state, ...state.view }, '', buildUrl(state.view),
@@ -19243,7 +21101,7 @@ async function watchSaveTask(taskId, context = {}) {
             );
             if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
             renderView({
-              ...renderOptions,
+              ...currentRenderOptions(),
               preserveMountedGalleryChildren: true,
             });
             viewReconciledLocally = true;
@@ -19259,8 +21117,8 @@ async function watchSaveTask(taskId, context = {}) {
             },
           );
           if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
-          renderView(renderOptions);
-        } else if (!originStillOwnsView()) {
+          renderView(currentRenderOptions());
+        } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
             await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
           } catch (refreshError) {
@@ -19310,6 +21168,48 @@ async function watchSaveTask(taskId, context = {}) {
               ...modalUpdatedAlbums,
             ]);
           }
+          if (
+            structuralTagEditRequiresMountedGalleryChildReplacement
+            && data.requires_view_refresh
+            && !finalizedAlbums.length
+            && trackModalOpen
+            && typeof loadTrackModalAlbumDetails === 'function'
+          ) {
+            const currentModalAlbum = state.modalReleases[state.modalReleaseIndex] || originalAlbum;
+            const currentModalPaths = getAlbumTrackPaths(currentModalAlbum);
+            const canonicalModalCandidates = modalUpdatedAlbums.length
+              ? modalUpdatedAlbums
+              : collectVisibleAlbumsUnique();
+            const canonicalModalAlbum = canonicalModalCandidates.find((album) => (
+              albumsShareTrackPath(album, currentModalPaths)
+              || albumsShareRuntimeIdentityAlias(album, currentModalAlbum)
+              || albumsShareLogicalReleaseIdentity(album, currentModalAlbum)
+            ));
+            const canonicalModalKey = getAlbumRequestKey(canonicalModalAlbum);
+            if (canonicalModalKey) {
+              try {
+                const hydratedModalAlbum = await loadTrackModalAlbumDetails(canonicalModalKey);
+                if (hydratedModalAlbum) {
+                  modalUpdatedAlbums = canonicalModalCandidates.map((album) => (
+                    album === canonicalModalAlbum ? hydratedModalAlbum : album
+                  ));
+                  updateOpenTrackModalAfterTagEdit(
+                    originalAlbum,
+                    modalUpdatedAlbums,
+                    {
+                      patchVisibleState: !viewRefreshed,
+                      preserveHydratedModalAfterCanonicalSave: true,
+                    },
+                  );
+                }
+              } catch (hydrationError) {
+                console.warn(
+                  '[AlbumHaven][SaveTask] Saved tags, but failed to refresh open album details.',
+                  hydrationError,
+                );
+              }
+            }
+          }
         }
         if (data.log_entry) {
           await prependUtilityLogHistoryEntry(data.log_entry);
@@ -19318,7 +21218,23 @@ async function watchSaveTask(taskId, context = {}) {
           await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
         }
         restoreOwnedAbsoluteScroll();
-        if (!consumesProvidedTerminalPayload) {
+        const completionMessage = String(
+          context.tagEditAlert?.completionMessage || '',
+        ).trim();
+        if (completionMessage) {
+          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+            .map((warning) => String(warning || '').trim())
+            .filter(Boolean);
+          const hasCompletionWarning = completionWarnings.length > 0;
+          showRepairAlert(
+            [completionMessage, ...completionWarnings].join(' '),
+            hasCompletionWarning ? 'warning' : 'success',
+            hasCompletionWarning ? 8000 : 2000,
+            {
+              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+            },
+          );
+        } else if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
         settleTagEditViewMutation(tagEditMutationClaim);
@@ -19349,7 +21265,7 @@ async function watchSaveTask(taskId, context = {}) {
               preserveScroll: true,
             },
           );
-          renderView(renderOptions);
+          renderView(currentRenderOptions());
         }
         if (originalAlbum && canReconcileOriginView()) {
           const reconciledAlbums = viewRefreshed
@@ -19358,6 +21274,13 @@ async function watchSaveTask(taskId, context = {}) {
           updateOpenTrackModalAfterTagEdit(originalAlbum, reconciledAlbums, {
             preserveHydratedModalAfterFailedSave: true,
           });
+        }
+        if (
+          context.tagEditorDraft
+          && canReconcileOriginView()
+          && typeof restoreTagEditorDraftAfterFailedSave === 'function'
+        ) {
+          restoreTagEditorDraftAfterFailedSave(context.tagEditorDraft);
         }
         if (data.log_entry) {
           try {
@@ -19381,6 +21304,14 @@ async function watchSaveTask(taskId, context = {}) {
       console.warn('[AlbumHaven][SaveTask] Could not check save task status.', error);
     }
     await waitForBrowserTimeout(500);
+  }
+  if (!mutationWasSuperseded()) {
+    showRepairAlert(
+      'Tag changes are still being finalized. Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    );
   }
   if (problematicMutation) settleProblematicSaveTaskMutation(normalizedId);
   settleTagEditViewMutation(tagEditMutationClaim);
@@ -19754,6 +21685,7 @@ async function openUtilityModalForTrack(trackPath) {
   const navigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationToken = navigationToken;
   state.utility.problematicNavigationActiveToken = navigationToken;
+  let openedCanonicalTarget = false;
   const ownsNavigation = () => (
     Number(state.utility.problematicNavigationToken || 0) === navigationToken
   );
@@ -19828,13 +21760,33 @@ async function openUtilityModalForTrack(trackPath) {
       && Number(state.utility.problematicSummaryRequestToken || 0)
         > summaryRequestTokenBeforePendingTasks
     );
+    const loadTrackSummary = async () => {
+      const complete = loadProblematicFiles(true, { render: false });
+      const initial = state.utility.initialLoadPromise || complete;
+      if (initial !== complete) {
+        complete.then((result) => {
+          if (result !== null && openedCanonicalTarget && ownsNavigation()
+              && state.utility.activeTab === 'problematic-files'
+              && state.utility.focusedTrackPath === String(trackPath || '')) {
+            renderUtilityModalContent();
+          }
+        });
+      }
+      const result = await initial;
+      if (result === null || !ownsNavigation()
+          || (initial.problematicSummaryRequestToken !== undefined
+            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      if (getProblematicAlbumForTrackPath(trackPath)) return result;
+      // Only returned canonical track membership may identify the target.
+      return complete;
+    };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
-      const loadResult = await loadProblematicFiles(true, { render: false });
+      const loadResult = await loadTrackSummary();
       if (loadResult === null || !ownsNavigation()) return;
     }
     let album = getProblematicAlbumForTrackPath(trackPath);
     if (!album && summaryWasLoaded) {
-      const refreshResult = await loadProblematicFiles(true, { render: false });
+      const refreshResult = await loadTrackSummary();
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
@@ -19850,10 +21802,63 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
+    let refreshedStaleDetailTarget = false;
     if (!album.detail_loaded) {
-      await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
-      if (!ownsNavigation()) return;
+      while (album && !album.detail_loaded) {
+        const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+        state.utility.selectedProblematicKey = album.key || '';
+        const detailRequest = loadProblematicAlbumDetail(
+          album.key || '',
+          undefined,
+          { render: false, allowMissing: true },
+        );
+        const detailOwner = Number(state.utility.problematicDetailRequestToken || 0);
+        const refreshedDetail = await detailRequest;
+        if (!ownsNavigation()) return;
+        const detailMissing = !refreshedDetail
+          && Number(state.utility.problematicDetailRequestToken || 0) === detailOwner;
+        const currentSummary = state.utility.completeLoadPromise
+          || state.utility.initialLoadPromise;
+        if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+          const current = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
+          if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
+            await state.utility.detailLoadPromises[current.key];
+            if (!ownsNavigation()) return;
+          }
+          if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+            album = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
+            if (!album && !refreshedStaleDetailTarget) {
+              if (currentSummary && typeof currentSummary.then === 'function') {
+                await currentSummary;
+                if (!ownsNavigation()) return;
+                album = getProblematicAlbumForTrackPath(trackPath);
+                if (album) continue;
+              }
+              refreshedStaleDetailTarget = true;
+              const refreshResult = await loadTrackSummary();
+              if (refreshResult === null || !ownsNavigation()) return;
+              album = getProblematicAlbumForTrackPath(trackPath);
+              if (album) continue;
+            }
+            if (album?.detail_loaded
+                || !currentSummary
+                || typeof currentSummary.then !== 'function') break;
+          }
+        }
+        if (!currentSummary || typeof currentSummary.then !== 'function') {
+          if (!state.utility.loaded) return;
+          album = getProblematicAlbumForTrackPath(trackPath);
+          if (!album) return;
+          continue;
+        }
+        await currentSummary;
+        if (!ownsNavigation()) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
+      }
     }
+    if (!album) return;
+    state.utility.selectedProblematicKey = album.key || '';
+    openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {
     if (Number(state.utility.problematicNavigationActiveToken || 0) === navigationToken) {
@@ -21874,6 +23879,16 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
+    return;
+  }
+
+  if (
+    selectedProblematicMissing
+    && state.utility.selectedProblematicKey
+    && state.utility.problematicFilesComplete === false
+  ) {
+    renderTree('');
+    els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
   }
 
@@ -23902,6 +25917,15 @@ async function loadProblematicFiles(force = false, options = {}) {
     }
     return result;
   }
+  const pendingCompleteLoad = state.utility.completeLoadPromise;
+  if (
+    state.utility.problematicFilesComplete === false
+    && pendingCompleteLoad
+    && pendingCompleteLoad.problematicSummaryRequestToken
+      === Number(state.utility.problematicSummaryRequestToken || 0)
+  ) {
+    return pendingCompleteLoad;
+  }
   if (state.utility.loaded && !force) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
@@ -23911,6 +25935,10 @@ async function loadProblematicFiles(force = false, options = {}) {
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
   if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
+  let settleInitialSummary;
+  const initialSummaryPromise = new Promise((resolve) => { settleInitialSummary = resolve; });
+  initialSummaryPromise.problematicSummaryRequestToken = requestToken;
+  state.utility.initialLoadPromise = initialSummaryPromise;
   let requestPromise = null;
   requestPromise = (async () => {
     const startedAt = getProblematicUtilityNow();
@@ -23923,6 +25951,7 @@ async function loadProblematicFiles(force = false, options = {}) {
     let loadSucceeded = false;
     let loadError = '';
     let boundedPayloadCommitted = false;
+    let previousSummaryItems = [];
     try {
       const fetchSummary = async (url) => {
         const requestStartedAt = getProblematicUtilityNow();
@@ -23941,7 +25970,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         }
         return data;
       };
-      const commitSummary = (data, preserveSelectedDetail) => {
+      const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
         const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
         const stateCommitStartedAt = getProblematicUtilityNow();
         initialDetailKey = String(initialDetail?.key || '').trim();
@@ -23951,28 +25980,46 @@ async function loadProblematicFiles(force = false, options = {}) {
           : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;
+        const previousSummary = previousSummaryItems.find(item => item.key === selectedKey);
+        const nextSummary = summaryItems.find(item => item.key === selectedKey);
+        // Client request ownership does not prove that the server snapshot is unchanged.
+        const unchangedSelection = continuation && previousSummary && nextSummary
+          && JSON.stringify(previousSummary) === JSON.stringify(nextSummary);
+        const selectedPendingDetail = unchangedSelection && selectedKey !== initialDetailKey
+          ? state.utility.detailLoadPromises?.[selectedKey] : null;
+        const refreshChangedSelection = continuation && previousSummary && nextSummary
+          && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary ? selectedDetail : item;
+          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
         });
         state.utility.libraryWatchHealthProblems = operationalItems;
-        state.utility.detailLoadPromises = {};
+        state.utility.detailLoadPromises = selectedPendingDetail
+          ? { [selectedKey]: selectedPendingDetail } : {};
+        previousSummaryItems = summaryItems;
         state.utility.loaded = true;
         stateCommitMs += roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
-        return { selectedKey, selectedDetail, selectedSummary };
+        return { selectedKey, selectedDetail,
+          selectedSummary: (continuation && unchangedSelection) ? null : selectedSummary,
+          refreshChangedSelection };
       };
 
       let data = await fetchSummary('/utilities/problematic-files?limit=50');
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
       let committedSelection = commitSummary(data, options.preserveSelectedDetail === true);
       boundedPayloadCommitted = data.complete === false;
+      settleInitialSummary(state.utility.problematicFiles);
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
         const completePayloadPromise = fetchSummary('/utilities/problematic-files');
+        if (state.utility.loadPromise === requestPromise) {
+          state.utility.loading = false;
+          state.utility.loadPromise = null;
+        }
         if (canRenderBoundedPage()
             && ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage())) {
           renderUtilityModalContent();
@@ -23980,12 +26027,12 @@ async function loadProblematicFiles(force = false, options = {}) {
         }
         data = await completePayloadPromise;
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitSummary(data, true);
+        committedSelection = commitSummary(data, true, true);
       }
       state.utility.problematicFilesComplete = true;
       loadSucceeded = true;
-      const { selectedKey, selectedDetail, selectedSummary } = committedSelection;
-      if (selectedSummary) {
+      const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
+      if (selectedSummary || refreshChangedSelection) {
         const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
         const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
         const refreshedDetail = await detailRequest;
@@ -23995,7 +26042,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           // Discard retained stale detail, but never replace a newer navigation result.
           state.utility.problematicFiles = state.utility.problematicFiles.map(item => (
             item.key === selectedKey && (item === selectedDetail || stillOwnsDetail)
-              ? { ...selectedSummary, detail_load_failed: stillOwnsDetail && state.utility.selectedProblematicKey === selectedKey }
+              ? { ...(selectedSummary || item), detail_load_failed: stillOwnsDetail && state.utility.selectedProblematicKey === selectedKey }
               : item
           ));
         }
@@ -24015,6 +26062,10 @@ async function loadProblematicFiles(force = false, options = {}) {
       showToast('Unable to load problematic files.', 'error', 3200);
       return null;
     } finally {
+      settleInitialSummary(null);
+      if (state.utility.initialLoadPromise === initialSummaryPromise) {
+        state.utility.initialLoadPromise = null;
+      }
       const stillOwner = Number(state.utility.problematicSummaryRequestToken || 0) === requestToken;
       // A mutation can invalidate payload ownership while this request still
       // owns the loading slot. Release that slot without touching a newer load.
@@ -24454,15 +26505,25 @@ async function performAlbumMove(album, action, options = {}) {
 async function fetchUnsuccessfulAlbumCovers() {
   const previousStatus = { ...state.status };
   const statusAction = claimLibraryStatusAction(true);
+  statusAction.coverPreparation = true;
   try {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
       covers_in_progress: true,
+      covers_cancelable: false,
+      covers_phase: 'preparing',
+      covers_run_mode: 'manual-bulk',
+      covers_outcome: '',
+      covers_elapsed_seconds: null,
+      covers_estimated_remaining_seconds: null,
       covers_processed: 0,
+      covers_completed: 0,
+      covers_spotify_quota_exceeded: false,
       covers_total: 0,
       covers_downloaded: 0,
       covers_current_folder: '',
     });
+    scheduleStatusPoll(250);
     const response = await fetch('/utilities/fetch-covers-unsuccessful', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -24495,7 +26556,10 @@ async function fetchUnsuccessfulAlbumCovers() {
         scan_processed: Number(state.status?.scan_processed || 0),
         scan_total: Number(state.status?.scan_total || 0),
         covers_in_progress: false,
+        covers_cancelable: false,
         covers_processed: 0,
+        covers_completed: 0,
+        covers_spotify_quota_exceeded: false,
         covers_total: 0,
         covers_downloaded: 0,
         covers_current_folder: '',
@@ -24508,7 +26572,12 @@ async function fetchUnsuccessfulAlbumCovers() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: true,
+      covers_cancelable: true,
+      covers_phase: 'fetching',
+      covers_run_mode: 'manual-bulk',
       covers_processed: 0,
+      covers_completed: 0,
+      covers_spotify_quota_exceeded: false,
       covers_total: Number(data.queued_count || 0),
       covers_downloaded: 0,
       covers_current_folder: String(data.current_folder || ''),
@@ -24537,6 +26606,7 @@ async function cancelAlbumCoverScan() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: false,
+      covers_cancelable: false,
       covers_current_folder: '',
       pending_cover_refresh_after_scan: false,
     });
@@ -25327,6 +27397,8 @@ function closeUtilityModal(skipAppearanceGuard = false) {
   if (!els.overlay) return;
   utilityOpenGeneration += 1;
   if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
+  if (typeof disposeProblematicFilesVirtualList === 'function') disposeProblematicFilesVirtualList();
+  if (els.list) els.list.scrollTop = 0;
   state.utility.problemDropdownOpen = false;
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = true;
@@ -25555,6 +27627,7 @@ function getTrackTagInitialValues(track, album) {
     track_number: String(track?.track_number ?? ''),
     disc_number: String(track?.disc_number ?? ''),
     exception_type: String(track?.exception_type || ''),
+    custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
     album_rating: String(track?.album_rating ?? album?.album_rating ?? ''),
   };
@@ -25601,7 +27674,11 @@ function applyTagEditsToNonAlbumView(album, updates) {
   Object.entries(updates || {}).forEach(([path, edits]) => {
     const hasAlbumEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'album');
     const hasExceptionEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'exception_type');
-    if (!hasAlbumEdit && !hasExceptionEdit) return;
+    const hasCollectionNameEdit = Object.prototype.hasOwnProperty.call(
+      edits || {},
+      'custom_collection_name',
+    );
+    if (!hasAlbumEdit && !hasExceptionEdit && !hasCollectionNameEdit) return;
     const normalizedPath = String(path || '');
     if (!normalizedPath) return;
     const track = tracksByPath.get(normalizedPath) || nextByPath.get(normalizedPath) || {};
@@ -25627,11 +27704,15 @@ function applyTagEditsToNonAlbumView(album, updates) {
       title: String(edits.title || track?.title || 'Unknown track'),
       album: albumName,
       exception_type: exceptionType,
+      custom_collection_name: hasCollectionNameEdit
+        ? String(edits.custom_collection_name || '').trim()
+        : String(track?.custom_collection_name || '').trim(),
       reason_label: exceptionType,
       display_path: String(track?.display_path || normalizedPath),
     });
   });
   view.non_album_tracks = Array.from(nextByPath.values());
+  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
   return view.non_album_tracks;
 }
 
@@ -25699,6 +27780,140 @@ function getTagEditorPendingIconMarkup() {
     </span>`;
 }
 
+function getLibraryExceptionTypeChoices() {
+  const values = ['Interview', 'Non-album rarity', 'Custom Collection'];
+  const seen = new Set(values.map((value) => value.toLocaleLowerCase()));
+  (Array.isArray(state.view?.non_album_tracks) ? state.view.non_album_tracks : []).forEach((track) => {
+    const value = String(track?.exception_type || '').trim();
+    const key = value.toLocaleLowerCase();
+    if (!value || seen.has(key)) return;
+    seen.add(key);
+    values.push(value);
+  });
+  return values;
+}
+
+function isCustomCollectionException(value) {
+  return String(value || '').trim() === 'Custom Collection';
+}
+
+function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoices(), currentValue = '') {
+  const selected = String(currentValue || '').trim();
+  const choices = ['', ...values.filter((value) => String(value || '').trim())];
+  return choices.map((value) => (
+    `<button type="button" role="option" aria-selected="${value === selected ? 'true' : 'false'}" tabindex="-1" data-tag-editor-exception-option="${escapeHtml(value)}">${escapeHtml(value || 'None')}</button>`
+  )).join('');
+}
+
+let tagEditorExceptionMenuCleanup = null;
+
+function getTagEditorExceptionMenuLayout(inputRect, menuHeight, boundaryRect, viewportWidth, viewportHeight) {
+  const inset = 8;
+  const maxMenuHeight = Math.min(240, Math.floor(viewportHeight * 0.4));
+  const boundaryTop = Math.max(inset, Number(boundaryRect?.top ?? inset));
+  const boundaryBottom = Math.min(viewportHeight - inset, Number(boundaryRect?.bottom ?? viewportHeight - inset));
+  const availableBelow = Math.max(0, boundaryBottom - inputRect.bottom);
+  const availableAbove = Math.max(0, inputRect.top - boundaryTop);
+  const placement = availableBelow >= Math.min(menuHeight, maxMenuHeight) || availableBelow >= availableAbove
+    ? 'below'
+    : 'above';
+  const availableHeight = placement === 'below' ? availableBelow : availableAbove;
+  const height = Math.max(0, Math.min(menuHeight, maxMenuHeight, availableHeight));
+  const width = Math.min(inputRect.width, viewportWidth - (inset * 2));
+  const left = Math.max(inset, Math.min(inputRect.left, viewportWidth - inset - width));
+  const top = placement === 'below' ? inputRect.bottom - 1 : inputRect.top - height + 1;
+  return { placement, top, left, width, maxHeight: height };
+}
+
+function positionTagEditorExceptionMenu(input, menu) {
+  const footer = document.getElementById('tag-editor-footer');
+  const dialog = input.closest('.tag-editor-dialog');
+  const viewportWidth = window.visualViewport?.width || window.innerWidth;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const dialogRect = dialog?.getBoundingClientRect();
+  const footerRect = footer?.getBoundingClientRect();
+  const layout = getTagEditorExceptionMenuLayout(
+    input.getBoundingClientRect(),
+    menu.scrollHeight,
+    {
+      top: dialogRect?.top ?? 0,
+      bottom: footerRect?.top ?? dialogRect?.bottom ?? viewportHeight,
+    },
+    viewportWidth,
+    viewportHeight,
+  );
+  menu.dataset.placement = layout.placement;
+  menu.style.position = 'fixed';
+  menu.style.top = `${layout.top}px`;
+  menu.style.left = `${layout.left}px`;
+  menu.style.width = `${layout.width}px`;
+  menu.style.maxHeight = `${layout.maxHeight}px`;
+}
+
+function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
+  const form = getTagEditorElements().form;
+  const input = form?.querySelector('[data-tag-field="exception_type"]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (!menu) return;
+  tagEditorExceptionMenuCleanup?.();
+  tagEditorExceptionMenuCleanup = null;
+  menu.hidden = true;
+  delete menu.dataset.placement;
+  ['position', 'top', 'left', 'width', 'max-height'].forEach((name) => menu.style.removeProperty(name));
+  input?.setAttribute('aria-expanded', 'false');
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  if (restoreFocus) input?.focus?.({ preventScroll: true });
+}
+
+function openTagEditorExceptionMenu() {
+  const form = getTagEditorElements().form;
+  const input = form?.querySelector('[data-tag-field="exception_type"]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (!input || !menu || input.disabled) return false;
+  tagEditorExceptionMenuCleanup?.();
+  tagEditorExceptionMenuCleanup = null;
+  menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), input.value);
+  menu.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  positionTagEditorExceptionMenu(input, menu);
+  const closeOnScroll = () => closeTagEditorExceptionMenu();
+  const reposition = () => positionTagEditorExceptionMenu(input, menu);
+  form.addEventListener('scroll', closeOnScroll, { once: true });
+  window.addEventListener('resize', reposition);
+  window.visualViewport?.addEventListener('resize', reposition);
+  tagEditorExceptionMenuCleanup = () => {
+    form.removeEventListener('scroll', closeOnScroll);
+    window.removeEventListener('resize', reposition);
+    window.visualViewport?.removeEventListener('resize', reposition);
+  };
+  return true;
+}
+
+function selectTagEditorExceptionOption(value) {
+  const input = getTagEditorElements().form?.querySelector('[data-tag-field="exception_type"]');
+  if (!input) return;
+  input.value = String(value || '');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  closeTagEditorExceptionMenu({ restoreFocus: true });
+}
+
+function syncTagEditorCollectionFields(selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || [])) {
+  const form = getTagEditorElements().form;
+  if (!form) return true;
+  const exceptionInput = form.querySelector('[data-tag-field="exception_type"]');
+  const collectionInput = form.querySelector('[data-tag-field="custom_collection_name"]');
+  const collectionField = form.querySelector('[data-custom-collection-name-field]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (menu) menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), exceptionInput?.value);
+  const isCollection = isCustomCollectionException(exceptionInput?.value);
+  if (collectionField) collectionField.hidden = !isCollection;
+  if (collectionInput) collectionInput.disabled = !isCollection || selectedPaths.length === 0;
+  if (!isCollection) return true;
+  return selectedPaths.every((path) => (
+    String(state.tagEditor.values?.[path]?.custom_collection_name || '').trim()
+  ));
+}
+
 function syncTagEditorPendingChanges() {
   const els = getTagEditorElements();
   const pending = buildChangedTagEditorUpdates(
@@ -25712,7 +27927,8 @@ function syncTagEditorPendingChanges() {
     els.albumInput.removeAttribute('aria-describedby');
   }
   if (els.applyButton) {
-    els.applyButton.disabled = pendingPaths.size === 0;
+    els.applyButton.disabled = pendingPaths.size === 0
+      || !syncTagEditorCollectionFields();
   }
   els.list?.querySelectorAll('[data-tag-editor-track]').forEach((button) => {
     const path = String(button.getAttribute('data-tag-editor-track') || '');
@@ -25731,6 +27947,44 @@ function parseOptionalInteger(value) {
   if (!text) return null;
   const parsed = Number.parseInt(text, 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function inferOptimisticBlankAlbumMembership(target, tracks) {
+  if (String(target?.album || '').trim()) return '';
+  const targetNumber = parseOptionalInteger(String(target?.track_number ?? '').split('/', 1)[0]);
+  const containerParts = (track) => {
+    const parts = String(track?.path || '').replaceAll('\\', '/').split('/').filter(Boolean);
+    parts.pop();
+    if (/(?:^|[^a-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*\d{1,2}(?:$|[^a-z0-9])/i.test(parts.at(-1) || '')) {
+      parts.pop();
+    }
+    return parts.map((part) => part.toLocaleLowerCase());
+  };
+  const targetContainer = containerParts(target);
+  if (targetNumber == null || targetNumber <= 0 || !targetContainer.length) return '';
+  const targetPath = String(target?.path || '').replaceAll('/', '\\').toLocaleLowerCase();
+  const siblings = tracks.flatMap((candidate) => {
+    const candidatePath = String(candidate?.path || '').replaceAll('/', '\\').toLocaleLowerCase();
+    const candidateAlbum = String(candidate?.album || '').trim();
+    const candidateNumber = parseOptionalInteger(String(candidate?.track_number ?? '').split('/', 1)[0]);
+    const sameContainer = JSON.stringify(containerParts(candidate)) === JSON.stringify(targetContainer);
+    const meaningfulAlbum = candidateAlbum
+      && !['unknown', 'unknown artist', 'unknown album', 'none', 'null'].includes(candidateAlbum.toLocaleLowerCase())
+      && !/^[!\-\s[(]*non[\s_-]*album(?:\b.*)?$/i.test(candidateAlbum);
+    return candidatePath && candidatePath !== targetPath && sameContainer
+      && candidateNumber != null && candidateNumber > 0 && meaningfulAlbum
+      ? [[candidateAlbum, candidateNumber]]
+      : [];
+  });
+  const albumNames = new Map(siblings.map(([name]) => [name.toLocaleLowerCase(), name]));
+  if (siblings.length < 2 || albumNames.size !== 1) return '';
+  if (!siblings.some(([, number]) => Math.abs(number - targetNumber) === 1)) return '';
+  const inferredAlbum = albumNames.values().next().value;
+  const folderKey = (value) => String(value || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}_]+/gu, '');
+  const albumKey = folderKey(inferredAlbum);
+  return albumKey && targetContainer.some((part) => folderKey(part).includes(albumKey))
+    ? inferredAlbum
+    : '';
 }
 
 function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
@@ -25786,7 +28040,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   updatedTracks.forEach((track) => {
     if (String(track?.exception_type || '').trim()) return;
     const albumArtist = String(track?.album_artist || album?.album_artist || '').trim();
-    const albumName = String(track?.album ?? album?.name ?? '').trim();
+    const inferredAlbumName = inferOptimisticBlankAlbumMembership(track, updatedTracks);
+    if (inferredAlbumName) track.is_problematic = true;
+    const albumName = String(track?.album || inferredAlbumName).trim();
     if (!albumName) return;
     const edits = updates?.[String(track?.path || '')];
     const hasEditionEdit = Boolean(
@@ -26039,13 +28295,93 @@ function getTagEditorFieldDisplayValue(field, selectedPaths) {
 function renderTagEditorArtwork(selectedPaths) {
   const els = getTagEditorElements();
   if (!els.artwork) return;
-  const firstSelectedPath = selectedPaths[0] || '';
-  const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === firstSelectedPath);
+  const selectedPathSet = new Set(selectedPaths);
+  const focusedPath = selectedPathSet.has(String(state.tagEditor.anchorPath || ''))
+    ? String(state.tagEditor.anchorPath || '')
+    : (selectedPaths[0] || '');
+  const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === focusedPath);
   const coverPath = track?.cover_path || state.tagEditor.album?.cover_path || '';
-  const label = getFilenameFromPath(firstSelectedPath) || track?.title || 'selected track';
-  els.artwork.innerHTML = coverPath
+  const label = getFilenameFromPath(focusedPath) || track?.title || 'selected track';
+  const separatorIndex = Math.max(focusedPath.lastIndexOf('/'), focusedPath.lastIndexOf('\\'));
+  const folderPath = separatorIndex > 0 ? focusedPath.slice(0, separatorIndex) : '';
+  const artwork = coverPath
     ? `<img src="/cover?path=${encodeURIComponent(coverPath)}" alt="Artwork for ${escapeHtml(label)}">`
-    : '<div class="tag-editor-artwork-placeholder">No artwork</div>';
+    : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>`;
+}
+
+function getTagEditorFocusedPath() {
+  const tracks = state.tagEditor?.tracks || [];
+  const knownPaths = new Set(tracks.map((track) => String(track.path || '')).filter(Boolean));
+  const anchorPath = String(state.tagEditor?.anchorPath || '');
+  if (knownPaths.has(anchorPath)) return anchorPath;
+  const selectedPath = (state.tagEditor?.selectedPaths || [])
+    .map((path) => String(path || ''))
+    .find((path) => knownPaths.has(path));
+  return selectedPath || String(tracks[0]?.path || '');
+}
+
+function normalizeTagEditorPathKey(path) {
+  return String(path || '').replaceAll('/', '\\').toLocaleLowerCase();
+}
+
+async function loadTagEditorFolderFiles() {
+  const tagEditor = state.tagEditor;
+  const sourcePath = getTagEditorFocusedPath();
+  const button = document.getElementById('tag-editor-folder-load');
+  if (!tagEditor || !sourcePath || tagEditor.folderLoading) return;
+
+  tagEditor.folderLoading = true;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+  }
+  try {
+    const response = await fetch('/utilities/tag-editor/folder-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        source_path: sourcePath,
+        album: {
+          key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
+          tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
+        },
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load files from this folder.');
+    if (state.tagEditor !== tagEditor || getTagEditorElements().overlay?.hidden === true) return;
+
+    const existingPathKeys = new Set(
+      (tagEditor.tracks || []).map((track) => normalizeTagEditorPathKey(track.path)),
+    );
+    const addedTracks = [];
+    (Array.isArray(data.tracks) ? data.tracks : []).forEach((track) => {
+      const path = String(track?.path || '');
+      const pathKey = normalizeTagEditorPathKey(path);
+      if (!path || existingPathKeys.has(pathKey)) return;
+      existingPathKeys.add(pathKey);
+      addedTracks.push(track);
+      tagEditor.values[path] = getTrackTagInitialValues(track, tagEditor.album);
+    });
+
+    if (!addedTracks.length) {
+      showRepairAlert('All supported files from this folder are already loaded.', 'success');
+      return;
+    }
+    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks];
+    renderTagEditor();
+  } catch (error) {
+    showRepairAlert(error.message || 'Unable to load files from this folder.', 'error');
+  } finally {
+    if (state.tagEditor === tagEditor) {
+      tagEditor.folderLoading = false;
+    }
+    if (button && state.tagEditor === tagEditor) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
 }
 
 function stageTagEditorTrackOrder(tracks) {
@@ -26161,6 +28497,7 @@ function renderTagEditor(options = {}) {
     input.value = displayValue.value;
     input.placeholder = displayValue.mixed ? 'Mixed values' : '';
   });
+  syncTagEditorCollectionFields(selectedPaths);
   syncTagEditorPendingChanges();
 }
 
@@ -26179,6 +28516,23 @@ function getCoverLookupModalElements() {
     pastedUrls: document.getElementById('cover-lookup-pasted-urls'),
   };
 }
+
+function loadCoverLookupDrawerHoverIcon(button) {
+  const icon = button?.querySelector?.('.cover-lookup-drawer-glyph-hover[data-src]');
+  const src = String(icon?.dataset?.src || '').trim();
+  if (!src) return false;
+  icon.src = src;
+  delete icon.dataset.src;
+  return true;
+}
+
+const coverLookupDrawerButton = document.getElementById?.('cover-lookup-drawer-button');
+coverLookupDrawerButton?.addEventListener?.('mouseenter', () => {
+  loadCoverLookupDrawerHoverIcon(coverLookupDrawerButton);
+});
+coverLookupDrawerButton?.addEventListener?.('focus', () => {
+  loadCoverLookupDrawerHoverIcon(coverLookupDrawerButton);
+});
 
 const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -26434,6 +28788,13 @@ function normalizeCoverLookupCandidateSnapshot(value) {
   };
 }
 
+function coverLookupCandidateGenerationKey(value) {
+  const generation = String(value || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generation)
+    ? generation.replaceAll('-', '').toLowerCase()
+    : generation;
+}
+
 function getCoverLookupCandidateSource(task, candidateSnapshot) {
   const normalizedTask = task && typeof task === 'object' ? task : null;
   const normalizedSnapshot = normalizeCoverLookupCandidateSnapshot(candidateSnapshot);
@@ -26495,8 +28856,8 @@ function coverLookupCandidateTimestamp(value) {
 function applyCoverLookupCandidateSource(candidateSource) {
   if (!candidateSource) return;
   const modal = state.coverLookup.modal;
-  const generation = String(candidateSource.generation || '').trim();
-  if (generation !== String(modal.candidateGeneration || '').trim()) {
+  const generation = coverLookupCandidateGenerationKey(candidateSource.generation);
+  if (generation !== coverLookupCandidateGenerationKey(modal.candidateGeneration)) {
     modal.candidateGeneration = generation;
     modal.remoteSelectionOverrideGeneration = '';
     modal.remoteSelectionOverrideCandidateId = '';
@@ -26513,7 +28874,7 @@ function applyCoverLookupCandidateSource(candidateSource) {
   );
   const userOverrodeThisGeneration = Boolean(
     generation
-    && String(modal.remoteSelectionOverrideGeneration || '') === generation
+    && coverLookupCandidateGenerationKey(modal.remoteSelectionOverrideGeneration) === generation
   );
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
   const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
@@ -26975,6 +29336,8 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
     || getUpdatedAlbumForTrackPaths(candidates, getAlbumTrackPaths(state.coverLookup.modal.album))
     || candidates[0];
   if (!updatedAlbum) return;
+  state.ui = state.ui || {};
+  state.ui.albumCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0) + 1;
   const applyRefresh = () => {
     patchVisibleAlbumsByTrackPath(candidates);
     refreshRenderedAlbumCoverOnly(updatedAlbum);
@@ -27393,6 +29756,22 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
+const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
+const COVER_LOOKUP_TASK_OVERSCAN = 10;
+const COVER_LOOKUP_TASK_ESTIMATED_HEIGHT = 74;
+
+function getCoverLookupTaskRenderWindow(tasks, body) {
+  const rowHeight = Math.max(
+    1,
+    Number(state.coverLookup.taskEstimatedHeight || COVER_LOOKUP_TASK_ESTIMATED_HEIGHT),
+  );
+  const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
+  const visibleStart = Math.floor(Math.max(0, Number(body.scrollTop || 0)) / rowHeight);
+  const start = Math.min(maximumStart, Math.max(0, visibleStart - COVER_LOOKUP_TASK_OVERSCAN));
+  const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
+  return { start, end, rowHeight };
+}
+
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
@@ -27413,10 +29792,19 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
-  const activeCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
-  const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
-  const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
-  const badgeCount = activeCount + pendingNotificationCount;
+  const loadedActiveCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
+  const loadedTerminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
+  const counts = state.coverLookup.notificationCounts;
+  const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
+  const activeCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.active_count || 0), loadedActiveCount)
+    : loadedActiveCount;
+  const terminalCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
+    : loadedTerminalCount;
+  const badgeCount = hasAuthoritativeCounts
+    ? Math.max(Number(counts.total_count || 0), tasks.length)
+    : tasks.length;
   if (summary) {
     summary.textContent = [
       activeCount ? `${activeCount} active` : '',
@@ -27425,12 +29813,20 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   }
   badge.hidden = badgeCount <= 0;
   badge.textContent = String(badgeCount || '');
+  if (badgeCount > 0) loadCoverLookupDrawerHoverIcon(button);
   button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
     clearButton.hidden = false;
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
+  if (!state.coverLookup.drawerOpen) {
+    body.innerHTML = '';
+    state.coverLookup.taskRenderWindowStart = 0;
+    syncCoverLookupElapsedTimer();
+    return;
+  }
+
   const preserveSelectedNotificationText = preserveInteraction
     && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {
@@ -27440,22 +29836,28 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     syncCoverLookupElapsedTimer();
     return;
   }
-  const taskMarkup = tasks.map((task) => {
+  const renderWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  state.coverLookup.taskRenderWindowStart = renderWindow.start;
+  const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
+  const taskMarkup = visibleTasks.map((task) => {
     const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
-    const foundCount = Array.isArray(task?.possible_matches)
-      ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
-      : 0;
+    const isCoverUpdated = status === 'completed' && String(task?.result_kind || '') === 'cover-updated';
+    const foundCount = Number.isFinite(Number(task?.possible_match_count))
+      ? Math.max(0, Number(task.possible_match_count))
+      : Array.isArray(task?.possible_matches)
+        ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+        : 0;
     const statusLabel = status === 'failed'
-      ? 'Lookup failed'
+      ? (String(task?.result_kind || '') === 'interrupted' ? 'Lookup interrupted' : 'Lookup failed')
       : status === 'canceled'
       ? 'Canceled'
       : isNoResult
       ? 'No covers found'
-      : isCompleted && task?.notification_action_taken
-      ? 'Art chosen'
+          : isCoverUpdated
+            ? 'Art chosen'
       : status === 'completed'
         ? `${foundCount ? `${foundCount} ` : ''}covers found`
       : status === 'pending'
@@ -27479,10 +29881,10 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? String(buildAlbumDisplayCoverUrl(task?.album_payload || {}) || '').trim()
       : '';
     const coverMarkup = coverUrl
-      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
+      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
-      <div class="cover-lookup-task-card navigation-tree-item ${taskStateClass}">
+      <div class="cover-lookup-task-card ${taskStateClass}">
         <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
           ${coverMarkup}
           <span class="cover-lookup-task-copy">
@@ -27523,7 +29925,17 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     `;
   }).join('');
   if (!preserveSelectedNotificationText) {
-    body.innerHTML = taskMarkup;
+    const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
+    const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
+    body.innerHTML = `
+      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
+      ${taskMarkup}
+      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
+    `;
+    const measuredCard = body.querySelector?.('.cover-lookup-task-card');
+    const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
+    const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;
+    if (measuredHeight > 0) state.coverLookup.taskEstimatedHeight = measuredHeight + measuredGap;
   }
   syncCoverLookupElapsedTimer();
 }
@@ -27557,6 +29969,7 @@ async function clearCompletedCoverLookupTasks() {
       throw new Error(data.error || 'Failed to clear completed cover lookups');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
   } catch (error) {
@@ -27594,6 +30007,7 @@ async function clearCoverLookupTaskNotification(taskId) {
       throw new Error(data.error || 'Failed to clear notification');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
     showToast('Notification cleared.', 'success', 2200);
@@ -27606,7 +30020,39 @@ async function clearCoverLookupTaskNotification(taskId) {
   }
 }
 
-function buildCoverLookupCard(item, kind = 'local') {
+function releaseDeferredCoverLookupPreviews(root) {
+  const images = root?.querySelectorAll?.('[data-cover-lookup-deferred-src]') || [];
+  images.forEach((image) => {
+    const src = String(image.getAttribute('data-cover-lookup-deferred-src') || '').trim();
+    if (!src) return;
+    image.src = src;
+    image.removeAttribute('data-cover-lookup-deferred-src');
+  });
+}
+
+function scheduleDeferredCoverLookupPreviews(root) {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const requestFrame = typeof window.requestAnimationFrame === 'function'
+      ? callback => window.requestAnimationFrame(callback)
+      : typeof window.setTimeout === 'function'
+      ? callback => window.setTimeout(callback, 0)
+      : callback => callback();
+    requestFrame(() => requestFrame(() => releaseDeferredCoverLookupPreviews(root)));
+  };
+  const priorityImage = root?.querySelector?.('.cover-lookup-art-preview-image[fetchpriority="high"]');
+  if (!priorityImage || priorityImage.complete) {
+    release();
+    return;
+  }
+  priorityImage.addEventListener('load', release, { once: true });
+  priorityImage.addEventListener('error', release, { once: true });
+  window.setTimeout?.(release, 500);
+}
+
+function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
@@ -27673,9 +30119,14 @@ function buildCoverLookupCard(item, kind = 'local') {
     ? `data-cover-lookup-open-lightbox="1" data-cover-src="${escapeHtml(fullImageUrl)}" data-cover-alt="${previewAlt}"`
     : `data-cover-src="${escapeHtml(fullImageUrl)}" data-cover-alt="${previewAlt}"`;
   const previewButtonLabel = 'Open full-size cover art';
-  const previewLoadingAttrs = isRemoteKind
+  const previewLoadingAttrs = isRemoteKind && !prioritizeRemotePreview
     ? 'loading="lazy" fetchpriority="low"'
-    : 'loading="eager"';
+    : isRemoteKind
+      ? 'loading="eager" fetchpriority="high"'
+      : 'loading="eager"';
+  const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
+    ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
+    : `src="${escapeHtml(imageUrl)}"`;
   const actionLabel = kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
@@ -27690,7 +30141,7 @@ function buildCoverLookupCard(item, kind = 'local') {
       <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
-          ${imageUrl ? `<img class="cover-lookup-art-preview-image" src="${imageUrl}" alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
+        ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
           <button class="cover-lookup-art-preview-button" type="button" ${previewAttrs} aria-label="${previewButtonLabel}">
             <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
               <path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-.75 1.75h1.5v2h2v1.5h-2v2h-1.5v-2h-2v-1.5h2v-2Z" fill="currentColor"></path>
@@ -27866,7 +30317,7 @@ function renderCoverLookupModal() {
     : '';
   const possibleMatchesMarkup = possibleMatches.length
     ? `
-        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
+        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item, index) => buildCoverLookupCard(item, 'remote', index === 0)).join('')}</div>` : ''}
         ${groupedDiscogsMatches.length ? `<div class="cover-lookup-subsection-title">Discogs</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="discogs">${groupedDiscogsMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${groupedArchiveMatches.length ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="cover_art_archive">${groupedArchiveMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${manualLinkMatches.length ? `<div class="cover-lookup-subsection-title">MANUAL LINKS</div><div class="cover-lookup-gallery">${manualLinkMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
@@ -27930,39 +30381,122 @@ function renderCoverLookupModal() {
       </section>
     `;
   restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
+  scheduleDeferredCoverLookupPreviews(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();
   }
 }
 
-let coverLookupTasksRequestSequence = 0;
+const coverLookupTasksRequestSequences = { replace: 0, refresh: 0, append: 0, active: 0 };
+
+function updateCoverLookupNotificationCounts(data) {
+  if (!Number.isFinite(Number(data?.total_count))) return;
+  state.coverLookup.notificationCounts = {
+    total_count: Math.max(0, Number(data.total_count || 0)),
+    active_count: Math.max(0, Number(data.active_count || 0)),
+    finished_count: Math.max(0, Number(data.finished_count || 0)),
+  };
+}
+
+async function loadCoverLookupNotificationCounts(options = {}) {
+  try {
+    const response = await fetch('/utilities/cover-lookup/tasks/counts', {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || 'Failed to load cover lookup notification counts');
+    }
+    updateCoverLookupNotificationCounts(data);
+    renderCoverLookupDrawer();
+  } catch (error) {
+    console.warn('[AlbumHaven][CoverLookup] Failed to load notification counts.', error);
+    if (options.toast !== false) {
+      showToast(error.message || 'Failed to load cover lookup notification counts.', 'error', 2800);
+    }
+  }
+}
+
+function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
+  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks);
+  if (mode === 'replace') return incoming;
+  const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
+  const remaining = current.filter((task) => !incomingIds.has(String(task?.id || '')));
+  return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
+}
 
 async function loadCoverLookupTasks(options = {}) {
-  const requestSequence = ++coverLookupTasksRequestSequence;
+  const activeOnly = options.activeOnly === true;
+  const append = options.append === true;
+  const requestMode = activeOnly
+    ? 'active'
+    : append
+      ? 'append'
+      : options.mergeFirstPage === true
+        ? 'refresh'
+        : 'replace';
+  const requestSequence = ++coverLookupTasksRequestSequences[requestMode];
+  const previousActiveTaskIds = activeOnly
+    ? new Set(
+      (state.coverLookup.tasks || [])
+        .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
+        .map((task) => String(task?.id || ''))
+        .filter(Boolean),
+    )
+    : new Set();
   try {
-    const response = await fetch('/utilities/cover-lookup/tasks', { headers: { Accept: 'application/json' } });
+    const params = new URLSearchParams({ limit: '50' });
+    if (activeOnly) params.set('active_only', 'true');
+    if (append && state.coverLookup.tasksNextCursor) {
+      params.set('cursor', state.coverLookup.tasksNextCursor);
+    }
+    const response = await fetch(`/utilities/cover-lookup/tasks?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
     const data = await response.json().catch(() => ({}));
-    if (requestSequence !== coverLookupTasksRequestSequence) return;
+    if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
-    state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
-    renderCoverLookupDrawer();
-    (state.coverLookup.tasks || []).forEach((task) => {
-      applyCoverLookupTaskUpdates(task);
-    });
-    const snapshot = JSON.stringify(state.coverLookup.tasks.map((task) => ({
+    updateCoverLookupNotificationCounts(data);
+    const incomingTasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const incomingTaskIds = new Set(
+      incomingTasks.map((task) => String(task?.id || '')).filter(Boolean),
+    );
+    const missingActiveTask = activeOnly
+      && Array.from(previousActiveTaskIds).some((taskId) => !incomingTaskIds.has(taskId));
+    const nextTasks = mergeCoverLookupTaskSummaries(incomingTasks, requestMode);
+    if (requestMode !== 'active') {
+      state.coverLookup.tasksNextCursor = String(data.next_cursor || '') || null;
+    }
+    const snapshot = JSON.stringify(nextTasks.map((task) => ({
       id: task.id,
       status: task.status,
       progress: task.progress,
+      progress_label: task.progress_label,
+      message: task.message,
+      result_kind: task.result_kind,
+      artist: task.artist,
+      album: task.album,
+      year: task.year,
+      notification_action_taken: Boolean(task.notification_action_taken),
+      possible_match_count: Number(task.possible_match_count || 0),
+      candidate_updated_at: String(task.candidate_updated_at || ''),
       selected_candidate_id: task.selected_candidate_id,
       possible_match_ids: buildCoverLookupCandidateSnapshot(task),
       updated_albums_count: Array.isArray(task.updated_albums) ? task.updated_albums.length : 0,
     })));
+    const tasksChanged = snapshot !== state.coverLookup.tasksSnapshot;
+    state.coverLookup.tasks = nextTasks;
+    if (tasksChanged) renderCoverLookupDrawer();
+    nextTasks.forEach((task) => {
+      applyCoverLookupTaskUpdates(task);
+    });
     const modalTaskId = String(state.coverLookup.modal.taskId || '');
-    if (modalTaskId && snapshot !== state.coverLookup.tasksSnapshot) {
-      const task = state.coverLookup.tasks.find((item) => String(item?.id || '') === modalTaskId);
+    if (modalTaskId && tasksChanged) {
+      const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
         state.coverLookup.modal.statusText = String(task.message || task.progress_label || '');
@@ -27973,7 +30507,15 @@ async function loadCoverLookupTasks(options = {}) {
           state.coverLookup.modal.candidateSnapshot,
         );
         applyCoverLookupCandidateSource(candidateSource);
-        if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
+      const partialCandidatesAdvanced = ['pending', 'running'].includes(taskStatus)
+        && (
+          Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0)
+          || coverLookupCandidateTimestamp(task.candidate_updated_at)
+            > coverLookupCandidateTimestamp(state.coverLookup.modal.candidateSnapshot?.updated_at)
+        );
+      if (partialCandidatesAdvanced) {
+        await refreshCoverLookupGallery(false);
+      } else if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
           if (options.refreshModalGallery !== false) {
             await refreshCoverLookupGallery(false);
           } else {
@@ -27992,8 +30534,15 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
+    if (missingActiveTask) {
+      await loadCoverLookupTasks({
+        toast: false,
+        mergeFirstPage: true,
+        refreshModalGallery: options.refreshModalGallery,
+      });
+    }
   } catch (error) {
-    if (requestSequence !== coverLookupTasksRequestSequence) return;
+    if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     console.warn('[AlbumHaven][CoverLookup] Failed to load lookup tasks.', error);
     if (options.toast !== false) {
       showToast(error.message || 'Failed to load cover lookups.', 'error', 2800);
@@ -28001,24 +30550,83 @@ async function loadCoverLookupTasks(options = {}) {
   }
 }
 
+let coverLookupPollingRequest = null;
+let coverLookupBackgroundPollTicks = 0;
+let coverLookupPollInFlight = false;
+let coverLookupHistoryRequest = null;
+
+async function loadNextCoverLookupTaskPage(options = {}) {
+  if (!state.coverLookup.tasksNextCursor) return;
+  if (coverLookupHistoryRequest) return coverLookupHistoryRequest;
+  const request = loadCoverLookupTasks({ ...options, append: true });
+  coverLookupHistoryRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (coverLookupHistoryRequest === request) coverLookupHistoryRequest = null;
+  }
+}
+
+function handleCoverLookupDrawerScroll(event) {
+  const body = event?.currentTarget || document.getElementById('cover-lookup-drawer-body');
+  if (!body || !state.coverLookup.drawerOpen) return Promise.resolve();
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const nextWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  if (nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)) {
+    renderCoverLookupDrawer({ preserveInteraction: false });
+  }
+  const remaining = Number(body.scrollHeight || 0)
+    - Number(body.scrollTop || 0)
+    - Number(body.clientHeight || 0);
+  const prefetchThreshold = Math.max(600, Number(body.clientHeight || 0) * 2);
+  if (remaining > prefetchThreshold || !state.coverLookup.tasksNextCursor) return Promise.resolve();
+  return loadNextCoverLookupTaskPage({ toast: false });
+}
+
+async function loadCoverLookupTasksForPolling(options = {}) {
+  if (coverLookupPollingRequest) return coverLookupPollingRequest;
+  const request = loadCoverLookupTasks({ ...options, activeOnly: true });
+  coverLookupPollingRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (coverLookupPollingRequest === request) {
+      coverLookupPollingRequest = null;
+    }
+  }
+}
+
 function ensureCoverLookupPolling() {
   if (state.coverLookup.pollingTimer) return;
   state.coverLookup.pollingTimer = window.setInterval(async () => {
-    await loadCoverLookupTasks({ toast: false });
-    const snapshot = state.coverLookup.modal.candidateSnapshot;
+    if (coverLookupPollInFlight) return;
     const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
-    const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
-      String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
-      && ['pending', 'running'].includes(String(task?.status || ''))
-    ));
-    if (
-      modalOpen
-      && !hasMatchingActiveTask
-      && ['pending', 'running'].includes(String(snapshot?.status || ''))
-    ) {
-      await refreshCoverLookupGallery(false);
+    if (!modalOpen) {
+      coverLookupBackgroundPollTicks += 1;
+      if (coverLookupBackgroundPollTicks < 25) return;
+      coverLookupBackgroundPollTicks = 0;
+    } else {
+      coverLookupBackgroundPollTicks = 0;
     }
-  }, 2500);
+    coverLookupPollInFlight = true;
+    try {
+      await loadCoverLookupTasksForPolling({ toast: false });
+      const snapshot = state.coverLookup.modal.candidateSnapshot;
+      const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
+        String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
+        && ['pending', 'running'].includes(String(task?.status || ''))
+      ));
+      if (
+        modalOpen
+        && !hasMatchingActiveTask
+        && ['pending', 'running'].includes(String(snapshot?.status || ''))
+      ) {
+        await refreshCoverLookupGallery(false);
+      }
+    } finally {
+      coverLookupPollInFlight = false;
+    }
+  }, 100);
 }
 
 function stopCoverLookupPollingIfIdle() {
@@ -28029,6 +30637,7 @@ function stopCoverLookupPollingIfIdle() {
   if (state.coverLookup.pollingTimer) {
     window.clearInterval(state.coverLookup.pollingTimer);
     state.coverLookup.pollingTimer = 0;
+    coverLookupBackgroundPollTicks = 0;
   }
 }
 
@@ -28152,10 +30761,7 @@ async function openCoverLookupModal(album, options = {}) {
   }
   renderCoverLookupModal();
   ensureCoverLookupPolling();
-  await Promise.all([
-    loadCoverLookupTasks({ toast: false, refreshModalGallery: false }),
-    refreshCoverLookupGallery(),
-  ]);
+  await refreshCoverLookupGallery();
 }
 
 function closeCoverLookupModal() {
@@ -28174,6 +30780,18 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
+  state.coverLookup.modal.saving = false;
+  state.coverLookup.modal.album = null;
+  state.coverLookup.modal.taskId = '';
+  state.coverLookup.modal.localCovers = [];
+  state.coverLookup.modal.otherArt = [];
+  state.coverLookup.modal.possibleMatches = [];
+  state.coverLookup.modal.candidateSnapshot = null;
+  state.coverLookup.modal.candidateGeneration = '';
+  state.coverLookup.modal.statusText = '';
+  state.coverLookup.modal.statusTone = 'neutral';
+  state.coverLookup.modal.manualUrlText = '';
+  if (els.body) els.body.innerHTML = '';
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
     els.saveRemote.disabled = true;
@@ -28213,7 +30831,8 @@ function closeCoverLookupDeleteConfirm() {
 async function startCoverLookupForAlbum(album, options = {}) {
   if (!album) return;
   const backgroundOnly = Boolean(options?.backgroundOnly);
-  const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
+  const triggerButton = backgroundOnly ? options?.triggerButton : null;
+  const triggerWasDisabled = Boolean(triggerButton?.disabled);
   if (!backgroundOnly) {
     const selectedLocalCard = document.getElementById('cover-lookup-modal-body')
       ?.querySelector?.('[data-select-local-cover][data-cover-lookup-local-active]');
@@ -28229,6 +30848,10 @@ async function startCoverLookupForAlbum(album, options = {}) {
     }
   }
   try {
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.setAttribute?.('aria-busy', 'true');
+    }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = true;
       renderCoverLookupModal();
@@ -28268,14 +30891,17 @@ async function startCoverLookupForAlbum(album, options = {}) {
       5000,
       { placement: 'top-center' },
     );
-    await loadCoverLookupTasks({ toast: false });
-    if (!backgroundOnly && modalOpen) {
-      await refreshCoverLookupGallery(false);
+    if (backgroundOnly) {
+      await loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     }
   } catch (error) {
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);
     showToast(error.message || 'Failed to start cover art lookup.', 'error', 2800);
   } finally {
+    if (triggerButton) {
+      triggerButton.disabled = triggerWasDisabled;
+      triggerButton.removeAttribute?.('aria-busy');
+    }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = false;
       renderCoverLookupModal();
@@ -28337,7 +30963,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       renderCoverLookupDrawer();
     }
     if (ownsModal()) closeCoverLookupModal();
-    showToast('Local cover art selected.', 'success', 2200);
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (previousAlbum) {
@@ -28407,7 +31032,6 @@ async function deleteLocalCoverFromLookup(sourcePath) {
         await refreshCoverLookupGallery(false);
       }
     }
-    showToast('Local cover art deleted.', 'success', 2200);
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
@@ -28491,10 +31115,6 @@ async function saveRemoteCoverFromLookup() {
     await loadCoverLookupTasks({ toast: false });
     ensureCoverLookupPolling();
     renderCoverLookupDrawer();
-    const successMessage = selectedMatch?.display_only
-      ? 'Remote cover art linked.'
-      : (data.queued ? 'Saving selected cover art in the background.' : 'Selected cover art saved.');
-    showToast(successMessage, 'success', 2400);
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
@@ -28608,7 +31228,6 @@ async function savePastedCoverFromLookup(imageId) {
       markCoverLookupTaskActionTaken(taskId, album);
       renderCoverLookupDrawer();
     }
-    showToast('Pasted image saved as cover art.', 'success', 2200);
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
@@ -28638,6 +31257,8 @@ async function saveCoverFromLookup() {
 // END js/runtime/cover-lookup-modal-and-drawer.js
 
 // BEGIN js/runtime/tag-editor-and-optimistic-updates.js
+
+let tagEditorCleanupGeneration = 0;
 
 const albumTrackCollator = new Intl.Collator(undefined, {
   numeric: true,
@@ -28889,6 +31510,18 @@ function openTagEditor(album, options = {}) {
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
   bindOverlayPointerOrigin(els.overlay);
+  const openGeneration = ++tagEditorCleanupGeneration;
+  if (typeof albumRequiresHydration === 'function' && albumRequiresHydration(album)) {
+    return loadTrackModalAlbumDetails(getAlbumRequestKey(album)).then((hydratedAlbum) => {
+      if (openGeneration !== tagEditorCleanupGeneration) return;
+      if (!hydratedAlbum?.allowed_actions?.['library.files.edit_tags']) return;
+      return openTagEditor(hydratedAlbum, options);
+    }).catch(() => {
+      if (openGeneration === tagEditorCleanupGeneration) {
+        showRepairAlert('Unable to load album tracks for editing.', 'error');
+      }
+    });
+  }
   const tracksMode = options.tracksMode || 'problematic';
   const tracks = orderAlbumTracks(getTagEditorTracks(album, tracksMode));
   if (!tracks.length) {
@@ -28918,6 +31551,11 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
+  const folderLoadButton = document.getElementById?.('tag-editor-folder-load');
+  if (folderLoadButton) {
+    folderLoadButton.disabled = false;
+    folderLoadButton.removeAttribute?.('aria-busy');
+  }
   if (els.list) els.list.hidden = true;
   if (els.form) els.form.hidden = true;
   if (els.applyButton) els.applyButton.disabled = true;
@@ -28986,12 +31624,33 @@ function closeTagEditorFromBackdrop() {
   if (!Object.keys(changedUpdates).length) closeTagEditor();
 }
 
+function deferClosedTagEditorCleanup(elements, cleanupGeneration) {
+  const cleanup = () => {
+    if (!elements.overlay.hidden || cleanupGeneration !== tagEditorCleanupGeneration) return;
+    if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
+    elements.list?.replaceChildren?.();
+  };
+  const afterPaint = () => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(cleanup, { timeout: 100 });
+      return;
+    }
+    cleanup();
+  };
+  if (typeof requestAnimationFrame !== 'function') {
+    afterPaint();
+    return;
+  }
+  requestAnimationFrame(() => requestAnimationFrame(afterPaint));
+}
+
 function closeTagEditor() {
-  if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();
   if (!els.overlay) return;
   settleTagEditorSessionMutationClaim();
   els.overlay.hidden = true;
+  const cleanupGeneration = ++tagEditorCleanupGeneration;
+  deferClosedTagEditorCleanup(els, cleanupGeneration);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const confirmOpen = !document.getElementById('tag-edit-confirm-modal')?.hidden;
@@ -29000,9 +31659,38 @@ function closeTagEditor() {
   }
 }
 
+function restoreTagEditorDraftAfterFailedSave(tagEditor) {
+  if (
+    !tagEditor
+    || state.tagEditor !== tagEditor
+    || typeof getTagEditorElements !== 'function'
+  ) return;
+  const els = getTagEditorElements();
+  if (!els.overlay) return;
+  settleTagEditorSessionMutationClaim(tagEditor);
+  tagEditor.sessionMutationClaim = claimTagEditViewMutation(tagEditor.album);
+  state.tagEditor = tagEditor;
+  if (els.list) els.list.hidden = true;
+  if (els.form) els.form.hidden = true;
+  if (els.applyButton) els.applyButton.disabled = true;
+  els.overlay.setAttribute?.('aria-busy', 'true');
+  els.overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  if (typeof renderTagEditor === 'function') {
+    scheduleTagEditorRenderAfterPaint(tagEditor, els);
+  }
+}
+
 function openTagEditConfirmModal() {
   const els = getTagEditConfirmElements();
   if (!els.overlay) return;
+  if (
+    typeof syncTagEditorCollectionFields === 'function'
+    && !syncTagEditorCollectionFields()
+  ) {
+    showRepairAlert('Custom Collection name is required.', 'error');
+    return;
+  }
   const album = state.tagEditor.album;
   const updates = buildChangedTagEditorUpdates(
     album,
@@ -29360,8 +32048,19 @@ function scheduleTagEditSaveTaskWatch(taskId, options) {
   });
 }
 
+function buildTagEditAlertCopy(album, editedTrackCount) {
+  const trackCount = Math.max(1, Number(editedTrackCount) || 0);
+  const trackLabel = trackCount === 1 ? 'track' : 'tracks';
+  const albumName = String(album?.name || '').trim() || 'this album';
+  return {
+    savingMessage: `Updating ${trackCount} ${trackLabel} in “${albumName}”.`,
+    completionMessage: `Saved changes to ${trackCount} ${trackLabel} in “${albumName}”.`,
+  };
+}
+
 async function confirmManualTagEdit() {
-  const album = state.tagEditor.album;
+  const tagEditorDraft = state.tagEditor;
+  const album = tagEditorDraft.album;
   const updates = buildChangedTagEditorUpdates(album, state.tagEditor.tracks || [], state.tagEditor.values || {});
   const editedPaths = Object.keys(updates).filter(Boolean);
   if (!album || !editedPaths.length) {
@@ -29369,6 +32068,7 @@ async function confirmManualTagEdit() {
     closeTagEditConfirmModal();
     return;
   }
+  const tagEditAlert = buildTagEditAlertCopy(album, editedPaths.length);
 
   const problematicMutationOriginKey = readProblematicMutationOriginKey();
   const inverseUpdates = buildInverseTagEditorUpdates(
@@ -29411,6 +32111,12 @@ async function confirmManualTagEdit() {
       scrollTop: Number(state.tagEditor.originGalleryScrollPosition.scrollTop),
     }
     : null;
+  const absoluteScrollOwnerGeneration = (
+    typeof virtualGrid !== 'undefined'
+    && typeof virtualGrid?.getUserScrollIntentGeneration === 'function'
+  )
+    ? virtualGrid.getUserScrollIntentGeneration()
+    : null;
   const renderOptions = {
     preserveScroll: true,
     preserveAbsoluteScroll: true,
@@ -29433,8 +32139,15 @@ async function confirmManualTagEdit() {
     tagEditMutationClaim,
   });
   renderView(renderOptions);
-  showRepairAlert('Writing tag changes...', 'success', null);
+  showRepairAlert(
+    tagEditAlert.savingMessage,
+    'info',
+    2000,
+    { title: 'Saving tags', dismissible: false },
+  );
   let failedLogHistoryEntryId = '';
+  let failedSaveTaskError = '';
+  let failedSavePreservesDraft = false;
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -29447,6 +32160,12 @@ async function confirmManualTagEdit() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      if (
+        data.save_task_id
+        && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
+      ) {
+        failedSaveTaskError = String(data.error || '').trim();
+      }
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {
@@ -29455,6 +32174,8 @@ async function confirmManualTagEdit() {
           console.warn('[AlbumHaven][Utilities] Could not persist the failed tag edit in browser history.', historyError);
         }
       }
+      failedSavePreservesDraft = data.failure_stage === 'persistence'
+        && data.edit_outcome === 'failed_rolled_back';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
     const updatedAlbums = Array.isArray(data.updated_albums)
@@ -29496,6 +32217,7 @@ async function confirmManualTagEdit() {
     }
     const saveTaskWatchOptions = {
       originalAlbum: album,
+      tagEditorDraft,
       originatingViewStateRevision,
       originatingViewRequestUrl,
       originatingSearchContext,
@@ -29503,9 +32225,13 @@ async function confirmManualTagEdit() {
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
       absoluteScrollPosition,
+      ...(Number.isSafeInteger(absoluteScrollOwnerGeneration)
+        ? { absoluteScrollOwnerGeneration }
+        : {}),
       problematicMutationOriginKey,
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
+      tagEditAlert,
     };
     if (
       provisionalProblematicMutation
@@ -29529,11 +32255,20 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    showRepairAlert(
-      responseIsTerminal ? 'Tag changes saved.' : 'Tag changes queued. Finalizing library view...',
-      'success',
-      2000,
-    );
+    if (responseIsTerminal && !completedResponseNeedsCanonicalRefresh) {
+      const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+        .map((warning) => String(warning || '').trim())
+        .filter(Boolean);
+      const hasCompletionWarning = completionWarnings.length > 0;
+      showRepairAlert(
+        [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
+        hasCompletionWarning ? 'warning' : 'success',
+        hasCompletionWarning ? 8000 : 2000,
+        {
+          title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+        },
+      );
+    }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
       pendingProblematicEntry.settle();
@@ -29580,9 +32315,15 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
+      if (
+        !failedLogHistoryEntryId
+        || failedSavePreservesDraft
+      ) {
+        restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
+      }
     }
     showRepairAlert(
-      'Failed to edit tags.',
+      failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {
@@ -29983,12 +32724,13 @@ async function ignoreAlbumVersion(albumKey) {
   }
 }
 
-function refreshOpenTrackModalVersionState(preferredAlbumKey = '') {
+function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbum = null) {
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return;
   const currentKey = String(preferredAlbumKey || state.modalReleases[state.modalReleaseIndex]?.key || '');
   const visibleAlbums = flattenVisibleAlbums();
-  const currentAlbum = visibleAlbums.find((item) => String(item.key || '') === currentKey)
+  const currentAlbum = preferredAlbum
+    || visibleAlbums.find((item) => String(item.key || '') === currentKey)
     || state.modalReleases[state.modalReleaseIndex]
     || visibleAlbums[0]
     || null;
@@ -29997,6 +32739,18 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '') {
   state.modalReleases = releaseSet.releases;
   state.modalReleaseIndex = Math.min(releaseSet.selectedIndex, Math.max(0, state.modalReleases.length - 1));
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
+}
+
+function scheduleVersionGalleryRefresh() {
+  scheduleBrowserAnimationFrame(() => {
+    scheduleBrowserTimeout(() => {
+      Promise.resolve()
+        .then(() => fetchAndRender(buildApiUrl(state.view), false))
+        .catch((error) => {
+          console.error('[AlbumHaven][Versions] Failed to refresh the gallery after saving.', error);
+        });
+    }, 0);
+  });
 }
 
 async function markAlbumVersion(albumKey, parentAlbumKey) {
@@ -30019,8 +32773,8 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
         : {},
     }, { trackSidebarReveal: false });
     refreshOpenTrackModalVersionState(childKey);
-    await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Album marked as a version.', 'success', 2600);
+    scheduleVersionGalleryRefresh();
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to mark album as a version.', error);
     showToast(error.message || 'Failed to mark album as a version.', 'error', 3200);
@@ -30047,8 +32801,8 @@ async function unmarkAlbumVersion(albumKey) {
         : {},
     }, { trackSidebarReveal: false });
     refreshOpenTrackModalVersionState(key);
-    await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Album is no longer manually marked as a version.', 'success', 2600);
+    scheduleVersionGalleryRefresh();
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to unmark album version.', error);
     showToast(error.message || 'Failed to unmark album version.', 'error', 3200);
@@ -30144,6 +32898,9 @@ function renderVersionContextMenu() {
   menu.style.top = `${stateMenu.y}px`;
   menu.dataset.albumKey = stateMenu.albumKey;
   menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideVersionContextMenu);
+  }
 }
 
 function showVersionContextMenu(albumKey, x, y) {
@@ -30164,7 +32921,10 @@ function hideVersionContextMenu() {
     visible: false,
   };
   const menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) menu.hidden = true;
+  if (menu) {
+    menu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  }
 }
 
 function buildTrackModalCoverVisualHtml({
@@ -30446,6 +33206,7 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
+  const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
   const albumDetailsLayout = String(
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
   ).trim().toLowerCase();
@@ -30457,6 +33218,7 @@ function renderTrackModalRelease(album) {
       year: album.year || '',
       releaseType: album.release_type || 'ALBUM',
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     els = getTrackModalElements();
@@ -30483,6 +33245,7 @@ function renderTrackModalRelease(album) {
       <div class="track-modal-cover-shell">
         ${renderAlbumArtbox({ state: 'missing', label: `${album.name || 'Album'} artwork unavailable` })}
       </div>
+      ${coverSourceMarkersHtml}
     `;
   } else if (albumHasDisplayCover(album)) {
     const coverSrc = buildAlbumDisplayCoverUrl(album);
@@ -30522,6 +33285,7 @@ function renderTrackModalRelease(album) {
       })}
       ${coverSourceBadge}
       </div>
+      ${coverSourceMarkersHtml}
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
       ? els.cover.querySelector('.track-modal-cover-image-slot')
@@ -30586,6 +33350,7 @@ function renderTrackModalRelease(album) {
         overlayHtml: coverToolsHtml,
       })}
       </div>
+      ${coverSourceMarkersHtml}
     `;
   }
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
@@ -32008,12 +34773,13 @@ function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) 
 // BEGIN js/runtime/gallery-cover-preview-cache.js
 
 const GALLERY_COVER_PREVIEW_CACHE_PREFIX = 'album-haven-gallery-previews-';
-const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v1';
+const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v2';
 const GALLERY_COVER_PREVIEW_CACHE_NAME = `${GALLERY_COVER_PREVIEW_CACHE_PREFIX}${GALLERY_COVER_PREVIEW_CACHE_VERSION}`;
 const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
+const GALLERY_COVER_PRODUCTION_URL_HEADER = 'X-Album-Haven-Cover-Production-Url';
 
 class GalleryCoverPreviewCache {
   constructor(options = {}) {
@@ -32024,6 +34790,9 @@ class GalleryCoverPreviewCache {
     this.cacheName = String(options.cacheName || GALLERY_COVER_PREVIEW_CACHE_NAME);
     this.maxActiveObjectUrls = Math.max(1, Number(options.maxActiveObjectUrls || MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS));
     this.activeObjectUrls = new Map();
+    this.imageObjectUrls = new WeakMap();
+    this.objectUrlConsumerCounts = new Map();
+    this.retiredObjectUrls = new Set();
     this.inFlight = new Map();
     this.writeChains = new Map();
     this.liveFetches = new Map();
@@ -32175,13 +34944,16 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  createCacheableResponse(response, blob) {
+  createCacheableResponse(response, blob, productionUrl) {
     if (typeof globalThis.Response !== 'function') return null;
     const contentType = String(blob?.type || this.responseContentType(response) || '').trim();
     return new globalThis.Response(blob, {
       status: Number(response?.status || 200),
       statusText: String(response?.statusText || ''),
-      headers: contentType ? { 'Content-Type': contentType } : undefined,
+      headers: {
+        ...(contentType ? { 'Content-Type': contentType } : {}),
+        [GALLERY_COVER_PRODUCTION_URL_HEADER]: productionUrl,
+      },
     });
   }
 
@@ -32213,37 +34985,49 @@ class GalleryCoverPreviewCache {
     return this.latestRequestedProductionUrls.get(this.baseCacheKey(productionUrl)) === productionUrl;
   }
 
-  async purgeSupersededEntries(cache, productionUrl, shouldContinue = () => true) {
-    const baseKey = this.baseCacheKey(productionUrl);
-    if (typeof cache?.keys !== 'function') return;
-    const requests = await cache.keys();
-    if (!shouldContinue()) return;
-    for (const request of requests) {
-      if (!shouldContinue()) return;
-      const cachedUrl = String(request?.url || request || '');
-      if (
-        cachedUrl !== productionUrl
-        && this.normalizeProductionUrl(cachedUrl)
-        && this.baseCacheKey(cachedUrl) === baseKey
-      ) {
-        await cache.delete(request);
-        if (!shouldContinue()) return;
-      }
-    }
-  }
-
   rememberObjectUrl(productionUrl, objectUrl) {
     const previous = this.activeObjectUrls.get(productionUrl);
-    if (previous && previous !== objectUrl) this.urlApi?.revokeObjectURL?.(previous);
+    if (previous && previous !== objectUrl) this.retireObjectUrl(previous);
     this.activeObjectUrls.delete(productionUrl);
     this.activeObjectUrls.set(productionUrl, objectUrl);
     while (this.activeObjectUrls.size > this.maxActiveObjectUrls) {
       const oldest = this.activeObjectUrls.entries().next().value;
       if (!oldest) break;
       this.activeObjectUrls.delete(oldest[0]);
-      this.urlApi?.revokeObjectURL?.(oldest[1]);
+      this.retireObjectUrl(oldest[1]);
     }
     this.syncActiveDiagnostics();
+  }
+
+  retireObjectUrl(objectUrl) {
+    if (this.objectUrlConsumerCounts.has(objectUrl)) {
+      this.retiredObjectUrls.add(objectUrl);
+      return;
+    }
+    this.urlApi?.revokeObjectURL?.(objectUrl);
+  }
+
+  retainImageObjectUrl(image, objectUrl) {
+    const previous = this.imageObjectUrls.get(image);
+    if (previous === objectUrl) return;
+    this.releaseImageObjectUrl(image);
+    if (!String(objectUrl || '').startsWith('blob:')) return;
+    this.imageObjectUrls.set(image, objectUrl);
+    this.objectUrlConsumerCounts.set(objectUrl, Number(this.objectUrlConsumerCounts.get(objectUrl) || 0) + 1);
+  }
+
+  releaseImageObjectUrl(image) {
+    const objectUrl = this.imageObjectUrls.get(image);
+    if (!objectUrl) return;
+    this.imageObjectUrls.delete(image);
+    const remaining = Number(this.objectUrlConsumerCounts.get(objectUrl) || 0) - 1;
+    if (remaining > 0) {
+      this.objectUrlConsumerCounts.set(objectUrl, remaining);
+      return;
+    }
+    this.objectUrlConsumerCounts.delete(objectUrl);
+    if (!this.retiredObjectUrls.delete(objectUrl)) return;
+    this.urlApi?.revokeObjectURL?.(objectUrl);
   }
 
   syncActiveDiagnostics() {
@@ -32295,18 +35079,12 @@ class GalleryCoverPreviewCache {
         );
         await this.deferCacheWrite(async () => {
           if (!shouldContinue()) return;
-          try {
-            await this.purgeSupersededEntries(cache, productionUrl, shouldContinue);
-          } catch (error) {
-            this.recordDiagnostic('superseded-entry-purge-failure', productionUrl, error);
-          }
-          if (!shouldContinue()) return;
-          await cache.put(productionUrl, cacheCandidate);
+          await cache.put(baseKey, cacheCandidate);
           wroteCacheEntry = true;
         });
         if (!shouldContinue()) {
           if (wroteCacheEntry || !this.isLatestRequestedProductionUrl(productionUrl)) {
-            await cache.delete(productionUrl);
+            await cache.delete(baseKey);
           }
           return {
             blob,
@@ -32334,9 +35112,10 @@ class GalleryCoverPreviewCache {
   async loadBlob(productionUrl, snapshot, signal = null, abortController = null, priorityOwner = null) {
     this.throwIfAborted(signal);
     const cache = await this.openCache();
-    const cachedResponse = await cache.match(productionUrl);
+    const cacheKey = this.baseCacheKey(productionUrl);
+    const cachedResponse = await cache.match(cacheKey);
     this.throwIfAborted(signal);
-    if (cachedResponse) {
+    if (cachedResponse?.headers?.get?.(GALLERY_COVER_PRODUCTION_URL_HEADER) === productionUrl) {
       try {
         const blob = await this.validatedBlob(cachedResponse);
         this.throwIfAborted(signal);
@@ -32345,7 +35124,7 @@ class GalleryCoverPreviewCache {
         if (signal?.aborted) this.throwIfAborted(signal);
         if (error?.name === 'AbortError') throw error;
         try {
-          await cache.delete(productionUrl);
+          await cache.delete(cacheKey);
         } catch (deleteError) {
           this.recordDiagnostic('invalid-cache-delete-failure', productionUrl, deleteError);
         }
@@ -32390,7 +35169,7 @@ class GalleryCoverPreviewCache {
         });
         this.throwIfAborted(signal);
         blob = await this.validatedBlob(response);
-        cacheCandidate = this.createCacheableResponse(response, blob);
+        cacheCandidate = this.createCacheableResponse(response, blob, productionUrl);
         this.throwIfAborted(signal);
       } catch (error) {
         promotionRetry = Boolean(
@@ -32669,12 +35448,12 @@ class GalleryCoverPreviewCache {
     const objectUrl = this.activeObjectUrls.get(normalizedUrl);
     if (objectUrl) {
       this.activeObjectUrls.delete(normalizedUrl);
-      this.urlApi?.revokeObjectURL?.(objectUrl);
+      this.retireObjectUrl(objectUrl);
       this.syncActiveDiagnostics();
     }
     try {
       const cache = await this.openCache();
-      return Boolean(await cache.delete(normalizedUrl));
+      return Boolean(await cache.delete(this.baseCacheKey(normalizedUrl)));
     } catch (error) {
       this.recordDiagnostic('fallback', normalizedUrl, error);
       return false;
@@ -32684,8 +35463,12 @@ class GalleryCoverPreviewCache {
   destroy() {
     this.generation += 1;
     this.abortInFlight('cache-destroyed');
-    this.activeObjectUrls.forEach((objectUrl) => this.urlApi?.revokeObjectURL?.(objectUrl));
+    new Set([...this.activeObjectUrls.values(), ...this.retiredObjectUrls])
+      .forEach((objectUrl) => this.urlApi?.revokeObjectURL?.(objectUrl));
     this.activeObjectUrls.clear();
+    this.imageObjectUrls = new WeakMap();
+    this.objectUrlConsumerCounts.clear();
+    this.retiredObjectUrls.clear();
     this.syncActiveDiagnostics();
     this.liveFetches.clear();
     this.inFlight.clear();
@@ -32711,6 +35494,7 @@ function beginGalleryCoverImageRequest(image, productionUrl) {
 function commitGalleryCoverImageRequest(request, result) {
   if (!request || galleryCoverImageRequestTokens.get(request.image) !== request.requestToken) return false;
   request.image.setAttribute('data-production-cover-src', result.productionUrl);
+  galleryCoverPreviewCache.retainImageObjectUrl(request.image, result.displayUrl);
   request.image.src = result.displayUrl;
   return true;
 }
@@ -32738,7 +35522,7 @@ async function loadGalleryCoverPreviewImage(image, productionUrl, options = {}) 
 
 // BEGIN js/runtime/gallery-cover-load-scheduler.js
 
-const GALLERY_COVER_LOAD_CONCURRENCY = 2;
+const GALLERY_COVER_LOAD_CONCURRENCY = 6;
 const GALLERY_COVER_BACKGROUND_CONCURRENCY = 2;
 const GALLERY_COVER_PRIORITY_ORDER = Object.freeze({ visible: 0, near: 1, background: 2 });
 
@@ -33461,6 +36245,9 @@ function albumCardHtml(album, options = {}) {
     remote_cover_thumbnail_url: String(album?.remote_cover_thumbnail_url || ''),
     inventory_status: String(album?.inventory_status || ''),
     missing_since: String(album?.missing_since || ''),
+    root_provenance: { categories: getAlbumCardSourceCategories(album).map((category) => category === 'main' ? 'main_library' : category) },
+    library_root_category: album?.library_root_category,
+    has_duplicate_files: album?.has_duplicate_files === true,
     allowed_actions: album?.allowed_actions && typeof album.allowed_actions === 'object'
       ? album.allowed_actions
       : {},
@@ -33501,6 +36288,8 @@ function albumCardHtml(album, options = {}) {
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
     artboxHtml,
+    sourceCategories: getAlbumCardSourceCategories(album),
+    hasDuplicateFiles: album?.has_duplicate_files === true,
     displayMode: options.displayMode || state?.gallery?.mainState?.view || state?.view?.gallery_display_mode,
   });
 }
@@ -33508,6 +36297,16 @@ function albumCardHtml(album, options = {}) {
 function getAlbumCardRating(album) {
   const rating = album?.album_preference?.rating;
   return Number.isInteger(rating) && rating >= 1 && rating <= 10 ? rating : null;
+}
+
+function getAlbumCardSourceCategories(album) {
+  const categories = typeof resolveGalleryAlbumSources === 'function'
+    ? resolveGalleryAlbumSources(album)
+    : (Array.isArray(album?.root_provenance?.categories)
+      ? album.root_provenance.categories
+      : [album?.library_root_category || 'main_library']);
+  const normalized = categories.map((category) => category === 'main_library' ? 'main' : category);
+  return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
 function getAlbumCardRenderKey(album) {
@@ -33526,6 +36325,8 @@ function getAlbumCardRenderKey(album) {
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
+    getAlbumCardSourceCategories(album),
+    album?.has_duplicate_files === true,
     String(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode || 'cards'),
   ]);
 }
@@ -33701,7 +36502,7 @@ class VirtualArtistGrid {
     this.layoutConfig = CARD_GALLERY_LAYOUT_CONFIG;
     this.columnGap = 14;
     this.rowGap = 14;
-    this.sectionHeaderHeight = 54;
+    this.sectionHeaderHeight = 42;
     this.showArtistSectionHeaders = true;
     this.sectionMarginBottom = 28;
     this.labelHeight = 40;
@@ -33724,6 +36525,8 @@ class VirtualArtistGrid {
     this._measureRaf = null;
     this._scrollRestoreRaf = null;
     this._stabilizeRaf = null;
+    this._albumDetailPrewarmRaf = 0;
+    this._albumDetailPrewarmGeneration = 0;
     this._stabilizeGeneration = 0;
     this._pendingStabilizationScroll = null;
     this._absoluteScrollRestore = null;
@@ -33742,6 +36545,15 @@ class VirtualArtistGrid {
     this._albumCardPointerReleaseRaf = 0;
     this._deferredPointerGestureRender = null;
     this._measureTimeout = 0;
+    this._touchScrollGestureActive = false;
+    this._touchScrollGestureHadScroll = false;
+    this._touchScrollGestureTarget = null;
+    this._scrollAnchorVisualPhase = 0;
+    this._userScrollIntentGeneration = 0;
+    this._deferredSetGroups = null;
+    this._deferredArtistTreeSettlement = false;
+    this._artistTreeReflowAnchor = undefined;
+    this._deferredResizeOptions = null;
     this._resetScrollAfterMeasure = false;
     this.isScrollSettled = true;
     this._diagnosticSequence = 0;
@@ -33755,13 +36567,17 @@ class VirtualArtistGrid {
     globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ = this.diagnostics;
     this.onScroll = this.onScroll.bind(this);
     this.onUserScrollIntent = this.onUserScrollIntent.bind(this);
+    this.onTouchScrollEnd = this.onTouchScrollEnd.bind(this);
     this.onResize = this.onResize.bind(this);
+    this.onArtistTreeToggleStarting = this.onArtistTreeToggleStarting.bind(this);
     this.onArtistTreeSettled = this.onArtistTreeSettled.bind(this);
     this.onPointerDown = this.onPointerDown.bind(this);
     this.onAlbumCardPointerGestureEnd = this.onAlbumCardPointerGestureEnd.bind(this);
     this.scrollEl.addEventListener('scroll', this.onScroll, { passive: true });
     this.scrollEl.addEventListener('wheel', this.onUserScrollIntent, { passive: true });
     this.scrollEl.addEventListener('touchstart', this.onUserScrollIntent, { passive: true });
+    this.scrollEl.addEventListener('touchend', this.onTouchScrollEnd, { passive: true });
+    this.scrollEl.addEventListener('touchcancel', this.onTouchScrollEnd, { passive: true });
     this.scrollEl.addEventListener('pointerdown', this.onUserScrollIntent, { capture: true });
     if (this.containerEl && typeof this.containerEl.addEventListener === 'function') {
       this.containerEl.addEventListener('pointerdown', this.onPointerDown, { capture: true });
@@ -33769,12 +36585,22 @@ class VirtualArtistGrid {
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('pointerup', this.onAlbumCardPointerGestureEnd, { capture: true });
       document.addEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
+      document.addEventListener('touchend', this.onTouchScrollEnd, { passive: true, capture: true });
+      document.addEventListener('touchcancel', this.onTouchScrollEnd, { passive: true, capture: true });
     }
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('album-haven:artist-tree-toggle-starting', this.onArtistTreeToggleStarting);
     window.addEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
   }
 
   recordDiagnosticEvent(type, details = {}) {
+    const epoch = (
+      typeof performance !== 'undefined'
+      && Number.isFinite(Number(performance.timeOrigin))
+      && typeof performance.now === 'function'
+    )
+      ? Number(performance.timeOrigin) + performance.now()
+      : Date.now();
     const event = {
       sequence: ++this._diagnosticSequence,
       type: String(type || 'unknown'),
@@ -33783,6 +36609,7 @@ class VirtualArtistGrid {
       renderRafOwner: Number(this._activeRenderRafOwner || this._raf || 0),
       measureRafOwner: Number(this._activeMeasureRafOwner || this._measureRaf || 0),
       ...details,
+      epoch,
     };
     this.diagnostics.events.push(event);
     if (this.diagnostics.events.length > this.diagnostics.maxEvents) {
@@ -33810,6 +36637,8 @@ class VirtualArtistGrid {
     this.scrollEl.removeEventListener('scroll', this.onScroll);
     this.scrollEl.removeEventListener('wheel', this.onUserScrollIntent);
     this.scrollEl.removeEventListener('touchstart', this.onUserScrollIntent);
+    this.scrollEl.removeEventListener('touchend', this.onTouchScrollEnd);
+    this.scrollEl.removeEventListener('touchcancel', this.onTouchScrollEnd);
     this.scrollEl.removeEventListener('pointerdown', this.onUserScrollIntent, { capture: true });
     if (this.containerEl && typeof this.containerEl.removeEventListener === 'function') {
       this.containerEl.removeEventListener('pointerdown', this.onPointerDown, { capture: true });
@@ -33817,8 +36646,12 @@ class VirtualArtistGrid {
     if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
       document.removeEventListener('pointerup', this.onAlbumCardPointerGestureEnd, { capture: true });
       document.removeEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
+      document.removeEventListener('touchend', this.onTouchScrollEnd, { capture: true });
+      document.removeEventListener('touchcancel', this.onTouchScrollEnd, { capture: true });
     }
+    this.clearTouchScrollGestureTarget();
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('album-haven:artist-tree-toggle-starting', this.onArtistTreeToggleStarting);
     window.removeEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
     if (this._scrollRestoreRaf) {
       cancelBrowserAnimationFrame(this._scrollRestoreRaf);
@@ -33840,10 +36673,17 @@ class VirtualArtistGrid {
     this._albumCardPointerGestureActive = false;
     this._activeAlbumCardPointerId = null;
     this._deferredPointerGestureRender = null;
+    this._touchScrollGestureActive = false;
+    this._touchScrollGestureHadScroll = false;
+    this._deferredSetGroups = null;
+    this._deferredArtistTreeSettlement = false;
+    this._artistTreeReflowAnchor = undefined;
+    this._deferredResizeOptions = null;
     if (this._measureRaf) {
       cancelBrowserAnimationFrame(this._measureRaf);
       this._measureRaf = null;
     }
+    this.cancelVisibleAlbumDetailPrewarm();
     if (this._measureTimeout) {
       clearBrowserTimeout(this._measureTimeout);
       this._measureTimeout = 0;
@@ -33853,6 +36693,42 @@ class VirtualArtistGrid {
     if (typeof galleryCoverPreviewCache !== 'undefined' && typeof galleryCoverPreviewCache.destroy === 'function') {
       galleryCoverPreviewCache.destroy();
     }
+  }
+
+  cancelVisibleAlbumDetailPrewarm() {
+    this._albumDetailPrewarmGeneration += 1;
+    if (!this._albumDetailPrewarmRaf) return;
+    cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
+    this._albumDetailPrewarmRaf = 0;
+  }
+
+  scheduleVisibleAlbumDetailPrewarm(rangeKey, scrollTop) {
+    this.cancelVisibleAlbumDetailPrewarm();
+    if (
+      !this.isScrollSettled
+      || typeof queueVisibleTrackModalAlbumDetailsPrewarm !== 'function'
+    ) {
+      return;
+    }
+    const generation = this._albumDetailPrewarmGeneration;
+    const renderGeneration = this._renderGeneration;
+    const normalizedScrollTop = Number(scrollTop || 0);
+    this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
+      if (generation !== this._albumDetailPrewarmGeneration) return;
+      this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
+        if (generation !== this._albumDetailPrewarmGeneration) return;
+        this._albumDetailPrewarmRaf = 0;
+        if (
+          renderGeneration !== this._renderGeneration
+          || !this.isScrollSettled
+          || this.lastKey !== rangeKey
+          || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
+        ) {
+          return;
+        }
+        queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+      });
+    });
   }
 
   onPointerDown(event) {
@@ -33897,6 +36773,9 @@ class VirtualArtistGrid {
       } finally {
         this._activeRenderRafOwner = previousActiveRenderRafOwner;
       }
+      if (Object.prototype.hasOwnProperty.call(deferredRender, 'measurementAnchor')) {
+        this.stabilizeScrollAfterMeasurement(deferredRender.measurementAnchor);
+      }
     });
   }
 
@@ -33934,7 +36813,7 @@ class VirtualArtistGrid {
     return true;
   }
 
-  captureScrollAnchor() {
+  captureScrollAnchor(options = {}) {
     if (!this.scrollEl || !this.containerEl) return null;
     const scrollLeft = Number(this.scrollEl.scrollLeft || 0);
     const scrollTop = Number(this.scrollEl.scrollTop || 0);
@@ -33947,9 +36826,15 @@ class VirtualArtistGrid {
       return { scrollLeft, scrollTop };
     }
     const cardTriggers = Array.from(this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'));
-    const anchorCardTrigger = cardTriggers.find((element) => element.getBoundingClientRect().bottom >= scrollRect.top + 1) || cardTriggers[0] || null;
+    const anchorCardTrigger = cardTriggers.find((element) => {
+      const visibleElement = options.requireVisibleTrigger
+        ? element
+        : element.closest?.('.album-card') || element;
+      return visibleElement.getBoundingClientRect().bottom >= scrollRect.top + 1;
+    }) || cardTriggers[0] || null;
     if (anchorCardTrigger instanceof HTMLElement) {
-      const anchorRect = anchorCardTrigger.getBoundingClientRect();
+      const anchorCard = anchorCardTrigger.closest?.('.album-card');
+      const anchorRect = (anchorCard || anchorCardTrigger).getBoundingClientRect();
       let albumName = '';
       let albumYear = '';
       try {
@@ -33967,6 +36852,7 @@ class VirtualArtistGrid {
         albumName,
         albumYear,
         triggerKind: anchorCardTrigger.matches?.('.album-card__artbox-trigger') ? 'artbox' : 'title',
+        anchorBox: anchorCard ? 'card' : 'trigger',
         sectionOccurrenceKey: this.getRenderedSectionOccurrenceKey(anchorCardTrigger, this.containerEl),
         offsetTop: anchorRect.top - scrollRect.top,
       };
@@ -33986,11 +36872,32 @@ class VirtualArtistGrid {
     };
   }
 
+  applyScrollAnchorVisualPhase(nextPhase) {
+    const normalizedPhase = Math.round((Number(nextPhase) || 0) * 64) / 64;
+    this._scrollAnchorVisualPhase = normalizedPhase;
+    this.containerEl.style.translate = normalizedPhase ? `0 ${normalizedPhase}px` : '';
+  }
+
+  applyAnchoredScrollTop(requestedScrollTop) {
+    const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
+    const requestedScrollDelta = Number(requestedScrollTop || 0) - previousScrollTop;
+    this.scrollEl.scrollTop = requestedScrollTop;
+    const appliedScrollDelta = Number(this.scrollEl.scrollTop || 0) - previousScrollTop;
+    this.applyScrollAnchorVisualPhase(
+      Number(this._scrollAnchorVisualPhase || 0) + appliedScrollDelta - requestedScrollDelta,
+    );
+  }
+
+  getUserScrollIntentGeneration() {
+    return this._userScrollIntentGeneration;
+  }
+
   restoreScrollAnchor(anchor) {
     if (!this.scrollEl || !anchor) return;
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
     // At the root, hydration must preserve the top rather than follow a preview card.
     if (Number(anchor.scrollTop || 0) <= 0) {
+      this.applyScrollAnchorVisualPhase(0);
       this.scrollEl.scrollTop = 0;
       return;
     }
@@ -34044,9 +36951,14 @@ class VirtualArtistGrid {
       const resolvedAnchorCardTrigger = anchorCardTrigger || renamedKeyTrigger || fallbackAlbumTrigger;
       if (resolvedAnchorCardTrigger instanceof HTMLElement && typeof this.scrollEl.getBoundingClientRect === 'function') {
         const scrollRect = this.scrollEl.getBoundingClientRect();
-        const anchorRect = resolvedAnchorCardTrigger.getBoundingClientRect();
+        const anchorElement = anchor.anchorBox === 'row'
+          ? resolvedAnchorCardTrigger.closest?.('.album-row') || resolvedAnchorCardTrigger
+          : anchor.anchorBox === 'card'
+            ? resolvedAnchorCardTrigger.closest?.('.album-card') || resolvedAnchorCardTrigger
+            : resolvedAnchorCardTrigger;
+        const anchorRect = anchorElement.getBoundingClientRect();
         const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
-        this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
+        this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + delta);
         return;
       }
       if (sectionOccurrenceKey && anchorAlbumName) {
@@ -34054,20 +36966,32 @@ class VirtualArtistGrid {
           section.kind === 'artist'
           && this.getRenderedSectionKey(section) === sectionOccurrenceKey
         ));
-        const modeledAlbums = Array.isArray(modeledSection?.group?.albums)
-          ? modeledSection.group.albums
-          : [];
-        const modeledAlbumIndex = modeledAlbums.findIndex((album) => (
+        const modeledBlocks = Array.isArray(modeledSection?.blocksData)
+          ? modeledSection.blocksData
+          : modeledSection ? this.getBlocksForSection(modeledSection) : [];
+        const findModeledBlockIndex = (matchesAlbum) => modeledBlocks.findIndex((block) => (
+          block?.kind === 'row'
+          && Array.isArray(block.albums)
+          && block.albums.some(matchesAlbum)
+        ));
+        const matchesCapturedModeledRelease = (album) => (
           String(album?.name || '') === anchorAlbumName
           && (!anchorAlbumYear || String(album?.year ?? '') === anchorAlbumYear)
+        );
+        let blockIndex = findModeledBlockIndex((album) => (
+          getAlbumRequestKey(album) === albumKey || getAlbumIdentity(album) === albumKey
         ));
-        if (modeledAlbumIndex >= 0) {
-          const blockIndex = Math.floor(modeledAlbumIndex / Math.max(1, Number(this.columns || 1)));
+        if (blockIndex < 0) {
+          blockIndex = findModeledBlockIndex(matchesCapturedModeledRelease);
+        }
+        if (blockIndex >= 0) {
           const modeledBlockOffset = Number(modeledSection.blockOffsets?.[blockIndex]);
           const modeledSectionTop = Number(modeledSection.top);
           if (Number.isFinite(modeledBlockOffset) && Number.isFinite(modeledSectionTop)) {
             const modeledCardTop = modeledSectionTop + this.sectionHeaderHeight + modeledBlockOffset;
-            this.scrollEl.scrollTop = Math.max(0, modeledCardTop - Number(anchor.offsetTop || 0));
+            this.applyAnchoredScrollTop(
+              Math.max(0, modeledCardTop - Number(anchor.offsetTop || 0)),
+            );
             return;
           }
         }
@@ -34090,7 +37014,55 @@ class VirtualArtistGrid {
     const scrollRect = this.scrollEl.getBoundingClientRect();
     const anchorRect = anchorRow.getBoundingClientRect();
     const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
-    this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
+    this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + delta);
+  }
+
+  restoreOwnedScrollAnchor(anchor) {
+    this.restoreScrollAnchor(anchor);
+    this._pendingStabilizationScroll = {
+      generation: this._stabilizeGeneration,
+      scrollLeft: Number(this.scrollEl?.scrollLeft || 0),
+      scrollTop: Number(this.scrollEl?.scrollTop || 0),
+    };
+  }
+
+  scrollToArtist(artist) {
+    const normalizedArtist = String(artist || '').trim();
+    if (!normalizedArtist) return false;
+    const section = this.sections.find((candidate) => (
+      candidate.kind === 'artist'
+      && String(candidate.group?.artist || '') === normalizedArtist
+    ));
+    if (!section) return false;
+    if (this._scrollRestoreRaf) {
+      cancelBrowserAnimationFrame(this._scrollRestoreRaf);
+      this._scrollRestoreRaf = null;
+    }
+    this._absoluteScrollRestore = null;
+    this.invalidateScrollStabilization();
+    this._resetScrollAfterMeasure = false;
+    this.applyScrollAnchorVisualPhase(0);
+    this.applyAnchoredScrollTop(Math.max(
+      0,
+      Number(section.top || 0) + Number(this.sectionHeaderHeight || 0),
+    ));
+    this.lastKey = '';
+    this.render(true);
+    const renderedHeader = Array.from(this.containerEl.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
+      String(candidate.getAttribute('data-scroll-artist') || '') === normalizedArtist
+    ));
+    const renderedRows = renderedHeader instanceof HTMLElement
+      ? renderedHeader.parentElement?.querySelector?.('.artist-rows')
+      : null;
+    if (renderedRows instanceof HTMLElement) {
+      const scrollRect = this.scrollEl.getBoundingClientRect();
+      const scrollContentTop = scrollRect.top + Number(this.scrollEl.clientTop || 0);
+      const renderedDelta = renderedRows.getBoundingClientRect().top - scrollContentTop;
+      if (Math.abs(renderedDelta) >= (1 / 64)) {
+        this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + renderedDelta);
+      }
+    }
+    return true;
   }
 
   invalidateScrollStabilization(options = {}) {
@@ -34099,6 +37071,14 @@ class VirtualArtistGrid {
     if (this._stabilizeRaf) {
       cancelBrowserAnimationFrame(this._stabilizeRaf);
       this._stabilizeRaf = null;
+    }
+    if (options.cancelScrollRestore === true) {
+      this._absoluteScrollRestore = null;
+      if (this._scrollRestoreRaf) {
+        cancelBrowserAnimationFrame(this._scrollRestoreRaf);
+        this._scrollRestoreRaf = null;
+      }
+      return;
     }
     if (options.preserveAbsoluteScroll === true || !this._absoluteScrollRestore) return;
     this._absoluteScrollRestore = null;
@@ -34124,6 +37104,9 @@ class VirtualArtistGrid {
       || !Number.isFinite(Number(position?.scrollLeft))
     ) return false;
     this.invalidateScrollStabilization();
+    // Returning from a mobile child page supersedes any deferred reset that
+    // belonged to the artist selection which produced the retained parent.
+    this._resetScrollAfterMeasure = false;
     const preservedAbsoluteScroll = {
       renderGeneration: this._renderGeneration,
       scrollLeft: Math.max(0, Number(position.scrollLeft)),
@@ -34150,7 +37133,45 @@ class VirtualArtistGrid {
   }
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
+    const shouldDeferMountedGroupUpdate = (
+      Boolean(options.preserveScroll)
+      && options.preserveMountedGalleryChildren === true
+      && options.resetScrollForUserArtistSelection !== true
+      && options.preserveAbsoluteScroll !== true
+      && !this._absoluteScrollRestore
+      && (
+        this._touchScrollGestureActive
+        || !this.isScrollSettled
+        || !this.hasMeasurableScrollSurface()
+      )
+    );
+    if (shouldDeferMountedGroupUpdate) {
+      this._deferredSetGroups = {
+        primaryGroups,
+        familyGroups,
+        fallbackGroups,
+        options,
+        layoutConfig,
+      };
+      this.recordDiagnosticEvent('group-update-deferred', {
+        touchGestureActive: this._touchScrollGestureActive,
+      });
+      return;
+    }
+    this._deferredSetGroups = null;
+    this._deferredArtistTreeSettlement = false;
+    this._artistTreeReflowAnchor = undefined;
+    this._deferredResizeOptions = null;
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
+    const ownedAbsoluteScrollPosition = (
+      options.preserveAbsoluteScroll !== false
+      && this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
+    )
+      ? {
+        scrollLeft: this._absoluteScrollRestore.scrollLeft,
+        scrollTop: this._absoluteScrollRestore.scrollTop,
+      }
+      : null;
     this._renderGeneration += 1;
     const renderGeneration = this._renderGeneration;
     this._preserveExistingChildrenGeneration = options.preserveMountedGalleryChildren
@@ -34200,15 +37221,26 @@ class VirtualArtistGrid {
         scrollTop: Math.max(0, Number(options.absoluteScrollPosition.scrollTop)),
       }
       : null;
-    const preservedAbsoluteScroll = preserveScroll && options.preserveAbsoluteScroll === true
+    const preservedAbsoluteScroll = preserveScroll && (
+      options.preserveAbsoluteScroll === true
+      || ownedAbsoluteScrollPosition
+    )
       ? {
         renderGeneration,
-        scrollLeft: requestedAbsoluteScroll?.scrollLeft ?? Number(this.scrollEl?.scrollLeft || 0),
-        scrollTop: requestedAbsoluteScroll?.scrollTop ?? Number(this.scrollEl?.scrollTop || 0),
+        scrollLeft: requestedAbsoluteScroll?.scrollLeft
+          ?? ownedAbsoluteScrollPosition?.scrollLeft
+          ?? Number(this.scrollEl?.scrollLeft || 0),
+        scrollTop: requestedAbsoluteScroll?.scrollTop
+          ?? ownedAbsoluteScrollPosition?.scrollTop
+          ?? Number(this.scrollEl?.scrollTop || 0),
       }
       : null;
+    const semanticScrollAnchorIsCurrent = options.semanticScrollAnchor && (
+      !Number.isSafeInteger(options.semanticScrollOwnerGeneration)
+      || options.semanticScrollOwnerGeneration === this._userScrollIntentGeneration
+    );
     const preservedAnchor = preserveScroll && !preservedAbsoluteScroll
-      ? this.captureScrollAnchor()
+      ? (semanticScrollAnchorIsCurrent ? options.semanticScrollAnchor : this.captureScrollAnchor())
       : null;
     this._absoluteScrollRestore = preservedAbsoluteScroll;
     const sections = [];
@@ -34290,6 +37322,7 @@ class VirtualArtistGrid {
     this.lastKey = '';
     this.recalculate();
     if (!preserveScroll && this.scrollEl) {
+      this.applyScrollAnchorVisualPhase(0);
       this.scrollEl.scrollTop = 0;
     }
     if (preservedAbsoluteScroll && this.scrollEl) {
@@ -34317,6 +37350,8 @@ class VirtualArtistGrid {
         ) return;
         this._scrollRestoreRaf = null;
         restoreScroll();
+        if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
+        if (typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
         const latestRender = this.diagnostics.latestRender;
         if (
           Number(latestRender?.renderGeneration || 0) !== renderGeneration
@@ -34340,6 +37375,7 @@ class VirtualArtistGrid {
     if (!preserveScroll && this.scrollEl) {
       const resetScroll = () => {
         if (renderGeneration !== this._renderGeneration) return;
+        this.applyScrollAnchorVisualPhase(0);
         this.scrollEl.scrollTop = 0;
         this.primeVisibleCoverImages();
       };
@@ -34358,7 +37394,17 @@ class VirtualArtistGrid {
             scrollTop: preservedAbsoluteScroll.scrollTop,
           };
         } else {
+          const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
           this.restoreScrollAnchor(preservedAnchor);
+          if (preservedAnchor?.albumKey && Math.abs(Number(this.scrollEl.scrollTop || 0) - previousScrollTop) > 1) {
+            this.render(true);
+            this.restoreScrollAnchor(preservedAnchor);
+          }
+          this._pendingStabilizationScroll = {
+            generation: this._stabilizeGeneration,
+            scrollLeft: Number(this.scrollEl.scrollLeft || 0),
+            scrollTop: Number(this.scrollEl.scrollTop || 0),
+          };
         }
         this.primeVisibleCoverImages();
       };
@@ -34367,19 +37413,43 @@ class VirtualArtistGrid {
     }
   }
 
-  getRowsForSection(section) {
-    const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
-    const rows = [];
-    for (let start = 0; start < albums.length; start += this.columns) {
-      rows.push(albums.slice(start, start + this.columns));
-    }
-    return rows;
-  }
-
   getBlocksForSection(section) {
+        const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
+        const uniqueAlbums = [];
+        const albumIndexByIdentity = new Map();
+        albums.forEach((album) => {
+            const identity = getAlbumIdentity(album);
+            if (!identity) {
+                uniqueAlbums.push(album);
+                return;
+            }
+            const existingIndex = albumIndexByIdentity.get(identity);
+            if (existingIndex === undefined) {
+                albumIndexByIdentity.set(identity, uniqueAlbums.length);
+                uniqueAlbums.push(album);
+                return;
+            }
+            const existingAlbum = uniqueAlbums[existingIndex];
+            if (
+                existingAlbum?.artist_relationship === 'featured'
+                && album?.artist_relationship !== 'featured'
+            ) {
+                uniqueAlbums[existingIndex] = album;
+            }
+        });
+        const ownedAlbums = uniqueAlbums.filter((album) => album?.artist_relationship !== 'featured');
+        const featuredAlbums = uniqueAlbums.filter((album) => album?.artist_relationship === 'featured');
     const blocks = [];
-    const normalRows = this.getRowsForSection(section);
-    normalRows.forEach((albums) => blocks.push({ kind: 'row', albums }));
+        const appendRows = (rowAlbums) => {
+            for (let start = 0; start < rowAlbums.length; start += this.columns) {
+                blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
+            }
+        };
+        appendRows(ownedAlbums);
+        if (featuredAlbums.length) {
+            blocks.push({ kind: 'subheading', title: 'Featured On', count: featuredAlbums.length });
+            appendRows(featuredAlbums);
+        }
     return blocks.length ? blocks : [];
   }
 
@@ -34393,8 +37463,25 @@ class VirtualArtistGrid {
     return `row:${this.columns}:${albumKey}`;
   }
 
+  hasMeasurableScrollSurface() {
+    const rect = this.scrollEl?.getBoundingClientRect?.();
+    if (!rect) return true;
+    const width = Number(rect.width);
+    const height = Number(rect.height);
+    return !(
+      Number.isFinite(width)
+      && Number.isFinite(height)
+      && (width <= 0 || height <= 0)
+    );
+  }
+
+  hasDeferredMountedGroupUpdate() {
+    return Boolean(this._deferredSetGroups);
+  }
+
   recalculate(options = {}) {
-    this.sectionHeaderHeight = this.showArtistSectionHeaders ? 54 : 0;
+    if (!this.hasMeasurableScrollSurface()) return false;
+    this.sectionHeaderHeight = this.showArtistSectionHeaders ? 42 : 0;
     const layoutConfig = this.getLayoutConfig();
     const selectedCardWidth = resolveGalleryCardWidth(layoutConfig);
     const width = Math.max(1, this.scrollEl.clientWidth - 4);
@@ -34425,7 +37512,9 @@ class VirtualArtistGrid {
     if (!options.preserveColumnGeometry) {
       this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
       this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-        ? (width - (this.columns - 1) * this.columnGap) / this.columns
+        ? Math.floor(
+          ((width - (this.columns - 1) * this.columnGap) / this.columns) * 1000,
+        ) / 1000
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
@@ -34438,8 +37527,18 @@ class VirtualArtistGrid {
       this.cardTrackWidth = mobileGeometry.cardTrackWidth;
     }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
+    const measuredRowHeight = this.sections.flatMap((section) => (
+      section.rowGeometryKey === rowGeometryKey
+        ? (section.blockHeights || []).filter((_height, index) => {
+          const measureKey = String(section.blockMeasureKeys?.[index] || '');
+          return measureKey.startsWith('row:')
+            && String(section.measuredBlockKeys?.[index] || '') === measureKey;
+        })
+        : []
+    )).find(height => Number(height) > 0);
     const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
-      || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);
+      || (displayMode === 'covers' ? this.cardTrackWidth : measuredRowHeight)
+      || this.collapsedRowHeight;
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {
@@ -34464,22 +37563,26 @@ class VirtualArtistGrid {
       const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
       const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
       section.blocksData = blocks;
-      if (!Array.isArray(section.blockHeights) || section.blockHeights.length !== blocks.length) {
-        const previousBlockHeights = Array.isArray(section.blockHeights)
-          ? section.blockHeights
-          : [];
-        section.blockHeights = blocks.map((block, index) => {
-          if (block.kind === 'subheading') return this.subsectionLabelHeight;
-          const previousHeight = Number(previousBlockHeights[index] || 0);
-          return previousHeight > 0 ? previousHeight : estimatedRowHeight;
-        });
-      } else {
-        section.blockHeights = blocks.map((block, index) => (
-          block.kind === 'subheading'
-            ? this.subsectionLabelHeight
-            : (section.blockHeights[index] || estimatedRowHeight)
-        ));
-      }
+      const previousBlockHeights = Array.isArray(section.blockHeights)
+        ? section.blockHeights
+        : [];
+      const sectionMeasuredRowHeight = previousBlockHeights.find((height, index) => {
+        const measureKey = String(previousMeasureKeys[index] || '');
+        return measureKey.startsWith('row:')
+          && String(previousMeasuredKeys[index] || '') === measureKey
+          && Number(height) > 0;
+      });
+      const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
+        || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
+        || estimatedRowHeight;
+      section.blockHeights = blocks.map((block, index) => {
+        if (block.kind === 'subheading') return this.subsectionLabelHeight;
+        const measureKey = nextMeasureKeys[index];
+        const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
+          && previousMeasuredKeys[index] === measureKey
+          && Number(previousBlockHeights[index]) > 0;
+        return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
+      });
       section.blockMeasureKeys = nextMeasureKeys;
       section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
         previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
@@ -34526,8 +37629,14 @@ class VirtualArtistGrid {
       this._absoluteScrollRestore,
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
+    if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore) {
+      this._userScrollIntentGeneration += 1;
+    }
     if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
-      && typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
+      && typeof loadNextRootGalleryPage === 'function') {
+      if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
+      void loadNextRootGalleryPage();
+    }
     if (!isOwnedStabilizationScroll && ownsPendingAbsoluteRestore) {
       this.scrollEl.scrollLeft = this._absoluteScrollRestore.scrollLeft;
       this.scrollEl.scrollTop = this._absoluteScrollRestore.scrollTop;
@@ -34537,17 +37646,17 @@ class VirtualArtistGrid {
         scrollTop: this._absoluteScrollRestore.scrollTop,
       };
     } else if (!isOwnedStabilizationScroll) {
-      this.invalidateScrollStabilization();
+      this.invalidateScrollStabilization({ cancelScrollRestore: true });
     }
-    this.isScrollSettled = false;
-    if (this._measureTimeout) {
-      clearBrowserTimeout(this._measureTimeout);
+    if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore) {
+      this.isScrollSettled = false;
+      if (this._measureRaf) {
+        cancelBrowserAnimationFrame(this._measureRaf);
+        this._measureRaf = null;
+      }
     }
-    this._measureTimeout = scheduleBrowserTimeout(() => {
-      this._measureTimeout = 0;
-      this.isScrollSettled = true;
-      this.scheduleMeasureRows(true);
-    }, 96);
+    if (this._touchScrollGestureActive) this._touchScrollGestureHadScroll = true;
+    this.scheduleSettledMeasurement();
     if (this._raf) {
       this.updateScrollDiagnostic(this._raf, true);
       return;
@@ -34578,35 +37687,189 @@ class VirtualArtistGrid {
     this.updateScrollDiagnostic(renderRafOwner);
   }
 
-  onUserScrollIntent(event) {
-    if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
-    this.invalidateScrollStabilization();
+  clearTouchScrollGestureTarget() {
+    const target = this._touchScrollGestureTarget;
+    this._touchScrollGestureTarget = null;
+    if (!target || typeof target.removeEventListener !== 'function') return;
+    target.removeEventListener('touchend', this.onTouchScrollEnd);
+    target.removeEventListener('touchcancel', this.onTouchScrollEnd);
   }
 
-  onArtistTreeSettled() {
-    const anchor = this.captureScrollAnchor();
-    this.onResize({ preserveCardTrackWidth: true });
-    if (anchor && !this._resetScrollAfterMeasure) {
-      this.stabilizeScrollAfterMeasurement(anchor);
-      // Reflow can virtualize the old anchor. Mount its restored row before
-      // reconciling the exact trigger offset against the new card geometry.
-      this.render(true);
-      this.stabilizeScrollAfterMeasurement(anchor);
+  onUserScrollIntent(event) {
+    if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
+    if (event?.type !== 'touchstart') this._userScrollIntentGeneration += 1;
+    if (event?.type === 'wheel') {
+      if (this._measureRaf) {
+        cancelBrowserAnimationFrame(this._measureRaf);
+        this._measureRaf = null;
+      }
+      this.isScrollSettled = false;
+      this.scheduleSettledMeasurement();
+    }
+    if (event?.type === 'touchstart') {
+      const touchTarget = event.target;
+      if (touchTarget !== this._touchScrollGestureTarget) {
+        this.clearTouchScrollGestureTarget();
+        if (
+          touchTarget
+          && touchTarget !== this.scrollEl
+          && typeof touchTarget.addEventListener === 'function'
+        ) {
+          this._touchScrollGestureTarget = touchTarget;
+          touchTarget.addEventListener('touchend', this.onTouchScrollEnd, { passive: true });
+          touchTarget.addEventListener('touchcancel', this.onTouchScrollEnd, { passive: true });
+        }
+      }
+      const pendingMeasurement = Boolean(this._measureRaf || this._measureTimeout);
+      if (this._measureRaf) {
+        cancelBrowserAnimationFrame(this._measureRaf);
+        this._measureRaf = null;
+      }
+      if (this._measureTimeout) {
+        clearBrowserTimeout(this._measureTimeout);
+        this._measureTimeout = 0;
+      }
+      this._touchScrollGestureActive = true;
+      this._touchScrollGestureHadScroll =
+        this._touchScrollGestureHadScroll || pendingMeasurement;
+    }
+    this.invalidateScrollStabilization({ cancelScrollRestore: true });
+  }
+
+  onTouchScrollEnd(event) {
+    if (Number(event?.touches?.length || 0) > 0) return;
+    this.clearTouchScrollGestureTarget();
+    if (!this._touchScrollGestureActive) return;
+    const hadScroll = this._touchScrollGestureHadScroll;
+    this._touchScrollGestureActive = false;
+    this._touchScrollGestureHadScroll = false;
+    if (
+      hadScroll
+      || this._deferredSetGroups
+      || this._deferredArtistTreeSettlement
+      || this._deferredResizeOptions
+    ) {
+      this.scheduleSettledMeasurement();
     }
   }
 
+  scheduleSettledMeasurement() {
+    if (this._measureTimeout) clearBrowserTimeout(this._measureTimeout);
+    this._measureTimeout = scheduleBrowserTimeout(() => {
+      this._measureTimeout = 0;
+      if (this._touchScrollGestureActive) return;
+      this.isScrollSettled = true;
+      const deferredSetGroups = this._deferredSetGroups;
+      const deferredArtistTreeSettlement = this._deferredArtistTreeSettlement;
+      const deferredResizeOptions = this._deferredResizeOptions;
+      const deferredReflowAnchor = deferredArtistTreeSettlement
+        && this._artistTreeReflowAnchor !== undefined
+        ? this._artistTreeReflowAnchor
+        : deferredArtistTreeSettlement || deferredResizeOptions
+          ? this.captureScrollAnchor()
+          : undefined;
+      this._deferredArtistTreeSettlement = false;
+      this._deferredResizeOptions = null;
+      if (deferredSetGroups) {
+        this._deferredSetGroups = null;
+        this.setGroups(
+          deferredSetGroups.primaryGroups,
+          deferredSetGroups.familyGroups,
+          deferredSetGroups.fallbackGroups,
+          deferredSetGroups.options,
+          deferredSetGroups.layoutConfig,
+        );
+      }
+      if (deferredArtistTreeSettlement) {
+        this._artistTreeReflowAnchor = undefined;
+        this.applyArtistTreeSettlement(deferredResizeOptions, deferredReflowAnchor);
+        return;
+      }
+      if (deferredResizeOptions) {
+        this.onResize(deferredResizeOptions);
+        this.stabilizeReflowAnchor(deferredReflowAnchor);
+        return;
+      }
+      if (deferredSetGroups) return;
+      this.scheduleMeasureRows(true);
+    }, 96);
+  }
+
+  stabilizeReflowAnchor(anchor) {
+    if (!anchor || this._resetScrollAfterMeasure) return;
+    this.stabilizeScrollAfterMeasurement(anchor);
+    // Reflow can virtualize the old anchor. Mount its restored row before
+    // reconciling the exact trigger offset against the new card geometry.
+    this.render(true);
+    this.measureRenderedRows(anchor);
+    this.stabilizeScrollAfterMeasurement(anchor);
+  }
+
+  applyArtistTreeSettlement(resizeOptions = null, preservedAnchor = undefined) {
+    const anchor = preservedAnchor === undefined
+      ? this.captureScrollAnchor()
+      : preservedAnchor;
+    if (resizeOptions) this.onResize(resizeOptions);
+    this.onResize({ preserveCardTrackWidth: true });
+    this.stabilizeReflowAnchor(anchor);
+  }
+
+  onArtistTreeToggleStarting() {
+    this._artistTreeReflowAnchor = this.captureScrollAnchor({ requireVisibleTrigger: true });
+  }
+
+  onArtistTreeSettled() {
+    if (this._touchScrollGestureActive || !this.isScrollSettled) {
+      this._deferredArtistTreeSettlement = true;
+      this.recordDiagnosticEvent('artist-tree-settlement-deferred', {
+        touchGestureActive: this._touchScrollGestureActive,
+      });
+      return;
+    }
+    this._deferredArtistTreeSettlement = false;
+    const preservedAnchor = this._artistTreeReflowAnchor;
+    this._artistTreeReflowAnchor = undefined;
+    this.applyArtistTreeSettlement(null, preservedAnchor);
+  }
+
   onResize(options = {}) {
+    const deferredSetGroups = this._deferredSetGroups;
+    if (deferredSetGroups && this.hasMeasurableScrollSurface()) {
+      this._deferredSetGroups = null;
+      this.setGroups(
+        deferredSetGroups.primaryGroups,
+        deferredSetGroups.familyGroups,
+        deferredSetGroups.fallbackGroups,
+        deferredSetGroups.options,
+        deferredSetGroups.layoutConfig,
+      );
+      return;
+    }
+    if (this._touchScrollGestureActive || !this.isScrollSettled) {
+      this._deferredResizeOptions = { ...options };
+      this.recordDiagnosticEvent('resize-deferred', {
+        touchGestureActive: this._touchScrollGestureActive,
+      });
+      return;
+    }
+    this._deferredResizeOptions = null;
     const artistTreeTransitioning = document.getElementById('shell-navigation-rail')
       ?.classList?.contains?.('is-transitioning');
     if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;
     this.lastKey = '';
-    this.recalculate(options);
+    if (this.recalculate(options) === false) return;
     this.render(true);
     this.scheduleMeasureRows(true);
   }
 
   render(force = false, options = {}) {
     if (this._albumCardPointerGestureActive || this._albumCardPointerReleaseRaf) {
+      const deferredMeasurementAnchor = Object.prototype.hasOwnProperty.call(
+        this._deferredPointerGestureRender || {},
+        'measurementAnchor',
+      )
+        ? { measurementAnchor: this._deferredPointerGestureRender.measurementAnchor }
+        : {};
       this._deferredPointerGestureRender = {
         force: Boolean(force),
         options: { ...options },
@@ -34615,6 +37878,7 @@ class VirtualArtistGrid {
           || this._deferredPointerGestureRender?.renderRafOwner
           || 0,
         ),
+        ...deferredMeasurementAnchor,
       };
       return;
     }
@@ -34739,6 +38003,7 @@ class VirtualArtistGrid {
     };
     this.diagnostics.latestRender = completedRender;
     this.recordDiagnosticEvent('render-completed', completedRender);
+    this.scheduleVisibleAlbumDetailPrewarm(rangeKey, viewportTop);
   }
 
   primeVisibleCoverImages() {
@@ -34783,7 +38048,12 @@ class VirtualArtistGrid {
   activateGalleryCoverImages(rootEl = this.containerEl) {
     if (typeof syncGalleryCardMetadataMotion === 'function') syncGalleryCardMetadataMotion(rootEl);
     if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
-    rootEl.querySelectorAll('img[data-gallery-cover-src]').forEach((image) => {
+    const images = Array.from(rootEl.querySelectorAll('img[data-gallery-cover-src]'));
+    images.sort((left, right) => (
+      Number(right.getAttribute('data-gallery-cover-priority') === 'visible')
+      - Number(left.getAttribute('data-gallery-cover-priority') === 'visible')
+    ));
+    images.forEach((image) => {
       if (!(image instanceof HTMLImageElement)) return;
       const productionUrl = String(image.getAttribute('data-gallery-cover-src') || '').trim();
       if (!productionUrl || image.getAttribute('data-gallery-cover-loading') === '1') return;
@@ -34891,6 +38161,18 @@ class VirtualArtistGrid {
     });
   }
 
+  releaseDetachedAlbumCardAncestors() {
+    // Retain decoded/in-flight cover pixels, not the rest of each removed card.
+    for (const card of this.albumCardNodeCache.values()) {
+      if (card.isConnected !== false) continue;
+      if (card.parentNode) card.remove();
+      const retainedCover = card.querySelector?.('.cover');
+      if (!retainedCover || typeof card.replaceChildren !== 'function') continue;
+      card.replaceChildren(retainedCover);
+      card.setAttribute?.('data-gallery-card-cover-only', '1');
+    }
+  }
+
   reuseRenderedAlbumCards(nextRoot) {
     if (!nextRoot || typeof nextRoot.querySelectorAll !== 'function') return;
     nextRoot.querySelectorAll('.album-card[data-gallery-card-key]').forEach((nextCard) => {
@@ -34901,24 +38183,37 @@ class VirtualArtistGrid {
         !retainedCard
         || retainedCard === nextCard
         || String(retainedCard?.getAttribute?.('data-gallery-card-render-key') || '') !== renderKey
-        || typeof nextCard.replaceWith !== 'function'
       ) {
         return;
       }
-      nextCard.replaceWith(retainedCard);
+      const retainedImage = retainedCard.querySelector?.('img[data-production-cover-src]');
+      if (retainedCard.getAttribute?.('data-gallery-card-cover-only') === '1') {
+        const retainedCover = retainedCard.querySelector?.('.cover');
+        const nextCover = nextCard.querySelector?.('.cover');
+        if (
+          !retainedCover
+          || typeof nextCover?.replaceWith !== 'function'
+          || typeof retainedCard.replaceChildren !== 'function'
+          || typeof nextCard.replaceWith !== 'function'
+        ) {
+          this.albumCardNodeCache.delete(cacheKey);
+          return;
+        }
+        nextCover.replaceWith(retainedCover);
+        retainedCard.replaceChildren(...Array.from(nextCard.childNodes || []));
+        retainedCard.removeAttribute?.('data-gallery-card-cover-only');
+        nextCard.replaceWith(retainedCard);
+      } else {
+        if (typeof nextCard.replaceWith !== 'function') return;
+        nextCard.replaceWith(retainedCard);
+      }
       this.albumCardNodeCache.delete(cacheKey);
       this.albumCardNodeCache.set(cacheKey, retainedCard);
-      const retainedImage = retainedCard.querySelector?.('img[data-production-cover-src]');
       const productionUrl = String(retainedImage?.getAttribute?.('data-production-cover-src') || '').trim();
       const retainedImageDecoded = retainedImage instanceof HTMLImageElement
         && Boolean(retainedImage.complete)
         && Number(retainedImage.naturalWidth || 0) > 0;
-      const decodedObjectUrlEvicted = Boolean(productionUrl)
-        && retainedImageDecoded
-        && typeof galleryCoverPreviewCache !== 'undefined'
-        && typeof galleryCoverPreviewCache.hasActive === 'function'
-        && !galleryCoverPreviewCache.hasActive(productionUrl);
-      if (productionUrl && (!retainedImageDecoded || decodedObjectUrlEvicted)) {
+      if (productionUrl && !retainedImageDecoded) {
         retainedImage.setAttribute('data-gallery-cover-src', productionUrl);
         retainedImage.removeAttribute('data-gallery-cover-loading');
       }
@@ -35057,6 +38352,7 @@ class VirtualArtistGrid {
       || typeof document?.createElement !== 'function'
     ) {
       this.containerEl.innerHTML = records.map((record) => record.html).join('');
+      this.releaseDetachedAlbumCardAncestors();
       return;
     }
     this.rememberRenderedAlbumCards(this.containerEl);
@@ -35116,6 +38412,7 @@ class VirtualArtistGrid {
     });
     if (!nextChildren.length && records.length) {
       this.containerEl.innerHTML = records.map((record) => record.html).join('');
+      this.releaseDetachedAlbumCardAncestors();
       return;
     }
     Array.from(this.containerEl.children || []).forEach((child) => {
@@ -35127,6 +38424,7 @@ class VirtualArtistGrid {
       this.containerEl.appendChild(child);
     });
     this.rememberRenderedAlbumCards(this.containerEl);
+    this.releaseDetachedAlbumCardAncestors();
   }
 
   scheduleMeasureRows(force = false) {
@@ -35143,6 +38441,7 @@ class VirtualArtistGrid {
     }
     let measureRafOwner = 0;
     measureRafOwner = scheduleBrowserAnimationFrame(() => {
+      if (this._measureRaf !== measureRafOwner) return;
       this._activeMeasureRafOwner = measureRafOwner;
       this._measureRaf = null;
       this.recordDiagnosticEvent('measure-frame-started', { measureRafOwner });
@@ -35175,6 +38474,7 @@ class VirtualArtistGrid {
         || renderGeneration !== this._renderGeneration
       ) return;
       if (resetScroll) {
+        this.applyScrollAnchorVisualPhase(0);
         this.scrollEl.scrollTop = 0;
       } else if (
         preservedAbsoluteScroll
@@ -35183,7 +38483,12 @@ class VirtualArtistGrid {
         this.scrollEl.scrollLeft = preservedAbsoluteScroll.scrollLeft;
         this.scrollEl.scrollTop = preservedAbsoluteScroll.scrollTop;
       } else {
+        const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
         this.restoreScrollAnchor(anchor);
+        if (anchor?.albumKey && Math.abs(Number(this.scrollEl.scrollTop || 0) - previousScrollTop) > 1) {
+          this.render(true);
+          this.restoreScrollAnchor(anchor);
+        }
       }
       this._pendingStabilizationScroll = {
         generation: stabilizeGeneration,
@@ -35193,18 +38498,25 @@ class VirtualArtistGrid {
       this.primeVisibleCoverImages();
     };
     stabilize();
+    const stabilizedScroll = this._pendingStabilizationScroll;
     this._stabilizeRaf = scheduleBrowserAnimationFrame(() => {
       if (stabilizeGeneration !== this._stabilizeGeneration) return;
       this._stabilizeRaf = null;
-      stabilize();
+      if (this._pendingStabilizationScroll !== stabilizedScroll) return;
+      this.scrollEl.scrollLeft = stabilizedScroll.scrollLeft;
+      this.scrollEl.scrollTop = stabilizedScroll.scrollTop;
+      this.primeVisibleCoverImages();
     });
   }
 
-  measureRenderedRows() {
+  measureRenderedRows(reflowAnchor = undefined) {
+    if (!this.hasMeasurableScrollSurface()) return;
     const absoluteScrollActive = (
       this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
     );
-    const preservedAnchor = absoluteScrollActive ? null : this.captureScrollAnchor();
+    const preservedAnchor = absoluteScrollActive
+      ? null
+      : reflowAnchor === undefined ? this.captureScrollAnchor() : reflowAnchor;
     let changed = false;
     const rowMeasurements = [];
     const rows = this.containerEl.querySelectorAll('.album-row[data-section-key][data-block-index]');
@@ -35225,7 +38537,7 @@ class VirtualArtistGrid {
         });
         return;
       }
-      const measured = Math.ceil(rowEl.getBoundingClientRect().height);
+      const measured = rowEl.getBoundingClientRect().height;
       rowMeasurements.push({
         blockIndex,
         measureKeyPresent: Boolean(measureKey),
@@ -35238,7 +38550,7 @@ class VirtualArtistGrid {
         section.measuredBlockKeys = [];
       }
       section.measuredBlockKeys[blockIndex] = measureKey;
-      if (measured > 0 && Math.abs((section.blockHeights[blockIndex] || 0) - measured) > 1) {
+      if (measured > 0 && Math.abs((section.blockHeights[blockIndex] || 0) - measured) >= (1 / 64)) {
         section.blockHeights[blockIndex] = measured;
         changed = true;
       }
@@ -35281,7 +38593,7 @@ class VirtualArtistGrid {
       this._activeRenderRafOwner = measurementRenderRafOwner;
     }
     try {
-      this.render(true);
+      this.render(true, { preserveExistingChildren: true });
     } finally {
       this._activeRenderRafOwner = previousActiveRenderRafOwner;
     }
@@ -35299,7 +38611,11 @@ class VirtualArtistGrid {
         }));
       }
     }
-    this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    if (this._deferredPointerGestureRender) {
+      this._deferredPointerGestureRender.measurementAnchor = preservedAnchor;
+    } else {
+      this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    }
   }
 
   getVisibleBlockRange(section, start, end) {
@@ -35314,8 +38630,12 @@ class VirtualArtistGrid {
       };
     }
     const contentTop = section.top + this.sectionHeaderHeight;
-    const localStart = Math.max(0, start - contentTop);
-    const localEnd = Math.max(0, end - contentTop);
+    const keepSelectedPrimaryMounted = section.sectionType === 'primary'
+      && String(state?.view?.selected_artist || '').trim();
+    const localStart = keepSelectedPrimaryMounted ? 0 : Math.max(0, start - contentTop);
+    const localEnd = keepSelectedPrimaryMounted
+      ? Number(section.blocksHeight || 0)
+      : Math.max(0, end - contentTop);
     let firstIndex = 0;
     while (
       firstIndex < blocks.length
@@ -35332,9 +38652,13 @@ class VirtualArtistGrid {
     }
     firstIndex = Math.max(0, Math.min(firstIndex, blocks.length - 1));
     lastIndex = Math.max(firstIndex, Math.min(lastIndex, blocks.length - 1));
-    const topSpacerHeight = section.blockOffsets[firstIndex] || 0;
+    // The flex container supplies the gap beside each spacer itself.
+    const topSpacerHeight = Math.max(0, (section.blockOffsets[firstIndex] || 0) - (firstIndex > 0 ? this.rowGap : 0));
     const lastBlockBottom = (section.blockOffsets[lastIndex] || 0) + (section.blockHeights[lastIndex] || 0);
-    const bottomSpacerHeight = Math.max(0, (section.blocksHeight || 0) - lastBlockBottom);
+    const bottomSpacerHeight = Math.max(
+      0,
+      (section.blocksHeight || 0) - lastBlockBottom - (lastIndex < blocks.length - 1 ? this.rowGap : 0),
+    );
     return { firstIndex, lastIndex, topSpacerHeight, bottomSpacerHeight };
   }
 
@@ -35358,7 +38682,9 @@ class VirtualArtistGrid {
     const rowBlocks = blocks.slice(startIndex, endIndex + 1).map((block, visibleIndex) => {
       const blockIndex = startIndex + visibleIndex;
       if (block.kind === 'subheading') {
-        return `<div class="artist-subsection-label">${escapeHtml(block.title || 'Non-Album Tracks')}</div>`;
+                const count = Math.max(0, Number(block.count || 0));
+                const countLabel = `${count} ${count === 1 ? 'album' : 'albums'}`;
+                return `<div class="artist-subsection-label"><span class="artist-subsection-title">${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="gallery-divider__line" aria-hidden="true"></span><span class="artist-subsection-separator" aria-hidden="true">•</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
@@ -37418,6 +40744,39 @@ function initCompactPlayer() {
 
 // END js/runtime/compact-player-controller.js
 
+// BEGIN js/runtime/player-browser-playback-integration.js
+
+function isUnexpectedBrowserPlaybackSuspension(engine, context) {
+  return engine?.context === context
+    && (context.state === 'suspended' || context.state === 'interrupted')
+    && Boolean(engine.roles?.current)
+    && engine.snapshot?.paused === false
+    && engine.snapshot?.ended !== true
+    && engine.mode !== 'error';
+}
+
+function observeBrowserPlaybackAudioContext(context) {
+  if (!context) return;
+  const previousStateChange = context.onstatechange;
+  context.onstatechange = (event) => {
+    if (typeof previousStateChange === 'function') previousStateChange.call(context, event);
+    const engine = state?.player?.streaming;
+    if (engine?.context !== context) return;
+    publishStreamingDiagnostics();
+    if (!isUnexpectedBrowserPlaybackSuspension(engine, context)) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    void reconcileInterruptedStreamingPlayback(context).catch((error) => {
+      console.warn('[AlbumHaven][Playback] Failed to reconcile interrupted audio.', error);
+    });
+  };
+}
+
+function reconcileBrowserPlaybackOnForeground() {
+  return reconcileInterruptedStreamingPlayback();
+}
+
+// END js/runtime/player-browser-playback-integration.js
+
 // BEGIN js/runtime/track-modal-and-gallery.js
 
 ﻿function attachCoverLookupModalEvents() {
@@ -37534,6 +40893,23 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
+  if (folderLoadButton) {
+    event.preventDefault();
+    void loadTagEditorFolderFiles();
+    return;
+  }
+
+  const exceptionOption = event.target.closest('[data-tag-editor-exception-option]');
+  if (exceptionOption) {
+    event.preventDefault();
+    selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
+    return;
+  }
+  const exceptionInput = event.target.closest('#tag-editor-form [data-tag-field="exception_type"]');
+  if (exceptionInput) openTagEditorExceptionMenu();
+  else if (!event.target.closest('[data-tag-editor-exception-anchor]')) closeTagEditorExceptionMenu();
+
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -37554,6 +40930,7 @@ async function handleUtilityBootstrapClick(event) {
   if (openLogHistoryAlertButton) {
     event.preventDefault();
     const selectedLogHistoryId = openLogHistoryAlertButton.getAttribute('data-log-history-entry-id') || '';
+    closeTagEditor();
     hideRepairAlert();
     openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
@@ -38233,14 +41610,21 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalCoverLookupButton = event.target.closest('[data-open-track-modal-cover-lookup="1"]');
   if (trackModalCoverLookupButton) {
     event.preventDefault();
-    openCoverLookupModal(resolveTrackModalActionAlbum(trackModalCoverLookupButton));
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalCoverLookupButton);
+    if (album) openCoverLookupModal(album);
     return;
   }
 
   const trackModalFetchCoverButton = event.target.closest('[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]');
   if (trackModalFetchCoverButton) {
     event.preventDefault();
-    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), { backgroundOnly: true });
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalFetchCoverButton);
+    if (album) {
+      startCoverLookupForAlbum(album, {
+        backgroundOnly: true,
+        triggerButton: trackModalFetchCoverButton,
+      });
+    }
     return;
   }
 
@@ -38249,7 +41633,7 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     state.coverLookup.drawerOpen = !state.coverLookup.drawerOpen;
     ensureCoverLookupPolling();
-    loadCoverLookupTasks({ toast: false });
+    loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     renderCoverLookupDrawer();
     return;
   }
@@ -38323,7 +41707,7 @@ async function handleUtilityBootstrapClick(event) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
-    }).finally(() => loadCoverLookupTasks({ toast: false }));
+    }).finally(() => loadCoverLookupTasks({ toast: false, mergeFirstPage: true }));
     return;
   }
 
@@ -38518,7 +41902,14 @@ function handleUtilityBootstrapInput(event) {
       ...(state.tagEditor.values[path] || {}),
       [field]: input.value,
     };
+    if (field === 'exception_type' && !isCustomCollectionException(input.value)) {
+      state.tagEditor.values[path].custom_collection_name = '';
+    }
   });
+  if (field === 'exception_type' && typeof syncTagEditorCollectionFields === 'function') {
+    syncTagEditorCollectionFields(selectedPaths);
+    openTagEditorExceptionMenu();
+  }
   syncTagEditorPendingChanges();
 }
 
@@ -38776,6 +42167,34 @@ function handleUtilityBootstrapKeyDown(event) {
   ) {
     return false;
   }
+  const exceptionInput = event.target?.closest?.('#tag-editor-form [data-tag-field="exception_type"]');
+  const exceptionOption = event.target?.closest?.('[data-tag-editor-exception-option]');
+  if (exceptionInput || exceptionOption) {
+    const menu = document.getElementById('tag-editor-exception-menu');
+    if (event.key === 'Escape' && menu && !menu.hidden) {
+      event.preventDefault();
+      closeTagEditorExceptionMenu({ restoreFocus: true });
+      return true;
+    }
+    if (event.key === 'Enter' && exceptionOption) {
+      event.preventDefault();
+      selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
+      return true;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      if (!menu || menu.hidden) openTagEditorExceptionMenu();
+      const options = Array.from(menu?.querySelectorAll?.('[data-tag-editor-exception-option]') || []);
+      if (!options.length) return true;
+      const current = options.indexOf(exceptionOption);
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? options.length - 1
+          : current < 0 ? (event.key === 'ArrowUp' ? options.length - 1 : 0)
+            : (current + (event.key === 'ArrowUp' ? -1 : 1) + options.length) % options.length;
+      options[next].focus();
+      return true;
+    }
+  }
   const reorderGrip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
   if (reorderGrip && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
     const path = String(reorderGrip.getAttribute('data-tag-editor-reorder-grip') || '');
@@ -39010,6 +42429,16 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
 
 function handleGalleryBootstrapClick(event) {
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
+  const artistTreeAction = event.target.closest('[data-artist-tree-action="scroll-to-artist"]');
+  if (artistTreeAction) {
+    event.preventDefault();
+    const menu = artistTreeAction.closest('#artist-tree-context-menu');
+    const artist = String(menu?.dataset?.artist || '').trim();
+    hideArtistTreeContextMenu();
+    closeArtistsDrawer({ restoreFocus: false });
+    void scrollRootGalleryToArtist(artist);
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -39116,6 +42545,13 @@ function handleGalleryBootstrapClick(event) {
 
     if (action === 'open-explorer') {
       openAlbumInExplorer(album);
+      return;
+    }
+
+    if (action === 'edit-tags') {
+      if (album?.allowed_actions?.['library.files.edit_tags']) {
+        openTagEditor(album, { tracksMode: 'all' });
+      }
       return;
     }
 
@@ -39278,13 +42714,55 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
-    const activeSearchQuery = String(state.view?.query || '').trim();
+    const isLibraryHome = allArtistsLink.getAttribute?.('data-library-home') === '1';
+    const opensMobileHome = Boolean(
+      isLibraryHome
+      && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout()
+    );
+    const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
     state.ui.pendingSearchClearOnBlur = false;
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = activeSearchQuery;
     closeRecentSearchPopover();
+    const currentSurface = String(
+      state.view?.surface?.active || state.view?.surface_request || 'albums'
+    ).trim().toLowerCase();
+    const alreadyAtLibraryHome = Boolean(
+      isLibraryHome
+      && !opensMobileHome
+      && currentSurface === 'albums'
+      && !String(state.view?.query || '').trim()
+      && !String(state.view?.selected_artist || '').trim()
+      && state.view?.all_artists_active !== false
+      && !(Array.isArray(state.view?.related_filter_artists) && state.view.related_filter_artists.length)
+      && !Boolean(state.view?.primary_filter_active)
+      && !Boolean(state.view?.gallery_page?.has_previous)
+      && !String(state.view?.gallery_page?.anchor_artist || '').trim()
+      && !Boolean(state.busy)
+      && !Boolean(state.ui?.activeViewRequestController)
+      && !Boolean(state.ui?.pendingViewRequest)
+      && !String(state.ui?.pendingSidebarSelectedArtist || '').trim()
+    );
+    if (alreadyAtLibraryHome) {
+      releasePendingGallerySearchSuspensions();
+      const galleryScroll = document.getElementById('albums-scroll');
+      if (galleryScroll) galleryScroll.scrollTop = 0;
+      closeArtistsDrawer({ restoreFocus: false });
+      state.view.search_context = null;
+      pushBrowserViewState({
+        ...state.view,
+        query: '',
+        selected_artist: '',
+        all_artists_active: true,
+        related_filter_artists: [],
+        primary_filter_active: false,
+        search_context: null,
+      });
+      return;
+    }
     releasePendingGallerySearchSuspensions();
     let coverLoadSuspensionToken = 0;
     if (
@@ -39314,17 +42792,25 @@ function handleGalleryBootstrapClick(event) {
     closeArtistsDrawer({ restoreFocus: false });
     const nextView = {
       ...state.view,
-      query: state.view.query || '',
+      ...(opensMobileHome ? {
+        surface: {
+          ...(state.view?.surface || {}),
+          active: 'home',
+        },
+        surface_request: 'home',
+      } : {}),
+      query: activeSearchQuery,
       selected_artist: '',
-      all_artists_active: true,
+      all_artists_active: !opensMobileHome,
       related_filter_artists: [],
       primary_filter_active: false,
+      ...(isLibraryHome ? { search_context: null } : {}),
     };
     state.gallery.sidebarArtistsOverride = null;
     state.gallery.sidebarShowAllArtistsOverride = null;
     state.ui.pendingSidebarSelectedArtist = '';
-    state.ui.pendingSidebarAllArtistsActive = true;
-    const reusableRootBrowseView = typeof getReusableRootBrowseView === 'function'
+    state.ui.pendingSidebarAllArtistsActive = !opensMobileHome;
+    const reusableRootBrowseView = !opensMobileHome && typeof getReusableRootBrowseView === 'function'
       ? getReusableRootBrowseView(nextView)
       : null;
     if (reusableRootBrowseView) {
@@ -39336,17 +42822,17 @@ function handleGalleryBootstrapClick(event) {
       scheduleBrowserAnimationFrame(() => {
         renderArtistGroups({ preserveScroll: true });
       });
-      Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
-        omitSidebar: true,
-      }), false, {
+      Promise.resolve(fetchAndRender(buildApiUrl(
+        nextView,
+        isLibraryHome ? {} : { omitSidebar: true },
+      ), false, {
         preserveScroll: true,
       })).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
       return;
     }
     renderSidebar();
-    Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
-      omitSidebar: true,
-    }), true)).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
+    Promise.resolve(fetchAndRender(buildApiUrl(nextView), true))
+      .then(resumeCoverLoads, () => resumeCoverLoads(true, true));
     return;
   }
 
@@ -39453,6 +42939,97 @@ function getStableLightboxZoomOrigin(lightboxImage, clientX, clientY) {
   };
 }
 
+let rootGalleryArtistAlignmentGeneration = 0;
+
+function cancelRootGalleryArtistAlignment() {
+  rootGalleryArtistAlignmentGeneration += 1;
+}
+
+function stabilizeRootGalleryArtistAlignment(artist) {
+  const targetArtist = String(artist || '').trim();
+  if (!targetArtist) return;
+  const generation = rootGalleryArtistAlignmentGeneration + 1;
+  rootGalleryArtistAlignmentGeneration = generation;
+  let attempts = 0;
+  let stableFrames = 0;
+  const align = () => {
+    if (rootGalleryArtistAlignmentGeneration !== generation) return;
+    attempts += 1;
+    const scroll = document.getElementById('albums-scroll');
+    if (!scroll) return;
+    const header = Array.from(document.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
+      String(candidate.getAttribute('data-scroll-artist') || '') === targetArtist
+    ));
+    const rows = header?.parentElement?.querySelector?.('.artist-rows');
+    const chromeName = document.querySelector?.(
+      '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]',
+    );
+    const aligned = Boolean(scroll && rows)
+      && Math.abs(rows.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1
+      && String(chromeName?.textContent || '').trim() === targetArtist;
+    if (aligned) stableFrames += 1;
+    else {
+      stableFrames = 0;
+      virtualGrid?.scrollToArtist?.(targetArtist);
+    }
+    if (stableFrames >= 45 || attempts >= 240) return;
+    scheduleBrowserAnimationFrame(align);
+  };
+  scheduleBrowserAnimationFrame(align);
+}
+
+function scrollRootGalleryToArtist(artist) {
+  const targetArtist = String(artist || '').trim();
+  if (!targetArtist) return Promise.resolve(false);
+  cancelRootGalleryArtistAlignment();
+  const navigationGeneration = rootGalleryArtistAlignmentGeneration;
+  const isUnfilteredGallery = !String(state.view?.query || '').trim()
+    && !String(state.view?.selected_artist || '').trim()
+    && !(state.view?.related_filter_artists || []).length
+    && !state.view?.primary_filter_active;
+  if (isUnfilteredGallery && virtualGrid?.scrollToArtist?.(targetArtist)) {
+    stabilizeRootGalleryArtistAlignment(targetArtist);
+    return Promise.resolve(true);
+  }
+  clearPendingSelectedArtistReconcile();
+  const nextView = {
+    ...state.view,
+    surface_request: 'albums',
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+  };
+  const url = buildApiUrl(nextView, {
+    galleryAnchorArtist: targetArtist,
+    omitSidebar: true,
+  });
+  renderLibraryLoader(state.status);
+  return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
+    if (result === false || rootGalleryArtistAlignmentGeneration !== navigationGeneration) return false;
+    const galleryPage = state.view?.gallery_page;
+    const anchoredGalleryPage = galleryPage;
+    const renderedArtist = String(
+      galleryPage?.anchor_artist === targetArtist
+        ? galleryPage?.anchor_group_artist || targetArtist
+        : targetArtist,
+    ).trim();
+    const scrollWhenRendered = (attemptsRemaining) => {
+      if (rootGalleryArtistAlignmentGeneration !== navigationGeneration) return;
+      if (state.view?.gallery_page !== anchoredGalleryPage) return;
+      if (virtualGrid?.scrollToArtist?.(renderedArtist)) {
+        stabilizeRootGalleryArtistAlignment(renderedArtist);
+        return;
+      }
+      if (attemptsRemaining <= 0) return;
+      scheduleBrowserAnimationFrame(() => scrollWhenRendered(attemptsRemaining - 1));
+    };
+    scrollWhenRendered(180);
+    return true;
+  });
+}
+
 function handleSidebarArtistSelectionClick(event) {
   const sidebarArtistLink = event.target.closest('[data-sidebar-artist]');
   if (!sidebarArtistLink) return false;
@@ -39496,12 +43073,13 @@ function handleSidebarArtistSelectionClick(event) {
   const primaryArtistChanged = String(artist || '').trim() !== currentSelectedArtist;
   const activeSearchQuery = String(state.view?.query || '').trim();
   const previousGalleryMainState = state.gallery.mainState;
-  const previousAlbumTypes = new Set(previousGalleryMainState?.albumTypes || ['studio', 'ep']);
+  const previousAlbumTypes = new Set(previousGalleryMainState?.albumTypes || ['studio', 'ep', 'compilation']);
   const galleryFiltersWereCustomized = Boolean(previousGalleryMainState && (
     Object.values(previousGalleryMainState.sources || {}).some((enabled) => enabled === false)
-    || previousAlbumTypes.size !== 2
+    || previousAlbumTypes.size !== 3
     || !previousAlbumTypes.has('studio')
     || !previousAlbumTypes.has('ep')
+    || !previousAlbumTypes.has('compilation')
     || previousGalleryMainState.familySelectionExplicit === true
     || (previousGalleryMainState.familyArtists || []).length
   ));
@@ -39626,7 +43204,39 @@ function applyImmediateSidebarArtistSelection(sidebarArtistLink, artist) {
   return true;
 }
 
+function applyImmediateExactSearchArtistSelection(query) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  if (!normalizedQuery) return false;
+  const mountedMatches = Array.from(
+    document.querySelectorAll('#sidebar-list [data-sidebar-artist]'),
+  ).filter((link) => (
+    String(link.getAttribute?.('data-sidebar-artist') || '')
+      .trim()
+      .toLocaleLowerCase() === normalizedQuery
+  ));
+  const sidebarList = document.getElementById?.('sidebar-list')
+    || mountedMatches[0]?.closest?.('#sidebar-list');
+  const sidebarArtists = Array.isArray(sidebarList?.albumHavenSidebarArtistsSource)
+    ? sidebarList.albumHavenSidebarArtistsSource
+    : [];
+  const sourceMatches = sidebarArtists.filter((entry) => (
+    String(entry?.artist || '').trim().toLocaleLowerCase() === normalizedQuery
+  ));
+  if (sourceMatches.length !== 1) return false;
+  const artist = String(sourceMatches[0]?.artist || '').trim();
+  if (!artist) return false;
+  if (mountedMatches.length === 1) {
+    if (applyImmediateSidebarArtistSelection(mountedMatches[0], artist)) return true;
+  }
+  state.ui.pendingSidebarSelectedArtist = artist;
+  state.ui.pendingSidebarAllArtistsActive = false;
+  state.ui.pendingSidebarRevealArtist = artist;
+  renderSidebar();
+  return true;
+}
+
 function handleGalleryBootstrapWheel(event) {
+  if (event.target?.closest?.('#albums-scroll')) cancelRootGalleryArtistAlignment();
   const lightboxImage = event.target.closest('#image-lightbox-image');
   if (!lightboxImage) return;
   const overlay = document.getElementById('image-lightbox');
@@ -39643,7 +43253,92 @@ function handleGalleryBootstrapWheel(event) {
   setLightboxZoom(state.lightbox.zoom + (direction * step), { originX, originY });
 }
 
+const ARTIST_TREE_LONG_PRESS_DELAY_MS = 500;
+const ARTIST_TREE_LONG_PRESS_MOVE_TOLERANCE_PX = 12;
+const ARTIST_TREE_LONG_PRESS_CLICK_GUARD_MS = 1000;
+let artistTreeLongPressGesture = null;
+let artistTreeLongPressClickGuard = null;
+
+function clearArtistTreeLongPressGesture() {
+  if (artistTreeLongPressGesture?.timeoutId) {
+    clearBrowserTimeout(artistTreeLongPressGesture.timeoutId);
+  }
+  artistTreeLongPressGesture = null;
+}
+
+function armArtistTreeLongPressClickGuard(artist) {
+  if (artistTreeLongPressClickGuard?.timeoutId) {
+    clearBrowserTimeout(artistTreeLongPressClickGuard.timeoutId);
+  }
+  const guard = { artist, timeoutId: 0 };
+  artistTreeLongPressClickGuard = guard;
+  guard.timeoutId = scheduleBrowserTimeout(() => {
+    if (artistTreeLongPressClickGuard === guard) artistTreeLongPressClickGuard = null;
+  }, ARTIST_TREE_LONG_PRESS_CLICK_GUARD_MS);
+}
+
+function beginArtistTreeLongPress(event) {
+  if (String(event?.pointerType || '').toLowerCase() !== 'touch' || event?.isPrimary === false) {
+    return false;
+  }
+  const artistLink = event.target?.closest?.('[data-sidebar-artist]');
+  const artist = String(artistLink?.getAttribute?.('data-sidebar-artist') || '').trim();
+  if (!artist) return false;
+  clearArtistTreeLongPressGesture();
+  const gesture = {
+    pointerId: event.pointerId,
+    x: Number(event.clientX || 0),
+    y: Number(event.clientY || 0),
+    artist,
+    opened: false,
+    timeoutId: 0,
+  };
+  artistTreeLongPressGesture = gesture;
+  gesture.timeoutId = scheduleBrowserTimeout(() => {
+    if (artistTreeLongPressGesture !== gesture) return;
+    gesture.opened = true;
+    gesture.timeoutId = 0;
+    armArtistTreeLongPressClickGuard(artist);
+    showArtistTreeContextMenu(gesture.x, gesture.y, artist);
+  }, ARTIST_TREE_LONG_PRESS_DELAY_MS);
+  return true;
+}
+
+function updateArtistTreeLongPress(event) {
+  const gesture = artistTreeLongPressGesture;
+  if (!gesture || event?.pointerId !== gesture.pointerId || gesture.opened) return false;
+  const deltaX = Number(event.clientX || 0) - gesture.x;
+  const deltaY = Number(event.clientY || 0) - gesture.y;
+  if (Math.hypot(deltaX, deltaY) <= ARTIST_TREE_LONG_PRESS_MOVE_TOLERANCE_PX) return false;
+  clearArtistTreeLongPressGesture();
+  return true;
+}
+
+function finishArtistTreeLongPress(event) {
+  const gesture = artistTreeLongPressGesture;
+  if (!gesture || event?.pointerId !== gesture.pointerId) return false;
+  const opened = gesture.opened;
+  clearArtistTreeLongPressGesture();
+  if (opened) event.preventDefault?.();
+  return opened;
+}
+
+function consumeArtistTreeLongPressClick(event) {
+  const guard = artistTreeLongPressClickGuard;
+  if (!guard) return false;
+  const artistLink = event.target?.closest?.('[data-sidebar-artist]');
+  const artist = String(artistLink?.getAttribute?.('data-sidebar-artist') || '').trim();
+  if (artist !== guard.artist) return false;
+  if (guard.timeoutId) clearBrowserTimeout(guard.timeoutId);
+  artistTreeLongPressClickGuard = null;
+  event.preventDefault?.();
+  event.stopPropagation?.();
+  return true;
+}
+
 function handleGalleryBootstrapPointerDown(event) {
+  if (event.target?.closest?.('#albums-scroll')) cancelRootGalleryArtistAlignment();
+  beginArtistTreeLongPress(event);
   const lightboxImage = event.target.closest('#image-lightbox-image');
   if (!lightboxImage || state.lightbox.zoom <= 1) return;
   event.preventDefault();
@@ -39652,6 +43347,7 @@ function handleGalleryBootstrapPointerDown(event) {
 }
 
 function handleGalleryBootstrapPointerMove(event) {
+  updateArtistTreeLongPress(event);
   updateLightboxDrag(event);
   if (String(event?.pointerType || '').toLowerCase() !== 'mouse') return;
   const albumCard = event.target?.closest?.('.album-card');
@@ -39665,11 +43361,13 @@ function handleGalleryBootstrapPointerMove(event) {
   }
 }
 
-function handleGalleryBootstrapPointerUp() {
+function handleGalleryBootstrapPointerUp(event) {
+  finishArtistTreeLongPress(event);
   stopLightboxDrag();
 }
 
 function handleGalleryBootstrapPointerCancel() {
+  clearArtistTreeLongPressGesture();
   stopLightboxDrag();
 }
 
@@ -40076,6 +43774,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  applyImmediateExactSearchArtistSelection(nextQuery);
   const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else {
@@ -40285,6 +43984,18 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     return;
   }
   const previousView = state.view;
+  const mountedSelectedArtist = String(previousView?.selected_artist || '').trim();
+  const pendingExactSearchArtist = String(
+    state.ui?.pendingSidebarSelectedArtist || '',
+  ).trim();
+  const retainsMountedExactArtist = Boolean(
+    mountedSelectedArtist
+    && pendingExactSearchArtist
+    && pendingExactSearchArtist.toLocaleLowerCase() === mountedSelectedArtist.toLocaleLowerCase()
+    && String(normalizedQuery || '').trim().toLocaleLowerCase()
+      === pendingExactSearchArtist.toLocaleLowerCase()
+    && isMountedSelectedGalleryComplete(mountedSelectedArtist, null)
+  );
   const next = {
     ...withActiveGallerySources(state.view, state.gallery.mainState),
     query: normalizedQuery,
@@ -40293,6 +44004,13 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     related_filter_artists: [],
     primary_filter_active: false,
   };
+  if (retainsMountedExactArtist) {
+    applyViewPayload({
+      ...previousView,
+      query: normalizedQuery,
+      all_artists_active: false,
+    }, { trackSidebarReveal: false });
+  }
   state.gallery.sidebarArtistsOverride = null;
   state.gallery.sidebarShowAllArtistsOverride = null;
   state.ui.pendingSearchClearOnBlur = false;
@@ -40334,7 +44052,8 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     }
   };
   const request = fetchAndRender(hydrationUrl, true, {
-    preserveScroll: String(previousView.query || '') === normalizedQuery,
+    preserveScroll: retainsMountedExactArtist
+      || String(previousView.query || '') === normalizedQuery,
     restartIfSameUrl: true,
     skipPendingViewTransition: true,
     showSearchProgress: true,
@@ -40478,6 +44197,12 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
   const currentFamilyGroups = Array.isArray(state.view?.family_artist_groups)
     ? state.view.family_artist_groups
     : [];
+  // Primary groups include guest appearances. Their shared "featured" marker
+  // cannot prove membership when that artist becomes a family member.
+  if (currentPrimaryGroups.some((group) => (
+    !matchesArtist(group)
+    && (group.albums || []).some((album) => album.artist_relationship === 'featured')
+  ))) return null;
   const currentSelectedArtist = String(state.view?.selected_artist || '').trim();
   const currentRelatedArtists = Array.isArray(state.view?.related_artists)
     ? state.view.related_artists
@@ -40665,7 +44390,17 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
 
 function tryRenderOptimisticSidebarArtistSelection(nextView, options = {}) {
   const query = String(state.view?.query || '').trim();
+  const selectedArtist = String(nextView.selected_artist || '').trim();
   const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
+  const selectedAlbums = optimisticGroups?.primaryGroups?.[0]?.albums;
+  const expectedAlbumCount = readSidebarAlbumCount(state.view?.artists_sidebar, selectedArtist);
+  if (
+    query
+    && String(state.view?.selected_artist || '').trim() === selectedArtist
+    && state.view?.search_context?.artist_name_match_artists?.includes(selectedArtist)
+    && Array.isArray(selectedAlbums)
+    && selectedAlbums.length === expectedAlbumCount
+  ) return true;
   const reusableSelectedArtistBrowseView = query
     && (!optimisticGroups || optimisticGroups.skipFetch)
     && typeof getReusableSelectedArtistBrowseView === 'function'
@@ -41087,8 +44822,12 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
+  const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
-  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
+  const requestUrl = options.galleryAnchorArtist
+    ? buildApiUrl(parseBrowserUrlState(parentViewUrl), { galleryAnchorArtist: options.galleryAnchorArtist })
+    : parentViewUrl;
+  fetchAndRender(requestUrl, false, options);
 }
 
 // END js/runtime/bootstrap-gallery-event-handlers.js
@@ -41097,6 +44836,7 @@ function handleGalleryBootstrapPopState(options = {}) {
 
 /* Responsive shell navigation. Existing components retain their data and event owners. */
 const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
+const mobileLiveGalleryParents = new WeakMap();
 const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal' });
 
 function isMobileClient() {
@@ -41211,29 +44951,154 @@ function resolveMobileParentScrollPosition(descriptor, previous, snapshot = {}, 
   if (!position || !Number.isFinite(position.scrollTop) || !Number.isFinite(position.scrollLeft)) return null;
   return { scrollTop: Math.max(0, position.scrollTop), scrollLeft: Math.max(0, position.scrollLeft) };
 }
+
+function resolveMobileParentScrollAnchor(descriptor, previous, snapshot = {}, captured = null) {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey)
+    : null;
+  const anchor = previous?.parentScrollAnchor ?? restored?.parentScrollAnchor ?? captured;
+  if (!anchor || !Number.isFinite(anchor.scrollTop) || !Number.isFinite(anchor.scrollLeft)) return null;
+  return {
+    ...anchor,
+    scrollTop: Math.max(0, anchor.scrollTop),
+    scrollLeft: Math.max(0, anchor.scrollLeft),
+  };
+}
 function resolveMobileParentViewUrl(descriptor, previous, snapshot = {}, viewUrl = '') {
   const restored = Array.isArray(snapshot.mobilePages)
     ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
   return previous?.parentViewUrl ?? restored?.parentViewUrl ?? viewUrl;
+}
+function resolveMobileParentGalleryAnchorArtist(descriptor, previous, snapshot = {}, captured = '') {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  return String(
+    previous?.parentGalleryAnchorArtist ?? restored?.parentGalleryAnchorArtist ?? captured,
+  ).trim();
+}
+function captureMobileParentGalleryAnchorArtist() {
+ const requestedArtist = String(state.view?.gallery_page?.anchor_artist || '').trim();
+ const renderedArtist = String(
+ state.view?.gallery_page?.anchor_group_artist || requestedArtist,
+ ).trim();
+ if (!requestedArtist || !renderedArtist) return '';
+ const scroll = document.getElementById('albums-scroll');
+ const heading = [...document.querySelectorAll(
+ '#artist-groups .family-artist-header[data-scroll-artist]',
+ )].find(candidate => candidate.getAttribute('data-scroll-artist') === renderedArtist);
+ const section = heading?.closest('.artist-section');
+ const rows = section?.querySelector('.artist-rows');
+ const firstCard = section?.querySelector('.album-card');
+ if (!scroll || !rows || !firstCard) return '';
+  const scrollTop = scroll.getBoundingClientRect().top + Number(scroll.clientTop || 0);
+  return rows.getBoundingClientRect().top === scrollTop
+    && firstCard.getBoundingClientRect().top >= scrollTop
+ ? requestedArtist
+ : '';
+}
+function mobileGalleryParentIsSettled() {
+  return !state.busy && !state.ui?.pendingInventoryMutationViewRefresh
+    && !state.ui?.activeViewRequestController && !state.ui?.pendingViewRequest;
 }
 function restoreMobileGalleryParent(descriptor) {
   const parentPosition = descriptor?.parentPosition;
   const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
   const atParent = !Number.isSafeInteger(parentPosition) || !Number.isSafeInteger(destinationPosition)
     || parentPosition === destinationPosition;
-  const position = atParent ? descriptor?.parentScrollPosition : null;
-  const options = { preserveScroll: true };
+  const galleryAnchorArtist = atParent
+    ? String(descriptor?.parentGalleryAnchorArtist || '').trim()
+    : '';
+  const liveParent = descriptor && mobileLiveGalleryParents.get(descriptor);
+  const canReuseLiveParent = atParent && liveParent && mobileGalleryParentIsSettled()
+    && liveParent.revision === state.status?.inventory_mutation_revision
+    && descriptor.parentViewUrl === buildUrl(state.view)
+    && (
+      typeof virtualGrid === 'undefined'
+      || !virtualGrid?.hasDeferredMountedGroupUpdate?.()
+    );
+  let jumpScrollAnchor = null;
+  if (
+    galleryAnchorArtist
+    && !descriptor?.parentScrollAnchor
+    && typeof state !== 'undefined'
+    && galleryAnchorArtist === String(state.view?.gallery_page?.anchor_artist || '').trim()
+  ) {
+    const mountedGalleryArtist = String(
+      state.view?.gallery_page?.anchor_group_artist || galleryAnchorArtist,
+    ).trim();
+    if (
+      typeof virtualGrid !== 'undefined'
+      && virtualGrid?.scrollToArtist?.(mountedGalleryArtist)
+    ) {
+      stabilizeRootGalleryArtistAlignment(mountedGalleryArtist);
+      if (canReuseLiveParent) {
+        if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+        return;
+      }
+      jumpScrollAnchor = virtualGrid?.captureScrollAnchor?.() || null;
+    }
+  }
+  const semanticScrollAnchor = atParent
+    ? descriptor?.parentScrollAnchor || jumpScrollAnchor
+    : null;
+  const position = semanticScrollAnchor
+    ? null
+    : atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
+  const preserveParentScroll = !galleryAnchorArtist || Boolean(semanticScrollAnchor);
+  const options = {
+    preserveScroll: preserveParentScroll,
+    preserveMountedGalleryChildren: preserveParentScroll,
+  };
   // Root '/' can display the canonical album gallery as well as Home. Retain
   // the owning view route, not its data, through this page's history entry.
   if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
+  if (galleryAnchorArtist) {
+    options.galleryAnchorArtist = galleryAnchorArtist;
+  }
+  if (semanticScrollAnchor) {
+    options.semanticScrollAnchor = semanticScrollAnchor;
+    const ownerGeneration = virtualGrid?.getUserScrollIntentGeneration?.();
+    if (Number.isSafeInteger(ownerGeneration)) {
+      options.semanticScrollOwnerGeneration = ownerGeneration;
+    }
+  }
   if (position) {
     options.preserveAbsoluteScroll = true;
     options.absoluteScrollPosition = position;
     // Restore before the request too: equivalent responses may retain the mounted
     // gallery. The virtual grid already owns stabilization and row materialization.
     if (typeof virtualGrid !== 'undefined' && virtualGrid?.restoreOwnedAbsoluteScrollPosition(position)) {
+      options.absoluteScrollPositionApplied = true;
       virtualGrid.render(true);
     }
+  }
+  let semanticScrollPositionApplied = false;
+  if (
+    semanticScrollAnchor
+    && typeof virtualGrid !== 'undefined'
+    && typeof virtualGrid?.restoreOwnedScrollAnchor === 'function'
+  ) {
+    virtualGrid.render(true);
+    virtualGrid.restoreOwnedScrollAnchor(semanticScrollAnchor);
+    const ownerGeneration = options.semanticScrollOwnerGeneration;
+    if (Number.isSafeInteger(ownerGeneration) && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        if (
+          mobilePageState.pages.length
+          || virtualGrid?.getUserScrollIntentGeneration?.() !== ownerGeneration
+        ) return;
+        virtualGrid.restoreOwnedScrollAnchor(semanticScrollAnchor);
+        if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+      });
+    }
+    semanticScrollPositionApplied = true;
+  }
+  if (
+    canReuseLiveParent
+    && (semanticScrollPositionApplied || (position && options.absoluteScrollPositionApplied))
+  ) {
+    if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+    return;
   }
   handleGalleryBootstrapPopState(options);
 }
@@ -41246,9 +45111,32 @@ function presentMobilePage(descriptor) {
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
     mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
+  descriptor.parentScrollAnchor = resolveMobileParentScrollAnchor(
+    descriptor,
+    previous,
+    window.history.state || {},
+    mobilePageState.pages.length || typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.(),
+  );
   descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
     mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
+  descriptor.parentGalleryAnchorArtist = resolveMobileParentGalleryAnchorArtist(
+    descriptor,
+    previous,
+    window.history.state || {},
+ mobilePageState.pages.length ? '' : captureMobileParentGalleryAnchorArtist(),
+  );
   const active = mobilePageState.pages.at(-1);
+  // Only a live, settled parent can be reused. History reconstruction must fetch.
+  const inheritedParent = mobileLiveGalleryParents.get(previous || mobilePageState.pages[0] || {});
+  if (!mobilePageState.restoring && inheritedParent) mobileLiveGalleryParents.set(descriptor, inheritedParent);
+  else if (!mobilePageState.restoring && !mobilePageState.pages.length && mobileGalleryParentIsSettled()
+    && Number.isSafeInteger(state.status?.inventory_mutation_revision)) {
+    mobileLiveGalleryParents.set(descriptor, {
+      view: state.view, groups: state.view?.artist_groups, revision: state.status.inventory_mutation_revision,
+    });
+  }
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
     syncMobilePageShell();
@@ -41810,7 +45698,8 @@ function syncMobileAlbumHeader() {
   // One Back button: beside the cover initially, in the pinned bar after handoff.
   const back = document.getElementById('mobile-back-button');
   const overview = document.querySelector('#track-modal .mobile-album-overview');
-  const backHost = presentation.bodyOwnsIdentity && overview ? overview : header;
+  const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
+  const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');
@@ -42065,6 +45954,7 @@ function syncMobileHome() {
 // Keep this file as a thin registration seam; feature logic belongs in
 // feature-owned bootstrap handler files rather than accumulating here.
 document.addEventListener('click', (event) => {
+  if (consumeArtistTreeLongPressClick(event)) return;
   const closeScanPageButton = event.target?.closest?.('[data-close-scan-page]') || null;
   if (closeScanPageButton) {
     event.preventDefault();
@@ -42106,8 +45996,8 @@ document.addEventListener('pointermove', (event) => {
   handleGalleryBootstrapPointerMove(event);
 });
 
-document.addEventListener('pointerup', () => {
-  handleGalleryBootstrapPointerUp();
+document.addEventListener('pointerup', (event) => {
+  handleGalleryBootstrapPointerUp(event);
 });
 
 document.addEventListener('pointercancel', () => {
@@ -42214,13 +46104,21 @@ window.addEventListener('popstate', () => {
 
 // BEGIN js/runtime/bootstrap-init.js
 
-const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 5000;
+const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 0;
 
 restorePlayerAppearance();
 attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof loadCoverLookupNotificationCounts === 'function') {
+  void loadCoverLookupNotificationCounts({ toast: false });
+}
+document.getElementById('cover-lookup-drawer-body')?.addEventListener(
+  'scroll',
+  handleCoverLookupDrawerScroll,
+  { passive: true },
+);
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();
@@ -42325,8 +46223,11 @@ const shouldApplyEmbeddedSidebarHydration = Boolean(
   && embeddedStartupViewPatch.artists_sidebar.length
 );
 const shouldTreatStartupPreviewAsVisibleReady = Boolean(
-  shouldApplyEmbeddedSidebarHydration
-  && startupHydrationFollowupEndpoint
+  bootstrap.startupPreview?.renderedGalleryMarkup
+  || (
+    shouldApplyEmbeddedSidebarHydration
+    && startupHydrationFollowupEndpoint
+  )
 );
 if (shouldStartImmediateHydration) {
   startupMetrics.beginInitialRefresh();
@@ -42356,7 +46257,14 @@ if (shouldTreatStartupPreviewAsVisibleReady) {
     ]
     : (Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : []);
   rebuildAlbumIndex(startupPreviewGroups);
-  renderView({ preserveMountedGallery: true });
+  renderView(
+    bootstrap.startupPreview?.renderedGalleryMarkup
+      && !bootstrap.partialView
+      && !startupHydrationRequired
+      && !state.view?.initial_view_partial
+      ? { preserveMountedGalleryChildren: true }
+      : { preserveMountedGallery: true },
+  );
 } else {
   renderView();
 }
@@ -42401,7 +46309,7 @@ if (
   && typeof startupMetrics?.completeVisibleInitialRefresh === 'function'
 ) {
   startupMetrics.completeVisibleInitialRefresh(state.view, {
-    hydrationTier: 'sidebar',
+    hydrationTier: startupHydrationTier,
     source: 'startup_preview',
   });
 }
@@ -42418,7 +46326,9 @@ updateStatusIndicator({
   relations_phase: 'Building family artists',
   relations_source: 'local',
   covers_in_progress: Boolean(bootstrap.coversInProgress),
+  covers_cancelable: Boolean(bootstrap.coversCancelable),
   covers_processed: 0,
+  covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
   last_scan_display: bootstrap.lastScanDisplay || ''
@@ -42447,7 +46357,9 @@ renderLibraryLoader({
 });
 scheduleBrowserTimeout(pollStatus, 500);
 if (shouldStartImmediateHydration) {
-  const resolvedStartupHydrationFollowupEndpoint = resolveInitialHydrationEndpoint({
+  const resolvedStartupHydrationFollowupEndpoint = (
+    !startupHydrationFollowupEndpoint && startupHydrationTier !== 'sidebar'
+  ) ? '' : resolveInitialHydrationEndpoint({
     followupEndpoint: startupHydrationFollowupEndpoint,
   }, {
     ...galleryDisplayPreferenceResolutionOptions,
@@ -42517,6 +46429,17 @@ if (shouldStartImmediateHydration) {
 
 
 document.addEventListener('contextmenu', (event) => {
+  const sidebarArtist = event.target.closest('[data-sidebar-artist]');
+  if (sidebarArtist) {
+    event.preventDefault();
+    clearArtistTreeLongPressGesture();
+    showArtistTreeContextMenu(
+      event.clientX,
+      event.clientY,
+      sidebarArtist.getAttribute('data-sidebar-artist') || '',
+    );
+    return;
+  }
   const versionTab = event.target.closest('[data-version-context-key]');
   if (versionTab) {
     event.preventDefault();
@@ -42531,6 +46454,9 @@ document.addEventListener('contextmenu', (event) => {
 });
 
 document.addEventListener('click', (event) => {
+  if (!event.target.closest('#artist-tree-context-menu') && typeof hideArtistTreeContextMenu === 'function') {
+    hideArtistTreeContextMenu();
+  }
   if (!event.target.closest('#status-context-menu')) {
     hideStatusContextMenu();
   }
@@ -42575,8 +46501,7 @@ document.addEventListener('contextmenu', (event) => {
 
 document.addEventListener('click', (event) => {
   const insideAlbumMenu = event.target.closest('#album-card-context-menu');
-  const insideAlbumCard = event.target.closest('.album-card');
-  if (!insideAlbumMenu && !insideAlbumCard) {
+  if (!insideAlbumMenu) {
     hideAlbumCardContextMenu();
   }
 });
@@ -42609,6 +46534,11 @@ window.addEventListener('focus', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    if (typeof reconcileBrowserPlaybackOnForeground === 'function') {
+      void Promise.resolve(reconcileBrowserPlaybackOnForeground()).catch((error) => {
+        console.warn('[AlbumHaven][Playback] Foreground recovery failed.', error);
+      });
+    }
     reconcileLoopEditSessionExpiry();
     handleViewportRefocusVisibilityChange();
     return;

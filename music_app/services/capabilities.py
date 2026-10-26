@@ -164,6 +164,8 @@ def action_capabilities(action: str) -> frozenset[str]:
 
 def client_allows_action(action: str, surface: str, *, administrator: bool) -> bool:
     """Availability and client limits narrow durable authority, including owners."""
+    if action.startswith("system.preview_storage."):
+        return administrator and surface in {"private_web", "desktop"}
     capabilities = action_capabilities(action)
     if any(f"capability.{name}" in UNAVAILABLE_CAPABILITIES for name in capabilities):
         return False

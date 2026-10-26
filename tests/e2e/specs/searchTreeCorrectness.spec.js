@@ -199,11 +199,12 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     async () => {
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TRANSATLANTIC_ARTIST)}`);
       await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST);
-      const albums = await galleryActions.readAlbumNamesByHeading(TRANSATLANTIC_ARTIST);
+      const albums = await galleryActions.readAppliedPrimaryArtistAlbumNames(TRANSATLANTIC_ARTIST);
       expect(albums.length).toBeGreaterThan(1);
       return {
         albums,
-        headings: await galleryActions.readArtistHeadings(),
+        headings: (await galleryActions.readArtistHeadingOccurrencesAcrossGallery())
+          .map(({ artist }) => artist),
       };
     },
   );
@@ -276,10 +277,11 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     await navigationPanelActions.selectSidebarArtistByName(TRANSATLANTIC_ARTIST);
     await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
     await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
-    expect(await galleryActions.readAlbumNamesByHeading(TRANSATLANTIC_ARTIST))
+    const occurrences = await galleryActions.readArtistHeadingOccurrencesAcrossGallery({
+      expectedArtists: completeTransatlanticView.headings,
+    });
+    expect(occurrences.find(({ artist }) => artist === TRANSATLANTIC_ARTIST)?.albumNames)
       .toEqual(completeTransatlanticView.albums);
-    expect(await galleryActions.readArtistHeadings())
-      .toEqual(completeTransatlanticView.headings);
   });
 
   await stepLogger.step('Search by a Neal Morse track title and keep the same record-only scope', async () => {

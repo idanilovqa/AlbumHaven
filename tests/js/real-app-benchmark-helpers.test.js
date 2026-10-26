@@ -1,6 +1,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('startup hydration reports logical full sidebar count and preserves mounted preview count', async () => {
+  const { measureStartupSidebarHydration } = await import('../e2e/helpers/allArtistsResponsivenessHelpers.js');
+  const galleryActions = {
+    galleryPage: {
+      page: { waitForFunction: async () => ({ jsonValue: async () => ({ startupMode: 'postgres-paged-root' }) }) },
+      albumCard: {},
+    },
+    goto: async () => {},
+    readInitialAllArtistsReadinessSnapshot: async () => ({ ready: true }),
+    waitForInitialAllArtistsSections: async () => {},
+    waitForVisibleGalleryCoversLoaded: async () => {},
+  };
+  const navigationPanelActions = {
+    navigationPanel: {},
+    readSidebarArtistCount: async () => 160,
+    readHydratedSidebarArtistNames: async () => Array.from({ length: 6344 }, (_, index) => `Artist ${index}`),
+    readAllArtistsVisibleCount: async () => 6344,
+    waitForSidebarFullyHydrated: async () => {},
+    waitForSidebarAndAllArtistsCountSynchronized: async () => {},
+  };
+  const measured = await measureStartupSidebarHydration(galleryActions, navigationPanelActions);
+  assert.equal(measured.previewSidebarCount, 160);
+  assert.equal(measured.fullSidebarCount, 6344);
+  assert.equal(measured.fullVisibleAllArtistsCount, measured.fullSidebarCount);
+});
+
 function buildBootstrapDocument(initialView, bootstrap = {}) {
   return `<html><script>window.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__ = ${JSON.stringify({
     startup_payload: { first_paint_view: initialView },
@@ -190,6 +216,31 @@ test('production bootstrap parser preserves braces and quotes inside JSON string
   }));
 
   assert.equal(payload.initial_view.app_name, 'Album {"Haven"}');
+});
+
+test('startup authority collection ignores unsuccessful root browse responses', async () => {
+  const { collectRootBrowseStartupAuthorityEvidence } = await import(
+    '../../tests/e2e/helpers/realAppBenchmarkHelpers.js'
+  );
+  let responseListener = null;
+  const page = {
+    on(eventName, listener) {
+      if (eventName === 'response') responseListener = listener;
+    },
+    off(eventName, listener) {
+      if (eventName === 'response' && responseListener === listener) responseListener = null;
+    },
+  };
+  const evidence = await collectRootBrowseStartupAuthorityEvidence(page, async () => {
+    responseListener({
+      ok: () => false,
+      url: () => 'http://127.0.0.1:5101/view-data?surface=albums',
+      request: () => ({ resourceType: () => 'fetch' }),
+      json: async () => ({ payload_tier: 'gallery_page' }),
+    });
+  });
+
+  assert.deepEqual(evidence, { rootBrowsePayloads: [], bootstrapPayloads: [] });
 });
 
 test('startup authority accepts a production embedded-sidebar bootstrap without a later response', async () => {

@@ -38,6 +38,14 @@ test('Python CI provisions and tears down an exact disposable PostgreSQL 17 data
   assert.match(job, /\$env:PGPASSWORD\s*=\s*\$null[\s\S]*?python -m pytest -q/);
 });
 
+test('bootstrap checks native command exit codes without promoting stderr notices', () => {
+  assert.match(bootstrap, /&\s*\$Executable\s+@Arguments\s+2>&1\s*\|\s*Write-Output/i);
+  assert.match(
+    bootstrap,
+    /function\s+Invoke-Checked[\s\S]*?\$previousErrorActionPreference\s*=\s*\$ErrorActionPreference[\s\S]*?\$ErrorActionPreference\s*=\s*['"]Continue['"][\s\S]*?\$exitCode\s*=\s*\$LASTEXITCODE[\s\S]*?\$ErrorActionPreference\s*=\s*\$previousErrorActionPreference[\s\S]*?if\s*\(\$exitCode\s*-ne\s*0\)/i,
+  );
+});
+
 test('schema-only bootstrap skips only fixture loading and preserves migrations and privilege probes', () => {
   assert.match(bootstrap, /Import-Module\s+Microsoft\.PowerShell\.Utility\s+-ErrorAction\s+Stop/);
   assert.match(bootstrap, /\[switch\]\$SkipFixtureLoad/);

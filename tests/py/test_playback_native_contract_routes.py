@@ -6,6 +6,7 @@ import hashlib
 import pytest
 
 from music_app.routes import playback_control_asgi
+from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.current_actor import CurrentActor
 from tests.py.asgi_testing import decode_json, run_asgi_request
 from tests.py.test_playback_stream_asgi import decoder_factory, media_path, open_command, playback_app
@@ -33,7 +34,6 @@ def test_native_playback_contract_requires_authentication(playback_app, method, 
     ("POST", "/playback/refs"),
     ("PUT", "/playback/state"),
     ("DELETE", "/playback/state"),
-    ("POST", "/playback/state/handoff"),
 ])
 def test_native_playback_mutation_rejects_foreign_origin(playback_app, method, path):
     status, _, _ = run_asgi_request(
@@ -45,6 +45,7 @@ def test_native_playback_mutation_rejects_foreign_origin(playback_app, method, p
 
 def test_short_listen_stages_reload_handoff_without_completion(playback_app, monkeypatch):
     calls = []
+    playback_app.state.auth_policy_config["trusted_origins"] = ["http://testserver"]
 
     class Claims:
         def __init__(self, _config):
@@ -61,6 +62,7 @@ def test_short_listen_stages_reload_handoff_without_completion(playback_app, mon
     monkeypatch.setattr(playback_control_asgi, "PostgresPlaybackClaims", Claims)
     client_id = "11111111-1111-4111-8111-111111111111"
     handoff_id = "22222222-2222-4222-8222-222222222222"
+    csrf = issue_session_csrf("s" * 43, playback_app.state.auth_policy_config)
     status, _, body = run_asgi_request(
         playback_app,
         "POST",
@@ -71,6 +73,7 @@ def test_short_listen_stages_reload_handoff_without_completion(playback_app, mon
             "claimToken": "p" * 43,
             "handoff": {"id": handoff_id, "token": "h" * 43},
             "completion": None,
+            "csrf_token": csrf,
         },
     )
 
@@ -92,6 +95,65 @@ def test_short_listen_stages_reload_handoff_without_completion(playback_app, mon
         ).digest(),
         "persist_completion": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("csrf_case", "origin", "expected_status", "expected_calls"),
+    [
+        ("valid", "http://testserver", 200, 1),
+        ("missing", "http://testserver", 400, 0),
+        ("wrong", "http://testserver", 400, 0),
+        ("valid", "https://foreign.example", 400, 0),
+    ],
+    ids=["matching-body-token", "missing-body-token", "wrong-body-token", "cross-origin"],
+)
+def test_handoff_beacon_uses_route_owned_body_csrf(
+    playback_app, monkeypatch, csrf_case, origin, expected_status, expected_calls
+):
+    calls = []
+    playback_app.state.auth_policy_config["trusted_origins"] = ["http://testserver"]
+
+    class Claims:
+        def __init__(self, _config):
+            pass
+
+        def stage_handoff(self, actor, **kwargs):
+            calls.append((actor, kwargs))
+            return {"protocol": 1, "staged": True, "expiresAt": "2026-10-25T12:00:15+00:00"}
+
+    monkeypatch.setattr(playback_control_asgi, "PostgresPlaybackClaims", Claims)
+    session = "s" * 43
+    csrf = issue_session_csrf(session, playback_app.state.auth_policy_config)
+    body = {
+        "protocol": 1,
+        "clientId": "11111111-1111-4111-8111-111111111111",
+        "claimToken": "p" * 43,
+        "handoff": {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "token": "h" * 43,
+        },
+        "completion": None,
+    }
+    if csrf_case != "missing":
+        body["csrf_token"] = csrf if csrf_case == "valid" else "wrong-token"
+
+    status, _, _ = run_asgi_request(
+        playback_app,
+        "POST",
+        "/playback/state/handoff",
+        json_body=body,
+        headers={
+            "cookie": (
+                f"__Host-album_haven_session={session}; "
+                f"__Host-album_haven_csrf={csrf}"
+            ),
+            "origin": origin,
+            "x-album-haven-csrf": "",
+        },
+    )
+
+    assert status == expected_status
+    assert len(calls) == expected_calls
 
 
 @pytest.mark.parametrize("tracks", [[], [

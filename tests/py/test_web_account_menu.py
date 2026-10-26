@@ -11,7 +11,10 @@ from music_app.services.auth_session_csrf import matches_session_csrf
 def test_shell_menu_uses_policy_projection_and_session_bound_csrf(monkeypatch, can_manage):
     session = "s" * 43
     config = {"hmac": {"secret": "s" * 32, "key_version": 1}}
-    allowed = SimpleNamespace(allows=lambda action: can_manage and action == "accounts.read")
+    allowed = SimpleNamespace(
+        allows=lambda action: can_manage
+        and action in {"accounts.read", "system.preview_storage.read"}
+    )
     calls = []
 
     def project(request, actions):
@@ -35,7 +38,7 @@ def test_shell_menu_uses_policy_projection_and_session_bound_csrf(monkeypatch, c
     context = web_asgi._template_response(request, {})
 
     assert calls == [
-        (request, ("accounts.read",)),
+        (request, ("accounts.read", "system.preview_storage.read")),
         (request, ("library.loops.create",)),
         (request, ("library.rules.read", "library.loops.read", "library.logs.read",
                    "library.problems.read", "integration.settings.read", "library.settings.read")),
@@ -44,4 +47,8 @@ def test_shell_menu_uses_policy_projection_and_session_bound_csrf(monkeypatch, c
     assert context["playback_allowed_actions"] is allowed
     assert context["account_menu_allowed_actions"] is allowed
     assert context["account_menu_allowed_actions"].allows("accounts.read") is can_manage
+    assert (
+        context["account_menu_allowed_actions"].allows("system.preview_storage.read")
+        is can_manage
+    )
     assert matches_session_csrf(session, context["account_menu_csrf_token"], config)

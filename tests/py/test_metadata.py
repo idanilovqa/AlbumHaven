@@ -11,6 +11,56 @@ import pytest
 from music_app.services import metadata
 
 
+@pytest.mark.parametrize("subtitle_tag", ["subtitle", "discsubtitle", "TSST"])
+def test_track_and_disc_subtitles_do_not_split_album_editions(monkeypatch, tmp_path, subtitle_tag):
+    from music_app.services.library import build_albums_from_file_cache
+
+    entries = {}
+    for number, subtitle in enumerate(["First Movement", "Second Movement"], start=1):
+        path = tmp_path / f"{number:02d}.mp3"
+        path.touch()
+        tags = {
+            "album": ["Fixture Album"], "albumartist": ["Fixture Artist"],
+            "artist": ["Fixture Artist"], "title": [f"Track {number}"],
+            "tracknumber": [str(number)], "date": ["2001"],
+            subtitle_tag: [subtitle],
+        }
+        monkeypatch.setattr(metadata, "MutagenFile", lambda _path, tags=tags: SimpleNamespace(tags=tags))
+        entry = metadata.read_metadata_for_file(path)
+        assert entry["edition"] is None
+        assert metadata.read_tags(path)[subtitle_tag.lower()] == [subtitle]
+        entries[str(path)] = entry
+
+    albums = build_albums_from_file_cache(entries)
+    assert len(albums) == 1
+    assert len(albums[0].tracks) == 2
+
+
+@pytest.mark.parametrize("edition_tag", ["edition", "album edition", "albumedition", "version", "VERSION", "TIT3"])
+def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, edition_tag):
+    from music_app.services.library import build_albums_from_file_cache
+
+    entries = {}
+    for number, edition in enumerate(["Original", "Deluxe"], start=1):
+        path = tmp_path / f"{number:02d}.mp3"
+        path.touch()
+        tags = {
+            "album": ["Fixture Album"], "albumartist": ["Fixture Artist"],
+            "artist": ["Fixture Artist"], "title": [f"Track {number}"],
+            "tracknumber": [str(number)], "date": ["2001"],
+            edition_tag: [edition], "discsubtitle": ["Disc subtitle"],
+        }
+        monkeypatch.setattr(metadata, "MutagenFile", lambda _path, tags=tags: SimpleNamespace(tags=tags))
+        entry = metadata.read_metadata_for_file(path)
+        assert entry["edition"] == edition
+        assert metadata.read_tags(path)[edition_tag.lower()] == [edition]
+        entries[str(path)] = entry
+
+    albums = build_albums_from_file_cache(entries)
+    assert len(albums) == 2
+    assert {album.edition for album in albums} == {"Original", "Deluxe"}
+
+
 @pytest.mark.parametrize(
     ("entry", "expected"),
     [
@@ -22,8 +72,9 @@ from music_app.services import metadata
         ({"metadata_schema_version": "1"}, False),
         ({"metadata_schema_version": 1}, False),
         ({"metadata_schema_version": 2}, False),
-        ({"metadata_schema_version": 2, "release_date": None}, True),
-        ({"metadata_schema_version": 2, "release_date": "2004-07-16"}, True),
+        ({"metadata_schema_version": 2, "release_date": None}, False),
+        ({"metadata_schema_version": 3, "release_date": None}, True),
+        ({"metadata_schema_version": 3, "release_date": "2004-07-16"}, True),
     ],
 )
 def test_file_metadata_schema_is_current_requires_exact_non_bool_version(
@@ -158,6 +209,38 @@ def test_read_tags_opens_mutagen_once_and_normalizes_full_mp4_tags(monkeypatch):
     assert tags["discnumber"] == ["1/2"]
     assert tags["----:com.apple.itunes:album rating"] == [b"9"]
     assert tags["duration_seconds"] == 183
+
+
+def test_read_tags_prefers_current_id3_values_over_legacy_ape_tags(monkeypatch, tmp_path):
+    track_path = tmp_path / "fixture.mp3"
+    track_path.touch()
+    audio = SimpleNamespace(
+        tags={
+            "TALB": SimpleNamespace(text=["Approved Album"]),
+            "TPE2": SimpleNamespace(text=["Approved Album Artist"]),
+            "TPE1": SimpleNamespace(text=["Approved Track Artist"]),
+            "TIT2": SimpleNamespace(text=["Approved Track"]),
+        },
+        info=SimpleNamespace(length=180.0),
+    )
+    monkeypatch.setattr(metadata, "MutagenFile", lambda _path: audio)
+    monkeypatch.setattr(
+        metadata,
+        "read_apev2_tags",
+        lambda _path: {
+            "album": ["Legacy Album"],
+            "albumartist": ["Legacy Album Artist"],
+            "artist": ["Legacy Track Artist"],
+            "title": ["Legacy Track"],
+        },
+    )
+
+    entry = metadata.read_metadata_for_file(track_path)
+
+    assert entry["album"] == "Approved Album"
+    assert entry["album_artist"] == "Approved Album Artist"
+    assert entry["artist"] == "Approved Track Artist"
+    assert entry["title"] == "Approved Track"
 
 
 def test_full_tag_aliases_preserve_easy_id3_names_used_by_metadata_extraction():
@@ -420,7 +503,7 @@ def test_read_metadata_for_generated_mp3_parses_real_id3_album_rating_txxx(
     assert parsed["album_artist"] == "Christopher Tin"
     assert parsed["genre"] == "Classical Crossover"
     assert parsed["album_rating"] == 9
-    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 2
+    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 3
 
 def test_read_editable_tag_values_returns_exact_blanks_and_requested_fields(monkeypatch):
     audio = {

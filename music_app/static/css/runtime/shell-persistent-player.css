@@ -26,6 +26,7 @@
 
 .cover-lookup-drawer {
   height: calc(100vh - var(--player-height));
+  height: calc(100dvh - var(--player-height));
 }
 
 /* Dialogs retain their established proportions within the reduced surface lane. */

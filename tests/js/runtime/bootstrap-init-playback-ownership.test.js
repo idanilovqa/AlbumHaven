@@ -24,6 +24,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
     restorePlaybackOwnershipFromPageCache: 0,
     restorePlaybackOwnershipSnapshots: [],
     resumePlayerPlaybackFromPageCache: [],
+    reconcileBrowserPlaybackOnForeground: 0,
     setLoopActive: [],
     stopStreamingPlayback: [],
   };
@@ -35,6 +36,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   let ownershipRestore = new Promise((resolve) => { resolveOwnershipRestore = resolve; });
   let idleWarmup;
   let initialLoaderState = null;
+  let initialStatus = null;
   const context = {
     window: {
       location: { href: 'http://localhost:5000/' },
@@ -98,7 +100,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
       markInitialRender() {},
     },
     renderView() {},
-    updateStatusIndicator() {},
+    updateStatusIndicator(data) { initialStatus = data; },
     renderLibraryLoader(data) {
       initialLoaderState = data;
     },
@@ -161,6 +163,10 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
       calls.prepareStreamingPlaybackEngine += 1;
       return Promise.reject(preparationFailure);
     },
+    reconcileBrowserPlaybackOnForeground() {
+      calls.reconcileBrowserPlaybackOnForeground += 1;
+      return Promise.resolve('continued');
+    },
     attachModalEvents() {},
     attachCoverLookupModalEvents() {},
     attachCoverLookupDeleteConfirmEvents() {},
@@ -183,6 +189,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(calls.initPlaybackOwnershipCoordinator, 1);
+
   assert.equal(calls.prepareStreamingPlaybackEngine, 0, 'audio engine must not block initial rendering');
   assert.equal(typeof idleWarmup, 'function');
   if (!unloadBeforeIdle) idleWarmup();
@@ -190,8 +197,10 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   assert.equal(calls.prepareStreamingPlaybackEngine, unloadBeforeIdle ? 0 : 1);
   assert.equal(observedErrors.length, unloadBeforeIdle ? 0 : 1);
   if (!unloadBeforeIdle) assert.equal(observedErrors[0].includes(preparationFailure), true);
+
   assert.equal(typeof calls.visibilitychange, 'function');
   calls.visibilitychange();
+  assert.equal(calls.reconcileBrowserPlaybackOnForeground, 1);
   assert.ok(windowListeners.focus);
   windowListeners.focus();
   documentListeners.pointerdown();
@@ -928,7 +937,7 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
   ]);
   assert.deepEqual(
     scheduledTimeouts.map(({ delayMs }) => delayMs),
-    [500, 5000],
+    [500, 0],
   );
   assert.equal(runtimeBootstrap.startupHydration.embeddedViewPatch, null);
   assert.equal(runtimeBootstrap.startupPayloadTiers.hydration.embeddedViewPatch, null);
@@ -943,10 +952,22 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
   });
 });
 
-function createDelayedStartupHydrationHarness() {
+function createDelayedStartupHydrationHarness({
+  selectedArtist = '',
+  startupHydrationEndpoint = '/view-data?payload_tier=sidebar',
+  startupHydrationFollowupEndpoint = '/view-data',
+  startupHydrationTier = 'sidebar',
+  renderedGalleryMarkup = false,
+} = {}) {
   const scheduledTimeouts = [];
   const fetchedEndpoints = [];
+  const fetchedOptions = [];
+  let visibleRefreshCount = 0;
+  const visibleRefreshDetails = [];
   const runtimeBootstrap = {
+    startupPreview: {
+      renderedGalleryMarkup,
+    },
     startupPayloadTiers: {
       hydration: {
         embeddedViewPatch: {
@@ -956,9 +977,9 @@ function createDelayedStartupHydrationHarness() {
     },
     startupHydration: {
       required: true,
-      endpoint: '/view-data?payload_tier=sidebar',
-      followupEndpoint: '/view-data',
-      tier: 'sidebar',
+      endpoint: startupHydrationEndpoint,
+      followupEndpoint: startupHydrationFollowupEndpoint,
+      tier: startupHydrationTier,
       embeddedViewPatch: {
         artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
         artist_count: 1,
@@ -984,7 +1005,7 @@ function createDelayedStartupHydrationHarness() {
       awaitingInitialDataRefresh: false,
       ui: { viewStateRevision: 0 },
       view: {
-        selected_artist: '',
+        selected_artist: selectedArtist,
         query: '',
         artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
         primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
@@ -1002,6 +1023,9 @@ function createDelayedStartupHydrationHarness() {
     applyViewPayload(view) {
       context.state.view = { ...context.state.view, ...view };
     },
+    buildApiUrl() {
+      return '/view-data?payload_tier=gallery_summary';
+    },
     readViewStateRevision() { return context.state.ui.viewStateRevision; },
     suppressRefocusViewportInteraction() {},
     suppressRefocusViewportClick() {},
@@ -1012,6 +1036,10 @@ function createDelayedStartupHydrationHarness() {
     startupMetrics: {
       beginInitialRefresh() {},
       markInitialRender() {},
+      completeVisibleInitialRefresh(_view, detail) {
+        visibleRefreshCount += 1;
+        visibleRefreshDetails.push(detail);
+      },
     },
     rebuildAlbumIndex() {},
     renderView() {},
@@ -1022,7 +1050,10 @@ function createDelayedStartupHydrationHarness() {
       return scheduledTimeouts.length;
     },
     pollStatus() {},
-    fetchAndRender(endpoint) { fetchedEndpoints.push(endpoint); },
+    fetchAndRender(endpoint, _silent, options) {
+      fetchedEndpoints.push(endpoint);
+      fetchedOptions.push(options);
+    },
     isEffectivelyEmptyView() { return false; },
     hideVersionContextMenu() {},
     hideStatusContextMenu() {},
@@ -1049,8 +1080,50 @@ function createDelayedStartupHydrationHarness() {
 
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
-  return { context, fetchedEndpoints, scheduledTimeouts };
+  return {
+    context,
+    fetchedEndpoints,
+    fetchedOptions,
+    scheduledTimeouts,
+    visibleRefreshCount,
+    visibleRefreshDetails,
+  };
 }
+
+test('server-rendered selected gallery dismisses startup blocking before full hydration', () => {
+  const {
+    context,
+    visibleRefreshCount,
+    visibleRefreshDetails,
+  } = createDelayedStartupHydrationHarness({
+    selectedArtist: 'Broadcast',
+    startupHydrationTier: 'full',
+    renderedGalleryMarkup: true,
+  });
+
+  assert.equal(visibleRefreshCount, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(visibleRefreshDetails)), [{
+    hydrationTier: 'full',
+    source: 'startup_preview',
+  }]);
+  assert.equal(context.state.awaitingInitialDataRefresh, true);
+});
+
+test('full selected startup does not invent a gallery-summary follow-up after root-sidebar hydration', () => {
+  const {
+    fetchedEndpoints,
+    fetchedOptions,
+  } = createDelayedStartupHydrationHarness({
+    selectedArtist: 'Broadcast',
+    startupHydrationEndpoint: '/view-data?root_sidebar=1&artist=Broadcast',
+    startupHydrationFollowupEndpoint: '',
+    startupHydrationTier: 'full',
+    renderedGalleryMarkup: true,
+  });
+
+  assert.deepEqual(fetchedEndpoints, ['/view-data?root_sidebar=1&artist=Broadcast']);
+  assert.equal(fetchedOptions[0].startupHydrationFollowupEndpoint, '');
+});
 
 test('delayed startup hydration yields to cover-display/source work without aborting it', () => {
   const { context, fetchedEndpoints, scheduledTimeouts } = createDelayedStartupHydrationHarness();
@@ -1058,7 +1131,7 @@ test('delayed startup hydration yields to cover-display/source work without abor
 
   context.state.view.gallery_display_mode = 'covers';
   context.state.awaitingInitialDataRefresh = false;
-  scheduledTimeouts.find(({ delayMs }) => delayMs === 5000).callback();
+  scheduledTimeouts.find(({ delayMs }) => delayMs === 0).callback();
 
   assert.deepEqual(fetchedEndpoints, []);
   assert.equal(context.state.awaitingInitialDataRefresh, false);
@@ -1070,7 +1143,7 @@ test('delayed startup hydration clears readiness when cached artist navigation s
 
   context.state.ui.viewStateRevision += 1;
   context.state.view.selected_artist = 'Broadcast';
-  scheduledTimeouts.find(({ delayMs }) => delayMs === 5000).callback();
+  scheduledTimeouts.find(({ delayMs }) => delayMs === 0).callback();
 
   assert.deepEqual(fetchedEndpoints, []);
   assert.equal(context.state.awaitingInitialDataRefresh, false);
@@ -1196,7 +1269,7 @@ test('bootstrap init still queues the embedded sidebar-first hydration request w
 
   assert.deepEqual(
     scheduledTimeouts.map(({ delayMs }) => delayMs),
-    [500, 5000],
+    [500, 0],
   );
   scheduledTimeouts[1].callback();
   assert.equal(fetchedEndpoint, '/view-data?payload_tier=sidebar');
@@ -1211,6 +1284,7 @@ test('bootstrap init still queues the embedded sidebar-first hydration request w
 test('bootstrap init completes a fully rendered startup exactly once after paint without hydration', () => {
   const scheduledAnimationFrames = [];
   const completedViews = [];
+  const renderOptions = [];
   let fetchedEndpoint = null;
   const context = {
     window: {
@@ -1250,6 +1324,9 @@ test('bootstrap init completes a fully rendered startup exactly once after paint
       getBootstrap() {
         return {
           partialView: false,
+          startupPreview: {
+            renderedGalleryMarkup: true,
+          },
           startupHydration: {
             required: false,
             endpoint: '/view-data?artist=Broadcast',
@@ -1292,7 +1369,10 @@ test('bootstrap init completes a fully rendered startup exactly once after paint
         completedViews.push(view);
       },
     },
-    renderView() {},
+    rebuildAlbumIndex() {},
+    renderView(options) {
+      renderOptions.push(options);
+    },
     updateStatusIndicator() {},
     renderLibraryLoader() {},
     scheduleBrowserTimeout() {
@@ -1338,6 +1418,9 @@ test('bootstrap init completes a fully rendered startup exactly once after paint
   vm.runInContext(helperSource, context, { filename: helperPath });
 
   assert.equal(fetchedEndpoint, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(renderOptions)), [
+    { preserveMountedGalleryChildren: true },
+  ]);
   assert.equal(completedViews.length, 0);
   assert.equal(scheduledAnimationFrames.length, 1);
 

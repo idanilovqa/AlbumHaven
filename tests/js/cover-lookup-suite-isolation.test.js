@@ -84,6 +84,16 @@ test('cover lookup scenarios own distinct mutable album identities', async () =>
   assert.equal(new Set(identities).size, identities.length);
 });
 
+test('cover lookup performance owns the materialized DDT remixes album', async () => {
+  const { COVER_LOOKUP_TEST_TARGETS } = await import(fixtureDataUrl);
+
+  assert.deepEqual(COVER_LOOKUP_TEST_TARGETS.performanceInteractions, {
+    artist: 'ДДТ',
+    album: 'Ремиксы',
+    year: '2000',
+  });
+});
+
 test('FTC-COVERS-013 reaches the held provider without a sufficient manual result', () => {
   const source = fs.readFileSync(
     path.join(repoRoot, 'tests', 'e2e', 'specs', 'coverLookup.spec.js'),

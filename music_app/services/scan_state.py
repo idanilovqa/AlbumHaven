@@ -9,7 +9,12 @@ from typing import Callable
 
 from music_app.services.app_logging import log_app_event
 from music_app.services.library import build_albums_from_file_cache
-from music_app.services.library_indexing import ScanCancelled
+from music_app.services.library_indexing import (
+    ScanCancelled,
+    finish_scan_stage,
+    reset_scan_stage_timings,
+    start_scan_stage,
+)
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.scan_cache_persistence import (
     ScanCachePublicationSuperseded,
@@ -207,6 +212,7 @@ def refresh_library_state(
             library_state.get("scan_mode") or "background"
         )
         scan_started_at = time.time()
+        reset_scan_stage_timings(library_state)
         library_state["scan_generation"] = int(library_state.get("scan_generation") or 0) + 1
         scan_generation = int(library_state.get("scan_generation") or 0)
         library_state["last_error"] = None
@@ -432,6 +438,7 @@ def refresh_library_state(
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_phase"] = "finalizing"
+                start_scan_stage(library_state, "relations")
         relation_refresh_options: dict[str, object] = {
             "seed_missing_album_ratings": True,
             "expected_scan_generation": scan_generation,
@@ -446,6 +453,8 @@ def refresh_library_state(
                 expected_inventory_mutation_revision
             )
         refresh_relation_views(**relation_refresh_options)
+        finish_scan_stage(library_state, "relations")
+        library_state["scan_elapsed_seconds"] = max(0.0, time.time() - scan_started_at)
         with cache_lock:
             generation_is_current = (
                 int(library_state.get("scan_generation") or 0) == scan_generation
@@ -501,7 +510,10 @@ def refresh_library_state(
                  history_scope=history_scope)
                 library_state["last_error"] = str(exc)
                 library_state["scan_outcome"] = "failed"
+        raise
     finally:
+        for stage in ("discover", "metadata", "relations"):
+            finish_scan_stage(library_state, stage)
         with cache_lock:
             _clear_matching_scan_preview(
                 library_state,
@@ -510,53 +522,65 @@ def refresh_library_state(
             )
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_current_path"] = ""
+                library_state["post_scan_cover_refresh_pending"] = bool(
+                    scan_completed_successfully
+                )
+                library_state["post_scan_cover_refresh_pending_generation"] = (
+                    scan_generation if scan_completed_successfully else 0
+                )
                 library_state["scan_in_progress"] = False
                 library_state["scan_phase"] = "idle"
                 library_state["scan_mode"] = "idle"
                 library_state.pop("scan_committed_generation", None)
 
-    if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
-        if (
-            requested_scan_mode == "manual_full_rescan"
-            and recover_library_watch_health is not None
-        ):
-            observed_root_ids = publication_state.get(
-                "observed_library_root_ids"
+    try:
+        if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
+            if (
+                requested_scan_mode == "manual_full_rescan"
+                and recover_library_watch_health is not None
+            ):
+                observed_root_ids = publication_state.get(
+                    "observed_library_root_ids"
+                )
+                try:
+                    recover_library_watch_health(
+                        scan_mode=requested_scan_mode,
+                        scan_started_at=scan_started_at,
+                        observed_root_ids=(
+                            observed_root_ids
+                            if isinstance(observed_root_ids, (set, list, tuple))
+                            else ()
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Unable to clear recovered library watcher health."
+                    )
+            finalize_post_scan_actions(
+                library_state,
+                config=cfg,
+                logger=logger,
+                previous_album_keys=previous_album_keys,
+                start_manual_cover_refresh=start_manual_cover_refresh,
+                start_background_cover_refresh=start_background_cover_refresh,
             )
-            try:
-                recover_library_watch_health(
-                    scan_mode=requested_scan_mode,
-                    scan_started_at=scan_started_at,
-                    observed_root_ids=(
-                        observed_root_ids
-                        if isinstance(observed_root_ids, (set, list, tuple))
-                        else ()
-                    ),
-                )
-            except Exception:
-                logger.exception(
-                    "Unable to clear recovered library watcher health."
-                )
-        finalize_post_scan_actions(
-            library_state,
-            config=cfg,
-            logger=logger,
-            previous_album_keys=previous_album_keys,
-            start_manual_cover_refresh=start_manual_cover_refresh,
-            start_background_cover_refresh=start_background_cover_refresh,
-        )
-        if queue_mbid_assertion_follow_up is not None:
-            try:
-                queue_mbid_assertion_follow_up(
-                    library_state,
-                    previous_albums=previous_albums,
-                )
-            except Exception as exc:
-                log_app_event(
-                    cfg,
-                    logger,
-                    "Post-scan MBID assertion follow-up hook failed",
-                    level="warning",
-                    reason="post_scan_mbid_assertion_hook_failed",
-                    error=str(exc),
-                )
+            if queue_mbid_assertion_follow_up is not None:
+                try:
+                    queue_mbid_assertion_follow_up(
+                        library_state,
+                        previous_albums=previous_albums,
+                    )
+                except Exception as exc:
+                    log_app_event(
+                        cfg,
+                        logger,
+                        "Post-scan MBID assertion follow-up hook failed",
+                        level="warning",
+                        reason="post_scan_mbid_assertion_hook_failed",
+                        error=str(exc),
+                    )
+    finally:
+        with cache_lock:
+            if int(library_state.get("post_scan_cover_refresh_pending_generation") or 0) == scan_generation:
+                library_state["post_scan_cover_refresh_pending"] = False
+                library_state["post_scan_cover_refresh_pending_generation"] = 0

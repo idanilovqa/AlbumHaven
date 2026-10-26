@@ -8,6 +8,10 @@ const template = fs.readFileSync(path.join(root, 'music_app/templates/partials/a
 const appChromeCss = fs.readFileSync(path.join(root, 'music_app/static/css/app-chrome.css'), 'utf8');
 const baseLayoutCss = fs.readFileSync(path.join(root, 'music_app/static/css/runtime/base-layout.css'), 'utf8');
 
+test('the library brand uses the existing in-page navigation path', () => {
+  assert.match(template, /class="app-bar-brand"[^>]*href="\/"[^>]*variant == 'library'[^>]*data-nav="1"[^>]*data-sidebar-all-artists="1"[^>]*data-library-home="1"/);
+});
+
 test('the shared app bar renders the Album Haven mark as a theme-aware component', () => {
   assert.match(template, /class="app-bar-brand-mark"/);
   assert.match(template, /class="app-bar-brand-label"/);

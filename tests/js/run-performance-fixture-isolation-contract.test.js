@@ -18,6 +18,7 @@ const GENERATED_ISOLATED_TARGETS = new Set([
   'scan-page',
   'scan-health', 'scan-error',
 ]);
+const PRELOADED_DERIVED_TARGETS = new Set(['gallery-artwork-diversity']);
 
 const OWNER_RUNTIME_ENV_KEYS = [
   'MUSIC_DIR',
@@ -29,9 +30,9 @@ const OWNER_RUNTIME_ENV_KEYS = [
 ];
 
 function expectedFixtureMode(targetName) {
-  return GENERATED_ISOLATED_TARGETS.has(targetName)
-    ? 'generated-isolated'
-    : 'preloaded-release';
+  if (GENERATED_ISOLATED_TARGETS.has(targetName)) return 'generated-isolated';
+  if (PRELOADED_DERIVED_TARGETS.has(targetName)) return 'preloaded-derived';
+  return 'preloaded-release';
 }
 
 function approvedTargetEnv(targetName) {

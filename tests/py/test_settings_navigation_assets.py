@@ -1,5 +1,6 @@
 """Shared navigation CSS must track the same runtime revision as the shell."""
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,3 +39,28 @@ def test_navigation_script_only_change_invalidates_default_shell_asset_digest(tm
     navigation.write_text('const version = 2;', encoding='utf-8')
     os.utime(navigation, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
     assert web_asgi._runtime_asset_version() != first
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native asset cache")
+def test_unchanged_default_digest_never_reopens_asset_contents(tmp_path, monkeypatch):
+    from music_app.routes import web_asgi
+    from music_app.services.runtime_asset_versions import runtime_asset_version_cache
+
+    package = tmp_path / "music_app"
+    static = package / "static"
+    static.mkdir(parents=True)
+    (static / "app.js").write_text("asset")
+    monkeypatch.setattr(web_asgi, "__file__", str(package / "routes" / "web_asgi.py"))
+    runtime_asset_version_cache.close()
+    try:
+        version = web_asgi._runtime_asset_version()
+        assert version != "missing"
+
+        def forbidden(*_args, **_kwargs):
+            pytest.fail("unchanged HTML request reopened static asset content")
+
+        monkeypatch.setattr(Path, "open", forbidden)
+        for _ in range(20):
+            assert web_asgi._runtime_asset_version() == version
+    finally:
+        runtime_asset_version_cache.close()

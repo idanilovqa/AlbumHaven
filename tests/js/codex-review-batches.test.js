@@ -236,6 +236,33 @@ test('rename identities and deleted base content remain assigned with real befor
   assert.deepEqual(fs.readFileSync(path.join(options.outputDir, deletedImage.images[0].path)), right);
 });
 
+test('JPEG content with a PNG filename retains both image sides and their actual formats', t => {
+  const { createReviewPlan, validateManifest } = engine();
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB1cAAAAASUVORK5CYII=', 'base64');
+  const jpeg = fs.readFileSync(path.resolve(__dirname,
+    '../../docs/design-mockups/components/library-provenance/v001/screenshots/a-dark-cards.png'));
+  assert.deepEqual([...jpeg.subarray(0, 3)], [0xff, 0xd8, 0xff]);
+  const options = fixture(t, { 'image.png': png }, { 'image.png': jpeg, 'native.jpg': jpeg, 'native.jpeg': jpeg });
+  const manifest = createReviewPlan(options);
+  const visual = manifest.items.find(item => item.path === 'image.png');
+  assert.equal(visual.kind, 'image');
+  assert.deepEqual(visual.images.map(image => image.side).sort(), ['left', 'right']);
+  for (const image of visual.images) {
+    assert.equal(path.extname(image.path), image.side === 'left' ? '.png' : '.jpg');
+    assert.deepEqual(fs.readFileSync(path.join(options.outputDir, image.path)),
+      image.side === 'left' ? png : jpeg);
+  }
+  assert.deepEqual(manifest.batches.flatMap(batch => batch.itemIds).sort(),
+    manifest.items.map(item => item.id).sort());
+  assert.doesNotThrow(() => validateManifest(manifest, options));
+});
+
+test('truncated JPEG signature with PNG filename fails visibly', t => {
+  const { createReviewPlan } = engine();
+  const options = fixture(t, { 'safe.js': 'old\n' }, { 'safe.js': 'new\n', 'image.png': Buffer.from([0xff, 0xd8, 0xff, 0]) });
+  assert.throws(() => createReviewPlan(options), /binary|unsupported|UTF-8/i);
+});
+
 test('unsupported binary changes fail visibly rather than producing incomplete review coverage', t => {
   const { createReviewPlan } = engine();
   const options = fixture(t, { 'safe.js': 'old\n' }, { 'safe.js': 'new\n', 'archive.bin': Buffer.from([0, 1, 0, 2]) });

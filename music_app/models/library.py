@@ -17,6 +17,7 @@ class Track:
     edition: str | None = None
     album_rating: int | None = None
     exception_type: str | None = None
+    custom_collection_name: str | None = None
     cover_path: Path | None = None
     cover_revision: str | None = None
     local_cover_width: int | None = None
@@ -45,6 +46,8 @@ class Album:
     cover_path: Path | None = None
     cover_revision: str | None = None
     cover_selection_origin: str | None = None
+    cover_selection_provenance: str | None = None
+    cover_selection_repair_previous: dict[str, object] | None = None
     local_cover_width: int | None = None
     local_cover_height: int | None = None
     remote_cover_url: str | None = None

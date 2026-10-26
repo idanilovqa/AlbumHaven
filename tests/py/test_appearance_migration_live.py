@@ -52,7 +52,7 @@ def test_live_legacy_selection_accent_survives_aggregate_upgrade(
                         (account_id, client_profile, main_surface_color, compact_player_style)
                     values (%s, %s, '#123456', 'floating')
                 """, (account_id, existing_profile))
-        isolatedPostgres.apply_migrations(setup_url, upgrade)
+        isolatedPostgres.apply_migrations(setup_url, migrations)
         with isolatedPostgres._connect(setup_url) as connection:
             row = connection.execute("""select * from app.user_appearance_preferences
                 where account_id = %s and client_profile = 'desktop'""", (account_id,)).fetchone()

@@ -11,7 +11,8 @@ function load(overrides = {}) {
   }, lastfmScrobbles: { summary: null, loading: false, submitting: false } } }, escapeHtml: value => String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),
     cloneRuntimeJson: value => JSON.parse(JSON.stringify(value)), renderUtilityModalContent(){},
     formatLogHistoryTimestamp: value => value, getDetectedBrowserTimeZone:()=> 'America/Denver',getSupportedBrowserTimeZones:()=>[],
-    showRepairAlert(){}, showToast(){}, console, ...overrides };
+    showRepairAlert(){}, showToast(){}, closeTagEditorExceptionMenu(){},
+    getTagEditorElements: () => ({ form: null }), console, ...overrides };
   context.window = context; vm.createContext(context);
   for (const file of ['button-component.js','runtime/utility-loop-playback.js','runtime/library-settings.js','runtime/utility-list-builders.js','runtime/utility-renderers-and-actions.js'])
     vm.runInContext(fs.readFileSync(path.join(root,'music_app/static/js',file),'utf8'),context);

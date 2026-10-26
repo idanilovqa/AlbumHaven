@@ -1114,3 +1114,63 @@ def test_concurrent_flushes_preserve_delete_then_recreation_order(tmp_path: Path
     assert not second_flush.is_alive()
     assert [request.deleted_paths for request in emitted] == [frozenset({path}), frozenset()]
     assert [request.paths for request in emitted] == [frozenset(), frozenset({path})]
+@pytest.mark.parametrize(
+    ("kind", "destination_template"),
+    [
+        ("created", None),
+        ("deleted", None),
+        ("moved", "Artist/Album/renamed-{index:05}.flac"),
+    ],
+)
+def test_capacity_drains_complete_batches_without_watcher_overflow(
+    tmp_path: Path,
+    kind: str,
+    destination_template: str | None,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    health = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        emit_health_event=health.append,
+        max_pending_groups=1,
+        max_pending_entries=64,
+        drain_at_capacity=True,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    events = [
+        _event(
+            LibraryEventKind(kind),
+            tmp_path,
+            f"Artist/Album/{index:05}.flac",
+            destination=(
+                destination_template.format(index=index)
+                if destination_template is not None
+                else None
+            ),
+        )
+        for index in range(5_000)
+    ]
+
+    assert all(coordinator.accept(event) for event in events)
+    coordinator.flush()
+
+    assert health == []
+    if kind == "deleted":
+        observed = {path for request in emitted for path in request.deleted_paths}
+        expected = {event.path for event in events}
+    elif kind == "moved":
+        observed = {
+            (move.source, move.destination)
+            for request in emitted
+            for move in request.moves
+        }
+        expected = {(event.path, event.destination) for event in events}
+    else:
+        observed = {path for request in emitted for path in request.paths}
+        expected = {event.path for event in events}
+    assert observed == expected
+    assert coordinator._pending_entry_count == 0

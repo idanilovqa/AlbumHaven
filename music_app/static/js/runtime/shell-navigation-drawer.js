@@ -1,5 +1,6 @@
 const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
 const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
+const ARTIST_TREE_TOGGLE_STARTING_EVENT = 'album-haven:artist-tree-toggle-starting';
 let cancelPendingArtistTreeResize = null;
 
 function isArtistsDrawerElement(value) {
@@ -171,7 +172,11 @@ function toggleArtistTreeFold() {
   const { button, navigationButton, rail } = getArtistTreeFoldElements();
   const moveFocusWithinRail = Boolean(rail?.contains?.(document.activeElement));
   const wasFolded = Boolean(state.ui.artistTreeFolded);
-  state.ui.artistTreeFolded = !wasFolded;
+  const nextFolded = !wasFolded;
+  window.dispatchEvent(new CustomEvent(ARTIST_TREE_TOGGLE_STARTING_EVENT, {
+    detail: { folded: nextFolded },
+  }));
+  state.ui.artistTreeFolded = nextFolded;
   state.ui.shellLayoutPreferences = {
     ...(state.ui.shellLayoutPreferences || {}),
     artistTreeFolded: state.ui.artistTreeFolded,

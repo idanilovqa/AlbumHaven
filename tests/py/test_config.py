@@ -33,6 +33,27 @@ def test_music_dir_has_no_machine_specific_default():
     assert result.returncode == 0, result.stderr
 
 
+def test_utility_projection_prewarm_is_opt_in():
+    environment = dict(os.environ)
+    environment.pop("ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from config import Config; "
+                "assert Config.ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED is False"
+            ),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_parse_env_value_strips_matching_quotes():
     assert _parse_env_value('"hello"') == "hello"
     assert _parse_env_value("'hello'") == "hello"

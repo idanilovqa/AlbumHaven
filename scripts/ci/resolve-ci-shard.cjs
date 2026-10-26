@@ -3,17 +3,29 @@ const FUNCTIONAL_SHARDS = Object.freeze({
     displayName: 'Gallery, Search & Visual',
     portBase: 5200,
   },
-  'cover-providers': {
-    displayName: 'Cover Providers',
+  'cover-providers-1': {
+    displayName: 'Cover Providers 1',
     portBase: 5300,
+  },
+  'cover-providers-2': {
+    displayName: 'Cover Providers 2',
+    portBase: 5350,
   },
   'metadata-mutations': {
     displayName: 'Metadata Mutations',
     portBase: 5400,
   },
-  'playback-utilities': {
-    displayName: 'Playback & Utilities',
+  'playback-utilities-1': {
+    displayName: 'Playback & Utilities 1',
     portBase: 5500,
+  },
+  'playback-utilities-2': {
+    displayName: 'Playback & Utilities 2',
+    portBase: 5550,
+  },
+  'playback-utilities-3': {
+    displayName: 'Playback & Utilities 3',
+    portBase: 5600,
   },
 });
 
@@ -26,7 +38,7 @@ const PERFORMANCE_SHARDS = Object.freeze({
     basePort: 4173,
     targets: [
       'idle-memory', 'all-artists', 'artist-family', 'search-all-artists', 'utility-rules',
-      'selected-artist', 'search-browse', 'root-album-browse', 'app-open-all-artists',
+      'selected-artist', 'edit-tags-post-edit', 'cover-lookup', 'album-title-search', 'track-title-search', 'search-browse', 'root-album-browse', 'artist-tree-scroll-navigation', 'app-open-all-artists', 'notification-history',
       'rules-focused', 'paired-search-calibration',
     ],
   },
@@ -53,6 +65,18 @@ const PERFORMANCE_SHARDS = Object.freeze({
     harness: 'scan',
     basePort: 4293,
     targets: ['scan-cold', 'scan-cached', 'scan-add-album', 'scan-metadata', 'scan-page', 'scan-health', 'scan-error'],
+  },
+  'gallery-artwork-diversity': {
+    fixtureProfile: 'synthetic-large-library',
+    fixtureDownloadProfile: 'synthetic-large-library',
+    fixtureMode: 'preloaded-derived',
+    harness: 'managed-app',
+    basePort: 4333,
+    targets: ['gallery-artwork-diversity'],
+    generatorRepository: 'idanilovqa/album-haven-test-data',
+    generatorCommit: 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11',
+    variantCount: 512,
+    sourceMaxEdge: 960,
   },
 });
 
@@ -101,7 +125,7 @@ function outputEntries(kind, config) {
     ['base_port', config.basePort],
     ['targets', config.targets.join(',')],
   ];
-  for (let index = 0; index < 11; index += 1) {
+  for (let index = 0; index < 17; index += 1) {
     entries.push([`target${index + 1}`, config.targets[index] || 'none']);
   }
   return entries;

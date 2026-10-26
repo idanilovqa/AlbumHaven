@@ -55,8 +55,8 @@ test('separate runners authenticate independently', async () => {
 
 test('failed authentication closes its context and fails all consumers without repeated login', async () => {
   const { auth, calls } = fixture({ rejectLogin: true });
-  await assert.rejects(auth.getStorageState());
-  await assert.rejects(auth.getStorageState());
+  await assert.rejects(auth.getStorageState(), /login failed/);
+  await assert.rejects(auth.getStorageState(), /login failed/);
   assert.equal(calls.filter((call) => call === 'login').length, 1);
   assert.equal(calls.filter((call) => call === 'close').length, 1);
 });

@@ -168,6 +168,26 @@ test('panel NavigationTree buttons preserve the regular left-aligned row present
   assert.match(css, /button\.navigation-tree-item\[data-navigation-tree-item="panel"\]\s*\{[^}]*width:\s*100%[^}]*text-align:\s*left[^}]*font:\s*inherit/s);
 });
 
+test('Settings navigation keeps NavigationTree hover and selection-accent presentation', () => {
+  const settingsCss = fs.readFileSync(
+    path.join(__dirname, '../../../music_app/static/css/settings-navigation.css'),
+    'utf8',
+  );
+  const adminCss = fs.readFileSync(
+    path.join(__dirname, '../../../music_app/static/css/admin-members.css'),
+    'utf8',
+  );
+
+  assert.doesNotMatch(
+    settingsCss,
+    /\.settings-nav-item:(?:hover|focus-visible)\s*\{[^}]*text-decoration:\s*underline/s,
+  );
+  assert.doesNotMatch(
+    adminCss,
+    /\.settings-nav-item\.is-active\s*\{[^}]*box-shadow:/s,
+  );
+});
+
 test('Appearance navigation uses the compact shared rows in approved order and defaults to Main elements', () => {
   const builderSource = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/utility-list-builders.js'), 'utf8');
   const rendererSource = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/utility-renderers-and-actions.js'), 'utf8');

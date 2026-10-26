@@ -208,7 +208,7 @@ test('theme application and sign-out cleanup only change the dedicated surface o
   assert.deepEqual([...values], [['--panel', 'existing-card-color'], ['--accent', 'existing-accent']]);
 });
 
-function browser(fetch, initial = custom()) {
+function browser(fetch, initial = custom(), allowedActions = null) {
   const styles = new Map();
   const listeners = new Map();
   const document = {
@@ -216,8 +216,11 @@ function browser(fetch, initial = custom()) {
       setProperty: (name, value) => styles.set(name, value),
       removeProperty: (name) => styles.delete(name),
     } },
-    getElementById: (id) => id === 'appearance-bootstrap'
-      ? { textContent: JSON.stringify({ ...initial, load_error: false }) } : null,
+    getElementById: (id) => {
+      if (id === 'appearance-bootstrap') return { textContent: JSON.stringify({ ...initial, load_error: false }) };
+      if (id === 'capability-bootstrap') return { textContent: JSON.stringify({ allowed_actions: allowedActions || {} }) };
+      return null;
+    },
     addEventListener: (name, listener) => listeners.set(`document:${name}`, listener),
   };
   const window = {
@@ -322,6 +325,16 @@ test('browser editor consumes live loop capability and exposes only the saved st
   instance.setLoopCreateAllowed(false);instance.controller.setLoopControlStyle('capsule');
   assert.equal(instance.controller.getState().canChangeLoopStyle,false);
   assert.equal(instance.controller.getState().draft.loop_control_style,'companion');
+});
+
+test('browser editor uses the server-rendered loop capability before status polling', () => {
+  const { instance } = browser(
+    async () => response(custom()),
+    custom(),
+    { 'library.loops.create': true },
+  );
+
+  assert.equal(instance.controller.getState().canChangeLoopStyle, true);
 });
 
 test('a stale failing appearance response cannot clear a newly loaded session while its body resolves',async()=>{

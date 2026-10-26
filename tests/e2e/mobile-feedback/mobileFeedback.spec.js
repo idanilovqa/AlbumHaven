@@ -4,6 +4,82 @@ import { GlobalPlayer } from '../poms/globalPlayer.js';
 import { UtilityAppearanceTab } from '../poms/utilityAppearanceTab.js';
 import { UtilityIntegrationsTab } from '../poms/utilityIntegrationsTab.js';
 
+test('Artist Tree album Back keeps the restored mobile gallery position stable', async ({ page, app }) => {
+  await app.libraryButton.click();
+  await app.artist('Northlight').click();
+  await expect(app.galleryContextName).toHaveText(/^Northlight(?: family)?$/);
+  await expect(app.galleryCards.first()).toBeVisible();
+  await app.scrollRegion('gallery', 700);
+
+  const before = await app.readVisibleGalleryAnchor();
+  expect(before.scrollTop).toBeGreaterThan(0);
+
+  await app.openAlbumFromGalleryAnchor(before.albumKey);
+  await expect(app.albumPage).toBeVisible();
+  await app.backButton.click();
+  await expect(app.albumPage).not.toBeVisible();
+
+  const samples = await app.observeGalleryStability(before.albumKey, 2500);
+  expect(samples.length).toBeGreaterThan(30);
+  for (const sample of samples) {
+    expect(sample.scrollTop).toBeCloseTo(before.scrollTop, 0);
+    expect(sample.cardOffsetTop).not.toBeNull();
+    expect(sample.cardOffsetTop).toBeCloseTo(before.offsetTop, 0);
+  }
+});
+
+test('mobile touch scrolling moves the gallery monotonically without layout jitter', async ({ page, app }) => {
+  await app.libraryButton.click();
+  await app.allArtists.click();
+  await expect(app.galleryCards.first()).toBeVisible();
+
+  const scrollBox = await app.galleryScroll.boundingBox();
+  if (!scrollBox) throw new Error('Gallery scroll surface is not visible.');
+  const anchor = await app.readVisibleGalleryAnchor();
+  const samples = [];
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const x = Math.round(scrollBox.x + scrollBox.width / 2);
+    const startY = Math.round(scrollBox.y + Math.min(scrollBox.height - 32, scrollBox.height * .82));
+    const endY = Math.round(scrollBox.y + Math.max(32, scrollBox.height * .12));
+    const point = y => ({ x, y, radiusX: 1, radiusY: 1, force: 1, id: 1 });
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [point(startY)],
+    });
+    for (let step = 1; step <= 24; step += 1) {
+      const y = Math.round(startY + ((endY - startY) * step) / 24);
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [point(y)],
+      });
+      await page.waitForTimeout(12);
+      samples.push(await app.readGalleryScrollSample(anchor.albumKey));
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally {
+    await cdp.detach();
+  }
+  await expect.poll(() => app.readScroll(app.galleryScroll)).toBeGreaterThan(250);
+  await page.waitForTimeout(250);
+  const moving = samples.filter((sample, index) => (
+    index === 0 || sample.scrollTop !== samples[index - 1].scrollTop
+  ));
+  expect(moving.length).toBeGreaterThan(5);
+  const committedStart = moving.findIndex(sample => sample.scrollTop >= 8);
+  expect(committedStart).toBeGreaterThanOrEqual(0);
+  const committedMoving = moving.slice(committedStart);
+  const backwardDeltas = committedMoving.slice(1).map((sample, index) => (
+    committedMoving[index].scrollTop - sample.scrollTop
+  )).filter(delta => delta > 0);
+  expect(backwardDeltas, JSON.stringify(committedMoving)).toEqual([]);
+  const anchorCoordinates = samples
+    .map(sample => sample.anchorCoordinate)
+    .filter(value => Number.isFinite(value));
+  expect(anchorCoordinates.length).toBeGreaterThan(5);
+  expect(Math.max(...anchorCoordinates) - Math.min(...anchorCoordinates)).toBeLessThanOrEqual(1);
+});
+
 test('row-body opens the sixteen-track album; scrolling shows a bar thumbnail; search leaves details', async ({ page, app, snapshot }) => {
   await app.search('Sixteen Horizons');
   await app.openAlbumBody('Sixteen Horizons');

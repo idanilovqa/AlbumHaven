@@ -4,6 +4,7 @@ from contextlib import nullcontext
 
 import pytest
 
+from music_app.services import album_cover_candidate_snapshots_postgres
 from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
 )
@@ -58,6 +59,32 @@ def repository_for(connection):
             else pytest.fail(f"unexpected database URL: {database_url}")
         ),
     )
+
+
+def test_default_repository_uses_shared_connection_pool(monkeypatch):
+    connection = FakeConnection([FakeCursor(row=snapshot_row())])
+    pooled_calls = []
+
+    monkeypatch.setattr(
+        album_cover_candidate_snapshots_postgres,
+        "_pooled_connection",
+        lambda database_url, **kwargs: (
+            pooled_calls.append((database_url, kwargs)) or nullcontext(connection)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        album_cover_candidate_snapshots_postgres,
+        "_connect",
+        lambda _database_url: pytest.fail("default reads must reuse the shared pool"),
+    )
+
+    repository = AlbumCoverCandidateSnapshotRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL}
+    )
+
+    assert repository.get_for_album_context(album_id=41)["album_id"] == 41
+    assert pooled_calls == [(DATABASE_URL, {"workload": "default"})]
 
 
 def candidate(candidate_id="candidate-1"):

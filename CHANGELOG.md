@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.0 - 2026-10-25
+
+- Added multi-root library support with source provenance, source-aware Gallery and Artist Tree filtering, duplicate-album ownership, and reconciliation across Hoard, New Arrivals, and other configured roots.
+- Reworked Gallery loading around bounded PostgreSQL projections, cursor pagination, artist-tree and card virtualization, retained cards, and earlier page fetching so search, tree selection, scroll jumps, and long browsing sessions stay responsive.
+- Stabilized album navigation across search, direct links, notifications, mobile Home, source changes, and browser history while preserving the selected album, artist identity, visible content boundary, and scroll position.
+- Repaired Edit Tags loading, repeated saves, partial edits, folder expansion, failure recovery, optimistic updates, corrected-artist reselection, and post-save browsing without leaving stale alerts or incomplete album details.
+- Improved Cover Lookup provider deadlines, composite-artist matching, remote MusicBrainz fallback, nested and root-level album discovery, candidate persistence, notification lifecycle, and artwork save recovery.
+- Added paginated and virtualized notification history with an independent exact count, bounded active-task polling, retained terminal outcomes, and recovery for orphaned cover-lookups.
+- Added owner-only generated-preview storage settings with album-folder or centralized server paths, restart-safe relocation, checksum verification, recovery, and exclusion of internal previews from Cover Lookup candidates.
+- Kept existing library data browseable during scans, corrected watcher and scan completion state, reduced redundant gallery refreshes, and strengthened Problematic Files loading and identity handling.
+- Expanded isolated PostgreSQL, JavaScript, component, functional, and measured performance coverage for search, scrolling, artwork, Edit Tags, notifications, preview relocation, source filtering, and cold application startup.
+
 ## 0.9.50 - 2026-10-08
 
 - Made Settings, Edit Tags, and album-details dismissal respond immediately while slower cleanup and data loading continue in the background.

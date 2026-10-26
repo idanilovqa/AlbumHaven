@@ -464,3 +464,52 @@ def test_resolve_candidate_under_root_skips_access_denied_oserror_paths(monkeypa
     )
 
     assert resolved is None
+
+
+def test_absolute_media_path_is_canonicalized_once_across_configured_roots(
+    tmp_path,
+    monkeypatch,
+):
+    first_root = (tmp_path / "First").resolve()
+    selected_root = (tmp_path / "Selected").resolve()
+    third_root = (tmp_path / "Third").resolve()
+    candidate = selected_root / "Artist" / "Album" / "cover.jpg"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"cover")
+    original_resolve = Path.resolve
+    candidate_resolves = []
+
+    def counted_resolve(self, *args, **kwargs):
+        if self == candidate:
+            candidate_resolves.append(self)
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted_resolve)
+
+    resolved = library_roots.resolve_configured_media_path(
+        {},
+        str(candidate),
+        configured_root_paths=(first_root, selected_root, third_root),
+    )
+
+    assert resolved == candidate
+    assert candidate_resolves == [candidate]
+
+
+def test_absolute_media_path_rejects_resolution_runtime_errors(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    candidate = root / "loop" / "cover.jpg"
+    original_resolve = Path.resolve
+
+    def failed_resolve(self, *args, **kwargs):
+        if self == candidate:
+            raise RuntimeError("symlink loop")
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", failed_resolve)
+
+    assert library_roots.resolve_configured_media_path(
+        {},
+        str(candidate),
+        configured_root_paths=(root,),
+    ) is None

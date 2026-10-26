@@ -77,11 +77,11 @@ def shutdown_registered_executors(*, wait: bool = False, cancel_futures: bool = 
 
 def _request_runtime_shutdown_for_state(library_state: dict[str, object]) -> None:
     from music_app.services.cover_refresh_runtime import cancel_cover_refresh
-    from music_app.services.state import cancel_background_refresh_for_state
+    from music_app.services.state import _CACHE_LOCK, cancel_background_refresh_for_state
 
     for cancel in (
         lambda: cancel_background_refresh_for_state(library_state),
-        lambda: cancel_cover_refresh(lambda: library_state),
+        lambda: cancel_cover_refresh(lambda: library_state, cache_lock=_CACHE_LOCK),
     ):
         try:
             cancel()

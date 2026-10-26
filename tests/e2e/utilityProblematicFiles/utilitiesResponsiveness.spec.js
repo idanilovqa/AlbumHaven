@@ -1,3 +1,4 @@
+import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
 import { expect, test } from '../support/performanceFixtures.js';
 import { SettingsRefactorShell } from '../poms/settingsRefactorShell.js';
 import { observeProblematicDetails, exerciseProblematicNativeJumps } from '../helpers/problematicVirtualScrollHelpers.js';
@@ -46,13 +47,22 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
 
       const {
         coldProblematicApiMs,
+        coldFirstVisibleMs,
         problematicResponseBytes,
       } = await stepLogger.step('Measure the cold native Problematic Files API response', async () => {
         const networkEvidence = await measureProblematicFilesSettingsOpenWithNetworkEvidence(
           page,
           settingsModalAppBarActions,
           utilityProblematicFilesActions,
-          { summaryPathname: PROBLEMATIC_FILES_PATHNAME, detailPathname: PROBLEMATIC_FILE_DETAIL_PATHNAME },
+          {
+            summaryPathname: PROBLEMATIC_FILES_PATHNAME,
+            detailPathname: PROBLEMATIC_FILE_DETAIL_PATHNAME,
+            onFirstVisible: (elapsed) => utilityProblematicFilesLocalReport.recordTextCheckpoint({
+              key: 'problematic-files-cold-first-visible-observed',
+              label: 'Cold Problematic Files first visible populated detail (diagnostic)',
+              valueText: `${elapsed} ms from the Settings click boundary`,
+            }),
+          },
         );
         const coldResponse = networkEvidence.summaryResponse;
         expect(coldResponse.request().resourceType()).toBe('fetch');
@@ -74,7 +84,28 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         expect(coldPayload.projection_cache_status, 'Expected the timed API request to be SQL-bounded.').toBe('bounded');
         expect(coldPayload.complete).toBe(false);
         expect(coldPayload.items).toHaveLength(50);
-        const completePayload = await networkEvidence.completeSummaryResponse.json();
+        const completeResponseBody = await networkEvidence.completeSummaryResponse.text();
+        const completePayload = JSON.parse(completeResponseBody);
+        const completeResponseBytes = new TextEncoder().encode(completeResponseBody).byteLength;
+        const completeResponseMs = await readCompletedResponseDurationMs(networkEvidence.completeSummaryResponse);
+        await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
+          key: 'problematic-files-complete-api',
+          label: 'Complete Problematic Files response fully received',
+          timingMs: completeResponseMs,
+          details: { responseBytes: completeResponseBytes, itemCount: completePayload.items.length },
+        });
+        utilityProblematicFilesLocalReport.recordTextCheckpoint({
+          key: 'problematic-files-complete-response-bytes',
+          label: 'Complete Problematic Files response body size',
+          valueText: `${completeResponseBytes} bytes`,
+        });
+        const payloadBudget = UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.expectations
+          .find((expectation) => expectation.key === 'problematicResponseBytes');
+        expect(completeResponseBytes, 'The approved full-fixture payload budget also applies beyond the first page')
+          .toBeLessThanOrEqual(payloadBudget.maxAllowed);
+        assertCompactProblematicSummary(coldPayload);
+        assertCompactProblematicSummary(completePayload);
+        expect(networkEvidence.summaryRequestCount, 'One bounded summary and one complete summary only').toBe(2);
         expect(
           evaluateProblematicFilesDatasetContract(
             completePayload,
@@ -97,6 +128,8 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
             phase: 'cold_problematic_files_native_fetch',
             measurement: 'browser-request-start-to-response-end',
             responseBytes,
+            firstVisibleMs: networkEvidence.firstVisibleMs,
+            fullReadyMs: networkEvidence.readyMs,
           },
         });
         utilityProblematicFilesLocalReport.recordTextCheckpoint({
@@ -106,6 +139,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         });
         return {
           coldProblematicApiMs: requestDurationMs,
+          coldFirstVisibleMs: networkEvidence.firstVisibleMs,
           problematicResponseBytes: responseBytes,
         };
       });
@@ -116,6 +150,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
 
       let problematicFilesPayload = null;
       let initialDetailRequestCount = 0;
+      let firstVisibleMs;
       const problematicReadyMs = await stepLogger.step('Open Settings and wait for Problematic Files to become ready', async () => {
         const networkEvidence = await measureProblematicFilesSettingsOpenWithNetworkEvidence(
           page,
@@ -125,15 +160,27 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
             timeout: 120000,
             summaryPathname: PROBLEMATIC_FILES_PATHNAME,
             detailPathname: PROBLEMATIC_FILE_DETAIL_PATHNAME,
+            onFirstVisible: (elapsed) => {
+              firstVisibleMs = elapsed;
+              utilityProblematicFilesLocalReport.recordTextCheckpoint({
+                key: 'problematic-files-first-visible-observed',
+                label: 'Problematic Files first visible populated detail (diagnostic)',
+                valueText: `${elapsed} ms from the Settings click boundary`,
+              });
+            },
           },
         );
         const timingMs = networkEvidence.readyMs;
+        firstVisibleMs = networkEvidence.firstVisibleMs;
         problematicFilesPayload = await networkEvidence.completeSummaryResponse.json();
+        assertCompactProblematicSummary(problematicFilesPayload);
+        expect(networkEvidence.summaryRequestCount, 'Warm opening must not duplicate summary requests').toBe(2);
         initialDetailRequestCount = networkEvidence.detailRequestCount;
         await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
           key: 'problematic-files-ready',
           label: 'Problematic Files ready after opening Settings',
           timingMs,
+          details: { firstVisibleMs },
         });
         return timingMs;
       });
@@ -391,6 +438,8 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       });
 
       const rawMetrics = {
+        firstVisibleMs,
+        coldFirstVisibleMs,
         coldProblematicApiMs,
         problematicResponseBytes,
         problematicReadyMs,

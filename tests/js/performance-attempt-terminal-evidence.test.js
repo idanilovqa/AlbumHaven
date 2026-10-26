@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { resolveTimingBudget } = require('../../scripts/performance-times-contract.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const helperPath = path.join(
@@ -23,17 +24,29 @@ async function loadHelper() {
 }
 
 function timingResult(overrides = {}) {
+  const metricId = overrides.metricId || 'all-artists-local-managed-chrome.selectedArtistSelectionMs';
+  const contractName = overrides.contractName || 'ci';
+  let budget;
+  try {
+    budget = resolveTimingBudget(metricId, contractName);
+  } catch {
+    budget = resolveTimingBudget('all-artists-local-managed-chrome.selectedArtistSelectionMs', 'ci');
+  }
+  const actual = overrides.actual ?? budget.hardCeiling + 1;
+  const performanceStatus = actual <= budget.targetMaximum
+    ? 'target-met'
+    : actual <= budget.hardCeiling ? 'grace-used' : 'hard-fail';
   return {
-    metricId: 'all-artists-local-managed-chrome.selectedArtistSelectionMs',
+    metricId,
     key: 'selectedArtistSelectionMs',
-    contractName: 'ci',
+    contractName,
     units: 'ms',
-    actual: 801,
-    targetMaximum: 600,
-    graceMs: 200,
-    hardCeiling: 800,
-    performanceStatus: 'hard-fail',
-    passed: false,
+    actual,
+    targetMaximum: budget.targetMaximum,
+    graceMs: budget.graceMs,
+    hardCeiling: budget.hardCeiling,
+    performanceStatus,
+    passed: performanceStatus !== 'hard-fail',
     ...overrides,
   };
 }
@@ -75,22 +88,12 @@ test('fixture helper retains the selected CI contract and exact timing classific
       timingResult({
         metricId: 'all-artists.startupPreviewSidebarMs',
         key: 'startupPreviewSidebarMs',
-        actual: 600,
-        targetMaximum: 881,
-        graceMs: 200,
-        hardCeiling: 1081,
-        performanceStatus: 'target-met',
-        passed: true,
+        actual: 800,
       }),
       timingResult({
         metricId: 'artist-family.treeNealSelectionMs',
         key: 'treeNealSelectionMs',
-        actual: 800,
-        targetMaximum: 650,
-        graceMs: 200,
-        hardCeiling: 850,
-        performanceStatus: 'grace-used',
-        passed: true,
+        actual: 200,
       }),
       timingResult(),
     ],
@@ -117,28 +120,28 @@ test('fixture helper retains the selected CI contract and exact timing classific
       {
         metricId: 'all-artists.startupPreviewSidebarMs',
         contractName: 'ci',
-        actual: 600,
-        targetMaximum: 881,
-        graceMs: 200,
-        hardCeiling: 1081,
+        actual: 800,
+        targetMaximum: 800,
+        graceMs: 400,
+        hardCeiling: 1200,
         performanceStatus: 'target-met',
       },
       {
         metricId: 'artist-family.treeNealSelectionMs',
         contractName: 'ci',
-        actual: 800,
-        targetMaximum: 650,
+        actual: 200,
+        targetMaximum: 100,
         graceMs: 200,
-        hardCeiling: 850,
+        hardCeiling: 300,
         performanceStatus: 'grace-used',
       },
       {
         metricId: 'all-artists-local-managed-chrome.selectedArtistSelectionMs',
         contractName: 'ci',
-        actual: 801,
-        targetMaximum: 600,
+        actual: 301,
+        targetMaximum: 100,
         graceMs: 200,
-        hardCeiling: 800,
+        hardCeiling: 300,
         performanceStatus: 'hard-fail',
       },
     ],
@@ -152,10 +155,7 @@ test('fixture helper retains local classification but never marks local timing f
     selectedContract: 'local',
     results: [timingResult({
       contractName: 'local',
-      actual: 551,
-      targetMaximum: 350,
-      graceMs: 200,
-      hardCeiling: 550,
+      actual: 301,
     })],
   }));
 
@@ -180,7 +180,7 @@ test('fixture helper rejects missing, malformed, and contract-mismatched timing 
   const cases = [
     completeAttempt({ results: [] }),
     completeAttempt({ results: [timingResult({ actual: Number.NaN })] }),
-    completeAttempt({ results: [timingResult({ hardCeiling: 801 })] }),
+    completeAttempt({ results: [timingResult({ hardCeiling: 301 })] }),
     completeAttempt({ results: [timingResult({ contractName: 'local' })] }),
     completeAttempt({
       expectedMetricIds: ['unknown-performance.metricMs'],
@@ -191,9 +191,7 @@ test('fixture helper rejects missing, malformed, and contract-mismatched timing 
       timingResult({
         metricId: 'artist-family.treeNealSelectionMs',
         key: 'treeNealSelectionMs',
-        actual: 851,
-        targetMaximum: 650,
-        hardCeiling: 850,
+        actual: 301,
       }),
     ] }),
   ];

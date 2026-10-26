@@ -590,6 +590,107 @@ export async function waitForActivePlaybackWindow(page, startingTime, options = 
   return readGaplessPlaybackDiagnostics(page);
 }
 
+export const MAX_SUSTAINED_PLAYBACK_WALL_OVERHEAD_MS = 1_000;
+
+export function evaluateSustainedPlaybackTiming({
+  elapsedMs,
+  currentTimeDelta,
+  requiredSeconds,
+}) {
+  const audibleDurationPassed = currentTimeDelta >= requiredSeconds;
+  const wallClockOverheadMs = elapsedMs - (currentTimeDelta * 1_000);
+  const wallClockPassed = wallClockOverheadMs <= MAX_SUSTAINED_PLAYBACK_WALL_OVERHEAD_MS;
+  return {
+    audibleDurationPassed,
+    wallClockOverheadMs,
+    wallClockPassed,
+    passed: audibleDurationPassed && wallClockPassed,
+  };
+}
+
+export async function measureSustainedPlaybackWindow(page, playbackEvidence, options = {}) {
+  const seconds = Math.max(1, Number(options.seconds || 1));
+  const timeout = options.timeout || 60000;
+  await page.waitForFunction(() => {
+    if (typeof getStreamingPlaybackSnapshot !== 'function' || typeof state === 'undefined') {
+      return false;
+    }
+    const snapshot = getStreamingPlaybackSnapshot();
+    const current = state.player?.streaming?.roles?.current || null;
+    return snapshot.paused === false
+      && snapshot.mode === 'playing'
+      && !snapshot.diagnostics?.buffering
+      && Number(current?.generation || 0) > 0
+      && Number(current?.streamId || 0) > 0;
+  }, undefined, { timeout });
+  const before = await readGaplessPlaybackDiagnostics(page);
+  const startedAtMs = Date.now();
+  const eventMark = playbackEvidence.eventMark();
+  const socketCount = playbackEvidence.socketCount();
+  const after = await waitForActivePlaybackWindow(page, before.currentTime, {
+    seconds,
+    timeout,
+  });
+  const elapsedMs = Date.now() - startedAtMs;
+  return {
+    after,
+    before,
+    activeSocketCount: playbackEvidence.activeSocketCount(),
+    currentStreamCloseCount: playbackEvidence.eventsSince(eventMark).filter((event) => (
+      event.direction === 'sent'
+        && event.type === 'close'
+        && event.generation === before.generation
+        && event.streamId === before.currentStreamId
+    )).length,
+    elapsedMs,
+    socketCount,
+    socketCountAfter: playbackEvidence.socketCount(),
+    requiredSeconds: seconds,
+  };
+}
+
+export function assertSustainedPlaybackContract(expect, measurement) {
+  const {
+    after,
+    before,
+    activeSocketCount,
+    currentStreamCloseCount,
+    elapsedMs,
+    requiredSeconds,
+    socketCount,
+    socketCountAfter,
+  } = measurement;
+  const minimumRenderedFrames = Math.floor(requiredSeconds * before.sampleRate);
+  const timing = evaluateSustainedPlaybackTiming({
+    elapsedMs,
+    currentTimeDelta: after.currentTime - before.currentTime,
+    requiredSeconds,
+  });
+
+  expect(before.paused).toBe(false);
+  expect(before.mode).toBe('playing');
+  expect(before.generation).toBeGreaterThan(0);
+  expect(before.currentStreamId).toBeGreaterThan(0);
+  expect(after.paused).toBe(false);
+  expect(after.mode).toBe('playing');
+  expect(after.buffering).toBe(false);
+  expect(after.generation).toBe(before.generation);
+  expect(after.currentStreamId).toBe(before.currentStreamId);
+  expect(after.currentTime - before.currentTime).toBeGreaterThanOrEqual(requiredSeconds);
+  expect(
+    timing.wallClockPassed,
+    `Playback accumulated ${Math.round(timing.wallClockOverheadMs)} ms of wall-clock stall.`,
+  ).toBe(true);
+  expect(after.renderedFrame - before.renderedFrame).toBeGreaterThanOrEqual(minimumRenderedFrames);
+  expect(after.underruns).toBe(before.underruns);
+  expect(after.lastError).toBeNull();
+  expect(after.renderedPcmEvidence?.streamId).toBe(after.currentStreamId);
+  expect(after.renderedPcmEvidence?.nonZeroSamples).toBeGreaterThan(0);
+  expect(currentStreamCloseCount).toBe(0);
+  expect(socketCountAfter).toBe(socketCount);
+  expect(activeSocketCount).toBe(1);
+}
+
 export function assertPersistentWaveformCacheContract(expect, {
   rendered,
   requests,
@@ -623,6 +724,7 @@ export async function readGaplessPlaybackDiagnostics(page) {
       mode: String(snapshot.mode || ''),
       generation: Number(snapshot.generation || 0),
       currentTime: Number(snapshot.currentTime || 0),
+      renderedFrame: Number(snapshot.renderedFrame || 0),
       paused: Boolean(snapshot.paused),
       src: String(snapshot.src || ''),
       sampleRate,
@@ -632,6 +734,7 @@ export async function readGaplessPlaybackDiagnostics(page) {
       currentCapacityFrames: Number(streaming.limits?.currentSeconds || 0) * sampleRate,
       continuityCapacityFrames: Number(streaming.limits?.continuitySeconds || 0) * sampleRate,
       underruns: Number(diagnostics.underruns || 0),
+      buffering: Boolean(diagnostics.buffering),
       lastError: diagnostics.lastError || null,
       seekReadinessException: diagnostics.seekReadinessException || null,
       seekRequestedAtMs: Number(diagnostics.seekRequestedAtMs || 0),

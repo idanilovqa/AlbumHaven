@@ -58,6 +58,7 @@ def test_private_routes_have_explicit_action_classification():
                     ("POST", "/logout"),
                     ("POST", "/account/password"),
                     ("POST", "/account/password-suggestion/dismiss"),
+                    ("POST", "/playback/state/handoff"),
                 }
                 else "session_header"
             )
@@ -76,6 +77,7 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/refresh-api", "library.refresh"),
         ("POST", "/utilities/edit-tags", "library.files.edit_tags"),
         ("POST", "/playback/session/scrobble", "integration.lastfm.scrobble"),
+        ("POST", "/playback/state/handoff", "app.access"),
         ("GET", "/utilities/integrations/lastfm/scrobbles", "integration.settings.read"),
         (
             "POST",
@@ -99,6 +101,11 @@ def test_private_routes_have_explicit_action_classification():
             "/admin/accounts/{account_id}/invitation/send",
             "accounts.invitation.send",
         ),
+        ("GET", "/admin/server", "system.preview_storage.read"),
+        ("GET", "/admin/server/preview-storage", "system.preview_storage.read"),
+        ("PUT", "/admin/server/preview-storage", "system.preview_storage.manage"),
+        ("POST", "/admin/server/preview-storage/cancel", "system.preview_storage.cancel"),
+        ("POST", "/admin/server/preview-storage/retry", "system.preview_storage.retry"),
     ],
 )
 def test_representative_routes_use_specific_action_keys(method, path, action):
@@ -109,6 +116,7 @@ def test_write_inventory_classifies_header_and_route_owned_csrf():
     assert csrf_mode_for_route("POST", "/logout") == "route_form"
     assert csrf_mode_for_route("POST", "/refresh-api") == "session_header"
     assert csrf_mode_for_route("POST", "/account/password") == "route_form"
+    assert csrf_mode_for_route("POST", "/playback/state/handoff") == "route_form"
     assert csrf_mode_for_route("GET", "/status") == "none"
     assert csrf_mode_for_route("WEBSOCKET", "/playback/pcm") == "none"
     assert private_action_for_route("WEBSOCKET", "/playback/pcm") == "library.media.read"
@@ -472,7 +480,7 @@ def test_authenticated_listener_without_cover_task_capabilities_cannot_read_or_m
         pytest.fail("Capability denial must precede task lookup and mutation")
 
     for operation in (
-        "list_cover_lookup_tasks",
+        "list_cover_lookup_task_summaries",
         "clear_completed_cover_lookup_tasks",
         "mark_cover_lookup_task_notification_action_taken",
         "cancel_cover_lookup_task_payload",

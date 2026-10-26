@@ -11,6 +11,7 @@ export class AppBar extends BasePage {
     this.coverActionButton = page.locator(this.coverActionButtonSelector);
     this.scanAlreadyRunningToast = page.locator(this.scanAlreadyRunningToastSelector);
     this.errorToasts = page.locator(this.errorToastSelector);
+    this.brand = this.root.locator('.app-bar-brand');
     this.brandArt = this.root.locator('.app-bar-brand-art');
     this.brandLabel = this.root.locator('.app-bar-brand-label');
     this.notificationGlyph = this.root.locator('.cover-lookup-drawer-glyph');

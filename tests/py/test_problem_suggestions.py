@@ -198,6 +198,7 @@ def test_reused_suggestion_payload_does_not_retain_previously_granted_actions(mo
     ({'ok': True, 'save_task_status': 'pending'}, 200, 'recovery_pending'),
     ({'ok': False, 'proposal_status': 'stale'}, 409, 'stale'),
     ({'ok': False, 'edit_outcome': 'failed_rolled_back'}, 500, 'failed_rolled_back'),
+    ({'ok': False, 'save_task_status': 'failed', 'edit_outcome': 'failed_rolled_back'}, 500, 'failed_rolled_back'),
     ({'ok': False, 'edit_outcome': 'recovery_pending'}, 500, 'recovery_pending'),
     ({'ok': False, 'save_task_status': 'failed'}, 500, 'recovery_pending'),
     ({'ok': False, 'error': 'denied'}, 403, 'rejected'),

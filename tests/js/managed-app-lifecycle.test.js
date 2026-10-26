@@ -222,7 +222,7 @@ test('restart writes one atomic nonce request and resolves only its ready acknow
   }
 });
 
-test('watcher cleanup emits only its fixed operation and waits for ready acknowledgment', async () => {
+test('watcher cleanup emits a validated runner-owned directory identity and waits for ready acknowledgment', async () => {
   const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
   const { root, controlDirectory } = createOwnedDirectories();
   try {
@@ -231,12 +231,58 @@ test('watcher cleanup emits only its fixed operation and waits for ready acknowl
       pollIntervalMs: 1, timeoutMs: 100,
       async sleep() {
         assert.deepEqual(JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'), 'utf8')),
-          { nonce: 'watcher-cleanup-2', operation: 'watcher-cleanup' });
+          {
+            nonce: 'watcher-cleanup-2',
+            operation: 'watcher-cleanup',
+            ownedDirectoryName: 'gallery-native-response-overlap',
+          });
         fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({ nonce: 'watcher-cleanup-2', status: 'ready' }));
       },
     });
     assert.equal(typeof lifecycle.cleanupWatcherFixture, 'function');
-    assert.deepEqual(await lifecycle.cleanupWatcherFixture(), { nonce: 'watcher-cleanup-2', status: 'ready' });
+    assert.deepEqual(
+      await lifecycle.cleanupWatcherFixture('gallery-native-response-overlap'),
+      { nonce: 'watcher-cleanup-2', status: 'ready' },
+    );
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('concurrent watcher cleanups with different owners are serialized independently', async () => {
+  const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
+  const { root, controlDirectory } = createOwnedDirectories();
+  const nonces = ['watcher-cleanup-first', 'watcher-cleanup-second'];
+  const requests = [];
+  try {
+    const lifecycle = createManagedAppLifecycle({
+      environment: createValidEnvironment(root, controlDirectory),
+      createNonce: () => nonces.shift(),
+      pollIntervalMs: 1,
+      timeoutMs: 100,
+      async sleep() {
+        const request = JSON.parse(fs.readFileSync(
+          path.join(controlDirectory, 'restart-request.json'),
+          'utf8',
+        ));
+        requests.push(request);
+        fs.writeFileSync(
+          path.join(controlDirectory, 'restart-ack.json'),
+          JSON.stringify({ nonce: request.nonce, status: 'ready' }),
+        );
+      },
+    });
+
+    const first = lifecycle.cleanupWatcherFixture('watcher-reconciliation');
+    const second = lifecycle.cleanupWatcherFixture('gallery-native-response-overlap');
+    const acknowledgments = await Promise.all([first, second]);
+
+    assert.deepEqual(requests.map(request => request.ownedDirectoryName), [
+      'watcher-reconciliation',
+      'gallery-native-response-overlap',
+    ]);
+    assert.deepEqual(acknowledgments.map(result => result.nonce), [
+      'watcher-cleanup-first',
+      'watcher-cleanup-second',
+    ]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

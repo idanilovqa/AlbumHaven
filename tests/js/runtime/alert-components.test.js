@@ -114,6 +114,24 @@ test('AlertLabel interaction states retain the gallery alert severity color fami
   assert.doesNotMatch(labelRules, /--appearance-interaction-outline/);
 });
 
+test('Library Health warning wraps its complete message without clipping action hover', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/css/runtime/alert-components.css'), 'utf8',
+  );
+  const content = css.match(/#library-scan-warning \.on-page-alert--compact \.on-page-alert__content\s*\{([^}]*)\}/)?.[1] || '';
+  const message = css.match(/#library-scan-warning \.on-page-alert--compact \.on-page-alert__message\s*\{([^}]*)\}/)?.[1] || '';
+  assert.match(content, /overflow:\s*visible\s*;/);
+  assert.match(content, /flex-wrap:\s*wrap\s*;/);
+  assert.match(message, /white-space:\s*normal\s*;/);
+  assert.match(message, /overflow-wrap:\s*anywhere\s*;/);
+  assert.match(message, /overflow:\s*visible\s*;/);
+  assert.match(message, /text-overflow:\s*clip\s*;/);
+  assert.match(message, /flex:\s*1 1 16rem\s*;/);
+  assert.match(message, /min-width:\s*0\s*;/);
+  // Other compact alerts retain their existing one-line presentation.
+  assert.match(css, /(?:^|\n)\.on-page-alert--compact \.on-page-alert__message\s*\{[^}]*white-space:\s*nowrap/s);
+});
+
 test('Suggested Edit labels use a neutral idle edge and saturated green selected state', () => {
   const css = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),

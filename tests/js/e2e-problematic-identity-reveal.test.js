@@ -18,6 +18,7 @@ function fixture({ horizontal = false, target = true, offset = 0 } = {}) {
     } } },
     waitForPageCondition: async (predicate, options, selectors) => {
       assert.ok(options.timeout > 0 && options.timeout <= 30000);
+      if (selectors?.completeInventory) return;
       assert.equal(selectors.target, view.offset);
       waits.push({ predicate, selectors });
     },
@@ -39,6 +40,33 @@ for (const horizontal of [false, true]) {
     assert.ok(wheels.every(([x, y]) => horizontal ? y === 0 : x === 0));
   });
 }
+
+test('identity reveal waits for the authoritative inventory after a bounded first page miss', async () => {
+  const { UtilityProblematicFilesActions } = await import(actionsUrl);
+  let complete = false;
+  const owner = {
+    utilityProblematicFilesTab: {
+      waitForPageCondition: async (predicate, options) => {
+        assert.match(predicate.toString(), /problematicFilesComplete/);
+        assert.ok(options.timeout > 0);
+        complete = true;
+      },
+    },
+    async *walkListWindows() {
+      yield complete
+        ? [{ key: 'target', title: 'Target', meta: 'Exact artist · 2026' }]
+        : [{ key: 'first-page', title: 'Other', meta: 'Other · 2026' }];
+    },
+  };
+  Object.setPrototypeOf(owner, UtilityProblematicFilesActions.prototype);
+
+  const found = await owner.revealListItemByIdentity({
+    title: 'Target',
+    meta: 'Exact artist · 2026',
+  });
+
+  assert.equal(found.key, 'target');
+});
 
 test('native traversal reports an absent identity at the real boundary without choosing a similar row', async () => {
   const { UtilityProblematicFilesActions } = await import(actionsUrl);

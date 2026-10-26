@@ -267,6 +267,27 @@ def test_exception_only_recovery_does_not_require_reading_the_media_file():
     assert persisted[0]["exception_updates"] == {PATH: ""}
 
 
+def test_custom_collection_recovery_is_app_owned_and_does_not_read_media():
+    payload = intent(
+        {"exception_type": "", "custom_collection_name": ""},
+        {"exception_type": "Custom Collection", "custom_collection_name": "Road trip"},
+        status="files_verified",
+    )
+    persisted = []
+    summary = reconcile_tag_edit_intents(
+        [payload],
+        read_physical_values=lambda *_args: pytest.fail("collection recovery read media"),
+        restore_physical_values=lambda *_args: pytest.fail("collection recovery wrote media"),
+        persist_resolution=lambda **kwargs: persisted.append(dict(kwargs)),
+        mark_recovery_failed=lambda *_args: pytest.fail("collection recovery failed"),
+    )
+    assert summary["completed"] == 1
+    assert persisted[0]["exception_updates"][PATH] == {
+        "exception_type": "Custom Collection",
+        "custom_collection_name": "Road trip",
+    }
+
+
 def test_terminal_intents_are_ignored_when_recovery_is_repeated():
     payload = intent({"album": "Old"}, {"album": "New"}, status="completed")
     calls = []
@@ -358,6 +379,11 @@ def test_startup_recovery_uses_generic_persistence_for_album_and_year_change(
             id="album-and-album-artist-generic",
         ),
         pytest.param(
+            {"album": "New album", "exception_type": "Non-album rarity"},
+            "album",
+            id="album-and-exception-targeted",
+        ),
+        pytest.param(
             {"year": "2025", "edition": "Deluxe"},
             None,
             id="year-and-edition-generic",
@@ -376,6 +402,7 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
         "album_artist": "Old artist",
         "year": "2024",
         "edition": "",
+        "exception_type": "",
         "title": "Opening",
         "track_number": "1",
     }

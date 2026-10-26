@@ -4,7 +4,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from music_app.routes.auth_asgi import _same_origin
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
+from music_app.services.auth_session_csrf import matches_session_csrf
 from music_app.services.lastfm import get_saved_lastfm_session, scrobble_track
 from music_app.services.lastfm_sync_bridge import (
     playback_handoff_completion_fingerprint,
@@ -22,6 +24,7 @@ from music_app.services.playback_session_payloads import normalize_playback_trac
 
 
 router = APIRouter()
+_SESSION_COOKIE = "__Host-album_haven_session"
 
 
 def playback_config(request):
@@ -78,6 +81,12 @@ async def acquire_playback(request: Request):
 @router.post("/playback/state/handoff")
 async def stage_playback_handoff(request: Request):
     payload = await playback_payload(request)
+    config = playback_config(request)
+    if (not _same_origin(request, config)
+            or not matches_session_csrf(
+                request.cookies.get(_SESSION_COOKIE), payload.get("csrf_token"), config
+            )):
+        raise HTTPException(400, "Invalid playback request.")
     handoff = payload.get("handoff")
     if not isinstance(handoff, dict) or set(handoff) != {"id", "token"}:
         raise HTTPException(400, "Invalid playback handoff.")
@@ -88,7 +97,6 @@ async def stage_playback_handoff(request: Request):
             or completion.get("measurement_version") != "rendered-pcm-v1"
             or completion.get("finalized") is not True):
         raise HTTPException(400, "Invalid playback completion.")
-    config = playback_config(request)
     persisted = []
     actor = request.state.current_actor
     try:

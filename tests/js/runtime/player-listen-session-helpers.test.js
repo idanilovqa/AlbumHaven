@@ -186,7 +186,10 @@ test('active short listen unload stages one reload handoff without separate comp
   const { context, fetchCalls, beaconCalls } = loadHelper({
     state,
     crypto: require('node:crypto').webcrypto,
-    window: { crypto: require('node:crypto').webcrypto },
+    window: {
+      crypto: require('node:crypto').webcrypto,
+      readSessionCsrfCookie: () => 'short-listen-csrf',
+    },
     getLocalStorageItem: () => '',
     setLocalStorageItem: () => true,
     getSessionStorageItem: () => '',
@@ -210,6 +213,7 @@ test('active short listen unload stages one reload handoff without separate comp
   assert.equal(body.protocol, 1);
   assert.equal(body.clientId, 'departing-client');
   assert.equal(body.claimToken, 'departing-claim');
+  assert.equal(body.csrf_token, 'short-listen-csrf');
   assert.equal(body.completion, null);
   assert.equal(typeof body.handoff?.id, 'string');
   assert.equal(typeof body.handoff?.token, 'string');
@@ -706,7 +710,10 @@ async function run() {
     const storedEnvelopes = [];
     const { context, beaconCalls } = loadHelper({
       crypto: require('node:crypto').webcrypto,
-      window: { crypto: require('node:crypto').webcrypto },
+      window: {
+        crypto: require('node:crypto').webcrypto,
+        readSessionCsrfCookie: () => 'measured-listen-csrf',
+      },
       state: {
         player: {
           current: flushSession.track,
@@ -740,6 +747,7 @@ async function run() {
     const payload = JSON.parse(await beaconCalls[0][1].text());
     assert.equal(payload.clientId, 'unload-client');
     assert.equal(payload.claimToken, 'unload-claim');
+    assert.equal(payload.csrf_token, 'measured-listen-csrf');
     assert.equal(payload.completion.measurement_version, 'rendered-pcm-v1');
     assert.equal(payload.completion.device_id, 'browser-device');
     assert.equal(payload.completion.session_id, 'measured-session');

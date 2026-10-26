@@ -4,7 +4,10 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from music_app.services.lastfm import LastfmError
-from music_app.services.measured_listen_history import measured_provider_guard
+from music_app.services.measured_listen_history import (
+    measured_provider_guard,
+    validate_playback_completion,
+)
 from music_app.services.lastfm_listen_sync import (
     build_playback_complete_entry,
     build_scrobble_result_updates,
@@ -58,6 +61,7 @@ def prepare_measured_playback_completion(
 ) -> JsonDict | None:
     from music_app.services.measured_listen_history import normalize_measurement
 
+    validate_playback_completion(payload)
     entry = build_playback_complete_entry({**payload, "user_timezone": user_timezone})
     for key in ("measurement_version", "device_id", "session_id", "sequence",
                 "measured_listened_seconds", "max_measured_contiguous_seconds"):
@@ -222,10 +226,15 @@ def record_playback_session_complete(
                 except LastfmError as exc:
                     error = str(exc)
                     reauthentication_required = exc.reauthentication_required
-                    retryable = bool(exc.reauthentication_required or (
-                        exc.retryable and exc.error_kind == "provider_error"
-                        and exc.code is not None
-                    ))
+                    retryable = bool(
+                        exc.reauthentication_required
+                        or (exc.retryable and exc.error_kind == "configuration_error")
+                        or (
+                            exc.retryable
+                            and exc.error_kind == "provider_error"
+                            and exc.code is not None
+                        )
+                    )
                     submission_state = "not_sent" if retryable else "uncertain"
                 stored = update_listen_history_entry(config, stored["id"], {
                     "scrobbled": scrobbled, "scrobble_error": error, "scrobble_retryable": retryable,

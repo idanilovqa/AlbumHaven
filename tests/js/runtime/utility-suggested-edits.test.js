@@ -20,6 +20,7 @@ function loadHelpers() {
       problemExclusionSelections: {}, repairSelections: {},
     } },
     escapeHtml: value => String(value ?? ''),
+    closeTagEditorExceptionMenu: () => {},
   };
   vm.createContext(context);
   vm.runInContext(readRuntime('utility-loop-playback'), context);

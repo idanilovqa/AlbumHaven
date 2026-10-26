@@ -4,6 +4,7 @@ import importlib.util
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -1826,6 +1827,108 @@ def test_bootstrap_preflight_skips_noop_service_reconfiguration() -> None:
     source = BOOTSTRAP_PATH.read_text(encoding="utf-8")
     assert "if ($service.StartType -ne 'Automatic')" in source
     assert "if ($service.Status -ne 'Running')" in source
+
+
+def test_bootstrap_preflight_prefers_ready_loopback_server_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    executable = shutil.which("pwsh") or shutil.which("powershell")
+    if executable is None:
+        pytest.skip("PowerShell is required for the Windows Postgres bootstrap preflight")
+    pgbin = tmp_path / "PostgreSQL" / "18" / "bin"
+    pgbin.mkdir(parents=True)
+    harness = r'''
+$ErrorActionPreference = 'Stop'
+$BootstrapPath = $env:TEST_BOOTSTRAP_PATH
+$Pgbin = $env:TEST_PGBIN
+$source = [Management.Automation.Language.Parser]::ParseFile(
+    $BootstrapPath, [ref]$null, [ref]$null
+)
+$definition = $source.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -ceq 'Assert-ProvisionPreflight'
+}, $true)
+$functionText = $definition.Extent.Text.Replace(
+    "Join-Path `$Pgbin 'pg_isready.exe'", "'Invoke-FakeReady'"
+).Replace("Join-Path `$Pgbin 'psql.exe'", "'Invoke-FakePsql'")
+Invoke-Expression $functionText
+foreach ($name in @('postgres.exe', 'psql.exe', 'pg_isready.exe')) {
+    New-Item -ItemType File -Path (Join-Path $Pgbin $name) | Out-Null
+}
+
+function Invoke-FakeReady {
+    $global:LASTEXITCODE = if ($env:TEST_POSTGRES_READY -eq '1') { 0 } else { 1 }
+}
+function Invoke-FakePsql {
+    if ($args -contains '--version') {
+        $global:LASTEXITCODE = 0
+        return "psql (PostgreSQL) $env:TEST_CLIENT_VERSION"
+    }
+    if ($env:TEST_AUTH_FAIL -eq '1') {
+        $global:LASTEXITCODE = 2
+        return 'authentication failed'
+    }
+    $global:LASTEXITCODE = 0
+    return $env:TEST_SERVER_VERSION
+}
+
+$script:serviceCalls = @()
+function Get-Service { param($Name) $script:serviceCalls += 'get'; [pscustomobject]@{ Name = $Name; StartType = 'Automatic'; Status = 'Stopped' } }
+function Set-Service { $script:serviceCalls += 'set' }
+function Start-Service { $script:serviceCalls += 'start'; $env:TEST_POSTGRES_READY = '1' }
+function Start-Sleep {}
+$ServiceName = 'postgresql-x64-18'
+$ExpectedMajorVersion = '18'
+$HostName = 'localhost'
+$Port = 5432
+$AdminRole = 'postgres'
+$requiredExecutables = @('postgres.exe', 'psql.exe', 'pg_isready.exe')
+$contract = [pscustomobject]@{ preflight = [pscustomobject]@{ readinessTimeoutSeconds = 1 } }
+
+function Invoke-Scenario([bool]$Ready, [string]$ClientVersion, [string]$ServerVersion, [bool]$AuthFails) {
+    $script:serviceCalls = @()
+    $env:TEST_POSTGRES_READY = if ($Ready) { '1' } else { '0' }
+    $env:TEST_CLIENT_VERSION = $ClientVersion
+    $env:TEST_SERVER_VERSION = $ServerVersion
+    $env:TEST_AUTH_FAIL = if ($AuthFails) { '1' } else { '0' }
+    try {
+        Assert-ProvisionPreflight $contract | Out-Null
+        [pscustomobject]@{ ok = $true; calls = @($script:serviceCalls); error = '' }
+    } catch {
+        [pscustomobject]@{ ok = $false; calls = @($script:serviceCalls); error = $_.Exception.Message }
+    }
+}
+
+[ordered]@{
+    ready = Invoke-Scenario $true '18.0' '180000' $false
+    unavailable = Invoke-Scenario $false '18.0' '180000' $false
+    wrongClientMajor = Invoke-Scenario $true '17.0' '180000' $false
+    wrongServerMajor = Invoke-Scenario $true '18.0' '170000' $false
+    authenticationFailure = Invoke-Scenario $true '18.0' '180000' $true
+} | ConvertTo-Json -Depth 4 -Compress
+'''
+    environment = dict(os.environ)
+    environment.update(TEST_BOOTSTRAP_PATH=str(BOOTSTRAP_PATH), TEST_PGBIN=str(pgbin))
+    result = subprocess.run(
+        [executable, "-NoProfile", "-Command", harness],
+        capture_output=True,
+        encoding="utf-8",
+        check=False,
+        env=environment,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    outcomes = json.loads(result.stdout)
+    assert outcomes["ready"] == {"ok": True, "calls": [], "error": ""}
+    assert outcomes["unavailable"]["ok"] is True
+    assert outcomes["unavailable"]["calls"] == ["get", "start"]
+    assert outcomes["wrongClientMajor"]["ok"] is False
+    assert "client version" in outcomes["wrongClientMajor"]["error"].casefold()
+    assert outcomes["wrongServerMajor"]["ok"] is False
+    assert "server version" in outcomes["wrongServerMajor"]["error"].casefold()
+    assert outcomes["authenticationFailure"]["ok"] is False
+    assert "server version" in outcomes["authenticationFailure"]["error"].casefold()
 
 
 def test_bootstrap_contract_uses_strict_suffixed_database_and_role_names(tmp_path: Path) -> None:

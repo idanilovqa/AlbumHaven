@@ -617,6 +617,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
       covers_in_progress: true,
+      covers_cancelable: false,
       covers_phase: 'preparing',
       covers_run_mode: 'manual-bulk',
       covers_outcome: '',
@@ -662,6 +663,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         scan_processed: Number(state.status?.scan_processed || 0),
         scan_total: Number(state.status?.scan_total || 0),
         covers_in_progress: false,
+        covers_cancelable: false,
         covers_processed: 0,
         covers_completed: 0,
         covers_spotify_quota_exceeded: false,
@@ -677,6 +679,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: true,
+      covers_cancelable: true,
       covers_phase: 'fetching',
       covers_run_mode: 'manual-bulk',
       covers_processed: 0,
@@ -710,6 +713,7 @@ async function cancelAlbumCoverScan() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: false,
+      covers_cancelable: false,
       covers_current_folder: '',
       pending_cover_refresh_after_scan: false,
     });

@@ -1778,6 +1778,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   const mutation = {
     taskId: normalizedTaskId,
     albumKey: selectedKey,
+    originalTrackPaths: Array.from(getAlbumTrackPaths(originalAlbum)),
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
@@ -1801,12 +1802,16 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (survivingKeys.has(selectedKey)) {
       state.utility.selectedProblematicKey = selectedKey;
     } else {
+      const retainedAlbum = findAlbumByTrackPaths(
+        items,
+        new Set(Array.isArray(mutation.originalTrackPaths) ? mutation.originalTrackPaths : []),
+      );
       const priorKeys = Array.isArray(mutation.priorKeys) ? mutation.priorKeys : [];
       const selectedIndex = priorKeys.indexOf(selectedKey);
       const previousSurvivor = selectedIndex > 0
         ? priorKeys.slice(0, selectedIndex).reverse().find((key) => survivingKeys.has(key))
         : '';
-      state.utility.selectedProblematicKey = previousSurvivor || String(items[0]?.key || '');
+      state.utility.selectedProblematicKey = String(retainedAlbum?.key || previousSurvivor || items[0]?.key || '');
     }
     const survivorKey = String(state.utility.selectedProblematicKey || '');
     const survivor = items.find((album) => String(album?.key || '') === survivorKey) || null;
@@ -3147,22 +3152,44 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
+    let refreshedStaleDetailTarget = false;
     if (!album.detail_loaded) {
       while (album && !album.detail_loaded) {
         const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
         state.utility.selectedProblematicKey = album.key || '';
-        await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
+        const detailRequest = loadProblematicAlbumDetail(
+          album.key || '',
+          undefined,
+          { render: false, allowMissing: true },
+        );
+        const detailOwner = Number(state.utility.problematicDetailRequestToken || 0);
+        const refreshedDetail = await detailRequest;
         if (!ownsNavigation()) return;
+        const detailMissing = !refreshedDetail
+          && Number(state.utility.problematicDetailRequestToken || 0) === detailOwner;
         const currentSummary = state.utility.completeLoadPromise
           || state.utility.initialLoadPromise;
         if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
-          const current = getProblematicAlbumForTrackPath(trackPath);
+          const current = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
           if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
             await state.utility.detailLoadPromises[current.key];
             if (!ownsNavigation()) return;
           }
           if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
-            album = getProblematicAlbumForTrackPath(trackPath);
+            album = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
+            if (!album && !refreshedStaleDetailTarget) {
+              if (currentSummary && typeof currentSummary.then === 'function') {
+                await currentSummary;
+                if (!ownsNavigation()) return;
+                album = getProblematicAlbumForTrackPath(trackPath);
+                if (album) continue;
+              }
+              refreshedStaleDetailTarget = true;
+              const refreshResult = await loadTrackSummary();
+              if (refreshResult === null || !ownsNavigation()) return;
+              album = getProblematicAlbumForTrackPath(trackPath);
+              if (album) continue;
+            }
             if (album?.detail_loaded
                 || !currentSummary
                 || typeof currentSummary.then !== 'function') break;

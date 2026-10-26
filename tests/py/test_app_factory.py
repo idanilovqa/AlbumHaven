@@ -673,6 +673,109 @@ def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
     assert recorded[0]["managed_relative_path"] == "v1/cover_variants/aa/aabb.jpg"
 
 
+@pytest.mark.parametrize("active_relocation", [True, False, "queued_after_start"])
+def test_preview_relocation_coordinates_cover_backfill_start(
+    monkeypatch, tmp_path, active_relocation
+):
+    import music_app
+    from music_app.services import cover_preview_backfill
+    from music_app.services import generated_preview_relocation
+    from music_app.services import generated_preview_storage_postgres
+
+    queued = {
+        "mode": "custom",
+        "active_root": str(tmp_path / "Generated"),
+        "requested_mode": "album_folders",
+        "requested_root": None,
+        "operation_state": "queued",
+    }
+    completed = {
+        "mode": "album_folders",
+        "active_root": None,
+        "requested_mode": None,
+        "requested_root": None,
+        "operation_state": "completed",
+    }
+    calls = []
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+        def load(self):
+            return queued if active_relocation is True else completed
+
+    class FakeBackfill:
+        def __init__(self, _config, *, logger):
+            self.logger = logger
+
+        def start(self):
+            calls.append("backfill-start")
+
+        def stop(self):
+            calls.append("backfill-stop")
+
+        def note_foreground_activity(self):
+            pass
+
+        def inventory_existing_previews(self):
+            return 0
+
+    class FakeWorker:
+        def __init__(self, _repository, *, on_state, **_kwargs):
+            self.on_state = on_state
+
+        def start(self):
+            calls.append("worker-start")
+            if active_relocation is True:
+                self.on_state(queued)
+                assert "backfill-start" not in calls
+                calls.append("worker-queued")
+            elif active_relocation == "queued_after_start":
+                self.on_state(queued)
+                calls.append("worker-queued")
+            self.on_state(completed)
+            calls.append("worker-completed")
+
+        async def stop(self, *, timeout_seconds=30.0):
+            calls.append(("worker-stop", timeout_seconds))
+
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "is_generated_preview_storage_postgres_available",
+        lambda _config: True,
+    )
+    monkeypatch.setattr(
+        generated_preview_storage_postgres,
+        "PostgresGeneratedPreviewStorageRepository",
+        FakeRepository,
+    )
+    monkeypatch.setattr(
+        cover_preview_backfill,
+        "CoverPreviewBackfill",
+        FakeBackfill,
+    )
+    monkeypatch.setattr(
+        generated_preview_relocation,
+        "GeneratedPreviewRelocationWorker",
+        FakeWorker,
+    )
+
+    messages = _run_asgi_lifespan(music_app.create_asgi_app())
+
+    assert messages[-1] == {"type": "lifespan.shutdown.complete"}
+    assert calls.count("backfill-start") == (
+        2 if active_relocation == "queued_after_start" else 1
+    )
+    if active_relocation is True:
+        assert calls.index("backfill-start") > calls.index("worker-queued")
+    elif active_relocation == "queued_after_start":
+        assert calls.index("backfill-stop") < calls.index("worker-queued")
+    assert calls.index(("worker-stop", 30.0)) < max(
+        index for index, call in enumerate(calls) if call == "backfill-stop"
+    )
+
+
 def test_status_poll_does_not_interrupt_cover_preview_backfill(monkeypatch):
     import music_app
 
@@ -798,7 +901,12 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
     )
     from config import Config
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, postgres_connections, state
+    from music_app.services import (
+        cover_preview_backfill,
+        lastfm_retry,
+        postgres_connections,
+        state,
+    )
 
     monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
     monkeypatch.setattr(
@@ -818,6 +926,8 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
         "prewarm_connection_pool",
         lambda _database_url: None,
     )
+    monkeypatch.setattr(cover_preview_backfill.CoverPreviewBackfill, "start", lambda _self: None)
+    monkeypatch.setattr(cover_preview_backfill.CoverPreviewBackfill, "stop", lambda _self: None)
     monkeypatch.setattr(
         lastfm_retry,
         "start_lastfm_retry_worker",

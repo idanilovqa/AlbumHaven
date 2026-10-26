@@ -173,14 +173,22 @@ class StructuralTagEditReservationManager:
     def acquire(
         self,
         resource_keys: set[str] | frozenset[str],
-    ) -> StructuralTagEditReservation:
+        *,
+        cancel_event: Event | None = None,
+    ) -> StructuralTagEditReservation | None:
         granted = Event()
         waiter = self._register(resource_keys, granted.set)
         try:
-            granted.wait()
+            while not granted.wait(timeout=0.1):
+                if cancel_event is not None and cancel_event.is_set():
+                    self._cancel_waiter(waiter)
+                    return None
         except BaseException:
             self._cancel_waiter(waiter)
             raise
+        if cancel_event is not None and cancel_event.is_set():
+            self._cancel_waiter(waiter)
+            return None
         return StructuralTagEditReservation(self, waiter.resource_keys)
 
     async def acquire_async(
@@ -245,8 +253,13 @@ def structural_tag_edit_resource_keys(
 
 def acquire_structural_tag_edit_reservation(
     resource_keys: set[str],
-) -> StructuralTagEditReservation:
-    return _STRUCTURAL_TAG_EDIT_RESERVATIONS.acquire(resource_keys)
+    *,
+    cancel_event: Event | None = None,
+) -> StructuralTagEditReservation | None:
+    return _STRUCTURAL_TAG_EDIT_RESERVATIONS.acquire(
+        resource_keys,
+        cancel_event=cancel_event,
+    )
 
 
 async def acquire_structural_tag_edit_reservation_async(
@@ -410,6 +423,7 @@ def _fail_save_task(
     log_entry: JsonDict,
     changed_paths: set[str],
     error: object,
+    compensation_succeeded: bool,
 ) -> None:
     failure_entry = _build_save_failure_log_entry(log_entry, error, changed_paths)
     try:
@@ -436,6 +450,10 @@ def _fail_save_task(
         completed_at=datetime.now(timezone.utc).isoformat(),
         error=str(error),
         log_entry=failure_entry,
+        failure_stage="persistence",
+        edit_outcome=(
+            "failed_rolled_back" if compensation_succeeded else "recovery_pending"
+        ),
     )
 
 
@@ -560,7 +578,7 @@ def _finalize_save_task(
                     "Tag edit persistence returned no durable completion task."
                 )
     except Exception as exc:
-        compensation_succeeded = True
+        compensation_succeeded = False
         try:
             if compensate_save_task is not None:
                 compensate_save_task(
@@ -569,6 +587,7 @@ def _finalize_save_task(
                     updated_file_entries=updated_file_cache,
                     changed_field_names=set(changed_field_names),
                 )
+                compensation_succeeded = True
         except Exception as compensation_exc:
             compensation_succeeded = False
             exc = compensation_exc
@@ -589,6 +608,7 @@ def _finalize_save_task(
             log_entry=log_entry,
             changed_paths=set(changed_paths),
             error=exc,
+            compensation_succeeded=compensation_succeeded,
         )
         return
     persistence_ms = (perf_counter() - persistence_started) * 1000.0
@@ -833,7 +853,7 @@ def finalize_structural_tag_edit_save_task(
                 )
             persistence_ms = (perf_counter() - persistence_started) * 1000.0
         except Exception as exc:
-            compensation_succeeded = True
+            compensation_succeeded = False
             try:
                 if compensate_structural_tag_edit is not None:
                     compensate_structural_tag_edit(
@@ -842,6 +862,7 @@ def finalize_structural_tag_edit_save_task(
                         updated_file_entries=updated_file_cache,
                         changed_field_names=set(changed_field_names),
                     )
+                    compensation_succeeded = True
             except Exception as compensation_exc:
                 compensation_succeeded = False
                 exc = compensation_exc
@@ -862,6 +883,7 @@ def finalize_structural_tag_edit_save_task(
                 log_entry=log_entry,
                 changed_paths=set(changed_paths),
                 error=exc,
+                compensation_succeeded=compensation_succeeded,
             )
             return
 

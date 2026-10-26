@@ -1937,3 +1937,83 @@ def test_asgi_revisioned_cover_route_prefers_centralized_variant_without_source_
     assert status == 200
     assert body == target_variant.read_bytes()
     assert body != fallback_variant.read_bytes()
+
+
+def test_cover_response_remains_readable_when_relocation_moves_fallback_variant(
+    app,
+    asgi_app,
+    tmp_path,
+):
+    import asyncio
+
+    from fastapi import Request
+    from music_app.routes.web_asgi import _cover_response
+    from music_app.services.covers import build_cover_variant_base_path
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+
+    source_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
+    revision = "d" * 64
+    active_root = tmp_path / "active-previews"
+    requested_root = tmp_path / "requested-previews"
+    asgi_app.state.generated_preview_storage_policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(
+            mode="custom",
+            active_root=active_root,
+            requested_mode="custom",
+            requested_root=requested_root,
+            operation_state="running",
+        )
+    )
+    active_variant = build_cover_variant_base_path(
+        source_path,
+        cache_root=active_root / "v1",
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    requested_variant = build_cover_variant_base_path(
+        source_path,
+        cache_root=requested_root / "v1",
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    expected = b"relocation-safe-cover-bytes"
+    active_variant.parent.mkdir(parents=True)
+    active_variant.write_bytes(expected)
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/cover",
+        "raw_path": b"/cover",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "app": asgi_app,
+    }
+    response = _cover_response(Request(scope), str(source_path), "480", revision)
+
+    requested_variant.parent.mkdir(parents=True)
+    active_variant.replace(requested_variant)
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    asyncio.run(response(scope, receive, send))
+
+    assert not active_variant.exists()
+    assert requested_variant.read_bytes() == expected
+    assert b"".join(
+        message.get("body", b"")
+        for message in messages
+        if message["type"] == "http.response.body"
+    ) == expected

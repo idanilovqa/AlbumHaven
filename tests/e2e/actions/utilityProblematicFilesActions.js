@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { expect } from '@playwright/test';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 
 export class UtilityProblematicFilesActions {
@@ -694,10 +695,11 @@ export class UtilityProblematicFilesActions {
     const pills = filenames.map((filename) => this.utilityProblematicFilesTab.fileProblemPill(filename, reason));
     const boxes = [];
     for (const pill of pills) {
-      await pill.waitFor({ state: 'visible', timeout: 60000 });
-      boxes.push(await pill.boundingBox());
+      boxes.push(await this.readStablePointerBox(
+        pill,
+        'Expected every Problematic reason pill to have pointer geometry.',
+      ));
     }
-    if (boxes.some((box) => !box)) throw new Error('Expected every Problematic reason pill to have pointer geometry.');
     const center = (box) => ({ x: box.x + (box.width / 2), y: box.y + (box.height / 2) });
     const start = center(boxes[0]);
     await this.utilityProblematicFilesTab.page.mouse.move(start.x, start.y);
@@ -716,10 +718,11 @@ export class UtilityProblematicFilesActions {
     ];
     const boxes = [];
     for (const pill of pills) {
-      await pill.waitFor({ state: 'visible', timeout: 60000 });
-      boxes.push(await pill.boundingBox());
+      boxes.push(await this.readStablePointerBox(
+        pill,
+        'Expected both boundary pills to have pointer geometry.',
+      ));
     }
-    if (boxes.some((box) => !box)) throw new Error('Expected both boundary pills to have pointer geometry.');
     const center = (box) => ({ x: box.x + (box.width / 2), y: box.y + (box.height / 2) });
     const startPoint = center(boxes[0]);
     const endPoint = center(boxes[1]);
@@ -727,6 +730,20 @@ export class UtilityProblematicFilesActions {
     await this.utilityProblematicFilesTab.page.mouse.down();
     await this.utilityProblematicFilesTab.page.mouse.move(endPoint.x, endPoint.y, { steps: 8 });
     await this.utilityProblematicFilesTab.page.mouse.up();
+  }
+
+  async readStablePointerBox(locator, message) {
+    let box = null;
+    await expect.poll(async () => {
+      try {
+        await locator.scrollIntoViewIfNeeded({ timeout: 5000 });
+        box = await locator.boundingBox();
+      } catch {
+        box = null;
+      }
+      return box;
+    }, { timeout: 60000, message }).not.toBeNull();
+    return box;
   }
 
   async readSelectedProblemInstances() {

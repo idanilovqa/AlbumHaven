@@ -2672,11 +2672,29 @@ def test_asgi_pasted_cover_persistence_failure_restores_prior_cover_bytes_and_st
 def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_image_fetch(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import cover_lookup_tasks
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
-    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused@localhost/test"
+    persisted_remote_url = "https://images.example/persisted-active.jpg"
+    cover_state_loads: list[set[str]] = []
+
+    def build_cover_state_entries_by_paths(_repository, track_paths):
+        cover_state_loads.append(set(track_paths))
+        return {
+            str(track_path): {
+                "path": str(track_path),
+                "remote_cover_url": persisted_remote_url,
+            }
+        }
+
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_cover_state_entries_by_paths",
+        build_cover_state_entries_by_paths,
+    )
     extraction_calls: list[dict[str, object]] = []
     fetch_calls: list[dict[str, object]] = []
     log_calls: list[dict[str, object]] = []
@@ -2753,6 +2771,8 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
         "candidate-old",
         "candidate-new",
     ]
+    assert payload["gallery"]["remote_cover"]["url"] == persisted_remote_url
+    assert cover_state_loads == [{str(track_path)}]
     assert extraction_calls[0]["urls"] == ["https://manual.example/cover"]
     assert extraction_calls[0]["user_agent"] == app.config["MUSICBRAINZ_USER_AGENT"]
     assert [call["message"] for call in log_calls] == [
@@ -4379,7 +4399,11 @@ def test_postgres_local_cover_commit_updates_live_runtime_not_inventory_snapshot
 
 
 @pytest.mark.parametrize("cached", [False, True])
-def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory(app, monkeypatch, cached):
+def test_cover_gallery_reads_saved_remote_cover_from_postgres_when_runtime_cache_is_stale(
+    app,
+    monkeypatch,
+    cached,
+):
     from music_app.routes import api_wave_d_asgi_routes as routes
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -4443,7 +4467,7 @@ def test_cover_lookup_task_identity_does_not_repeat_validated_album_resolution()
 
 
 @pytest.mark.parametrize("compact_request", [False, True])
-def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
+def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lookup(
     app,
     monkeypatch,
     compact_request,
@@ -4487,7 +4511,8 @@ def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
         def release(self):
             events.append("released")
 
-    async def acquire_reservation(resource_keys):
+    def acquire_reservation(resource_keys, *, cancel_event=None):
+        assert cancel_event is not None
         events.append(("acquired", resource_keys))
         return Reservation()
 
@@ -4502,13 +4527,15 @@ def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
         events.append(("reconciled", resource_keys, completed_after_monotonic))
         return {"destination_album_id": 24674}
 
-    def queue_lookup(queued_album, track_paths, manual_urls, **_kwargs):
-        events.append(("queued", queued_album, track_paths, manual_urls))
+    def queue_lookup(queued_album, track_paths, manual_urls, **kwargs):
+        events.append(
+            ("queued", queued_album, track_paths, manual_urls, kwargs.get("prepare"))
+        )
         return "task-1"
 
     monkeypatch.setattr(
         asgi_routes,
-        "acquire_structural_tag_edit_reservation_async",
+        "acquire_structural_tag_edit_reservation",
         acquire_reservation,
         raising=False,
     )
@@ -4547,7 +4574,17 @@ def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
 
     assert status == 200
     assert _decode_json(body)["ok"] is True
-    acquired = events[0]
+    assert [event[0] if isinstance(event, tuple) else event for event in events] == [
+        "queued"
+    ]
+    queued = events[0]
+    assert queued[1] == album
+    assert queued[2] == (set() if compact_request else {str(stale_path)})
+    assert callable(queued[4])
+
+    prepared_album, prepared_paths = queued[4](queued[1], queued[2], Event())
+
+    acquired = events[1]
     assert acquired[0] == "acquired"
     assert "album:ovderhead::telepathic minds" in acquired[1]
     stale_path_key = next(iter(asgi_routes.structural_tag_edit_resource_keys(
@@ -4555,15 +4592,13 @@ def test_cover_lookup_start_waits_for_edit_and_refreshes_stale_album_paths(
         {str(stale_path)},
     )))
     assert (stale_path_key in acquired[1]) is not compact_request
-    assert events[1] == ("refreshed", 14674, None)
     assert events[2][0] == "reconciled"
     assert events[2][1] == acquired[1]
     assert events[2][2] > 0
     assert events[3] == ("refreshed", 24674, None)
     assert events[4] == "released"
-    assert events[5][0] == "queued"
-    assert events[5][1]["album_artist"] == "Overhead"
-    assert events[5][2] == {str(current_path)}
+    assert prepared_album["album_artist"] == "Overhead"
+    assert prepared_paths == {str(current_path)}
 
 
 def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_task(
@@ -4590,13 +4625,6 @@ def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_t
     }
     captured = {}
 
-    class Reservation:
-        def release(self):
-            pass
-
-    async def acquire_reservation(_resource_keys):
-        return Reservation()
-
     async def resolve_context(_config, album, *, fallback_track_paths=None):
         captured["fallback_track_paths"] = fallback_track_paths
         hydrated_album = {**album, "tracks": [{"path": str(track_path)}]}
@@ -4611,11 +4639,6 @@ def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_t
         captured.update(_kwargs)
         return "new-eden-lookup"
 
-    monkeypatch.setattr(
-        asgi_routes,
-        "acquire_structural_tag_edit_reservation_async",
-        acquire_reservation,
-    )
     monkeypatch.setattr(asgi_routes, "_resolve_album_payload_context", resolve_context)
     monkeypatch.setattr(
         asgi_routes,
@@ -4717,16 +4740,17 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
             assert track_paths == {str(track_path)}
             return [current_album]
 
-    async def acquire_reservation(_resource_keys):
+    def acquire_reservation(_resource_keys, *, cancel_event=None):
+        assert cancel_event is not None
         return Reservation()
 
-    def queue_lookup(album, track_paths, _manual_urls, **_kwargs):
-        queued.append((album, track_paths))
+    def queue_lookup(album, track_paths, _manual_urls, **kwargs):
+        queued.append((album, track_paths, kwargs.get("prepare")))
         return "task-1"
 
     monkeypatch.setattr(
         asgi_routes,
-        "acquire_structural_tag_edit_reservation_async",
+        "acquire_structural_tag_edit_reservation",
         acquire_reservation,
     )
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
@@ -4756,5 +4780,15 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
     )
 
     assert status == 200, body
-    assert queued[0][0]["album_artist"] == "Overhead"
+    assert queued[0][0] == source_album
     assert queued[0][1] == {str(track_path)}
+    assert callable(queued[0][2])
+
+    prepared_album, prepared_paths = queued[0][2](
+        queued[0][0],
+        queued[0][1],
+        Event(),
+    )
+
+    assert prepared_album["album_artist"] == "Overhead"
+    assert prepared_paths == {str(track_path)}

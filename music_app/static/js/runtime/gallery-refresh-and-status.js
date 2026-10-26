@@ -1908,10 +1908,15 @@ function resumeScanPageGalleryCoverLoads() {
 
 function openScanPage() {
   if (!state.ui.scanPageReturnContext) {
+    const galleryScroll = document.getElementById('albums-scroll');
     state.ui.scanPageReturnContext = {
       view: JSON.parse(JSON.stringify(state.view || {})),
       searchDraftQuery: String(state.ui.searchDraftQuery ?? state.view?.query ?? ''),
       url: typeof window !== 'undefined' ? String(window.location?.href || '') : '',
+      galleryScrollPosition: galleryScroll ? {
+        scrollTop: Number(galleryScroll.scrollTop || 0),
+        scrollLeft: Number(galleryScroll.scrollLeft || 0),
+      } : null,
     };
   }
   suspendScanPageGalleryCoverLoads();
@@ -2016,7 +2021,16 @@ function closeScanPage() {
   if (retainedGalleryCardsRemainMounted) {
     renderView({ preserveMountedGallery: true });
   } else {
-    renderView();
+    renderView(returnContext.galleryScrollPosition ? {
+      preserveScroll: true,
+      preserveAbsoluteScroll: true,
+      absoluteScrollPosition: returnContext.galleryScrollPosition,
+    } : undefined);
+  }
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (galleryScroll && returnContext.galleryScrollPosition) {
+    galleryScroll.scrollTop = returnContext.galleryScrollPosition.scrollTop;
+    galleryScroll.scrollLeft = returnContext.galleryScrollPosition.scrollLeft;
   }
   resumeScanPageGalleryCoverLoads();
 }

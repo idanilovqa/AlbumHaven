@@ -73,6 +73,19 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["log_history_revision"] == ""
 
 
+def test_status_payload_keeps_post_scan_cover_handoff_busy():
+    from music_app.routes.api_read_asgi_routes import _build_status_payload_from_state
+
+    payload = _build_status_payload_from_state({
+        "covers_in_progress": False,
+        "post_scan_cover_refresh_pending": True,
+    })
+
+    assert payload["covers_in_progress"] is True
+    assert payload["covers_cancelable"] is False
+    assert payload["covers_phase"] == "preparing"
+
+
 def test_asgi_status_route_exposes_only_opaque_database_identity(app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 

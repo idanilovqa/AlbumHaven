@@ -540,6 +540,8 @@ def init_state(app) -> None:
         "cover_generation": 0,
         "pending_cover_refresh_after_scan": False,
         "pending_cover_refresh_force_search": False,
+        "post_scan_cover_refresh_pending": False,
+        "post_scan_cover_refresh_pending_generation": 0,
     }
 
 

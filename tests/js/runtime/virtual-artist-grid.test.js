@@ -4368,6 +4368,49 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   assert.equal(virtualGrid.diagnostics.latestRender.renderRafOwner, scrollFrameOwner);
 });
 
+test('row measurement waits to restore its anchor until the pointer-deferred render flushes', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  context.cancelBrowserAnimationFrame = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  virtualGrid.scheduleVisibleAlbumDetailPrewarm = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.renderSection = () => '';
+  virtualGrid.patchRenderedSections = () => {};
+  const anchor = { albumKey: 'cold-album', scrollTop: 15796, offsetTop: 130 };
+  const restored = [];
+  virtualGrid.captureScrollAnchor = () => anchor;
+  virtualGrid.stabilizeScrollAfterMeasurement = value => restored.push(value);
+  virtualGrid.recalculate = () => true;
+  const section = {
+    kind: 'artist',
+    sectionKey: 'artist:all:Cold Artist:0',
+    blockHeights: [120],
+    blockMeasureKeys: ['row:1:cold-album'],
+    measuredBlockKeys: [''],
+  };
+  virtualGrid.sections = [section];
+  virtualGrid.sectionByKey = new Map([[section.sectionKey, section]]);
+  context.__rows = [createMeasuredRow(section.sectionKey, 0, { rowHeight: 360 })];
+  context.__rowSelectorQueryCount = 1;
+
+  virtualGrid.onPointerDown({
+    pointerId: 92,
+    target: { closest: () => ({ dataset: { albumKey: 'cold-album' } }) },
+  });
+  virtualGrid.measureRenderedRows();
+
+  assert.deepEqual(restored, [], 'the old DOM cannot restore the measured anchor');
+  context.document.dispatchEvent({ type: 'pointerup', pointerId: 92 });
+  scheduledFrames.shift()();
+  assert.deepEqual(restored, [anchor]);
+});
+
 {
   const { context } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

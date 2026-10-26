@@ -572,6 +572,9 @@ class VirtualArtistGrid {
       } finally {
         this._activeRenderRafOwner = previousActiveRenderRafOwner;
       }
+      if (Object.prototype.hasOwnProperty.call(deferredRender, 'measurementAnchor')) {
+        this.stabilizeScrollAfterMeasurement(deferredRender.measurementAnchor);
+      }
     });
   }
 
@@ -1660,6 +1663,12 @@ class VirtualArtistGrid {
 
   render(force = false, options = {}) {
     if (this._albumCardPointerGestureActive || this._albumCardPointerReleaseRaf) {
+      const deferredMeasurementAnchor = Object.prototype.hasOwnProperty.call(
+        this._deferredPointerGestureRender || {},
+        'measurementAnchor',
+      )
+        ? { measurementAnchor: this._deferredPointerGestureRender.measurementAnchor }
+        : {};
       this._deferredPointerGestureRender = {
         force: Boolean(force),
         options: { ...options },
@@ -1668,6 +1677,7 @@ class VirtualArtistGrid {
           || this._deferredPointerGestureRender?.renderRafOwner
           || 0,
         ),
+        ...deferredMeasurementAnchor,
       };
       return;
     }
@@ -2400,7 +2410,11 @@ class VirtualArtistGrid {
         }));
       }
     }
-    this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    if (this._deferredPointerGestureRender) {
+      this._deferredPointerGestureRender.measurementAnchor = preservedAnchor;
+    } else {
+      this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    }
   }
 
   getVisibleBlockRange(section, start, end) {

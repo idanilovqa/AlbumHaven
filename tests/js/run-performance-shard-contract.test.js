@@ -165,6 +165,25 @@ test('performance profile runner prepares its fixture exactly once before the ta
   assert.ok(prepareIndex > provisionIndex && prepareIndex < targetLoopIndex, 'prepare after provisioning and before targets');
 });
 
+test('performance shard restores the prepared database after every mutating target', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(
+    source,
+    /\$databaseMutatingTargets\s*=\s*@\([\s\S]*['"]edit-tags-post-edit['"][\s\S]*['"]cover-lookup['"][\s\S]*['"]notification-history['"][\s\S]*\)/i,
+  );
+  assert.match(
+    source,
+    /foreach\s*\(\$target\s+in\s+\$targetNames\)[\s\S]*if\s*\(\$restorePreparedDatabaseBeforeNextTarget\)[\s\S]*Restore-PerformanceDatabase/i,
+    'a dirty target must restore the prepared database before the next target starts',
+  );
+  assert.match(
+    source,
+    /\$restorePreparedDatabaseBeforeNextTarget\s*=\s*\$databaseMutatingTargets\s+-contains\s+\$target/i,
+    'failed mutating targets must also mark the shared database dirty',
+  );
+});
+
 test('Edit Tags performance target receives only a private writable DDT media copy', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
 

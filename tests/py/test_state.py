@@ -4712,6 +4712,10 @@ def test_run_cover_jobs_owns_automatic_candidate_publishers_per_album(
             events.append(("fail", self.album_id))
             return True
 
+        def mark_automatic_improvement_seen(self):
+            events.append(("seen", self.album_id))
+            return {"album_id": self.album_id}
+
     configured = {
         **config,
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://covers",
@@ -4762,8 +4766,8 @@ def test_run_cover_jobs_owns_automatic_candidate_publishers_per_album(
         )
         if job["should_fail"]:
             return None, False, {"reason": failure_reason}
-        return Path(file_cache[job["track_paths"][0]]["cover_path"]), False, {
-            "reason": "remote_not_better_than_local"
+        return Path(file_cache[job["track_paths"][0]]["cover_path"]), True, {
+            "reason": "cover_written"
         }
 
     monkeypatch.setattr(
@@ -4807,6 +4811,8 @@ def test_run_cover_jobs_owns_automatic_candidate_publishers_per_album(
     ]
     assert ("complete", 101) in events
     assert ("fail", 102) in events
+    assert ("seen", 101) in events
+    assert ("seen", 102) not in events
 
 
 def test_automatic_candidate_payload_preserves_provider_storage_policy_metadata():

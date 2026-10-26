@@ -133,6 +133,7 @@ function loadHelpers() {
           scanInProgress: false,
           relationsInProgress: false,
           coversInProgress: false,
+          coversCancelable: false,
           partialView: false,
           startupPreview: {
             mode: 'empty_shell',
@@ -606,6 +607,7 @@ test('new cover run explicit zero discards previous completed count', () => {
     scan_album_folders_total: '8',
     scan_mode: 'manual_full_rescan',
     relations_phase: null,
+    covers_cancelable: 1,
     covers_current_folder: 42,
     album_total: '9',
   })));
@@ -630,6 +632,7 @@ test('new cover run explicit zero discards previous completed count', () => {
     relations_phase: 'Idle',
     relations_source: 'local',
     covers_in_progress: false,
+    covers_cancelable: true,
     covers_processed: 0,
     covers_completed: 0,
     covers_total: 0,
@@ -734,6 +737,7 @@ test('new cover run explicit zero discards previous completed count', () => {
       scanMode: 'manual_full_rescan',
       relationsInProgress: false,
       coversInProgress: false,
+      coversCancelable: false,
       partialView: false,
       startupPreview: {
         mode: 'fresh_preview',
@@ -789,6 +793,7 @@ test('new cover run explicit zero discards previous completed count', () => {
     initial_view: null,
     bootstrap: {
       coversInProgress: 1,
+      coversCancelable: 1,
     },
   })));
   assert.equal(normalized.view.app_name, 'Album Haven');
@@ -796,6 +801,7 @@ test('new cover run explicit zero discards previous completed count', () => {
   assert.deepEqual(normalized.view.artist_groups, []);
   assert.equal(normalized.bootstrap.refreshed, false);
   assert.equal(normalized.bootstrap.coversInProgress, true);
+  assert.equal(normalized.bootstrap.coversCancelable, true);
 }
 
 {

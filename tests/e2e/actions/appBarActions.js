@@ -226,7 +226,11 @@ export class AppBarActions {
         throw new Error(`Status request failed with HTTP ${response.status()}.`);
       }
       lastStatus = await response.json();
-      return Boolean(lastStatus.scan_in_progress || lastStatus.covers_in_progress);
+      return Boolean(
+        lastStatus.scan_in_progress
+        || lastStatus.covers_in_progress
+        || lastStatus.pending_cover_refresh_after_scan
+      );
     }, {
       message: () => (
         'Expected the production scan and automatic cover refresh to become idle. '

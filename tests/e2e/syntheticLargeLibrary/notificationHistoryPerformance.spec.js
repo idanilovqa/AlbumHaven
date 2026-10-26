@@ -9,7 +9,6 @@ import {
 } from '../helpers/index.js';
 import {
   clearCoverLookupNotificationHistory,
-  NOTIFICATION_HISTORY_SIZE,
   seedCoverLookupNotificationHistory,
 } from '../helpers/coverLookupNotificationHistoryFixture.js';
 import { COVER_LOOKUP_TEST_TARGETS } from '../helpers/coverLookupFixtureData.js';
@@ -118,7 +117,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
   }, testInfo) => {
     test.setTimeout(240000);
     requirePostgresRuntimeEnv('the notification-history performance benchmark');
-    await seedCoverLookupNotificationHistory();
+    const notificationHistorySize = await seedCoverLookupNotificationHistory();
 
     const samples = [];
     const paginationTimings = [];
@@ -129,7 +128,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
         await galleryActions.goto('/?surface=albums');
         await waitForPostgresBrowseWarmRoot(page, galleryActions, navigationPanelActions);
         await expect(coverLookupActions.coverLookup.drawerBadge).toHaveText(
-          String(NOTIFICATION_HISTORY_SIZE),
+          String(notificationHistorySize),
         );
       });
 
@@ -183,8 +182,8 @@ test.describe(`${CASE_ID} large notification history`, () => {
         }
       });
 
-      expect(notification.loadedTasks).toBe(NOTIFICATION_HISTORY_SIZE);
-      expect(notification.totalCount).toBe(NOTIFICATION_HISTORY_SIZE);
+      expect(notification.loadedTasks).toBe(notificationHistorySize);
+      expect(notification.totalCount).toBe(notificationHistorySize);
       expect(notification.visibleTitles).toContain('Notification Album 0528');
       samples.push(await sampleRenderer(coverLookupActions.coverLookup, cdp, 'history-loaded'));
 
@@ -373,7 +372,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
 
       const paginationMaximumMs = Math.max(...paginationTimings);
       const metrics = {
-        notificationCount: NOTIFICATION_HISTORY_SIZE,
+        notificationCount: notificationHistorySize,
         drawerOpenMs: drawerOpen.durationMs,
         paginationMaximumMs,
         searchGalleryReadyMs: search.durationMs,
@@ -400,7 +399,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
           key,
           label: key,
           timingMs,
-          details: { notificationCount: NOTIFICATION_HISTORY_SIZE },
+          details: { notificationCount: notificationHistorySize },
         });
         notificationHistoryLocalReport.recordTerminalTimingOutcome(
           budget.metricId,
@@ -417,7 +416,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
           key,
           label,
           timingMs,
-          details: { notificationCount: NOTIFICATION_HISTORY_SIZE },
+          details: { notificationCount: notificationHistorySize },
         });
         notificationHistoryLocalReport.recordTerminalTimingOutcome(
           COVER_LOOKUP_PHASE_BUDGETS[key].metricId,
@@ -438,7 +437,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
 
       await testInfo.attach('notification-history-performance.json', {
         body: Buffer.from(JSON.stringify({
-          notificationHistorySize: NOTIFICATION_HISTORY_SIZE,
+          notificationHistorySize,
           budgets: {
             drawer: DRAWER_BUDGET,
             pagination: PAGE_BUDGET,

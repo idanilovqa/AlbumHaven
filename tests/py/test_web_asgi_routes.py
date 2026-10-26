@@ -1942,7 +1942,11 @@ def test_active_scan_keeps_persisted_root_gallery_in_bootstrap(monkeypatch):
         query_args=query_params,
         config={"MUSIC_DIR": "C:/Music", "APP_NAME": "Album Haven"},
         logger=None,
-        library_state={"scan_in_progress": True, "scan_phase": "metadata"},
+        library_state={
+            "scan_in_progress": True,
+            "scan_phase": "metadata",
+            "covers_in_progress": True,
+        },
         query_raw="",
         selected_artist="",
         refreshed=False,
@@ -1952,6 +1956,8 @@ def test_active_scan_keeps_persisted_root_gallery_in_bootstrap(monkeypatch):
     assert payload["initial_view"]["album_count"] == 14398
     assert payload["initial_view"]["artist_count"] == 6240
     assert payload["bootstrap"]["scanInProgress"] is True
+    assert payload["bootstrap"]["coversInProgress"] is True
+    assert payload["bootstrap"]["coversCancelable"] is True
     assert payload["bootstrap"]["startupPreview"]["mode"] == "full_view"
     assert startup_preview["mode"] == "full_view"
 

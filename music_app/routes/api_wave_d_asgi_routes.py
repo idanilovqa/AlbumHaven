@@ -5,6 +5,7 @@ from music_app.services.log_history import history_scope_for_request
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
+from threading import Event
 from time import perf_counter
 from uuid import UUID
 
@@ -78,7 +79,7 @@ from music_app.services.covers import image_dimensions, score_image
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.repair_previews import build_problematic_album_detail_payload
 from music_app.services.save_tasks import (
-    acquire_structural_tag_edit_reservation_async,
+    acquire_structural_tag_edit_reservation,
     latest_structural_tag_edit_destination,
     structural_tag_edit_resource_keys,
 )
@@ -349,17 +350,18 @@ async def _serialize_cover_gallery_from_asgi(
     task_id: str = "",
     candidate_snapshot: Mapping[str, object] | None = None,
     task_payload: Mapping[str, object] | None = None,
-    authoritative_cover_state: bool = False,
+    *,
+    refresh_persisted_cover_state: bool = False,
 ) -> dict[str, object]:
     config = _app_config(request)
     file_cache = _library_state(request).get("file_cache", {}) or {}
-    cover_state_paths = track_paths if authoritative_cover_state else track_paths - set(file_cache)
-    if cover_state_paths and str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
+    paths_to_load = track_paths if refresh_persisted_cover_state else track_paths - set(file_cache)
+    if paths_to_load and str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
         selected_entries = await run_in_threadpool(
             PostgresLibraryBrowseRepository(config).build_cover_state_entries_by_paths,
-            cover_state_paths,
+            paths_to_load,
         )
         file_cache = {**file_cache, **selected_entries}
     serialized_task_payload = serialize_cover_lookup_task_payload(
@@ -744,7 +746,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
             task_id,
             candidate_snapshot,
             task_payload,
-            authoritative_cover_state=True,
+            refresh_persisted_cover_state=True,
         )
     )
 
@@ -815,10 +817,50 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             dict(config),
             task_id,
         ) or {}
+    queued_album = album or {}
     requested_track_paths = (
         _album_track_paths(album)
         or _cover_lookup_task_track_paths(task_payload)
     )
+    album_context = resolve_album_context(config, queued_album)
+    if task_payload:
+        queued_album, album_context = await _resolve_album_payload_context(
+            config,
+            queued_album,
+            fallback_track_paths=requested_track_paths,
+        )
+        if album_context is None:
+            split_response = await _cover_lookup_album_split_response(
+                config,
+                _cover_lookup_task_track_paths(task_payload),
+            )
+            if split_response is not None:
+                return _json_response(split_response)
+            return _json_response(
+                ({"ok": False, "error": "Album does not contain any tracks"}, 400)
+            )
+        if not _task_matches_album_context(
+            task_payload,
+            track_paths=album_context.track_paths,
+            album_id=_album_id(queued_album),
+        ):
+            split_response = await _cover_lookup_album_split_response(
+                config,
+                _cover_lookup_task_track_paths(task_payload),
+            )
+            if not _is_valid_split_choice(
+                queued_album,
+                split_response,
+                _album_id(queued_album),
+            ):
+                return _json_response(
+                    ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)
+                )
+        requested_track_paths = album_context.track_paths
+    elif album_context is None and _album_id(queued_album) is None:
+        return _json_response(
+            ({"ok": False, "error": "Album does not contain any tracks"}, 400)
+        )
     reservation_resource_keys = structural_tag_edit_resource_keys(
         str((album or {}).get("key") or (album or {}).get("album_ref") or ""),
         requested_track_paths,
@@ -826,30 +868,23 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     reconciliation_started_at = (
         perf_counter() - _STRUCTURAL_RECONCILIATION_LOOKBACK_SECONDS
     )
-    reservation = await acquire_structural_tag_edit_reservation_async(
-        reservation_resource_keys
-    )
-    queued_album = album or {}
-    try:
-        if task_payload:
-            queued_album, album_context = await _resolve_album_payload_context(
-                config,
-                queued_album,
-                fallback_track_paths=requested_track_paths,
-            )
-        else:
-            album_context = resolve_album_context(config, queued_album)
-        album_id = _album_id(queued_album)
-        if album_id is not None:
+    def prepare_cover_lookup(
+        current_album: dict[str, object],
+        current_track_paths: set[str],
+        cancel_event: Event,
+    ) -> tuple[dict[str, object], set[str]]:
+        reservation = acquire_structural_tag_edit_reservation(
+            reservation_resource_keys,
+            cancel_event=cancel_event,
+        )
+        if reservation is None:
+            return current_album, current_track_paths
+        prepared_album = current_album
+        try:
+            album_context = resolve_album_context(config, prepared_album)
+            album_id = _album_id(prepared_album)
             repository = PostgresLibraryBrowseRepository(config)
-            refreshed_album = await run_in_threadpool(
-                repository.build_album_detail_payload_by_id,
-                album_id,
-            )
-            if refreshed_album is not None:
-                queued_album = _album_with_context_tracks(refreshed_album)
-                album_context = resolve_album_context(config, queued_album)
-            if album_context is None:
+            if album_id is not None:
                 reconciliation = latest_structural_tag_edit_destination(
                     reservation_resource_keys,
                     completed_after_monotonic=reconciliation_started_at,
@@ -857,55 +892,44 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
                 destination_album_id = int(
                     (reconciliation or {}).get("destination_album_id") or 0
                 )
-                if destination_album_id > 0:
-                    refreshed_album = await run_in_threadpool(
-                        repository.build_album_detail_payload_by_id,
-                        destination_album_id,
-                    )
-                    if refreshed_album is not None:
-                        queued_album = _album_with_context_tracks(refreshed_album)
-                        album_context = resolve_album_context(config, queued_album)
-            if album_context is None and requested_track_paths:
-                current_albums = await run_in_threadpool(
-                    repository.build_album_payloads_by_track_paths,
-                    requested_track_paths,
+                refreshed_album = repository.build_album_detail_payload_by_id(
+                    destination_album_id or album_id
                 )
-                for current_album in current_albums:
-                    candidate = _album_with_context_tracks(current_album)
+                if refreshed_album is not None:
+                    prepared_album = _album_with_context_tracks(refreshed_album)
+                    album_context = resolve_album_context(config, prepared_album)
+                elif destination_album_id > 0:
+                    album_context = None
+            if album_context is None and current_track_paths:
+                current_albums = repository.build_album_payloads_by_track_paths(
+                    current_track_paths
+                )
+                for refreshed_album in current_albums:
+                    candidate = _album_with_context_tracks(refreshed_album)
                     candidate_context = resolve_album_context(config, candidate)
                     if (
                         candidate_context is not None
-                        and requested_track_paths <= candidate_context.track_paths
+                        and current_track_paths <= candidate_context.track_paths
                     ):
-                        queued_album = candidate
+                        prepared_album = candidate
                         album_context = candidate_context
                         break
-    finally:
-        reservation.release()
-    if album_context is None:
-        return _json_response(({"ok": False, "error": "Album does not contain any tracks"}, 400))
-    if task_payload and not _task_matches_album_context(
-        task_payload,
-        track_paths=album_context.track_paths,
-        album_id=_album_id(queued_album),
-    ):
-        split_response = await _cover_lookup_album_split_response(
-            config,
-            _cover_lookup_task_track_paths(task_payload),
-        )
-        if not _is_valid_split_choice(queued_album, split_response, _album_id(queued_album)):
-            return _json_response(
-                ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)
-            )
+        finally:
+            reservation.release()
+        if album_context is None:
+            raise ValueError("Album does not contain any tracks")
+        return prepared_album, album_context.track_paths
+
     task_id = queue_cover_lookup_task(
         queued_album,
-        album_context.track_paths,
+        requested_track_paths,
         manual_urls,
         config=config,
         logger=logger,
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
         preferred_task_id=task_id,
         allow_preferred_path_rebind=bool(task_payload),
+        prepare=prepare_cover_lookup,
     )
     log_app_event(
         config,

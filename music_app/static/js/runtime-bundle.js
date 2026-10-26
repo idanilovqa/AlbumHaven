@@ -359,6 +359,7 @@ const DEFAULT_STATUS_STATE = Object.freeze({
   relations_phase: 'Idle',
   relations_source: 'local',
   covers_in_progress: false,
+  covers_cancelable: false,
   covers_processed: 0,
   covers_completed: 0,
   covers_total: 0,
@@ -1455,6 +1456,7 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
     relations_phase: normalizeRuntimeString(source.relations_phase, base.relations_phase),
     relations_source: normalizeRuntimeString(source.relations_source, base.relations_source),
     covers_in_progress: normalizeRuntimeBoolean(source.covers_in_progress, base.covers_in_progress),
+    covers_cancelable: normalizeRuntimeBoolean(source.covers_cancelable, base.covers_cancelable),
     covers_processed: normalizeRuntimeNumber(source.covers_processed, base.covers_processed),
     covers_completed: normalizeRuntimeNumber(source.covers_completed, normalizeRuntimeNumber(source.covers_processed, base.covers_processed)),
     covers_total: normalizeRuntimeNumber(source.covers_total, base.covers_total),
@@ -1478,6 +1480,7 @@ function normalizeBootstrapPayload(payload, fallbackBootstrap = null) {
       scanMode: 'idle',
       relationsInProgress: false,
     coversInProgress: false,
+  coversCancelable: false,
     partialView: false,
     ...(isRuntimePlainObject(defaults) ? defaults : {}),
     ...(isRuntimePlainObject(fallbackBootstrap) ? fallbackBootstrap : {}),
@@ -1560,6 +1563,7 @@ function normalizeBootstrapPayload(payload, fallbackBootstrap = null) {
     scanMode: normalizeRuntimeString(source.scanMode, base.scanMode),
     relationsInProgress: normalizeRuntimeBoolean(source.relationsInProgress, base.relationsInProgress),
     coversInProgress: normalizeRuntimeBoolean(source.coversInProgress, base.coversInProgress),
+    coversCancelable: normalizeRuntimeBoolean(source.coversCancelable, base.coversCancelable),
     partialView: normalizeRuntimeBoolean(source.partialView, base.partialView),
     startupPreview: {
       ...startupPreviewBase,
@@ -3402,15 +3406,16 @@ function syncStatusContextMenu() {
   if (!fetchOrCancelButton) return menu;
   const scanBusy = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress);
   const coverBusy = Boolean(state.status?.covers_in_progress);
+  const coverCancelable = Boolean(state.status?.covers_cancelable);
   const coverQueued = Boolean(state.status?.pending_cover_refresh_after_scan);
   const initialFullScanBusy = scanBusy && Number(state.status?.album_total || 0) <= 0;
-  if (coverBusy) {
+  if (coverBusy && coverCancelable) {
     syncStatusContextButtonPresentation(fetchOrCancelButton, {
       action: 'cancel-cover-scan',
       label: 'Cancel Album Cover Scan',
       disabled: false,
     });
-  } else if (coverQueued) {
+  } else if (coverBusy || coverQueued) {
     syncStatusContextButtonPresentation(fetchOrCancelButton, {
       action: 'fetch-covers-queued',
       label: 'Fetching Covers Is Queued',
@@ -17014,10 +17019,15 @@ function resumeScanPageGalleryCoverLoads() {
 
 function openScanPage() {
   if (!state.ui.scanPageReturnContext) {
+    const galleryScroll = document.getElementById('albums-scroll');
     state.ui.scanPageReturnContext = {
       view: JSON.parse(JSON.stringify(state.view || {})),
       searchDraftQuery: String(state.ui.searchDraftQuery ?? state.view?.query ?? ''),
       url: typeof window !== 'undefined' ? String(window.location?.href || '') : '',
+      galleryScrollPosition: galleryScroll ? {
+        scrollTop: Number(galleryScroll.scrollTop || 0),
+        scrollLeft: Number(galleryScroll.scrollLeft || 0),
+      } : null,
     };
   }
   suspendScanPageGalleryCoverLoads();
@@ -17122,7 +17132,16 @@ function closeScanPage() {
   if (retainedGalleryCardsRemainMounted) {
     renderView({ preserveMountedGallery: true });
   } else {
-    renderView();
+    renderView(returnContext.galleryScrollPosition ? {
+      preserveScroll: true,
+      preserveAbsoluteScroll: true,
+      absoluteScrollPosition: returnContext.galleryScrollPosition,
+    } : undefined);
+  }
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (galleryScroll && returnContext.galleryScrollPosition) {
+    galleryScroll.scrollTop = returnContext.galleryScrollPosition.scrollTop;
+    galleryScroll.scrollLeft = returnContext.galleryScrollPosition.scrollLeft;
   }
   resumeScanPageGalleryCoverLoads();
 }
@@ -18323,7 +18342,14 @@ async function downloadUtilityLogHistory() {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
   anchor.href = url; anchor.download = `album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
 }
 
 function openUtilityLogHistoryQuery(exportAfter = false) {
@@ -20421,6 +20447,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   const mutation = {
     taskId: normalizedTaskId,
     albumKey: selectedKey,
+    originalTrackPaths: Array.from(getAlbumTrackPaths(originalAlbum)),
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
@@ -20444,12 +20471,16 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (survivingKeys.has(selectedKey)) {
       state.utility.selectedProblematicKey = selectedKey;
     } else {
+      const retainedAlbum = findAlbumByTrackPaths(
+        items,
+        new Set(Array.isArray(mutation.originalTrackPaths) ? mutation.originalTrackPaths : []),
+      );
       const priorKeys = Array.isArray(mutation.priorKeys) ? mutation.priorKeys : [];
       const selectedIndex = priorKeys.indexOf(selectedKey);
       const previousSurvivor = selectedIndex > 0
         ? priorKeys.slice(0, selectedIndex).reverse().find((key) => survivingKeys.has(key))
         : '';
-      state.utility.selectedProblematicKey = previousSurvivor || String(items[0]?.key || '');
+      state.utility.selectedProblematicKey = String(retainedAlbum?.key || previousSurvivor || items[0]?.key || '');
     }
     const survivorKey = String(state.utility.selectedProblematicKey || '');
     const survivor = items.find((album) => String(album?.key || '') === survivorKey) || null;
@@ -21790,22 +21821,44 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
+    let refreshedStaleDetailTarget = false;
     if (!album.detail_loaded) {
       while (album && !album.detail_loaded) {
         const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
         state.utility.selectedProblematicKey = album.key || '';
-        await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
+        const detailRequest = loadProblematicAlbumDetail(
+          album.key || '',
+          undefined,
+          { render: false, allowMissing: true },
+        );
+        const detailOwner = Number(state.utility.problematicDetailRequestToken || 0);
+        const refreshedDetail = await detailRequest;
         if (!ownsNavigation()) return;
+        const detailMissing = !refreshedDetail
+          && Number(state.utility.problematicDetailRequestToken || 0) === detailOwner;
         const currentSummary = state.utility.completeLoadPromise
           || state.utility.initialLoadPromise;
         if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
-          const current = getProblematicAlbumForTrackPath(trackPath);
+          const current = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
           if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
             await state.utility.detailLoadPromises[current.key];
             if (!ownsNavigation()) return;
           }
           if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
-            album = getProblematicAlbumForTrackPath(trackPath);
+            album = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
+            if (!album && !refreshedStaleDetailTarget) {
+              if (currentSummary && typeof currentSummary.then === 'function') {
+                await currentSummary;
+                if (!ownsNavigation()) return;
+                album = getProblematicAlbumForTrackPath(trackPath);
+                if (album) continue;
+              }
+              refreshedStaleDetailTarget = true;
+              const refreshResult = await loadTrackSummary();
+              if (refreshResult === null || !ownsNavigation()) return;
+              album = getProblematicAlbumForTrackPath(trackPath);
+              if (album) continue;
+            }
             if (album?.detail_loaded
                 || !currentSummary
                 || typeof currentSummary.then !== 'function') break;
@@ -23858,6 +23911,16 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
+    return;
+  }
+
+  if (
+    selectedProblematicMissing
+    && state.utility.selectedProblematicKey
+    && state.utility.problematicFilesComplete === false
+  ) {
+    renderTree('');
+    els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
   }
 
@@ -26481,6 +26544,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
       covers_in_progress: true,
+      covers_cancelable: false,
       covers_phase: 'preparing',
       covers_run_mode: 'manual-bulk',
       covers_outcome: '',
@@ -26526,6 +26590,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         scan_processed: Number(state.status?.scan_processed || 0),
         scan_total: Number(state.status?.scan_total || 0),
         covers_in_progress: false,
+        covers_cancelable: false,
         covers_processed: 0,
         covers_completed: 0,
         covers_spotify_quota_exceeded: false,
@@ -26541,6 +26606,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: true,
+      covers_cancelable: true,
       covers_phase: 'fetching',
       covers_run_mode: 'manual-bulk',
       covers_processed: 0,
@@ -26574,6 +26640,7 @@ async function cancelAlbumCoverScan() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: false,
+      covers_cancelable: false,
       covers_current_folder: '',
       pending_cover_refresh_after_scan: false,
     });
@@ -32703,6 +32770,7 @@ async function confirmManualTagEdit() {
   );
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
+  let failedSavePreservesDraft = false;
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -32724,6 +32792,8 @@ async function confirmManualTagEdit() {
           console.warn('[AlbumHaven][Utilities] Could not persist the failed tag edit in browser history.', historyError);
         }
       }
+      failedSavePreservesDraft = data.failure_stage === 'persistence'
+        && data.edit_outcome === 'failed_rolled_back';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
     const updatedAlbums = Array.isArray(data.updated_albums)
@@ -32863,7 +32933,10 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
-      if (!failedLogHistoryEntryId) {
+      if (
+        !failedLogHistoryEntryId
+        || failedSavePreservesDraft
+      ) {
         restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
       }
     }
@@ -37310,6 +37383,9 @@ class VirtualArtistGrid {
       } finally {
         this._activeRenderRafOwner = previousActiveRenderRafOwner;
       }
+      if (Object.prototype.hasOwnProperty.call(deferredRender, 'measurementAnchor')) {
+        this.stabilizeScrollAfterMeasurement(deferredRender.measurementAnchor);
+      }
     });
   }
 
@@ -38398,6 +38474,12 @@ class VirtualArtistGrid {
 
   render(force = false, options = {}) {
     if (this._albumCardPointerGestureActive || this._albumCardPointerReleaseRaf) {
+      const deferredMeasurementAnchor = Object.prototype.hasOwnProperty.call(
+        this._deferredPointerGestureRender || {},
+        'measurementAnchor',
+      )
+        ? { measurementAnchor: this._deferredPointerGestureRender.measurementAnchor }
+        : {};
       this._deferredPointerGestureRender = {
         force: Boolean(force),
         options: { ...options },
@@ -38406,6 +38488,7 @@ class VirtualArtistGrid {
           || this._deferredPointerGestureRender?.renderRafOwner
           || 0,
         ),
+        ...deferredMeasurementAnchor,
       };
       return;
     }
@@ -39138,7 +39221,11 @@ class VirtualArtistGrid {
         }));
       }
     }
-    this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    if (this._deferredPointerGestureRender) {
+      this._deferredPointerGestureRender.measurementAnchor = preservedAnchor;
+    } else {
+      this.stabilizeScrollAfterMeasurement(preservedAnchor);
+    }
   }
 
   getVisibleBlockRange(section, start, end) {
@@ -46888,6 +46975,7 @@ updateStatusIndicator({
   relations_phase: 'Building family artists',
   relations_source: 'local',
   covers_in_progress: Boolean(bootstrap.coversInProgress),
+  covers_cancelable: Boolean(bootstrap.coversCancelable),
   covers_processed: 0,
   covers_completed: 0,
   covers_total: 0,

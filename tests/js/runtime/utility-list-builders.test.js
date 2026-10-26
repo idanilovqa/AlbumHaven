@@ -3828,6 +3828,49 @@ test('watchSaveTask owns Problematic Files mutation state until its matching ter
   }
 });
 
+test('Problematic Files mutation follows the retained source album when a structural edit changes its key', async () => {
+  const context = loadHelpers();
+  const retainedTrackPath = 'C:/Music/Rarity/02 - Remain Editable.mp3';
+  const originalAlbum = {
+    key: 'rarity-before-edit',
+    name: 'Two Track Rarity Fixture',
+    tracks: [
+      { path: 'C:/Music/Rarity/01 - Apply Rarity Here.mp3' },
+      { path: retainedTrackPath },
+    ],
+  };
+  const unrelatedAlbum = {
+    key: 'unrelated-neighbor',
+    name: 'Unrelated Neighbor',
+    detail_loaded: true,
+    track_paths: ['C:/Music/Unrelated/01 - Track.mp3'],
+  };
+  const retainedAlbum = {
+    key: 'rarity-after-edit',
+    name: 'Two Track Rarity Fixture',
+    detail_loaded: true,
+    track_paths: [retainedTrackPath],
+  };
+  context.state.utility = {
+    activeTab: 'problematic-files',
+    loaded: true,
+    problematicFiles: [unrelatedAlbum, originalAlbum],
+    selectedProblematicKey: originalAlbum.key,
+  };
+  context.getUtilityModalElements = () => ({ list: { scrollTop: 0, scrollHeight: 0, clientHeight: 0 } });
+  context.renderUtilityModalContent = () => {};
+
+  context.claimProblematicSaveTaskMutation('structural-key-change', originalAlbum);
+  context.state.utility.problematicFiles = [unrelatedAlbum, retainedAlbum];
+  await context.settleProblematicSaveTaskMutation('structural-key-change', { reconcileSelection: true });
+
+  assert.equal(
+    context.state.utility.selectedProblematicKey,
+    retainedAlbum.key,
+    'a surviving track must keep the edited logical album selected before neighbor fallback',
+  );
+});
+
 test('pending Problematic Files mutation preserves explicit sidebar navigation and its newer scroll position', async () => {
   const context = loadHelpers();
   const removedAlbum = {
@@ -6759,6 +6802,7 @@ test('track problem navigation refreshes one stale loaded summary before selecti
   context.loadProblematicAlbumDetail = async (albumKey, force) => {
     detailLoads.push([albumKey, force]);
     refreshedAlbum.detail_loaded = true;
+    return refreshedAlbum;
   };
 
   await context.openUtilityModalForTrack(trackPath);
@@ -6767,6 +6811,132 @@ test('track problem navigation refreshes one stale loaded summary before selecti
   assert.deepEqual(detailLoads, [['album-alpha-refreshed', undefined]]);
   assert.equal(context.state.utility.selectedProblematicKey, 'album-alpha-refreshed');
   assert.equal(context.state.utility.focusedTrackPath, trackPath);
+});
+
+test('track problem navigation refreshes canonical membership when stale detail drops the track', async () => {
+  const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
+  const canonicalAlbum = {
+    ...staleAlbum,
+    key: 'album-alpha-restored',
+    detail_loaded: false,
+  };
+  const summaryLoads = [];
+  const detailLoads = [];
+  const opens = [];
+  staleAlbum.detail_loaded = false;
+  context.loadProblematicAlbumDetail = async (albumKey) => {
+    detailLoads.push(albumKey);
+    if (albumKey === staleAlbum.key) {
+      staleAlbum.problematic_track_paths = [];
+      staleAlbum.track_paths = [];
+      return staleAlbum;
+    }
+    canonicalAlbum.detail_loaded = true;
+    return canonicalAlbum;
+  };
+  context.loadProblematicFiles = async (force) => {
+    summaryLoads.push(force);
+    context.state.utility.problematicFiles = [canonicalAlbum];
+    return context.state.utility.problematicFiles;
+  };
+  context.openUtilityModal = () => {
+    opens.push(context.state.utility.selectedProblematicKey);
+  };
+
+  await context.openUtilityModalForTrack(trackPath);
+
+  assert.deepEqual(summaryLoads, [true]);
+  assert.deepEqual(detailLoads, [staleAlbum.key, canonicalAlbum.key]);
+  assert.deepEqual(opens, [canonicalAlbum.key]);
+  assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
+  assert.equal(context.state.utility.focusedTrackPath, trackPath);
+});
+
+test('track problem navigation waits out a stale summary before refreshing restored membership', async () => {
+  const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
+  const canonicalAlbum = {
+    ...staleAlbum,
+    key: 'album-alpha-restored-after-pending',
+    detail_loaded: true,
+  };
+  let releaseStaleSummary;
+  const staleSummary = new Promise((resolve) => {
+    releaseStaleSummary = resolve;
+  });
+  const summaryLoads = [];
+  const opens = [];
+  staleAlbum.detail_loaded = false;
+  context.state.utility.problematicFilesComplete = false;
+  context.state.utility.completeLoadPromise = staleSummary;
+  staleSummary.finally(() => {
+    context.state.utility.completeLoadPromise = null;
+    staleAlbum.problematic_track_paths = [trackPath];
+    staleAlbum.track_paths = [trackPath];
+    context.state.utility.problematicFiles = [staleAlbum];
+  });
+  let staleDetailLoads = 0;
+  context.loadProblematicAlbumDetail = async () => {
+    staleDetailLoads += 1;
+    staleAlbum.problematic_track_paths = [];
+    staleAlbum.track_paths = [];
+    return staleAlbum;
+  };
+  context.loadProblematicFiles = async () => {
+    if (context.state.utility.completeLoadPromise) {
+      summaryLoads.push('reused');
+      return context.state.utility.completeLoadPromise;
+    }
+    summaryLoads.push('fresh');
+    context.state.utility.problematicFiles = [canonicalAlbum];
+    return context.state.utility.problematicFiles;
+  };
+  context.openUtilityModal = () => {
+    opens.push(context.state.utility.selectedProblematicKey);
+  };
+
+  const navigation = context.openUtilityModalForTrack(trackPath);
+  setImmediate(() => releaseStaleSummary(context.state.utility.problematicFiles));
+  await navigation;
+
+  assert.deepEqual(summaryLoads, ['fresh']);
+  assert.deepEqual(opens, [canonicalAlbum.key]);
+  assert.equal(staleDetailLoads, 2);
+  assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
+});
+
+test('track problem navigation refreshes canonical membership when the stale detail key is missing', async () => {
+  const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
+  const canonicalAlbum = {
+    ...staleAlbum,
+    key: 'album-alpha-restored-after-missing-detail',
+    detail_loaded: true,
+  };
+  const detailOptions = [];
+  const summaryLoads = [];
+  const opens = [];
+  staleAlbum.detail_loaded = false;
+  context.loadProblematicAlbumDetail = async (_albumKey, _force, options) => {
+    detailOptions.push(options);
+    return null;
+  };
+  context.loadProblematicFiles = async () => {
+    summaryLoads.push(true);
+    context.state.utility.problematicFiles = [canonicalAlbum];
+    return context.state.utility.problematicFiles;
+  };
+  context.openUtilityModal = () => {
+    opens.push(context.state.utility.selectedProblematicKey);
+  };
+
+  await context.openUtilityModalForTrack(trackPath);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(detailOptions)),
+    [{ render: false, allowMissing: true }],
+  );
+  assert.deepEqual(summaryLoads, [true]);
+  assert.deepEqual(opens, [canonicalAlbum.key]);
+  assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
 });
 
 test('failed stale-summary refresh does not add a second missing-track error', async () => {

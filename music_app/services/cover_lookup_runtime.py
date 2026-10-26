@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import replace
 from datetime import datetime, timezone
 import inspect
 from types import MethodType
@@ -234,6 +235,11 @@ def queue_cover_lookup_task(
     user_agent: str | None = None,
     preferred_task_id: str = "",
     allow_preferred_path_rebind: bool = False,
+    prepare: Callable[
+        [dict[str, object], set[str], Event],
+        tuple[dict[str, object], set[str]],
+    ]
+    | None = None,
 ) -> str:
     task_id, cancel_event = create_cover_lookup_task(
         album,
@@ -255,7 +261,11 @@ def queue_cover_lookup_task(
         manual_urls,
         build_cover_lookup_job_contract("candidate_lookup"),
     )
-    future = _COVER_LOOKUP_EXECUTOR.submit(_run_cover_lookup_job, runtime_job)
+    future = _COVER_LOOKUP_EXECUTOR.submit(
+        _run_prepared_cover_lookup_job if prepare is not None else _run_cover_lookup_job,
+        runtime_job,
+        *([prepare] if prepare is not None else []),
+    )
     register_cover_lookup_future(task_id, future, config=config)
     return task_id
 
@@ -308,6 +318,58 @@ def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:
         runtime_job.cancel_event,
         runtime_job.manual_urls,
         provider_deadline_at=provider_deadline_at,
+    )
+
+
+def _run_prepared_cover_lookup_job(
+    runtime_job: CoverLookupRuntimeJob,
+    prepare: Callable[
+        [dict[str, object], set[str], Event],
+        tuple[dict[str, object], set[str]],
+    ],
+) -> None:
+    try:
+        album, track_paths = prepare(
+            runtime_job.album,
+            runtime_job.requested_track_paths,
+            runtime_job.cancel_event,
+        )
+    except Exception as exc:
+        log_app_event(
+            runtime_job.config,
+            runtime_job.logger,
+            "Cover lookup preparation failed",
+            level="error",
+            task_id=runtime_job.task_id,
+            error=str(exc),
+        )
+        _update_candidate_lookup_task(
+            runtime_job.task_id,
+            config=runtime_job.config,
+            status="failed",
+            progress=100,
+            progress_label="Failed",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            message=str(exc),
+        )
+        return
+    if runtime_job.cancel_event.is_set():
+        return
+    _update_candidate_lookup_task(
+        runtime_job.task_id,
+        config=runtime_job.config,
+        artist=str(album.get("album_artist") or ""),
+        album=str(album.get("name") or album.get("album") or ""),
+        year=album.get("year"),
+        album_payload=album,
+        track_paths=sorted(track_paths),
+    )
+    _run_cover_lookup_job(
+        replace(
+            runtime_job,
+            album=album,
+            requested_track_paths=track_paths,
+        )
     )
 
 

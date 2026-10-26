@@ -171,6 +171,9 @@ class AlbumCoverCandidatePublisher:
             self._automatic_improvement_marked = True
         return accepted
 
+    def mark_automatic_improvement_seen(self) -> dict[str, object] | None:
+        return self._repository.mark_seen(album_id=self._album_id)
+
     def fail(self) -> bool:
         return self._finish("failed")
 

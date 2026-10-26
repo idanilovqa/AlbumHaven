@@ -718,10 +718,14 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       await tagEditorActions.applyAndWaitForSavedFiles({
         savedNotificationDelivery: 'status-page',
         beforeSavedNotification: async () => {
-          expect((await utilityProblematicFilesActions.readDetectedTrackRows())
-            .map((track) => track.filename)).toEqual([
-            SIBLING_TRACK_FILENAME,
-          ]);
+          await expect.poll(async () => ({
+            detail: await utilityProblematicFilesActions.readSelectedDetailSummary(),
+            filenames: (await utilityProblematicFilesActions.readDetectedTrackRows())
+              .map((track) => track.filename),
+          }), { timeout: 60000 }).toMatchObject({
+            detail: { artist: RARITY_ARTIST, title: RARITY_ALBUM },
+            filenames: [SIBLING_TRACK_FILENAME],
+          });
           await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
         },
       });

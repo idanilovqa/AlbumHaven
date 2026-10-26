@@ -79,6 +79,9 @@ def lane_context(environ):
     mode = environ.get('ALBUM_HAVEN_FAVORITES_TEST_MODE', '')
     if mode == '':
         return {'mode': 'persistent14', 'major': 14}
+    if mode == 'favorites_owned_local17':
+        from tests.py.owned_local_postgres_admission import owned_local_context
+        return owned_local_context(environ)
     assert mode in ('favorites_linux17', 'favorites_windows17'), 'Unknown favorites admission mode'
     required = {'GITHUB_ACTIONS': 'true', 'RUNNER_OS': 'Linux',
         'GITHUB_JOB': 'test_feature_batches_linux', 'FEATURE_BATCH': 'favorites_backend'}
@@ -142,7 +145,7 @@ def validate_windows_state(context, state):
 
 def private_pgpass(context):
     # Credential files are metadata-only; only the non-secret provisioner JSON is read.
-    plain_metadata(context['pgpass'], linux=context['mode']=='favorites_linux17')
+    plain_metadata(context['pgpass'], linux=context['mode'] in ('favorites_linux17', 'favorites_owned_local17'))
     if context['mode'] == 'favorites_windows17':
         original = Path(expected_windows_state(context)['pgpass'])
         plain_metadata(original)
@@ -153,13 +156,13 @@ def private_pgpass(context):
 
 def assert_lane_connection(context, row, version, role):
     assert int(version) // 10000 == context['major'], 'Exact named-lane major required'
-    if context['mode'] in ('favorites_linux17', 'favorites_windows17'):
+    if context['mode'] in ('favorites_linux17', 'favorites_windows17', 'favorites_owned_local17'):
         assert row == {'database_name': context['database'], 'role_name': context[role+'_role']}
 
 
 def database_urls():
     context = lane_context(os.environ)
-    if context['mode'] in ('favorites_linux17', 'favorites_windows17'):
+    if context['mode'] in ('favorites_linux17', 'favorites_windows17', 'favorites_owned_local17'):
         private_pgpass(context)
     # Resolver is parsing/admission only; no destructive fixture is invoked.
     setup, app = isolatedPostgres.resolve_isolated_database_urls({
@@ -173,10 +176,13 @@ def admit(registry, urls):
     app, setup = urls
     context = lane_context(os.environ)
     assert os.environ.get('PGPASSFILE') and Path(os.environ['PGPASSFILE']).is_file()
-    if context['mode'] in ('favorites_linux17', 'favorites_windows17'):
+    if context['mode'] in ('favorites_linux17', 'favorites_windows17', 'favorites_owned_local17'):
         assert (app, setup) == (context['app'], context['setup'])
         private_pgpass(context)
     with registry(app) as con:
+        if context['mode'] == 'favorites_owned_local17':
+            from tests.py.owned_local_postgres_admission import assert_owned_local_server
+            assert_owned_local_server(con, context)
         isolatedPostgres._assert_connected_role(con, isolatedPostgres.RUNTIME_ROLE)
         identity = con.execute('select current_database() as database_name, current_user as role_name').fetchone()
         version = con.execute('show server_version_num').fetchone()['server_version_num']
@@ -187,11 +193,14 @@ def admit(registry, urls):
               and (rolsuper or rolcreatedb or rolcreaterole or rolreplication or rolbypassrls)) as safe""").fetchone()
         assert flags == {'app': True, 'limited': True, 'safe': True}
     with registry(setup) as con:
+        if context['mode'] == 'favorites_owned_local17':
+            from tests.py.owned_local_postgres_admission import assert_owned_local_server
+            assert_owned_local_server(con, context)
         isolatedPostgres._assert_connected_role(con, isolatedPostgres.SETUP_ROLE)
         identity = con.execute('select current_database() as database_name, current_user as role_name').fetchone()
         version = con.execute('show server_version_num').fetchone()['server_version_num']
         assert_lane_connection(context, identity, version, 'setup')
-        if context['mode'] in ('favorites_linux17', 'favorites_windows17'):
+        if context['mode'] in ('favorites_linux17', 'favorites_windows17', 'favorites_owned_local17'):
             flags = con.execute("""select pg_has_role(current_user,'album_haven_migrator','USAGE') as migrator,
                 not exists(select 1 from pg_roles where pg_has_role(current_user,oid,'MEMBER')
                   and (rolsuper or rolcreatedb or rolcreaterole or rolreplication or rolbypassrls)) as safe""").fetchone()

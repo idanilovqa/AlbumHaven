@@ -355,8 +355,20 @@ test('log history revision sync marks newer targets stale without replacing the 
   assert.deepEqual(calls.fetches, []);
 });
 
+function installIntegrationCapability(context, actions) {
+  context.window = context;
+  context.document = {
+    readyState: 'complete',
+    getElementById: id => id === 'capability-bootstrap'
+      ? { textContent: JSON.stringify({ allowed_actions: actions, available_tabs: ['integrations'] }) } : null,
+    querySelectorAll: () => [],
+  };
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../capability-ui.js'), 'utf8'), context);
+}
+
 test('the independent Integrations loader remains callable beside scoped Log History', async () => {
   const { context } = createContext();
+  installIntegrationCapability(context, { 'integration.settings.read': true });
   context.state.utility.integrationDrafts = { lastfm: { username: '' } };
   context.fetch = async () => ({ json: async () => ({ integrations: [{ key: 'library' }] }) });
   context.reconcileLastfmTimeZoneDraft = async () => {};
@@ -410,3 +422,19 @@ test('snapshot failure stays retryable without reading browser-owned history', a
   assert.equal(context.state.utility.logHistoryStorageStatus, undefined);
   assert.match(context.getUtilityLogHistoryController().getState().error, /unavailable/);
 });
+
+for (const permission of ['missing', 'denied']) {
+  test(`Integrations loader denies ${permission} current capability without fetching or retaining stale data`, async () => {
+    const { context, calls } = createContext();
+    context.window = context;
+    if (permission === 'denied') installIntegrationCapability(context, { 'integration.settings.read': false });
+    context.state.utility.integrations = [{ key: 'stale-private-integration' }];
+    context.state.utility.integrationsLoaded = true;
+    context.state.utility.integrationsLoading = true;
+    await context.loadUtilityIntegrations();
+    assert.deepEqual(Array.from(context.state.utility.integrations), []);
+    assert.equal(context.state.utility.integrationsLoaded, false);
+    assert.equal(context.state.utility.integrationsLoading, false);
+    assert.deepEqual(calls.fetches, []);
+  });
+}

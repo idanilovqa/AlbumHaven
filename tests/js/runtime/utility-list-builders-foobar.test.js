@@ -69,60 +69,41 @@ function loadHelpers(overrides = {}) {
   return context;
 }
 
-test('buildUtilityIntegrationDetail shows supported Foobar guidance and unavailable import', () => {
+function installPolicy(context, actions) {
+  context.document = {
+    readyState: 'complete',
+    getElementById: id => id === 'capability-bootstrap'
+      ? { textContent: JSON.stringify({ allowed_actions: actions, available_tabs: ['integrations'] }) } : null,
+    querySelectorAll: () => [],
+  };
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../capability-ui.js'), 'utf8'), context);
+}
+
+test('buildUtilityIntegrationDetail mounts the current Foobar account importer without library administration', () => {
   const context = loadHelpers();
-
-  const html = context.buildUtilityIntegrationDetail({
-    key: 'foobar',
-    title: 'Foobar2000',
-    description: 'Help-first setup, manual export references, and local sync contract prep.',
-    status_label: 'How To and reference assets ready',
-    help_route: '/utilities/integrations/foobar/help',
-    problem_surface: 'Utilities > Problematic Files',
-    continuous_sync: {
-      label: 'Continuous Foobar sync',
-      enabled: false,
-      default_state: 'off',
-      cadence_when_enabled: 'Once a week',
-      disabled_behavior: 'One-time import only',
-    },
-    source_families: [
-      {
-        key: 'manual_snapshot_exports',
-        title: 'Manual snapshot exports',
-        description: 'Playback Statistics XML and Text Tools exports stay one-time user-triggered snapshots.',
-      },
-      {
-        key: 'live_custom_db',
-        title: 'Live custom DB source',
-        description: 'A selected Foobar custom DB path stays one-time import only until Continuous Foobar sync is enabled.',
-      },
-    ],
-    write_back_scopes: ['History of plays', 'Favorite songs'],
-    reference_assets: [
-      {
-        asset_key: 'how-to-modal-copy',
-        title: 'How To modal copy',
-        description: 'Exact checked-in help copy baseline.',
-        view_url: '/utilities/integrations/foobar/assets/how-to-modal-copy',
-        download_url: '/utilities/integrations/foobar/assets/how-to-modal-copy?download=1',
-      },
-      {
-        asset_key: 'text-tools-standard-preset',
-        title: 'Standard Text Tools preset',
-        description: 'Recommended default preset.',
-        view_url: '/utilities/integrations/foobar/assets/text-tools-standard-preset',
-        download_url: '/utilities/integrations/foobar/assets/text-tools-standard-preset?download=1',
-      },
-    ],
-  });
-
+  installPolicy(context, { 'account.self.foobar.write': true });
+  const html = context.buildUtilityIntegrationDetail({ key: 'foobar', title: 'Foobar2000' });
   assert.match(html, /Foobar2000/);
-  assert.match(html, /Read setup instructions/);
-  assert.match(html, /data-foobar-format-trigger/);
-  assert.match(html, /Playback Statistics XML/);
-  assert.match(html, /Import is unavailable in this build/);
-  assert.match(html, /data-foobar-import/);
-  assert.doesNotMatch(html, /Continuous Foobar sync|One-time import only/);
+  assert.match(html, /data-foobar-import-host/);
+  assert.match(html, /Loading import controls/);
+  assert.doesNotMatch(html, /data-foobar-format-trigger|Playback Statistics XML|Import is unavailable in this build|data-foobar-help/);
+});
 
+test('buildUtilityIntegrationDetail denies Foobar mount when capability bootstrap is absent', () => {
+  const html = loadHelpers().buildUtilityIntegrationDetail({ key: 'foobar' });
+  assert.match(html, /Foobar import is unavailable/);
+  assert.doesNotMatch(html, /data-foobar-import-host/);
+});
+
+test('buildUtilityIntegrationDetail denies Foobar mount for explicit denial and administrative-only grants', () => {
+  for (const actions of [
+    { 'account.self.foobar.write': false },
+    { 'library.settings.manage': true, 'integration.settings.read': true, 'accounts.read': true },
+  ]) {
+    const context = loadHelpers();
+    installPolicy(context, actions);
+    const html = context.buildUtilityIntegrationDetail({ key: 'foobar' });
+    assert.match(html, /Foobar import is unavailable/);
+    assert.doesNotMatch(html, /data-foobar-import-host/);
+  }
 });

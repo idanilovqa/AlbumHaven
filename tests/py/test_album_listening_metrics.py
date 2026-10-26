@@ -954,7 +954,6 @@ class AlbumListeningStageBCandidateContract(unittest.TestCase):
 
     def test_b_partial_can_decrease_as_new_evidence_consumes_whole_token(self):
         a,pa=b_fixture({11:1000000},[[(11,0,600000)]])
-        a['history']={'status':'partial','reasons':['history_partial']}
         old=self.check(a,pa,dict(full=0,partial=1))
         b,pb=b_fixture({11:1000000},[[(11,0,600000)],[(11,400000,1000000)]])
         b['history']=deepcopy(a['history'])
@@ -962,11 +961,20 @@ class AlbumListeningStageBCandidateContract(unittest.TestCase):
         self.assertEqual(b['runs'][0],a['runs'][0])
         self.assertGreater(metric_value(new,'album_time_equivalents')['numerator'],
                            metric_value(old,'album_time_equivalents')['numerator'])
-        for result in (old,new):
-            for metric in result['metrics'].values():
-                self.assertEqual(metric['status'],'exact_recorded')
+        # Complete recorded scope exposes exact leftover tokens. Missing older
+        # evidence can consume those leftovers, so it cannot expose a lifetime
+        # partial count, even as full/time/coverage remain valid lower bounds.
+        for value, projection, full in ((a, pa, 0), (b, pb, 1)):
+            value['history']={'status':'partial','reasons':['history_partial']}
+            before=deepcopy((value,projection))
+            result=self.candidate(value,projection)
+            self.assertEqual((value,projection),before)
+            self.assertEqual(metric_value(result,'full'),full)
+            self.assertEqual(result['metrics']['partial']['status'],'unavailable')
+            self.assertIsNone(result['metrics']['partial']['value'])
+            for name, metric in result['metrics'].items():
+                if name != 'partial': self.assertEqual(metric['status'],'lower_bound')
                 self.assertIn('history_incomplete',metric['reasons'])
-                self.assertNotEqual(metric['status'],'lower_bound')
 
     def test_b_global_flow_reassignment_beats_first_available_path(self):
         # One physical track; scale 100000 makes trim 6000, not invented normalized input.

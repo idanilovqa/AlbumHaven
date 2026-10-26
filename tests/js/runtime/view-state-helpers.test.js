@@ -365,8 +365,10 @@ function loadHelpers(origin = 'http://localhost:5000') {
   assert.deepEqual(parsed, {
     surface_request: '',
     playlist_id: '',
+    top_ref: '',
     query: 'ambient',
     selected_artist: 'Eno',
+    page_mode: 'gallery',
     all_artists_active: true,
     gallery_scope: 'all',
     visible_library_categories: [],
@@ -397,8 +399,10 @@ function loadHelpers(origin = 'http://localhost:5000') {
   assert.deepEqual(parsed, {
     surface_request: '',
     playlist_id: '',
+    top_ref: '',
     query: '',
     selected_artist: 'Mono',
+    page_mode: 'gallery',
     all_artists_active: false,
     gallery_scope: 'all',
     visible_library_categories: [],
@@ -430,6 +434,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
   assert.deepEqual(parsed, {
     surface_request: '',
     playlist_id: '',
+    top_ref: '',
     query: 'ambient',
     selected_artist: '',
     all_artists_active: false,
@@ -459,8 +464,10 @@ function loadHelpers(origin = 'http://localhost:5000') {
   assert.deepEqual(parsed, {
     surface_request: '',
     playlist_id: '',
+    top_ref: '',
     query: 'ambient',
     selected_artist: 'Eno',
+    page_mode: 'gallery',
     all_artists_active: true,
     gallery_scope: 'all',
     visible_library_categories: [],
@@ -488,8 +495,10 @@ function loadHelpers(origin = 'http://localhost:5000') {
   assert.deepEqual(parsed, {
     surface_request: '',
     playlist_id: '',
+    top_ref: '',
     query: 'dub',
     selected_artist: 'Basic Channel',
+    page_mode: 'gallery',
     all_artists_active: false,
     gallery_scope: 'all',
     visible_library_categories: [],
@@ -527,6 +536,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
   assert.deepEqual(parsed, {
     surface_request: '',
     playlist_id: '',
+    top_ref: '',
     query: '',
     selected_artist: '',
     all_artists_active: false,
@@ -1483,4 +1493,16 @@ test('artist sidebar preserves server order through selection, search, and clear
     if (view.selected_artist) assert.match(html, /aria-current="true"/);
     assert.deepEqual(source.map(item => item.artist), sourceNames);
   }
+});
+
+
+test('URL state keeps public Top routing while omitting unrelated private identity parameters', () => {
+  const {parseUrlStateFromUrl} = loadHelpers('https://albumhaven.test');
+  const parsed = parseUrlStateFromUrl('/?artist=Eno&top_ref=public-top&page_mode=unsupported'
+    + '&path=%2Fprivate%2Ftrack.flac&inventory_track_ref=private-track&token=private-token', 'https://albumhaven.test');
+  assert.equal(parsed.top_ref, 'public-top'); assert.equal(parsed.page_mode, 'gallery');
+  for (const key of ['path', 'inventory_track_ref', 'token']) assert.equal(Object.hasOwn(parsed, key), false);
+  assert.doesNotMatch(JSON.stringify(parsed), /private-track|private-token|\/private\/track/);
+  const root = parseUrlStateFromUrl('/?page_mode=info', 'https://albumhaven.test');
+  assert.equal(root.top_ref, ''); assert.equal(Object.hasOwn(root, 'page_mode'), false);
 });

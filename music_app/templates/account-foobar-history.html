@@ -1,0 +1,53 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
+{% from "partials/button.html" import action_button %}
+{% from "partials/app-bar.html" import app_bar with context %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Foobar history — Album Haven</title>
+  <link rel="stylesheet" href="/static/css/account.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/admin-members.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/settings-navigation.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/app-chrome.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/button-component.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/utilities.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/runtime/compact-data-table.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/scrollbar.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/foobar-history.css?v={{ runtime_asset_version }}">
+  {% include "partials/navigation-tree-assets.html" %}
+  {% include "partials/appearance-bootstrap.html" %}
+  <script src="/static/js/surface-dismissal.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/settings-navigation.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/button-component.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/markup-format-helpers.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/compact-data-table.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/session-csrf-fetch.js?v={{ runtime_asset_version }}" defer></script>
+  <script type="module" src="/static/js/foobar-history/account-entry.mjs?v={{ runtime_asset_version }}"></script>
+</head>
+<body>
+  {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
+  <main class="settings-host settings-shell" data-settings-host data-settings-document-navigation="true">
+    {{ app_bar() }}
+    {% include "partials/admin-settings-nav.html" %}
+    <div class="settings-outlet" data-settings-outlet>
+      <section class="account-main" id="account-foobar-history"
+        data-account-foobar-context="{{ account_foobar_context }}"
+        data-account-foobar-scope="{{ account_foobar_scope }}"
+        data-account-foobar-history-allowed="{{ 'true' if account_foobar_history_allowed else 'false' }}"
+        aria-labelledby="account-foobar-history-title">
+        {{ action_button('Settings navigation', attributes={'data-settings-nav-toggle': '1', 'aria-expanded': 'false'}) }}
+        <h1 id="account-foobar-history-title">Foobar history</h1>
+        <h2>Imported listening evidence</h2>
+        <p>Read your own imported Foobar evidence. A connected music library is not required.</p>
+        <p>Foobar evidence remains separate from Last.fm and measured in-app listening. Counts and boundary dates do not prove individual listens, sessions or complete album plays.</p>
+        <div data-foobar-history-host><p role="status">Loading Foobar history…</p></div>
+        <noscript>JavaScript is required to browse Foobar history.</noscript>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

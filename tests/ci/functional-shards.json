@@ -344,6 +344,13 @@
               "case": "FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both constituent artists",
               "area": "gallery-search"
             },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-ALBUM-TRACK-CREDITS-003 groups repeated featured artists under one marker",
+              "area": "album-details"
+            },
 
             {
               "config": "playwright.config.js",

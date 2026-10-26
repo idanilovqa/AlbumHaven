@@ -159,6 +159,33 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-ALBUM-TRACK-CREDITS-003 groups repeated featured artists under one marker",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-track-credit-projection"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-grouped-feature-credit"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "single-feature-marker",
+      "deduplicated-featured-artists"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-grouped-feature-credit",
+      "filesystemCopy": "media/cases/watcher-grouped-feature-credit"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-SEARCH-NAV-034 keeps empty artist-scoped Non-album tracks disabled after hydration",
     "profile": "functional-core",
     "setupScope": "isolated",

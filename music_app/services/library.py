@@ -446,6 +446,7 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         and display_member_artists
     ):
         display_album_artist = _format_shared_album_artist(display_member_artists)
+        member_artists = display_member_artists
     return (
         compilation_state(True),
         display_album_artist or "Various Artists",

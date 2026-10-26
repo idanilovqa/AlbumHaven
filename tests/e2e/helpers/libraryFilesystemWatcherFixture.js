@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
 const WATCHER_FIXTURE_PROFILES = ['functional-core', 'synthetic-large-library'];
 const WATCHER_FIXTURE_DIRECTORIES = [
   'watcher-reconciliation',
+  'watcher-grouped-feature-credit',
   'gallery-native-response-overlap',
   'generated-preview-storage',
 ];

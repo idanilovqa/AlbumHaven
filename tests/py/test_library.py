@@ -351,6 +351,29 @@ def test_build_albums_from_file_cache_preserves_persisted_non_compilation_family
     assert inferred_relation_views["folder_related"] == {}
 
 
+def test_build_albums_from_file_cache_preserves_small_shared_release_members():
+    album_name = "Watcher Joint Credit Release"
+    member_artists = ("Jordsjø", "Breidablik")
+    file_cache = {
+        f"track-{track_number}": _entry(
+            path=f"C:/Music/Shared/{album_name}/{track_number:02}.mp3",
+            title=f"Track {track_number}",
+            artist=member_artist,
+            album_artist="Various Artists",
+            album=album_name,
+            track_number=track_number,
+        )
+        for track_number, member_artist in enumerate(member_artists, start=1)
+    }
+
+    albums = build_albums_from_file_cache(file_cache)
+
+    assert len(albums) == 1
+    assert albums[0].is_compilation is True
+    assert albums[0].album_artist == " / ".join(member_artists)
+    assert albums[0].artists == list(member_artists)
+
+
 def test_build_albums_from_file_cache_deduplicates_repeated_composite_album_artist_names():
     repeated_album_artist = (
         "Frank Churchill / Leigh Harline / Larry Morey / "

@@ -111,6 +111,13 @@ const JOINT_CREDIT_TARGET = Object.freeze({
   members: Object.freeze(['Jordsjø', 'Breidablik']),
   year: 2013,
 });
+const GROUPED_FEATURE_TARGET = Object.freeze({
+  artist: 'Feature Credit Owner',
+  album: 'Watcher Grouped Feature Credit',
+  year: 2014,
+  trackTitle: 'Grouped Feature Signal',
+  trackArtist: 'Feature Credit Owner / Guest One / Guest Two / Guest One',
+});
 const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
   Object.freeze({
     artist: 'Belle Stars',
@@ -769,6 +776,70 @@ test('FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both co
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
       await verifyJointCredit();
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+test('FTC-ALBUM-TRACK-CREDITS-003 groups repeated featured artists under one marker', {
+  tag: '@area:album-details',
+}, async ({
+  appBarActions,
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add one ordinary release with repeated structured guests', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+
+      fixture = await createWatchedAlbumFixture({
+        artist: GROUPED_FEATURE_TARGET.artist,
+        albumArtist: GROUPED_FEATURE_TARGET.artist,
+        album: GROUPED_FEATURE_TARGET.album,
+        year: GROUPED_FEATURE_TARGET.year,
+        trackTitles: [GROUPED_FEATURE_TARGET.trackTitle],
+        trackArtists: [GROUPED_FEATURE_TARGET.trackArtist],
+        ownedDirectoryName: 'watcher-grouped-feature-credit',
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      );
+      await appBarActions.waitForScanAndCoverRefreshIdle();
+    });
+
+    await stepLogger.step('Render one feat. marker and each guest once', async () => {
+      await searchToolbarActions.search(GROUPED_FEATURE_TARGET.album, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(GROUPED_FEATURE_TARGET.album);
+      await galleryActions.waitForAlbumVisible(GROUPED_FEATURE_TARGET.album);
+      await galleryActions.clickAlbumDetailsByAlbumName(GROUPED_FEATURE_TARGET.album);
+      const summary = await trackModalActions.waitForLoadedSummary();
+      expect(summary.trackRows).toBe(1);
+      expect(await trackModalActions.readTrackCredits(1)).toEqual([{
+        rawTitle: GROUPED_FEATURE_TARGET.trackTitle,
+        rawArtist: GROUPED_FEATURE_TARGET.trackArtist,
+        title: GROUPED_FEATURE_TARGET.trackTitle,
+        secondaryArtist: 'feat. Guest One, Guest Two',
+      }]);
+      await trackModalActions.close();
     });
   } catch (error) {
     originalFailure = error;

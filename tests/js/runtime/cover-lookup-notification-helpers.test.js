@@ -182,6 +182,30 @@ function loadHelper(overrides = {}) {
   process.exitCode = 1;
 });
 
+require('node:test')('optimistic cover choice updates its notification without persisting early', async () => {
+  const selectedCoverUrl = 'data:image/png;base64,selected';
+  const { context, fetchCalls } = loadHelper({
+    buildTrackPathSignature: (album) => (album?.tracks || []).map((track) => String(track.path || '')).sort().join('::'),
+    buildAlbumDisplayCoverUrl: () => selectedCoverUrl,
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'pasted-cover-task',
+    status: 'completed',
+    album_payload: { tracks: [{ path: 'Artist/Album/song.mp3' }] },
+  }];
+
+  context.markCoverLookupTaskActionTaken(
+    'pasted-cover-task',
+    { tracks: [{ path: 'Artist/Album/song.mp3' }] },
+    { persist: false },
+  );
+  await Promise.resolve();
+
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
+  assert.equal(context.state.coverLookup.tasks[0].current_user_cover_preview_url, selectedCoverUrl);
+  assert.equal(fetchCalls.length, 0);
+});
+
 {
   const { context } = loadHelper();
   const startedAt = '2026-07-20T12:00:00.000Z';

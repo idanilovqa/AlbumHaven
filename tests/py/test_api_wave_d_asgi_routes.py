@@ -3632,6 +3632,13 @@ def test_asgi_cover_lookup_gallery_rebinds_persisted_notification_after_album_id
     monkeypatch,
 ):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_cover_state_entries_by_paths",
+        lambda _self, _paths: {},
+    )
 
     track_path = (
         app.config["MUSIC_DIR"]
@@ -4047,8 +4054,15 @@ def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory
         "remote_cover_width": 640,
         "remote_cover_height": 640,
     }
+    cached_entry = {
+        **entry,
+        "remote_cover_url": "https://images.example/stale-cover.jpg",
+        "remote_cover_thumbnail_url": "https://images.example/stale-thumb.jpg",
+    }
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused@localhost/test"
-    app.library_state["file_cache"] = {str(track_path): dict(entry)} if cached else {}
+    app.library_state["file_cache"] = (
+        {str(track_path): dict(cached_entry)} if cached else {}
+    )
     app.library_state["albums"] = []
     loads = []
 
@@ -4072,8 +4086,10 @@ def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory
     assert remote["source_label"] == "Spotify"
     assert remote["album_url"] == entry["remote_cover_album_url"]
     assert (remote["width"], remote["height"]) == (640, 640)
-    assert loads == ([] if cached else [{str(track_path)}])
-    assert app.library_state["file_cache"] == ({str(track_path): entry} if cached else {})
+    assert loads == [{str(track_path)}]
+    assert app.library_state["file_cache"] == (
+        {str(track_path): cached_entry} if cached else {}
+    )
 
 
 def test_cover_lookup_task_identity_does_not_repeat_validated_album_resolution():

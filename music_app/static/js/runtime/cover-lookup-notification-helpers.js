@@ -84,7 +84,7 @@ function mergeCoverLookupTasksWithNotifications(tasks) {
   return pruneCoverLookupNotificationTasks(tasks);
 }
 
-function markCoverLookupTaskActionTaken(taskId, album = null) {
+function markCoverLookupTaskActionTaken(taskId, album = null, { persist = true } = {}) {
   const normalizedId = String(taskId || '').trim();
   const albumSignature = album ? buildTrackPathSignature(album) : '';
   const selectedCoverUrl = album ? String(buildAlbumDisplayCoverUrl(album) || '').trim() : '';
@@ -100,6 +100,7 @@ function markCoverLookupTaskActionTaken(taskId, album = null) {
     matchingTaskIds.push(String(nextTask?.id || '').trim());
     return nextTask;
   });
+  if (!persist) return;
   matchingTaskIds
     .filter(Boolean)
     .forEach((matchedTaskId) => {

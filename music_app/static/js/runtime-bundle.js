@@ -23360,7 +23360,7 @@ function mergeCoverLookupTasksWithNotifications(tasks) {
   return pruneCoverLookupNotificationTasks(tasks);
 }
 
-function markCoverLookupTaskActionTaken(taskId, album = null) {
+function markCoverLookupTaskActionTaken(taskId, album = null, { persist = true } = {}) {
   const normalizedId = String(taskId || '').trim();
   const albumSignature = album ? buildTrackPathSignature(album) : '';
   const selectedCoverUrl = album ? String(buildAlbumDisplayCoverUrl(album) || '').trim() : '';
@@ -23376,6 +23376,7 @@ function markCoverLookupTaskActionTaken(taskId, album = null) {
     matchingTaskIds.push(String(nextTask?.id || '').trim());
     return nextTask;
   });
+  if (!persist) return;
   matchingTaskIds
     .filter(Boolean)
     .forEach((matchedTaskId) => {
@@ -29734,6 +29735,7 @@ function applyOptimisticPastedCoverSelection(album, pastedItem) {
   markAlbumCoverPathsFresh([updatedAlbum]);
   syncCoverLookupAlbumReferences([updatedAlbum]);
   refreshCoverLookupAlbumArtwork(album, [updatedAlbum]);
+  return updatedAlbum;
 }
 
 function stopCoverLookupElapsedTimer() {
@@ -31553,8 +31555,15 @@ async function savePastedCoverFromLookup(imageId) {
   const pastedItem = (state.coverLookup.modal.pastedImages || []).find((item) => String(item?.id || '') === String(imageId || ''));
   if (!album || !pastedItem?.data_url) return;
   const previousAlbum = deepCloneJson(album);
+  const previousTask = taskId
+    ? deepCloneJson((state.coverLookup.tasks || []).find((task) => String(task?.id || '') === taskId) || null)
+    : null;
   try {
-    applyOptimisticPastedCoverSelection(album, pastedItem);
+    const optimisticAlbum = applyOptimisticPastedCoverSelection(album, pastedItem);
+    if (taskId && optimisticAlbum) {
+      markCoverLookupTaskActionTaken(taskId, optimisticAlbum, { persist: false });
+      renderCoverLookupDrawer();
+    }
     state.coverLookup.modal.manualBusy = false;
     state.coverLookup.modal.pendingLocalPath = '';
     state.coverLookup.modal.selectedRemoteId = '';
@@ -31589,6 +31598,12 @@ async function savePastedCoverFromLookup(imageId) {
       markAlbumCoverPathsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
+    }
+    if (previousTask) {
+      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
+        String(task?.id || '') === taskId ? previousTask : task
+      ));
+      renderCoverLookupDrawer();
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save pasted image.', error);
     showToast(error.message || 'Failed to save pasted image.', 'error', 2800);

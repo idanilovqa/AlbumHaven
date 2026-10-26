@@ -504,6 +504,70 @@ function createDrawerHarness(overrides = {}) {
   process.exitCode = 1;
 });
 
+require('node:test')('pasted cover updates its notification before the save response settles', async () => {
+  const album = {
+    key: 'various artists::aladdin',
+    album_artist: 'Various Artists',
+    name: 'Aladdin',
+    tracks: [{ path: 'C:/Music/Aladdin/01.mp3' }],
+  };
+  const markCalls = [];
+  const lifecycleCalls = [];
+  let resolveRequest;
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    getAlbumPathSignature: (value) => (value?.tracks || []).map((track) => track.path).join('::'),
+    showToast: () => {},
+  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.tasks = [{
+    id: 'aladdin-task',
+    status: 'completed',
+    notification_action_taken: false,
+  }];
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'aladdin-task',
+    pastedImages: [{
+      id: 'third-cover',
+      data_url: 'data:image/jpeg;base64,third-cover',
+      mime_type: 'image/jpeg',
+      filename: 'third-cover.jpg',
+    }],
+  };
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.closeCoverLookupModal = () => lifecycleCalls.push('close');
+  context.renderCoverLookupDrawer = () => lifecycleCalls.push('render');
+  context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum, options) => {
+    markCalls.push({ taskId, selectedAlbum, options });
+    const task = context.state.coverLookup.tasks.find((item) => item.id === taskId);
+    if (task) task.notification_action_taken = true;
+  };
+  context.fetch = () => new Promise((resolve) => {
+    resolveRequest = resolve;
+  });
+
+  const savePromise = context.savePastedCoverFromLookup('third-cover');
+  await Promise.resolve();
+
+  assert.equal(markCalls.length, 1);
+  assert.equal(markCalls[0].taskId, 'aladdin-task');
+  assert.equal(markCalls[0].selectedAlbum.name, 'Aladdin');
+  assert.equal(markCalls[0].options.persist, false);
+  assert.deepEqual(lifecycleCalls, ['render', 'close']);
+
+  resolveRequest({
+    ok: false,
+    json: async () => ({ ok: false, error: 'save failed' }),
+  });
+  await savePromise;
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
+  assert.deepEqual(lifecycleCalls, ['render', 'close', 'render']);
+});
+
 require('node:test')('notification startup loads authoritative counts without loading history', async () => {
   const requestedUrls = [];
   const { context, badgeElement } = createDrawerHarness({
@@ -1550,6 +1614,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album: secondAlbum,
     manual_urls: [],
+    task_id: 'flaming-row-lookup',
   });
 })().catch((error) => {
   console.error(error);

@@ -821,17 +821,19 @@ test('GalleryBar scroll context uses absolute virtual section coordinates instea
     },
   });
   const getGalleryMainContextSections = requireContract(context, 'getGalleryMainContextSections');
-  assert.deepEqual(plain(getGalleryMainContextSections()), [
-    { artist: 'Neal Morse & The Resonance', albumCount: 2, top: 1200, labelBottom: 1200 },
-    { artist: 'Cosmic Cathedral', albumCount: 1, top: 2200, labelBottom: 2200 },
+  const sections = getGalleryMainContextSections();
+  assert.deepEqual(plain(sections), [
+    { group: context.virtualGrid.sections[0].group, artist: 'Neal Morse & The Resonance', albumCount: 2, top: 1200, labelBottom: 1200 },
+    { group: context.virtualGrid.sections[1].group, artist: 'Cosmic Cathedral', albumCount: 1, top: 2200, labelBottom: 2200 },
   ]);
+  sections.forEach((section, index) => assert.equal(section.group, context.virtualGrid.sections[index].group));
 });
 
 test('family panel heading uses the selected primary artist with an adjacent count', () => {
   const title = {}, total = {}, name = {}, summary = {};
   const info = { dataset: {}, setAttribute() {}, remove() {} };
   const bar = { offsetHeight: 54, querySelector: selector => selector === '[data-gallery-context-name]' ? name : selector === '[data-gallery-context-summary]' ? summary : info };
-  const context = loadRuntime({ state: { gallery: {}, view: {
+  const context = loadRuntime({ window: {}, state: { gallery: {}, view: {
     selected_artist: 'Neal Morse',
     primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'one', source: 'main_library' }] }],
     family_artist_groups: [{ artist: 'Cosmic Cathedral', albums: [{ key: 'two', source: 'main_library' }] }],
@@ -840,6 +842,7 @@ test('family panel heading uses the selected primary artist with an adjacent cou
     querySelector: selector => ({ '[data-gallery-bar-instance="gallery"]': bar, '[data-gallery-family-panel-title]': title, '[data-gallery-family-panel-total]': total })[selector] || null,
     getElementById: id => id === 'albums-scroll' ? { scrollTop: 0, getBoundingClientRect: () => ({ top: 0 }) } : null,
   } });
+  assert.equal(context.window.AlbumHavenArtistPageRuntime, undefined);
   context.updateGalleryMainControls = () => {};
   context.updateGalleryMainChrome();
   assert.equal(title.textContent, 'Neal Morse Family');
@@ -1048,9 +1051,15 @@ test('scroll context distinguishes the gallery root, a selected family, and the 
   assert.deepEqual(plain(resolveGalleryBarContext({ scrollTop: 0, primaryArtist: 'Alestorm', hasFamily: false, artistCount: 1, albumCount: 4, groups })), {
     kind: 'single-artist', artist: 'Alestorm', albumCount: 4,
   });
-  assert.deepEqual(plain(resolveGalleryBarContext({ scrollTop: 760, galleryBarBottom: 120, primaryArtist: 'Neal Morse', artistCount: 2, albumCount: 10, groups })), {
-    kind: 'artist', artist: 'Transatlantic', albumCount: 4,
+  const current = resolveGalleryBarContext({ scrollTop: 760, galleryBarBottom: 120, primaryArtist: 'Neal Morse', artistCount: 2, albumCount: 10, groups });
+  assert.deepEqual(plain(current), {
+    kind: 'artist', artist: 'Transatlantic', albumCount: 4, sourceSection: groups[1],
   });
+  assert.equal(current.sourceSection, groups[1], 'currentness retains the exact internal section');
+  const markup = context.buildGalleryBarHtml({...current, contextKind: current.kind,
+    sourceSection: {...current.sourceSection, group: {path: '/private/internal-group', token: 'private-currentness-token'}}});
+  assert.match(markup, /Transatlantic/);
+  assert.doesNotMatch(markup, /sourceSection|sourceGroup|private-currentness-token|\/private\/internal-group/);
 });
 
 test('anchored surfaces toggle, dismiss, and return focus while switch activation stays open', () => {
@@ -1330,7 +1339,7 @@ test('partial bootstrap gallery chrome reports empty results after all sources a
     querySelector: selector => selector === '[data-gallery-context-name]' ? name
       : selector === '[data-gallery-context-summary]' ? summary : null };
   const scroll = { scrollTop: 0, getBoundingClientRect: () => ({ top: 0 }) };
-  const context = loadRuntime({ state: { gallery: {}, view: {
+  const context = loadRuntime({ window: {}, state: { gallery: {}, view: {
     initial_view_partial: true, artist_count: 120, album_count: 900,
     artist_groups: [{ artist: 'Preview artist', albums: [{ key: 'preview', source: 'main_library' }] }],
   } }, document: {
@@ -1338,6 +1347,7 @@ test('partial bootstrap gallery chrome reports empty results after all sources a
     querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
     getElementById: id => id === 'albums-scroll' ? scroll : null,
   } });
+  assert.equal(context.window.AlbumHavenArtistPageRuntime, undefined);
   context.updateGalleryMainControls = () => {};
   context.state.gallery.mainState = context.createGalleryMainState({
     sources: { main_library: false, new_arrivals: false, hoard: false },
@@ -1348,19 +1358,20 @@ test('partial bootstrap gallery chrome reports empty results after all sources a
 
 test('gallery bar stays hidden throughout active search transitions', () => {
   assert.match(bootstrapGalleryEventHandlersSource,
-    /function updateGallerySearchDraftQuery\(nextQuery\)[\s\S]*?syncGalleryBarSearchVisibility\(\);/);
+    /function updateGallerySearchDraftQuery\(nextQuery, \{searchOperation\} = \{\}\)[\s\S]*?syncGalleryBarSearchVisibility\(\);/);
   const name = { textContent: '' };
   const summary = { textContent: '' };
   const bar = { hidden: false, offsetHeight: 54,
     querySelector: selector => selector === '[data-gallery-context-name]' ? name
       : selector === '[data-gallery-context-summary]' ? summary : null };
-  const context = loadRuntime({ state: { gallery: {}, ui: { searchDraftQuery: '' }, view: {
+  const context = loadRuntime({ window: {}, state: { gallery: {}, ui: { searchDraftQuery: '' }, view: {
     query: '', artist_groups: [],
   } }, document: {
     querySelectorAll: () => [],
     querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
     getElementById: id => id === 'albums-scroll' ? { scrollTop: 0, getBoundingClientRect: () => ({ top: 0 }) } : null,
   } });
+  assert.equal(context.window.AlbumHavenArtistPageRuntime, undefined);
   context.updateGalleryMainControls = () => {};
   context.state.gallery.mainState = context.createGalleryMainState();
 
@@ -1405,7 +1416,7 @@ test('root gallery summary counts canonical albums once across artist credits af
       : selector === '[data-gallery-context-summary]' ? summary : null };
   const shared = { key: 'shared-release', album: 'Same title', source: 'main_library' };
   const distinctVersion = { key: 'distinct-release', album: 'Same title', source: 'hoard' };
-  const context = loadRuntime({ state: { gallery: {}, view: {
+  const context = loadRuntime({ window: {}, state: { gallery: {}, view: {
     artist_count: 2, album_count: 2,
     artist_groups: [
       { artist: 'Lead', albums: [shared, distinctVersion] },
@@ -1416,6 +1427,7 @@ test('root gallery summary counts canonical albums once across artist credits af
     querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
     getElementById: id => id === 'albums-scroll' ? { scrollTop: 0, getBoundingClientRect: () => ({ top: 0 }) } : null,
   } });
+  assert.equal(context.window.AlbumHavenArtistPageRuntime, undefined);
   context.updateGalleryMainControls = () => {};
   context.state.gallery.mainState = context.createGalleryMainState();
   context.updateGalleryMainChrome();

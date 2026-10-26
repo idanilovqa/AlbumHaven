@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createHash} = require('node:crypto');
 
 const runtimeDirectory = path.resolve(__dirname, '../../../music_app/static/js/runtime');
 const read = name => fs.readFileSync(path.join(runtimeDirectory, name), 'utf8');
@@ -11,7 +12,7 @@ const deferred = () => {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return {promise, resolve, reject};
 };
-function setup({idle = false, tracks, repeat = 'off'} = {}) {
+function setup({idle = false, tracks, repeat = 'off', nativePlayback = false} = {}) {
   tracks ||= [
     {path: 'ordinary-a', playlistItemId: 'item-a', albumRef: 'album-a'},
     {path: 'ordinary-b', playlistItemId: 'item-b', albumRef: 'album-a'},
@@ -22,17 +23,19 @@ function setup({idle = false, tracks, repeat = 'off'} = {}) {
   const engine = {roles: {current: idle ? null : {}, continuity: null}};
   const scope = {token: 'signed-in-session-one', actor: 'actor-one', library: 'library-one'};
   const scheduled = [], starts = [], callbacks = [], closed = [];
+  // Mutable host identity feeds the actual transport/track scope owners.
+  const shell = {dataset: {get nativeAccountId() {return scope.actor;},
+    get nativeLibraryId() {return scope.library;},
+    get privateUiContext() {return createHash('sha256').update(scope.token).digest('hex');}}};
   let permission = true, sourceCurrent = true, ended = idle, resolver = null, startResult = true;
   const context = vm.createContext({
     window: {AlbumHavenCapabilities: {allows: () => permission}},
     state, AbortController, Map, Set, WeakMap, Object, Promise,
-    PrivateUITransport: {subscribe: () => () => {}},
+    document: {getElementById: id => id === 'app-shell' ? shell : null},
+    activateSharedTrackButton() {throw new Error('Queue must retain its native playback boundary');},
+    fetch() {throw new Error('Unexpected private transport request');},
     refreshExplicitQueueReturnTrack: async (context, track) => track,
     playerTrackSelectionToken: 0,
-    TrackActionsRuntime: {
-      scope: () => ({...scope}),
-      canPlay: target => Boolean(target?.path && target.source_readable !== false && target.allowed_actions?.can_play !== false),
-    },
     getPlayerPlaybackSnapshot: () => ({ended}),
     streamingEngineState: () => engine,
     resolveNextPlaybackContextQueue: () => null,
@@ -41,18 +44,31 @@ function setup({idle = false, tracks, repeat = 'off'} = {}) {
     observeStreamingFacadeCallback: promise => {callbacks.push(Promise.resolve(promise).catch(error => error));},
     playTrackFromPayload: async (track, options) => { starts.push({track, options}); return startResult; },
   });
-  for (const name of ['playlist-queue.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js']) vm.runInContext(read(name), context);
-  const native = read('tag-editor-and-optimistic-updates.js');
-  vm.runInContext(native.slice(native.indexOf('function peekNextQueuedTrack()'), native.indexOf('function refreshTrackModalPlaybackState()')), context);
+  if (nativePlayback) loadNativePlaybackOwners({context, state, engine});
+  else {
+    const nextContext = context.resolveNextPlaybackContextQueue;
+    vm.runInContext(read('tag-editor-and-optimistic-updates.js'), context, {filename: 'tag-editor-and-optimistic-updates.js'});
+    context.resolveNextPlaybackContextQueue = nextContext;
+  }
+  for (const name of ['private-ui-transport.js', 'playlist-queue.js', 'track-actions.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js']) vm.runInContext(read(name), context, {filename: name});
   const runtime = vm.runInContext('ExplicitQueueRuntime', context), api = context.window.AlbumHavenExplicitQueue;
   const target = (suffix = 'one') => ({path: `/private/music/${suffix}.flac`, title: `Queued ${suffix}`,
-    artist: 'Artist', album_title: 'Album', availability: 'available', source_readable: true,
+    artist: 'Artist', album_title: 'Album', availability: 'local', source_readable: true,
     allowed_actions: {can_play: true}, playback_state: {can_start_here: true}});
   const capture = (suffix = 'one') => ({display: {title: `Queued ${suffix}`, artist: 'Artist', album: 'Album'},
     isCurrent: () => sourceCurrent,
+    // Both fresh metadata and native playback re-read the controlled source.
+    resolveMetadata: options => resolver ? resolver(options, suffix) : Promise.resolve(target(suffix)),
     resolve: options => resolver ? resolver(options, suffix) : Promise.resolve(target(suffix)),
   });
-  const settle = async () => { while (callbacks.length) await Promise.all(callbacks.splice(0)); };
+  const settle = async () => {
+    // Current player owners observe their own async facade results. Drain those
+    // promise continuations as well as the original directly observed callbacks.
+    for (let turn = 0; turn < 12; turn++) {
+      if (callbacks.length) await Promise.all(callbacks.splice(0));
+      await Promise.resolve();
+    }
+  };
   const advance = async () => {
     await settle(); await runtime.prepareNext();
     const preview = context.peekNextQueuedTrack(), next = context.getNextQueuedTrack();
@@ -60,10 +76,11 @@ function setup({idle = false, tracks, repeat = 'off'} = {}) {
     state.player.current = next;
     return next;
   };
-  return {context, state, engine, queue, scope, runtime, api, capture, target, scheduled, starts, closed, settle, advance,
+  return {context, state, engine, queue, scope, runtime, api, nativePlaybackOwners: nativePlayback, capture, target, scheduled, starts, closed, settle, advance,
     setPermission: value => {permission = value;}, setSourceCurrent: value => {sourceCurrent = value;},
     setResolver: value => {resolver = value;}, setStartResult: value => {startResult = value;},
     setEnded: value => {ended = value;},
+    reply: data => ({ok: true, json: async () => ({status: 'ready', data, context_ref: shell.dataset.privateUiContext})}),
   };
 }
 
@@ -302,12 +319,12 @@ test('saved Playlist return requires the same occurrence, revision, intent and p
   const value = {playlist_id: 'playlist', playlist_item_id: 'item-b', revision: 7, intent: 'play',
     native_target: {path: track.path, playlist_item_id: 'item-b', title: 'Fresh title'}};
   const saved = {nativeQueue: h.queue};
-  context.PrivateUITransport.request = async () => ({status: 'ready', data: value});
+  context.fetch = async () => h.reply(value);
   assert.equal((await context.refreshExplicitQueueReturnTrack(saved, track)).title, 'Fresh title');
   for (const change of [{revision: 8}, {playlist_item_id: 'item-c'}, {playlist_id: 'other'}, {intent: 'inspect'},
     {native_target: {...value.native_target, path: 'another-path'}},
     {native_target: {...value.native_target, playlist_item_id: 'item-c'}}]) {
-    context.PrivateUITransport.request = async () => ({status: 'ready', data: {...value, ...change}});
+    context.fetch = async () => h.reply({...value, ...change});
     await assert.rejects(context.refreshExplicitQueueReturnTrack(saved, track), /unavailable/);
   }
 });
@@ -323,21 +340,51 @@ test('refresh restores a previously unavailable queued occurrence without replac
   assert.equal(h.starts.length, 0);
 });
 
+function loadNativePlaybackOwners(h) {
+  if (h.nativePlaybackOwners) return;
+  const c = h.context, timers = new Map(), storage = new Map(); let timerId = 0;
+  const observed = Object.fromEntries(['getPlayerPlaybackSnapshot', 'scheduleStreamingContinuity',
+    'closeStreamingContinuityRole', 'observeStreamingFacadeCallback', 'resolveNextPlaybackContextQueue'].map(name => [name, c[name]]));
+  c.window.localStorage = {getItem: key => storage.get(key) ?? null,
+    setItem(key, value) {storage.set(String(key), String(value));}, removeItem: key => storage.delete(key)};
+  Object.assign(c, {console, setTimeout(callback) {const id = ++timerId; timers.set(id, callback); return id;},
+    clearTimeout: id => timers.delete(id), setInterval(callback) {const id = ++timerId; timers.set(id, callback); return id;},
+    clearInterval: id => timers.delete(id)});
+  Object.assign(h.engine, {generation: 1, startRequestId: 0, lifecycleEpoch: 0, diagnostics: {}, snapshot: {paused: true}});
+  h.state.player.streaming = h.engine;
+  // Whole actual owners, not a playTrackFromPayload slice or invented lease.
+  for (const file of ['browser-storage-helpers.js', 'player-streaming-engine.js',
+    'playback-ownership-helpers.js', 'tag-editor-and-optimistic-updates.js', 'player-loop-playback.js']) vm.runInContext(read(file), c, {filename: file});
+  Object.assign(c, observed);
+  h.nativePlaybackOwners = true;
+}
+
 function nativeStart(h) {
   const pending = deferred(), began = deferred(), stopped = [], selected = [];
-  h.context.startStreamingTrack = track => {began.resolve(track); return pending.promise;};
-  h.context.stopStreamingPlayback = async reason => {stopped.push(reason); h.runtime.stopped();};
-  h.context.setCurrentPlayerTrack = track => {selected.push(track); h.state.player.current = track;};
-  h.context.beginStreamingPlayerListenSession = () => {};
-  h.context.updatePlayerUi = () => {};
-  const source = read('player-loop-playback.js');
-  vm.runInContext(source.slice(source.indexOf('async function playTrackFromPayload('), source.indexOf('let handledStreamingFirstFrameIdentity')), h.context);
+  assert.equal(h.nativePlaybackOwners, true, 'actual playback owners load before Queue in served order');
+  const c = h.context, nativeStop = c.stopStreamingPlayback;
+  c.stopStreamingPlayback = (reason, options) => {stopped.push(reason); return nativeStop(reason, options);};
+  // The controlled media promise uses real opaque attempt registration/advance.
+  // It cannot install a role after the actual ownership/attempt owners retire it.
+  c.startStreamingTrack = (track, options) => {
+    const attempt = c.registerStreamingAttempt(h.engine, null, track);
+    options.onStartAttempt?.(attempt); began.resolve(track);
+    return pending.promise.then(role => {
+      if (c.isStreamingPlaybackAttemptCurrent(attempt)) {
+        h.engine.roles.current = role; c.advanceStreamingAttempt(attempt, role);
+      }
+      return role;
+    });
+  };
+  c.setCurrentPlayerTrack = track => {selected.push(track); h.state.player.current = track;};
+  c.beginStreamingPlayerListenSession = () => {};
+  c.updatePlayerUi = () => {};
   return {pending, began, stopped, selected};
 }
 
 for (const invalidation of ['abort', 'route', 'session']) {
   test(`native explicit start completing after ${invalidation} cancellation cannot install current media`, async () => {
-    const h = setup({idle: true}), [id] = await h.api.enqueue([h.capture()], 'end'), native = nativeStart(h);
+    const h = setup({idle: true, nativePlayback: true}), [id] = await h.api.enqueue([h.capture()], 'end'), native = nativeStart(h);
     const controller = new AbortController(); let current = true;
     const starting = h.api.play(id, {signal: controller.signal, isCurrent: () => current});
     const track = await native.began.promise;
@@ -351,6 +398,74 @@ for (const invalidation of ['abort', 'route', 'session']) {
     assert.ok(native.stopped.length > 0);
     assert.equal(h.api.getSnapshot().currentId, null);
     if (invalidation !== 'session') assert.equal(h.api.getSnapshot().entries[0].id, id);
+  });
+}
+
+test('captured Queue stop rolls back before abort dispatch and old completion preserves a same-occurrence successor', async () => {
+  const h = setup({idle: true, nativePlayback: true}), [id] = await h.api.enqueue([h.capture()], 'end');
+  const first = nativeStart(h), oldWork = h.api.play(id).then(value => ({value}), error => ({error}));
+  const oldTrack = await first.began.promise, oldAttempt = h.engine.playbackAttempt;
+  const oldStart = h.runtime.captureStop().start;
+  let successor, successorWork, rollbackAtDispatch;
+  oldStart.signal.addEventListener('abort', () => {
+    rollbackAtDispatch = {currentId: h.api.getSnapshot().currentId, queue: h.state.player.playbackQueue};
+    successor = nativeStart(h);
+    successorWork = h.api.play(id);
+  }, {once: true});
+  h.runtime.stopped();
+  assert.deepEqual(rollbackAtDispatch, {currentId: null, queue: null});
+  const newTrack = await successor.began.promise, newAttempt = h.engine.playbackAttempt;
+  const successorStart = h.runtime.captureStop().start, selectedQueue = h.state.player.playbackQueue;
+  assert.notEqual(newAttempt, oldAttempt); assert.notEqual(successorStart, oldStart);
+  first.pending.resolve({track: oldTrack});
+  assert.ok((await oldWork).error); await h.settle();
+  assert.equal(successorStart.signal.aborted, false);
+  assert.equal(h.runtime.captureStop().start, successorStart);
+  assert.equal(h.state.player.playbackQueue, selectedQueue);
+  assert.equal(h.api.getSnapshot().currentId, id);
+  assert.equal(h.context.isStreamingPlaybackAttemptCurrent(newAttempt), true);
+  assert.equal(first.selected.length, 0);
+  successor.pending.resolve({track: newTrack});
+  assert.equal(await successorWork, true); await h.settle();
+  assert.equal(h.state.player.current, newTrack);
+  assert.equal(h.engine.roles.current.track, newTrack);
+});
+
+test('captured Queue stop cannot rewind current media installed before the pending start settles', async () => {
+  const h = setup({idle: true, nativePlayback: true}), [id] = await h.api.enqueue([h.capture()], 'end');
+  const native = nativeStart(h), select = h.context.setCurrentPlayerTrack;
+  let installedQueue;
+  h.context.setCurrentPlayerTrack = track => {
+    select(track); installedQueue = h.state.player.playbackQueue; h.runtime.stopped();
+  };
+  const work = h.api.play(id), track = await native.began.promise;
+  native.pending.resolve({track});
+  await assert.rejects(work); await h.settle();
+  assert.equal(native.selected.length, 1);
+  assert.equal(h.state.player.current, track);
+  assert.equal(h.state.player.playbackQueue, installedQueue);
+  assert.equal(h.api.getSnapshot().currentId, id);
+  assert.equal(h.api.getSnapshot().halted, true);
+});
+
+for (const edit of ['remove', 'clear', 'deactivate']) {
+  test(`ordinary ${edit} retires Queue continuity without stopping the audible current attempt`, async () => {
+    const h = setup({nativePlayback: true}), role = {track: h.state.player.current};
+    h.engine.roles.current = role;
+    const attempt = h.context.registerStreamingAttempt(h.engine, null, role.track);
+    h.context.advanceStreamingAttempt(attempt, role);
+    const [id] = await h.api.enqueue([h.capture()], 'next'); await h.settle();
+    h.engine.roles.continuity = {track: h.scheduled.at(-1)};
+    if (edit === 'remove') h.api.remove(id);
+    if (edit === 'clear') h.api.clear([id]);
+    if (edit === 'deactivate') h.api.setEnabled(false);
+    await h.settle();
+    assert.equal(h.engine.roles.current, role);
+    assert.equal(h.engine.playbackAttempt, attempt);
+    assert.equal(h.context.isStreamingPlaybackAttemptCurrent(attempt), true);
+    assert.equal(h.state.player.current, role.track);
+    assert.equal(h.state.player.playbackQueue, h.queue);
+    assert.ok(h.closed.includes('explicit-queue-change'));
   });
 }
 
@@ -391,15 +506,56 @@ test('ready end requests retain displayed order while an earlier boundary-gated 
   assert.equal((await h.advance()).explicitEntryId, waiting);
 });
 
-test('session replacement retires a prepared native continuity role without changing the audible ordinary owner', async () => {
-  const h = setup(); await h.api.enqueue([h.capture()], 'next'); await h.settle();
-  const currentRole = h.engine.roles.current;
+test('authority scope replacement retires the captured current and prepared native continuity attempt', async () => {
+  const h = setup({nativePlayback: true}), currentRole = h.engine.roles.current;
+  currentRole.track = h.state.player.current;
+  const attempt = h.context.registerStreamingAttempt(h.engine, null, currentRole.track);
+  h.context.advanceStreamingAttempt(attempt, currentRole);
+  await h.api.enqueue([h.capture()], 'next'); await h.settle();
   h.engine.roles.continuity = {track: h.scheduled.at(-1)};
+  const stops = [], stop = h.context.stopStreamingPlayback;
+  h.context.stopStreamingPlayback = (reason, options) => {stops.push({reason, options}); return stop(reason, options);};
   h.scope.token = 'new-session';
   assert.equal(h.api.getSnapshot().entries.length, 0);
   assert.equal(h.engine.roles.continuity, null);
-  assert.equal(h.engine.roles.current, currentRole);
-  assert.ok(h.closed.includes('queue-session-changed'));
+  assert.equal(h.engine.roles.current, null);
+  assert.equal(h.context.isStreamingPlaybackAttemptCurrent(attempt), false);
+  assert.equal(stops.length, 1);
+  assert.equal(stops[0].reason, 'queue-session-changed');
+  assert.equal(stops[0].options.expectedAttempt, attempt);
+  assert.equal(stops[0].options.notifyQueue, false);
+  await h.settle();
+});
+
+test('authority scope retirement cannot stop a successor registered by its old refresh abort callback', async () => {
+  const h = setup({nativePlayback: true}), oldRole = h.engine.roles.current;
+  oldRole.track = h.state.player.current;
+  const oldAttempt = h.context.registerStreamingAttempt(h.engine, null, oldRole.track);
+  h.context.advanceStreamingAttempt(oldAttempt, oldRole);
+  const scheduled = deferred(), releaseSchedule = deferred();
+  h.context.scheduleStreamingContinuity = track => {
+    h.engine.roles.continuity = {track}; scheduled.resolve(track); return releaseSchedule.promise;
+  };
+  await h.api.enqueue([h.capture()], 'next'); await scheduled.promise;
+  const refresh = h.runtime.captureStop().refresh; assert.ok(refresh);
+  const successor = nativeStart(h), nextTrack = {path: 'new-scope-track', title: 'New scope'};
+  let successorWork, successorAttempt;
+  refresh.signal.addEventListener('abort', () => {
+    assert.equal(h.engine.roles.current, null, 'captured old resources detach before callback dispatch');
+    successorWork = h.context.playTrackFromPayload(nextTrack);
+    successorAttempt = h.engine.playbackAttempt;
+  }, {once: true});
+  h.scope.token = 'new-session';
+  assert.equal(h.api.getSnapshot().entries.length, 0);
+  assert.ok(successorAttempt); assert.notEqual(successorAttempt, oldAttempt);
+  assert.equal(h.context.isStreamingPlaybackAttemptCurrent(oldAttempt), false);
+  releaseSchedule.resolve(); await h.settle();
+  assert.equal(h.context.isStreamingPlaybackAttemptCurrent(successorAttempt), true);
+  successor.pending.resolve({track: nextTrack});
+  assert.equal(await successorWork, true); await h.settle();
+  assert.equal(h.engine.playbackAttempt, successorAttempt);
+  assert.equal(h.engine.roles.current.track, nextTrack);
+  assert.equal(h.state.player.current, nextTrack);
 });
 
 test('details resolution cannot commit after its queued occurrence was removed', async () => {
@@ -426,15 +582,13 @@ test('deactivated explicit requests do not break native gallery continuation int
 });
 
 test('native loop exit prepares an explicit successor through the existing streaming facade', async () => {
-  const h = setup(); await h.api.enqueue([h.capture()], 'next'); await h.settle();
+  const h = setup({nativePlayback: true}); await h.api.enqueue([h.capture()], 'next'); await h.settle();
   h.state.player.loopActive = true;
   h.context.streamingLoopScheduleToken = 0;
   h.context.loopEditSessionExpiryController = {stop() {}};
   h.context.dispatchActiveStreamingLoop = async () => null;
   h.context.setStreamingLoop = () => {};
   h.context.updatePlayerUi = () => {};
-  const source = read('player-loop-playback.js');
-  vm.runInContext(source.slice(source.indexOf('function setLoopActive('), source.indexOf('function setLoopBoundary(')), h.context);
   const before = h.scheduled.length;
   h.context.setLoopActive(false); await h.settle();
   assert.equal(h.state.player.loopActive, false);
@@ -553,7 +707,7 @@ test('a detached detail lease cannot revive after a denied source is restored be
 });
 
 test('native explicit skip locks Queue edits until its asynchronous player selection finishes', async () => {
-  const h = setup(), [id] = await h.api.enqueue([h.capture()], 'next'); await h.settle();
+  const h = setup({nativePlayback: true}), [id] = await h.api.enqueue([h.capture()], 'next'); await h.settle();
   const native = nativeStart(h), pending = h.runtime.skip(1), track = await native.began.promise;
   let editingError;
   try {h.api.setEnabled(false);} catch (error) {editingError = error;}
@@ -567,7 +721,7 @@ test('native explicit skip locks Queue edits until its asynchronous player selec
 
 for (const invalidation of ['stopped', 'source-revoked']) {
   test(`native explicit skip cannot strand its occurrence after ${invalidation} during delayed start`, async () => {
-    const h = setup(), [id] = await h.api.enqueue([h.capture()], 'next'); await h.settle();
+    const h = setup({nativePlayback: true}), [id] = await h.api.enqueue([h.capture()], 'next'); await h.settle();
     const native = nativeStart(h), pending = h.runtime.skip(1), track = await native.began.promise;
     if (invalidation === 'stopped') h.runtime.stopped();
     else h.setSourceCurrent(false);
@@ -583,7 +737,7 @@ for (const invalidation of ['stopped', 'source-revoked']) {
 
 for (const method of ['play', 'skip']) for (const restore of [false, true]) {
   test(`native ${method} start cannot outlive read denial${restore ? ' and restoration' : ''}`, async () => {
-    const h = setup({idle: method === 'play'}); let denied = false;
+    const h = setup({idle: method === 'play', nativePlayback: true}); let denied = false;
     const source = {...h.capture(), resolveDetails: async () => {
       if (denied) throw Object.assign(new Error('Source denied'), {status: 403});
       return {target: {kind: 'album', ref: 'safe-ref'}, data: {title: 'Album'}, isCurrent: () => true};
@@ -619,6 +773,13 @@ test('source denial retires prepared native continuity without a Queue snapshot 
   assert.equal(h.engine.roles.current, audible);
   denied = false; await h.api.details(id, 'album');
   assert.equal(h.context.peekNextQueuedTrack(), null);
+  assert.equal(h.api.getSnapshot().entries[0].availability, 'unknown', 'detail readability cannot restore a media metadata grant');
+  const deniedResolves = resolves;
+  await h.runtime.prepareNext();
+  assert.equal(resolves, deniedResolves, 'details alone cannot authorize native preload');
+  assert.notEqual(h.context.peekNextQueuedTrack()?.explicitEntryId, id);
+  await h.api.refresh(); await h.settle();
+  assert.equal(h.api.getSnapshot().entries[0].availability, 'local', 'fresh metadata reauthorizes local availability');
   const before = resolves;
   await h.runtime.prepareNext();
   assert.equal(resolves, before + 1);

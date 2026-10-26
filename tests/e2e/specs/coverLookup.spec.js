@@ -232,6 +232,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(payload.updated_album?.cover_path).toBe(savedCoverPath);
     expect(payload.updated_album?.cover_revision).toBe(savedCoverRevision);
     await expect(lookup.modal).toBeHidden();
+    await trackModalActions.close();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
     await coverLookupActions.waitForTaskStatus(
@@ -239,6 +240,8 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       'Art chosen',
     );
     await coverLookupActions.closeDrawer();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
+      .toEqual(USER_OWNED_IMPROVEMENT_TARGET);
   });
 
   await stepLogger.step('Use one saved revision for Album Details and full-size artwork', async () => {

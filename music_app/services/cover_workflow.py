@@ -740,7 +740,7 @@ def choose_best_remaining_local_cover(
         for path in album_root.rglob("*")
         if path.is_file()
         and path.suffix.lower() in image_extensions
-        and not is_managed_preview_path(path)
+        and not is_generated_cover_artifact(path, album_root)
     ]
     if not candidates:
         return None

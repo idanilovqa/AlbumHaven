@@ -1,6 +1,6 @@
 /* Responsive shell navigation. Existing components retain their data and event owners. */
 const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
-const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal', form: 'app-form-modal' });
+const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal', form: 'app-form-modal', 'now-playing': 'mobile-now-playing' });
 
 function currentMobileFormOwner() {
   return typeof getActiveAppFormPage === 'function' ? getActiveAppFormPage() : null;
@@ -358,6 +358,9 @@ function nativeAlbumPagePresentationAllowed() {
 }
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
+  // This presentation never becomes a desktop modal when the breakpoint changes.
+  const nowPlaying = document.getElementById('mobile-now-playing');
+  if (nowPlaying && !mobile) { nowPlaying.hidden = true; nowPlaying.inert = true; }
   const requested = mobilePageState.pages.at(-1);
   const active = mobile && !(requested?.kind === 'album' && !nativeAlbumPagePresentationAllowed()) ? requested : null;
   const sheet = active && isMobileArtistSheet(active);
@@ -377,7 +380,10 @@ function syncMobilePageShell() {
     const modalAlbum = kind === 'album' && !nativeAlbumPagePresentationAllowed();
     const retainedSheet = kind === 'album' && isMobileArtistSheet(mobilePageState.pages.find(item => item.kind === 'album'));
     setMobilePagePresentation(kind, mobile && !modalAlbum && !retainedSheet);
-    if (element) { element.hidden = !modalAlbum && mobile && kind !== active?.kind; element.inert = !modalAlbum && mobile && kind !== active?.kind; }
+    if (element) {
+      const hidden = kind === 'now-playing' ? !mobile || kind !== active?.kind : !modalAlbum && mobile && kind !== active?.kind;
+      element.hidden = hidden; element.inert = hidden;
+    }
   }
   if (page) {
     document.getElementById('mobile-page-title').textContent = active.title;
@@ -663,6 +669,8 @@ function presentMobileUtilityPage() { return presentMobilePage(mobilePageDescrip
 function presentMobileCoverLookupPage(album) { return presentMobilePage(mobilePageDescriptor('cover-lookup', album)); }
 
 function cleanupMobilePage(descriptor) {
+  if (descriptor.kind === 'now-playing') retireMobileNowPlaying();
+  if (mobileNowPlayingDismissal === descriptor) mobileNowPlayingDismissal = null;
   if (descriptor.kind === 'form') advancedFormDestinations.delete(descriptor);
   const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
   const original = mobilePageState.originals.get(descriptor.kind);
@@ -706,6 +714,7 @@ function dismissMobilePage(kind) {
   if (kind === 'form') { void currentMobileFormOwner()?.dismiss('back'); return true; }
   const index = mobilePageState.pages.findIndex(page => page.kind === kind);
   const descriptor = mobilePageState.pages[index];
+  if (kind === 'now-playing' && mobileNowPlayingDismissal === descriptor) return true;
   if (kind === 'album' && isMobileArtistSheet(descriptor)) {
     if (mobilePageState.sheetDismissal?.descriptor === descriptor) return true;
     let resolve;
@@ -717,7 +726,11 @@ function dismissMobilePage(kind) {
   if (delta !== null) {
     // Popstate retires the surface only after the traversal commits. This also
     // keeps Forward usable, instead of overwriting the album's history entry.
-    try {window.history.go(delta);} catch (error) {settleMobileArtistSheetDismissal(descriptor, false); throw error;}
+    if (kind === 'now-playing') mobileNowPlayingDismissal = descriptor;
+    try {window.history.go(delta);} catch (error) {
+      if (mobileNowPlayingDismissal === descriptor) mobileNowPlayingDismissal = null;
+      settleMobileArtistSheetDismissal(descriptor, false); throw error;
+    }
     return true;
   }
   const returningSheet = index === 0 && isMobileArtistSheet(descriptor);
@@ -902,6 +915,7 @@ function restoreArtistSheetPage(raw) {
 }
 function restoreMobilePage(descriptor) {
   if (!descriptor || !Object.hasOwn(MOBILE_PAGE_KINDS, descriptor.kind)) return;
+  if (descriptor.kind === 'now-playing') return openMobileNowPlaying();
   if (descriptor.kind === 'form') {
     const owner = currentMobileFormOwner();
     if (owner?.token === descriptor.formToken) presentMobileAppFormPage(owner);
@@ -1294,6 +1308,7 @@ function promoteVisibleMobileDialogs() {
 function initMobileNavigation() {
   if (mobilePageState.initialized || !document.getElementById('mobile-navigation')) return;
   mobilePageState.initialized = true;
+  initMobileNowPlaying();
   const form = document.getElementById('search-form');
   const submit = form?.querySelector('[data-search-submit]');
   if (submit) { submit.id = 'mobile-search-button'; submit.setAttribute('aria-controls', 'search-input'); }
@@ -1677,4 +1692,281 @@ function syncMobileUtilityDetail() {
   const modal = document.getElementById('utility-modal');
   if (!modal) return;
   modal.dataset.mobileUtilityView = page?.utilityDetail ? 'detail' : 'list';
+}
+
+// Mobile Now Playing is a live presentation of the persistent native player.
+// Its history descriptor contains no track, media URL, taste or listening data.
+// Live-only exact descriptor receipt; never persisted into history.
+let mobileNowPlayingDismissal = null;
+let mobileNowPlayingOwner = null;
+function mobileNowPlayingExcludedTarget(target) {
+  return Boolean(target?.closest?.('button, a, input, select, textarea, [role="button"], [contenteditable], #player-cover-button, #player-artist, #player-album-link, .player-timeline, .player-loop-handle'));
+}
+function initMobileNowPlaying() {
+  const player = getPlayerElements().player;
+  if (!player || player.dataset.nowPlayingBound === 'true') return;
+  player.dataset.nowPlayingBound = 'true';
+  let gesture = null;
+  player.addEventListener('pointerdown', event => {
+    gesture = event.isPrimary !== false && (event.button == null || event.button === 0)
+      ? {id: event.pointerId, x: event.clientX, y: event.clientY, moved: false} : null;
+  });
+  player.addEventListener('pointermove', event => {
+    if (gesture?.id === event.pointerId && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 8) gesture.moved = true;
+  });
+  player.addEventListener('pointercancel', () => {gesture = {moved: true};});
+  player.addEventListener('click', event => {
+    const moved = gesture?.moved; gesture = null;
+    if (event.defaultPrevented || moved || !usesMobilePageLayout() || mobileNowPlayingExcludedTarget(event.target)
+      || getPlayerElements().timeline?.parentElement?.contains(event.target)) return;
+    openMobileNowPlaying();
+  });
+}
+function retireMobileNowPlaying() {
+  const owner = mobileNowPlayingOwner;
+  if (!owner) return;
+  mobileNowPlayingOwner = null;
+  owner.dispose();
+}
+function openMobileNowPlaying() {
+  // Native history owns the old descriptor until its delayed pop commits.
+  // Do not attach a successor owner to that descriptor in the meantime.
+  if (mobileNowPlayingDismissal && mobilePageState.pages.includes(mobileNowPlayingDismissal)) return false;
+  mobileNowPlayingDismissal = null;
+  if (!usesMobilePageLayout() || !state.player.current || isPlaybackLockedByAnotherTab()) return false;
+  let owner = mobileNowPlayingOwner;
+  if (!owner) {
+    try {owner = createMobileNowPlaying();}
+    catch (error) {
+      const surface = document.getElementById('mobile-now-playing');
+      if (surface) {surface.hidden = true; surface.replaceChildren();}
+      showToast('Now Playing could not be opened.', 'error', 3200);
+      return false;
+    }
+    mobileNowPlayingOwner = owner;
+  }
+  try {
+    const shown = presentMobilePage({kind: 'now-playing', albumKey: '', title: 'Now Playing', subtitle: ''});
+    if (!shown) {if (mobileNowPlayingOwner === owner) retireMobileNowPlaying(); return false;}
+    if (mobileNowPlayingOwner !== owner) return false;
+    owner.refresh();
+    return true;
+  } catch (error) {
+    if (mobileNowPlayingOwner === owner) {
+      retireMobileNowPlaying();
+      showToast('Now Playing could not be opened.', 'error', 3200);
+    }
+    return false;
+  }
+}
+function createMobileNowPlaying() {
+  const document = window.document, scope = TrackActionsRuntime.scope().token;
+  let root = document.getElementById('mobile-now-playing');
+  if (!root) {root = document.createElement('section'); root.id = 'mobile-now-playing'; document.body.append(root);}
+  root.className = 'mobile-now-playing'; root.hidden = true;
+  root.setAttribute('aria-label', 'Now Playing');
+  root.replaceChildren();
+  let disposed = false, timer = null, track = null, trackKey = null, source = null, sourceKey = null, album = null, action = null, pendingLove = null, menu = null;
+  let releaseScope = null, releasePlayback = null, releasePreferences = null, scopeObserver = null;
+  const current = () => !disposed && mobileNowPlayingOwner === owner && TrackActionsRuntime.scope().token === scope
+    && mobilePageState.pages.some(page => page.kind === 'now-playing');
+  const identity = selected => selected ? JSON.stringify([selected.path, selected.inventory_track_ref, selected.src, selected.playlistItemId]) : null;
+  const sourceIdentity = value => value ? JSON.stringify([value.path, value.track_ref, value.canonical_track_ref, value.inventory_track_ref,
+    value.entry_ref, value.source_readable, value.read_only_subject, value.allowed_actions?.can_read,
+    value.track_preference?.allowed_actions?.can_set_love_tier]) : null;
+  const live = (selected, selectedKey) => current() && selected === state.player.current
+    && selectedKey === identity(state.player.current) && !isPlaybackLockedByAnotherTab();
+  const resolve = (selected, retainedAlbum = undefined) => {
+    const candidate = selected && !isPlaybackLockedByAnotherTab()
+      ? retainedAlbum === undefined ? resolveAlbumForPlayerTrack(selected) : retainedAlbum : null;
+    const matches = Array.isArray(candidate?.tracks) ? candidate.tracks.filter(row => row.path === selected.path
+      && (!selected.inventory_track_ref || row.inventory_track_ref === selected.inventory_track_ref)) : [];
+    const value = matches.length === 1 && !candidate.read_only_subject && candidate.source_readable !== false
+      && candidate.allowed_actions?.can_read !== false && !matches[0].read_only_subject && matches[0].source_readable !== false
+      && matches[0].allowed_actions?.can_read !== false ? matches[0] : null;
+    return {album: candidate, source: value};
+  };
+  const sourceCurrent = (selected, selectedKey, value, valueKey) => live(selected, selectedKey)
+    && value === resolve(selected).source && valueKey === sourceIdentity(value);
+  const element = (tag, className, parent = root) => {const node = document.createElement(tag); node.className = className; parent.append(node); return node;};
+  const button = (parent, label, icon, click) => {
+    const holder = element('span', '', parent);
+    holder.innerHTML = ButtonComponent.renderActionButton({ariaLabel: label, title: label, ...(icon ? {icon: icon} : {label})});
+    const node = holder.querySelector('button');
+    // Native button renderer remains the visual owner; text is a safe fallback
+    // for controls without a named glyph in the current icon registry.
+    if (!icon) node.textContent = label;
+    node.addEventListener('click', click); return node;
+  };
+  const header = element('div', 'mobile-now-playing__actions');
+  button(header, 'Close Now Playing', 'close', () => dismissMobilePage('now-playing'));
+  const more = button(header, 'More', 'more-vertical', () => openPlaylistMenu());
+  more.setAttribute('aria-label', 'Add to playlist');
+  const art = button(root, 'View full-size artwork', null, () => {
+    if (live(track, trackKey) && image.getAttribute('src')) openImageLightbox(image.src, `Artwork for ${track.title || 'track'}`);
+  });
+  art.classList.add('mobile-now-playing__art'); art.replaceChildren();
+  const image = element('img', '', art); image.alt = '';
+  const artist = element('div', 'mobile-now-playing__artist');
+  const albumText = element('div', 'mobile-now-playing__album');
+  const title = element('div', 'mobile-now-playing__title');
+  const loveRow = element('div', 'mobile-now-playing__love');
+  const love = button(loveRow, 'Love', 'love-off', () => {
+    if (!live(track, trackKey) || !source || pendingLove) return;
+    const selected = track, selectedKey = trackKey, selectedSource = source, selectedSourceKey = sourceKey, preference = TrackActionsRuntime.preference(source);
+    if (preference?.allowed_actions.can_set_love_tier !== true) return;
+    closeMenu();
+    menu = openUtilityChoiceDropdown(love, {label: 'Love', selected: preference.love_tier, updateTriggerLabel: false,
+      formats: [{value: 'off', label: 'Off'}, {value: 'loved', label: 'Loved'}, {value: 'obsessed', label: 'Obsessed'}],
+      onSelect: value => {
+        if (!sourceCurrent(selected, selectedKey, selectedSource, selectedSourceKey) || pendingLove) return;
+        const aborter = new AbortController(); pendingLove = aborter;
+        Promise.resolve().then(() => {
+          if (!sourceCurrent(selected, selectedKey, selectedSource, selectedSourceKey) || aborter.signal.aborted) return;
+          return TrackActionsRuntime.setLove({source: selectedSource, love_tier: value, signal: aborter.signal,
+            isCurrent: () => sourceCurrent(selected, selectedKey, selectedSource, selectedSourceKey)});
+        }).catch(error => {
+          if (sourceCurrent(selected, selectedKey, selectedSource, selectedSourceKey) && error.name !== 'AbortError') showToast(error.message || 'Love could not be saved.', 'error', 3200);
+        }).finally(() => {if (pendingLove === aborter) pendingLove = null; if (current()) refresh();});
+      }});
+  });
+  const progress = element('div', 'mobile-now-playing__progress');
+  const seek = element('input', 'mobile-now-playing__seek', progress);
+  seek.type = 'range'; seek.min = '0'; seek.step = '0.01'; seek.setAttribute('aria-label', 'Playback position');
+  let seekTrack = null, seekKey = null, seeking = false;
+  const beginSeek = () => {seekTrack = track; seekKey = trackKey; seeking = true;};
+  const endSeek = () => {seeking = false;};
+  seek.addEventListener('pointerdown', beginSeek);
+  seek.addEventListener('keydown', beginSeek);
+  seek.addEventListener('keyup', endSeek); seek.addEventListener('blur', endSeek);
+
+  seek.addEventListener('input', () => {
+    if (!live(seekTrack, seekKey) || seekTrack !== track) return;
+    setPlayerPlaybackHead(Number(seek.value));
+  });
+  const times = element('div', 'mobile-now-playing__times', progress);
+  const elapsed = element('span', '', times), duration = element('span', '', times);
+  const transport = element('div', 'mobile-now-playing__transport');
+  transport.innerHTML = renderPlaybackControlCluster({variant: 'compact-player'});
+  const {previous, playPause: play, next} = getPlaybackControlClusterElements(transport);
+  previous.addEventListener('click', () => {if (live(track, trackKey)) void playCompactQueueOffset(-1);});
+  play.addEventListener('click', () => {if (live(track, trackKey)) togglePlayerPlayback();});
+  next.addEventListener('click', () => {if (live(track, trackKey)) void playCompactQueueOffset(1);});
+  function closeMenu() {
+    const previous = menu; menu = null;
+    try {if (typeof previous === 'function') previous(); else if (typeof previous?.close === 'function') previous.close(); else previous?.dispose?.();} catch { /* Continue retiring other independent owners. */ }
+  }
+  function retireActions() {
+    const loveRequest = pendingLove, playlistAction = action; pendingLove = null; action = null;
+    closeMenu();
+    try {loveRequest?.abort();} catch {}
+    try {playlistAction?.dispose();} catch {}
+  }
+  function openPlaylistMenu() {
+    if (!live(track, trackKey) || !source?.inventory_track_ref || typeof window.AlbumHavenPlaytableUI?.actions !== 'function') return;
+    const selected = track, selectedKey = trackKey, selectedSource = source, selectedSourceKey = sourceKey;
+    closeMenu();
+    menu = window.AlbumHavenPlaytableUI.actions(more, {label: 'Track actions', formats: [{value: 'add', label: 'Add to playlist'}],
+      onSelect: () => {
+        if (!sourceCurrent(selected, selectedKey, selectedSource, selectedSourceKey)) return false;
+        action?.dispose();
+        const scopeKey = window.AlbumHavenPlaylistRuntime?.snapshot()?.scopeKey;
+        if (!scopeKey) return false;
+        const row = {rowKey: 'now-playing-track', readable: true, selectable: true}, identity = {}, aborter = new AbortController();
+        const listeners = new Set();
+        const valid = () => !aborter.signal.aborted && sourceCurrent(selected, selectedKey, selectedSource, selectedSourceKey);
+        const adapter = createPrivatePlaytableSource({scopeKey, rows: [row], instance: identity, revision: identity,
+          isCurrent: valid, resolveRow: () => valid() ? selectedSource : null});
+        const lifetime = {signal: aborter.signal, isCurrent: valid, subscribeInvalidation(listener) {listeners.add(listener); return () => listeners.delete(listener);},
+          dispose() {if (aborter.signal.aborted) return; aborter.abort(); adapter.dispose(); for (const listener of [...listeners]) listener(); listeners.clear();}};
+        action = lifetime;
+        const packet = Object.freeze({scopeKey, row_keys: Object.freeze([row.rowKey]), origin: Object.freeze({tableKey: 'mobile-now-playing', target: 'selection'})});
+        const opened = window.AlbumHavenPlaytableUI.open(packet, lifetime, adapter, more, {mode: 'add'});
+        if (!opened) lifetime.dispose();
+        return opened;
+      }});
+  }
+  function refresh(revalidateOwner = true) {
+    if (!current()) return;
+    const selected = state.player.current, locked = isPlaybackLockedByAnotherTab();
+    const selectedKey = identity(selected);
+    // Pure progress paint performs no album/library enumeration. Native
+    // playback/preference events and every action resolve the genuine owner.
+    // This cache is presentation only, never action authority.
+    const cachedReadable = source && !album?.read_only_subject && album?.source_readable !== false
+      && album?.allowed_actions?.can_read !== false && !source.read_only_subject && source.source_readable !== false
+      && source.allowed_actions?.can_read !== false;
+    const resolved = revalidateOwner || selected !== track || selectedKey !== trackKey
+      ? resolve(selected) : {album, source: cachedReadable ? source : null};
+    const resolvedKey = sourceIdentity(resolved.source);
+    if (selected !== track || selectedKey !== trackKey || resolved.source !== source || resolvedKey !== sourceKey || locked) {
+      retireActions(); track = selected; trackKey = selectedKey; seekTrack = null; seekKey = null; seeking = false;
+      source = resolved.source; sourceKey = resolvedKey;
+    }
+    album = resolved.album;
+    const playback = getPlayerPlaybackSnapshot(), available = Boolean(track && !locked);
+    title.textContent = locked ? 'Playing in another tab' : track?.title || 'Nothing playing';
+    artist.textContent = available ? track.artist || '' : '';
+    albumText.textContent = available ? [track.album, album?.year].filter(Boolean).join(' · ') : '';
+    const src = available && track.coverPath ? `/cover?path=${encodeURIComponent(track.coverPath)}` : '';
+    if (src !== (image.getAttribute('src') || '')) {if (src) image.setAttribute('src', src); else image.removeAttribute('src');}
+    image.hidden = !src; art.disabled = !src;
+    const maximum = available ? getPlayerDuration() : 0, position = available ? Number(playback.currentTime) || 0 : 0;
+    seek.max = String(Math.max(maximum, 0.1)); if (!seeking) seek.value = String(Math.min(maximum, position)); seek.disabled = !available || maximum <= 0;
+    elapsed.textContent = formatLoopTime(position); duration.textContent = formatLoopTime(maximum);
+    const compact = compactPlayerElements();
+    previous.disabled = !available || compact.previous?.disabled !== false;
+    next.disabled = !available || compact.next?.disabled !== false;
+    play.disabled = !available; renderGlobalPlayerPlayGlyph(play, playback.paused); play.setAttribute('aria-label', playback.paused ? 'Play' : 'Pause');
+    const preference = source && available ? TrackActionsRuntime.preference(source) : null;
+    love.disabled = !preference || preference.allowed_actions.can_set_love_tier !== true || Boolean(pendingLove);
+    const tier = preference?.love_tier || 'off';
+    if (love.dataset.loveTier !== tier) {
+      love.dataset.loveTier = tier;
+      love.querySelector('.action-button__content').innerHTML = ButtonComponent.renderIconSvg(`love-${tier}`, {className: 'action-button__icon'});
+    }
+    love.setAttribute('title', tier === 'obsessed' ? 'Obsessed' : tier === 'loved' ? 'Loved' : 'Love');
+    love.setAttribute('aria-pressed', String(Boolean(preference && preference.love_tier !== 'off')));
+    more.disabled = !available || !source?.inventory_track_ref || !window.AlbumHavenPlaytableUI;
+  }
+  const retireStaleScope = () => {
+    if (disposed || TrackActionsRuntime.scope().token === scope) return false;
+    // Transport generations notify synchronously; marker observation is the
+    // existing DOM identity fallback and runs before the next browser paint.
+    root.hidden = true; root.inert = true; root.replaceChildren();
+    try {dismissMobilePage('now-playing');}
+    finally {if (mobileNowPlayingOwner === owner) retireMobileNowPlaying();}
+    return true;
+  };
+  const tick = () => {
+    timer = null;
+    if (disposed) return;
+    if (retireStaleScope()) return;
+    if (current() && !root.hidden && !document.hidden) refresh(false);
+    timer = window.setTimeout(tick, 250);
+  };
+  const owner = {refresh, dispose() {
+    if (disposed) return;
+    disposed = true; window.clearTimeout(timer);
+    for (const release of [releaseScope, releasePlayback, releasePreferences, () => scopeObserver?.disconnect(),
+      () => window.removeEventListener('pointerup', endSeek), () => window.removeEventListener('pointercancel', endSeek), retireActions]) {
+      try {release?.();} catch { /* One failed disposer cannot retain another owner. */ }
+    }
+    root.hidden = true; root.inert = true; root.replaceChildren();
+  }};
+  try {
+  window.addEventListener('pointerup', endSeek); window.addEventListener('pointercancel', endSeek);
+  if (typeof PrivateUITransport !== 'undefined') releaseScope = PrivateUITransport.subscribe(retireStaleScope);
+  releasePlayback = TrackActionsRuntime.subscribePlayback?.(() => {if (!retireStaleScope() && current()) refresh();});
+  releasePreferences = TrackActionsRuntime.subscribePreferences?.(() => {if (!retireStaleScope() && current()) refresh();});
+  if (typeof MutationObserver === 'function') {
+    scopeObserver = new MutationObserver(retireStaleScope);
+    for (const host of [document.getElementById('app-shell'), document.getElementById('mobile-home')].filter(Boolean)) {
+      scopeObserver.observe(host, {attributes: true, attributeFilter: ['data-native-account-id', 'data-native-library-id',
+        'data-private-ui-context', 'data-home-account-id', 'data-home-library-id']});
+    }
+  }
+  timer = window.setTimeout(tick, 250);
+  return owner;
+  } catch (error) {owner.dispose(); throw error;}
 }

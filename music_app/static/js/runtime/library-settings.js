@@ -122,10 +122,16 @@ function buildUtilityLibraryIntegrationItem() {
 }
 
 function buildUtilityIntegrationItems() {
-  return [
-    buildUtilityLibraryIntegrationItem(),
-    ...(Array.isArray(state.utility.integrations) ? state.utility.integrations : []).map(item => item.key === 'lastfm' ? {...item, title: 'Scrobbling'} : item),
-  ];
+  const allows = action => window.AlbumHavenCapabilities?.allows(action) === true;
+  const foobarAllowed = allows('account.self.foobar.write');
+  const integrations = allows('integration.settings.read')
+    ? (Array.isArray(state.utility.integrations) ? state.utility.integrations : [])
+      .filter(item => item.key !== 'foobar' || foobarAllowed)
+      .map(item => item.key === 'lastfm' ? {...item, title: 'Scrobbling'} : item)
+    : [];
+  // This is navigation only. Server-owned capabilities decide availability.
+  if (foobarAllowed && !integrations.some(item => item.key === 'foobar')) integrations.push({key:'foobar',title:'Foobar2000'});
+  return [...(allows('library.settings.read') ? [buildUtilityLibraryIntegrationItem()] : []), ...integrations];
 }
 
 async function handleLibrarySettingsIntegrationSelection(integrationKey) {

@@ -1,6 +1,7 @@
 /* Narrow adapter: React owns Home, existing native components and playback keep their owners. */
 const HomeFriendsRuntime = (() => {
   const listeners = new Set();
+  const scrobbleRefreshListeners = new Set();
   let current = null;
   let lastView = null;
   let recent = null;
@@ -13,6 +14,9 @@ const HomeFriendsRuntime = (() => {
   let profileNavigationSequence = 0;
   let playtablePresentation = null;
   let activityProvider = null, activity = null, activitySourceEpoch = 0;
+  // Provider replacement is not cancellation of an already dispatched command.
+  // Keep one bridge-owned fence across provider and native view lifetimes.
+  let scrobblePending = null, historyImportPending = null, historyImportJobs = null;
   const friendActivityEpochs = new Map();
   function eraseActivity() {activity?.nativeRows?.clear(); activity?.resources?.clear(); activity?.rows?.clear(); activity = null;}
   const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
@@ -115,7 +119,7 @@ const HomeFriendsRuntime = (() => {
     return Object.freeze({
       kind: choice(value.kind, ['albums', 'tracks', 'artists'], 'albums'),
       kindExplicit: ['albums', 'tracks', 'artists'].includes(value.kind) && value.kindExplicit !== false,
-      homeSection: choice(value.homeSection, ['recent', 'queue', 'goals'], 'recent'),
+      homeSection: choice(value.homeSection, ['recent', 'queue', 'goals', 'foobar'], 'recent'),
       period: choice(value.period, ['week', 'month', 'six', 'year', 'all'], 'week'),
       views: views(value.views),
       friendKind: choice(value.friendKind, ['albums', 'tracks', 'artists'], 'tracks'),
@@ -361,11 +365,85 @@ const HomeFriendsRuntime = (() => {
       subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
     });
   }
-  function configureActivityProvider({readActivity, resolveActivityTrack, resolveActivityNativeTarget} = {}) {
+  function scrobbleTarget(row, context) {
+    const snapshot = sync(), owner = activity, stored = owner?.rows.get(row?.id);
+    if (scrobblePending || historyImportPending || !owner || !snapshot.visible || snapshot.scopeKey !== context?.scopeKey || owner.scopeKey !== snapshot.scopeKey
+      || window.AlbumHavenCapabilities?.allows?.('integration.lastfm.scrobbles.submit') !== true
+      || owner.provider !== activityProvider || owner.query !== activityQuery(context)
+      || context.account_ref !== null || context.kind !== 'listens' || stored?.kind !== 'listen'
+      || stored.source_readable !== true || stored.scrobble_delivery?.show_status !== true
+      || stored.scrobble_delivery.state !== 'not_sent' || stored.scrobble_delivery.next_step !== 'retry_check'
+      || typeof owner.provider.retryScrobble !== 'function' || typeof owner.provider.canRetryScrobble !== 'function') return null;
+    const options = {...owner.context, snapshot_ref: owner.snapshotRef, rowId: stored.id};
+    return owner.provider.canRetryScrobble(options) === true ? {owner, options} : null;
+  }
+  function canRetryRecentScrobble(row, context) {return Boolean(scrobbleTarget(row, context));}
+  async function retryRecentScrobble(row, context) {
+    const target = scrobbleTarget(row, context);
+    if (!target) throw failure('Refresh this play before checking delivery.', 409);
+    const {owner, options} = target;
+    scrobblePending = owner;
+    try {await owner.provider.retryScrobble(options);}
+    finally {
+      if (scrobblePending === owner) scrobblePending = null;
+      // Retire source authority before asking the current Home owner for a new
+      // initial snapshot, even if its provider was replaced during the command.
+      // Never apply the old provider result or retire another private scope.
+      if (activity?.scopeKey === owner.scopeKey && activity.context.account_ref === null
+        && activity.context.kind === 'listens') eraseActivity();
+      const snapshot = sync();
+      if (snapshot.visible && snapshot.scopeKey === owner.scopeKey) {
+        for (const listener of [...scrobbleRefreshListeners]) {
+          try {listener(owner.scopeKey);} catch { /* Keep other current owners refreshing. */ }
+        }
+      }
+    }
+  }
+  function canImportLastfmHistory(context) {
+    const snapshot = sync(), owner = activity;
+    return Boolean(!historyImportPending && !scrobblePending && owner && snapshot.visible && snapshot.scopeKey === context?.scopeKey
+      && owner.scopeKey === snapshot.scopeKey && owner.provider === activityProvider
+      && owner.query === activityQuery(context) && context.account_ref === null && context.kind === 'listens'
+      && owner.lastfmEnabled === true && typeof owner.provider.historyCommand === 'function');
+  }
+  async function importLastfmHistory(command, context, signal) {
+    if (!canImportLastfmHistory(context)) throw failure('Refresh your own listening history first.',409);
+    const owner = activity; historyImportPending = owner;
+    try {
+      const result = await owner.provider.historyCommand({...command,...owner.context,signal});
+      if (activity !== owner || activityProvider !== owner.provider || sync().scopeKey !== owner.scopeKey) throw superseded();
+      const previous = historyImportJobs?.scopeKey === owner.scopeKey && historyImportJobs.provider === owner.provider ? historyImportJobs.rows : [];
+      const ranges = previous.filter(row=>!row.plan), plans = previous.filter(row=>row.plan);
+      const rows = command.command === 'pending' ? [...plans,...result.generations]
+        : command.command === 'backfill_pending' ? [...ranges,...result.plans]
+        : result.plan ? [...ranges,...plans.filter(row=>row.plan!==result.plan),result]
+        : [...plans,...ranges.filter(row=>row.generation!==result.generation),result];
+      historyImportJobs = {scopeKey:owner.scopeKey,provider:owner.provider,
+        rows:[...rows.filter(row=>!row.plan).slice(-4),...rows.filter(row=>row.plan).slice(-5)]};
+      return result;
+    } finally {if (historyImportPending === owner) historyImportPending = null;}
+  }
+  function lastfmImportProgress(context) {
+    return canImportLastfmHistory(context) && historyImportJobs?.scopeKey === context.scopeKey
+      && historyImportJobs.provider === activityProvider ? Object.freeze([...historyImportJobs.rows]) : Object.freeze([]);
+  }
+  function refreshLastfmHistory(context) {
+    const snapshot = sync();
+    if (!snapshot.visible || snapshot.scopeKey !== context?.scopeKey || context.account_ref !== null || context.kind !== 'listens'
+      || activity?.query !== activityQuery(context) || activity?.provider !== activityProvider) return;
+    eraseActivity();
+    for (const listener of [...scrobbleRefreshListeners]) {try {listener(context.scopeKey);} catch {}}
+  }
+  function configureActivityProvider({readActivity, resolveActivityTrack, resolveActivityNativeTarget, retryActivityScrobble, canRetryActivityScrobble, lastfmHistoryCommand} = {}) {
     eraseActivity(); actionSequence++; activitySourceEpoch++;
     friendActivityEpochs.clear();
     activityProvider = typeof readActivity === 'function' ? {read: readActivity, resolve: typeof resolveActivityTrack === 'function' ? resolveActivityTrack : null, resolveNative: typeof resolveActivityNativeTarget === 'function' ? resolveActivityNativeTarget : null} : null;
     const provider = activityProvider;
+    if (provider) {
+      provider.historyCommand = typeof lastfmHistoryCommand === 'function' ? lastfmHistoryCommand : null;
+      provider.retryScrobble = typeof retryActivityScrobble === 'function' ? retryActivityScrobble : null;
+      provider.canRetryScrobble = typeof canRetryActivityScrobble === 'function' ? canRetryActivityScrobble : null;
+    }
     if (!provider) return null;
     return async function readActivityProjection(options = {}) {
       const start = sync(), query = activityQuery(options);
@@ -434,6 +512,38 @@ const HomeFriendsRuntime = (() => {
             owner.rows.set(row.id, redacted); owner.resources.delete(row.id); owner.nativeRows.delete(row.id); return redacted;
           }
           publicRow.source_readable = true;
+          const observation = row.lastfm_observation;
+          if (context.account_ref === null && context.kind === 'listens' && row.kind === 'listen'
+            && ['remote_only','in_app'].includes(observation?.source)
+            && observation.correlation === (observation.source === 'remote_only' ? 'unmatched' : 'exact_observed_tuple')
+            && typeof observation.uncertain === 'boolean')
+            publicRow.lastfm_observation = Object.freeze({source:observation.source,correlation:observation.correlation,uncertain:observation.uncertain});
+          // This bridge strips private fields before the Home model sees them.
+          // Only own occurrence DTOs cross; the model validates state/step pairs.
+          const delivery = row.scrobble_delivery;
+          if (context.account_ref === null && context.kind === 'listens' && row.kind === 'listen'
+            && delivery && typeof delivery === 'object' && !Array.isArray(delivery)
+            && Object.keys(delivery).length === 3
+            && ['state', 'next_step', 'show_status'].every(key => own(delivery, key))
+            && ['not_eligible', 'unknown', 'accepted', 'delivery_unconfirmed', 'not_sent',
+              'reauthentication_required', 'rejected', 'retry_exhausted'].includes(delivery.state)
+            && ['none', 'check_delivery', 'reauthenticate', 'retry_check', 'review_failure', 'check_connection'].includes(delivery.next_step)
+            && typeof delivery.show_status === 'boolean') {
+            publicRow.scrobble_delivery = Object.freeze({state: delivery.state,
+              next_step: delivery.next_step, show_status: delivery.show_status});
+          }
+          const assessment = row.lastfm_assessment;
+          if (context.account_ref === null && context.kind === 'listens' && row.kind === 'listen'
+            && row.source_readable === true && publicRow.scrobble_delivery?.show_status === true
+            && ['delivery_unconfirmed', 'unknown'].includes(publicRow.scrobble_delivery.state)
+            && assessment && typeof assessment === 'object' && !Array.isArray(assessment)
+            && Object.keys(assessment).length === 5
+            && ['state', 'accepted', 'proves_not_sent', 'can_resend', 'provider_snapshot_guaranteed'].every(key => own(assessment, key))
+            && ['unbound_attempt', 'incomplete_observation', 'not_observed', 'possible_observation', 'ambiguous_observation'].includes(assessment.state)
+            && ['accepted', 'proves_not_sent', 'can_resend', 'provider_snapshot_guaranteed'].every(key => assessment[key] === false)) {
+            publicRow.lastfm_assessment = Object.freeze({state: assessment.state, accepted: false,
+              proves_not_sent: false, can_resend: false, provider_snapshot_guaranteed: false});
+          }
           publicRow.artwork_url = typeof row.artwork_url === 'string' && row.artwork_url.startsWith('/') && !row.artwork_url.startsWith('//')
             && !/[\\\x00-\x20\x7f]/.test(row.artwork_url) ? row.artwork_url : null;
           publicRow.detail_ref = opaque(row.detail_ref) ? row.detail_ref : null;
@@ -469,6 +579,13 @@ const HomeFriendsRuntime = (() => {
         });
         if (!active()) throw superseded();
         const projected = {rows: Object.freeze(rows)};
+        const observationCoverage = data.coverage?.lastfm_observations;
+        owner.lastfmEnabled = context.account_ref === null && context.kind === 'listens' && observationCoverage?.enabled === true;
+        if (context.account_ref === null && context.kind === 'listens' && !owner.lastfmEnabled
+          && historyImportJobs?.scopeKey === owner.scopeKey) historyImportJobs = null;
+        if (owner.lastfmEnabled) projected.lastfm_observations = Object.freeze({enabled:true,
+          connected:observationCoverage.connected === true, observation_state:['not_imported','disconnected','binding_unavailable','partial','observed_ranges','uncertain'].includes(observationCoverage.observation_state) ? observationCoverage.observation_state : 'partial', complete_history:false, provider_snapshot_guaranteed:false,
+          uncertain_rows:Number.isSafeInteger(observationCoverage.uncertain_rows) && observationCoverage.uncertain_rows >= 0 ? observationCoverage.uncertain_rows : 0});
         if (owner.snapshotRef) projected.snapshot_ref = owner.snapshotRef;
         if (own(data, 'total_listens')) projected.total_listens = typeof data.total_listens === 'number' && Number.isFinite(data.total_listens) && data.total_listens >= 0 ? data.total_listens : null;
         for (const key of ['period_label', 'range_label']) if (own(data, key)) projected[key] = typeof data[key] === 'string' ? data[key] : null;
@@ -967,7 +1084,10 @@ const HomeFriendsRuntime = (() => {
       return () => listeners.delete(listener);
     },
     readRecent, albumIntent, albumDetailSelection, readAlbumProjection, navigate, savePresentation, openForm, openFriendRequestForm, openFriendProfile,
+    canImportLastfmHistory, importLastfmHistory, refreshLastfmHistory, lastfmImportProgress,
     configureActivityProvider, canTrackIntent, trackIntent, trackPreference: activityPreference, setTrackLove, createPlaytableSource, retainPlaytablePresentation,
+    canRetryRecentScrobble, retryRecentScrobble,
+    subscribeRecentScrobbleRefresh(listener) {scrobbleRefreshListeners.add(listener); return () => scrobbleRefreshListeners.delete(listener);},
     readPresencePlayback() {
       const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
       const locked = typeof isPlaybackLockedByAnotherTab !== 'function' || isPlaybackLockedByAnotherTab();

@@ -2,9 +2,19 @@
 
 ## What Album Haven does
 
-Foobar2000 history import is unavailable in this build. Album Haven provides setup instructions and export references. Opening this help page or downloading a reference file does not read your Foobar profile, change Foobar settings, or register a scheduled task.
+Use Settings → Integrations to review and confirm a manual Foobar2000 import into your own account. A connected music library is optional. The importer accepts supported UTF-8 Text Tools TSV files up to 64 MiB or finalized, self-contained Enhanced SQLite artifacts up to 512 MiB. A SQLite artifact must not depend on a WAL or a live database copy; the server validates the selected artifact before review.
 
-Manual exports are snapshots. Export a new file when you want to capture later Foobar activity. A future continuous-sync feature, when explicitly enabled, will have its own limited authorization contract.
+Album Haven does not configure Foobar, launch it, change its settings or presets, toggle components, or register scheduled tasks. It does not run the reference scripts, perform live synchronization, or write back to Foobar. Opening this help or downloading a reference file does not import anything.
+
+Manual exports are snapshots. Export a new file when you want to capture later Foobar activity. To resume an interrupted import, keep and reselect the exact original file, then review the remaining work and confirm again. An edited file or a fresh re-export cannot replace that original file for recovery. Requesting a stop does not undo work the server has already confirmed.
+
+## Dates and listening evidence
+
+TSV dates without a UTC offset retain their raw text and unresolved timezone. Album Haven does not guess a timezone from your browser, current location or travel history. Supported Enhanced FILETIME timestamps preserve their numeric source precision and provenance. Reported timestamp entries may be incomplete; counts, first/last bounds and timestamp entries do not prove listening duration or full album plays.
+
+## Upload privacy
+
+Your selected file is sent to this server for review and confirmation. Exports can contain sensitive local media paths and listening history; protect your original file. Raw upload staging is temporary. If you select “Keep a private temporary source copy”, Album Haven retains an account-only copy in its database until completion or 24 hours from the first save. Reads stop at expiry; physical cleanup may wait for a service restart. Server backups follow the operator’s retention policy. Keep the original file in case the temporary copy is unavailable. Imported history, ratings and favourites remain separate from this temporary copy.
 
 ## Components and export formats
 
@@ -27,6 +37,8 @@ The standard preset exports path, artist, album, date, disc and track numbers, t
 Use `text-tools-enhanced-preset.txt` only when `foo_enhanced_playcount` is installed and you need its richer history fields. Follow the same setup and export steps as the standard preset. Keep the standard preset as the default when aggregate playback fields are enough.
 
 ## Playback Statistics XML
+
+Playback Statistics XML is not supported by the current importer. These steps are export references only; choose a supported Text Tools TSV for import.
 
 Choose `Library -> Playback Statistics -> Export statistics to XML...` to create a manual XML snapshot. Inspect the result before relying on it. Hashed-only track identities may not contain enough information for a later import.
 

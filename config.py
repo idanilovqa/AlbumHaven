@@ -217,6 +217,22 @@ def _library_browse_bases():
 
 
 class Config:
+    # Capture remains opt-in; registering settings does not install its schema.
+    ALBUM_HAVEN_POSITION_CAPTURE_ENABLED = (
+        os.environ.get("ALBUM_HAVEN_POSITION_CAPTURE_ENABLED", "")
+        .strip().lower() in {"1", "true", "yes"}
+    )
+    ALBUM_HAVEN_WAV_ABSOLUTE_CAPTURE_ENABLED = (
+        os.environ.get("ALBUM_HAVEN_WAV_ABSOLUTE_CAPTURE_ENABLED", "")
+        .strip().lower() in {"1", "true", "yes"}
+    )
+    # Optional Tops presentation is independent of recording availability.
+    # Only an explicit affirmative deployment value enables it; absent/unknown
+    # values remain false. This does not enable capture or apply any schema.
+    ALBUM_HAVEN_TOP_LISTENING_PRESENTATION_ENABLED = (
+        os.environ.get("ALBUM_HAVEN_TOP_LISTENING_PRESENTATION_ENABLED", "")
+        .strip().lower() in {"1", "true", "yes"}
+    )
     ALBUM_HAVEN_DEPLOYMENT_MODE = os.environ.get("ALBUM_HAVEN_DEPLOYMENT_MODE", "self_hosted")
     _public_sharing = build_public_sharing_config(os.environ)
     ALBUM_HAVEN_PUBLIC_SHARING_ENABLED = _public_sharing["enabled"]
@@ -249,6 +265,18 @@ class Config:
         kind="library roots",
     )
     CACHE_MAX_AGE_SECONDS = int(os.environ.get("MUSIC_CACHE_MAX_AGE_SECONDS", "0"))
+    # Deployment opt-in only. Capacity remains mandatory and is validated by
+    # the service; missing or malformed values must not allocate a worker.
+    ALBUM_HAVEN_FOOBAR_ACCOUNT_IMPORT_ENABLED = os.environ.get(
+        'ALBUM_HAVEN_FOOBAR_ACCOUNT_IMPORT_ENABLED', '').strip().casefold() == 'true'
+    ALBUM_HAVEN_FOOBAR_IMPORT_INTAKE_BYTES = os.environ.get(
+        'ALBUM_HAVEN_FOOBAR_IMPORT_INTAKE_BYTES')
+    ALBUM_HAVEN_FOOBAR_IMPORT_TOTAL_LOGICAL_BYTES = os.environ.get(
+        'ALBUM_HAVEN_FOOBAR_IMPORT_TOTAL_LOGICAL_BYTES')
+    ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED = os.environ.get(
+        'ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED', '').strip().casefold() == 'true'
+    ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED = os.environ.get(
+        'ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED', '').strip().casefold() == 'true'
     SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wav"}
     IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
     COVER_PROVIDER_GROUPS = normalize_cover_provider_groups(

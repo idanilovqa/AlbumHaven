@@ -768,8 +768,8 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
 
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
-  await page.setViewportSize({ width: 390, height: 420 });
-  const drawerScrollTop = await coverLookupActions.scrollDrawerToEnd();
+  await page.setViewportSize({ width: 390, height: 300 });
+  const drawerScrollTop = await coverLookupActions.scrollDrawerAwayFromEdges();
   expect(drawerScrollTop).toBeGreaterThan(0);
   const readCards = async () => Object.fromEntries(await Promise.all(
     notifications.map(async ({ taskId }) => [

@@ -1188,9 +1188,9 @@ export class CoverLookupActions {
     await this.coverLookup.taskOpenButtonById(taskId).click();
   }
 
-  async scrollDrawerToEnd() {
+  async scrollDrawerAwayFromEdges() {
     return this.coverLookup.drawerBody.evaluate((body) => {
-      body.scrollTop = body.scrollHeight;
+      body.scrollTop = Math.floor((body.scrollHeight - body.clientHeight) / 2);
       return body.scrollTop;
     });
   }

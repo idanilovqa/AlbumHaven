@@ -27,7 +27,7 @@ transition: background 150ms ease, border-color 150ms ease, color 150ms ease, ou
 }
 .ui-button[hidden] { display: none !important; }
 .ui-button__content { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
-.ui-button--medium { min-height: 34px; }
+.ui-button--medium { box-sizing: border-box; height: 34px; min-height: 34px; padding: 0 12px; }
 .ui-button--small { min-height: 26px; }
 .ui-button--primary {
 border-color: var(--appearance-primary-button, var(--accent));

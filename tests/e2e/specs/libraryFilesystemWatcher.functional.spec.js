@@ -942,6 +942,26 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
       });
     });
 
+    await stepLogger.step('Keep an album-title search under its selected track performer', async () => {
+      const target = FEATURED_OWNERSHIP_TARGETS.at(-1);
+      await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(target.album)}`);
+      await galleryActions.waitForGalleryReady();
+      await expectFeaturedAlbumOccurrence({
+        page,
+        galleryActions,
+        navigationPanelActions,
+        ...target,
+      });
+      const observation = await galleryActions.readProductionVisibleAlbumObservation(
+        target.artist,
+        [target.album],
+      );
+      expect(observation.albumCount).toBe(1);
+      expect(observation.renderedIdentities).toEqual([
+        { album: target.album, year: String(target.year) },
+      ]);
+    });
+
     await stepLogger.step('Keep soundtrack ownership stable after application restart', async () => {
       await managedAppLifecycle.restart();
       await appBarActions.waitForScanAndCoverRefreshIdle();

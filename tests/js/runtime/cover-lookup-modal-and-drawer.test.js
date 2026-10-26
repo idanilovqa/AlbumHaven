@@ -772,6 +772,44 @@ require('node:test')('active-only polling merges updates without replacing loade
   );
 });
 
+require('node:test')('active-only polling drops completed cards cleared by another client', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [],
+          next_cursor: null,
+          total_count: 0,
+          active_count: 0,
+          finished_count: 0,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'cleared-in-another-client',
+    status: 'completed',
+    notification_action_taken: true,
+  }];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 1,
+    active_count: 0,
+    finished_count: 1,
+  };
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(Array.from(context.state.coverLookup.tasks), []);
+});
+
 require('node:test')('active-only polling refreshes the modal when partial candidates advance', async () => {
   let galleryRefreshes = 0;
   let pollCount = 0;

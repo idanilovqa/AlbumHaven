@@ -807,6 +807,15 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   expect(await readCards()).toEqual(afterSave);
   expect(await readTargetOrder()).toEqual(orderBeforeSave);
   await verifyCardDestinations();
+
+  const clearResponse = await page.request.post('/utilities/cover-lookup/tasks/clear-completed', {
+    data: {},
+  });
+  expect(clearResponse.ok()).toBe(true);
+  await expect(coverLookupActions.coverLookup.taskCardById(selected.taskId)).toHaveCount(0);
+  for (const { taskId } of notifications.slice(0, -1)) {
+    await expect(coverLookupActions.coverLookup.taskCardById(taskId)).toHaveCount(1);
+  }
 });
 
 test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload', { tag: '@area:cover-providers' }, async ({

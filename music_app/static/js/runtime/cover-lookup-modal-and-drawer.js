@@ -2285,7 +2285,12 @@ async function loadCoverLookupTasks(options = {}) {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
+    const previousNotificationTotal = Number(state.coverLookup.notificationCounts?.total_count);
     updateCoverLookupNotificationCounts(data);
+    const notificationsRemoved = activeOnly
+      && Number.isFinite(previousNotificationTotal)
+      && Number.isFinite(Number(data.total_count))
+      && Number(data.total_count) < previousNotificationTotal;
     const incomingTasks = Array.isArray(data.tasks) ? data.tasks : [];
     const incomingTaskIds = new Set(
       incomingTasks.map((task) => String(task?.id || '')).filter(Boolean),
@@ -2365,10 +2370,10 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
-    if (missingActiveTask) {
+    if (missingActiveTask || notificationsRemoved) {
       await loadCoverLookupTasks({
         toast: false,
-        mergeFirstPage: true,
+        mergeFirstPage: !notificationsRemoved,
         refreshModalGallery: options.refreshModalGallery,
       });
     }

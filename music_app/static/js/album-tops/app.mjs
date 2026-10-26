@@ -1,3 +1,4 @@
+import {mountListeningSettingsControl} from './listening-settings-control.mjs';
 import {captureAlbumTopSampleOrigin} from '../playlists/sample-playlist-origins.mjs';
 import {mountButton, mountStatus} from '../home-friends/native-controls.mjs';
 import {mountAlbumProgress} from '../home-friends/album-progress.mjs';
@@ -16,8 +17,9 @@ export function mountAlbumTopsView(host, runtime, props) {
   const {controller, providers} = props;
   let latest = props, disposed = false, dialog = null, dialogIntent = null, inline = null, normalHeader = null, restoreFocus = false, dialogToken = null, updating = false, pending = null;
   const section = node(host, 'section', 'album-tops'); section.setAttribute('aria-label', 'Album Tops');
-  const normal = node(section), headerHost = node(normal), filterHost = node(normal), description = node(normal, 'p'), statusHost = node(normal), empty = node(normal), cards = node(normal, 'div', 'home-activity__cards home-activity__cards--albums'), noticeHost = node(normal), editHost = node(section);
+  const normal = node(section), headerHost = node(normal), listeningSettingsHost = node(normal), filterHost = node(normal), description = node(normal, 'p'), statusHost = node(normal), empty = node(normal), cards = node(normal, 'div', 'home-activity__cards home-activity__cards--albums'), noticeHost = node(normal), editHost = node(section);
   filterHost.hidden = true;
+  let listeningSettings = null, listeningSettingsController = null;
   const status = mountStatus(statusHost, runtime, {value: latest.state.directory, label: 'Album Tops', retry: () => controller.load()});
   const notice = mountMutationNotice(noticeHost, runtime, {controller, value: latest.state.mutation});
   const cardOwners = new Map(), consumedShareRequests = new WeakSet();
@@ -95,6 +97,11 @@ export function mountAlbumTopsView(host, runtime, props) {
   }
   function render(next) {
     if (disposed) return; latest = next; const {state} = latest, selected = state.selectedTopRef, detail = state.detail.data;
+    const nextSettings = latest.listeningSettingsController || null;
+    if (listeningSettingsController !== nextSettings) {listeningSettings?.dispose(); listeningSettings = null; listeningSettingsController = nextSettings;
+      if (nextSettings) listeningSettings = mountListeningSettingsControl(listeningSettingsHost, runtime, nextSettings);}
+    listeningSettingsHost.hidden = !nextSettings;
+    listeningSettings?.update();
     const viewKey = JSON.stringify([state.scopeKey, selected]);
     if (readViewKey !== viewKey) {readViewKey = viewKey; readView = DEFAULT_TOP_READ_VIEW; inlineFocusOwner = null; restoreFocus = false;}
     const denied = state.directory.status === 'denied' || state.detail.status === 'denied';
@@ -135,7 +142,7 @@ export function mountAlbumTopsView(host, runtime, props) {
     if (!showGallery || galleryKey !== nextGalleryKey) retireGallery();
     if (showGallery) {
       const options = {controller, state, providers: latest.providers, toolsHost: normalHeader.galleryTools, panelHost: filterHost, sourceReplay: latest.sourceReplay,
-        readView, onReadViewChange(value) {if (!disposed && readViewKey === viewKey) readView = value;}};
+        listeningPreference: listeningSettingsController?.presentation(), readView, onReadViewChange(value) {if (!disposed && readViewKey === viewKey) readView = value;}};
       if (gallery) gallery.update(options); else {galleryKey = nextGalleryKey; gallery = mountAlbumTopGallery(galleryHost, runtime, options);}
     }
     for (const [index, row] of (ready && !selected ? state.directory.data.tops : []).entries()) {
@@ -172,7 +179,7 @@ export function mountAlbumTopsView(host, runtime, props) {
     if (disposed) return; pending = next; if (updating) return; updating = true;
     try {while (pending && !disposed) {const current = pending; pending = null; render(current);}} finally {updating = false;}
   }
-  function dispose() {if (disposed) return; disposed = true; pending = null; retireGallery(); retireDialog(); inline?.dispose(); normalHeader?.dispose(); status.dispose(); notice.dispose(); for (const item of cardOwners.values()) item.host.removeEventListener('click', item.listener); cardOwners.clear(); section.remove();}
+  function dispose() {if (disposed) return; disposed = true; pending = null; listeningSettings?.dispose(); retireGallery(); retireDialog(); inline?.dispose(); normalHeader?.dispose(); status.dispose(); notice.dispose(); for (const item of cardOwners.values()) item.host.removeEventListener('click', item.listener); cardOwners.clear(); section.remove();}
   try {update(props);} catch (error) {dispose(); throw error;}
   return {update, dispose};
 }

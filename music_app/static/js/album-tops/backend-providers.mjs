@@ -1,3 +1,4 @@
+import {createCurrentTopListeningProvider} from './current-listening-provider.mjs';
 // All network replies are bound to the authenticated native context and caller scope.
 import {isProgressRevision, isManualProgress, isTopActivity, projectCompleteTopProgress} from './progress.mjs';
 import {isPublicationRevision, projectOwnerPublication, projectPublicationReceipt} from './publication.mjs';
@@ -188,6 +189,15 @@ function nativeQueuePopularity(value) {
   try {timestamp(value.observed_at);} catch {throw fail('Invalid Album Top popularity.', 502);}
   return {provider: value.provider, metric: value.metric, count: value.count, observed_at: value.observed_at};
 }
+function nativeListeningSelection(value) {
+  if (!keysAre(value, ['version', 'selection_ref', 'membership_revision'])
+      || value.version !== 'local-edition-selection-v1'
+      || !canonicalUUID(value.selection_ref) || value.selection_ref === '00000000-0000-0000-0000-000000000000'
+      || typeof value.membership_revision !== 'string' || !/^[0-9a-f]{64}$/.test(value.membership_revision)) {
+    throw fail('Invalid Album Top listening selection.', 502);
+  }
+  return Object.freeze({...value});
+}
 function nativeQueue(value, captured, library) {
   if (!keysAre(value, ['top_ref', 'revision', 'albums', 'unavailable_items'])) throw fail('Invalid Album Top native queue.', 502);
   const data = {...value};
@@ -197,8 +207,10 @@ function nativeQueue(value, captured, library) {
   const members = new Set(), catalogs = new Set(), occurrences = new Set(), inventoryAlbums = new Map(), inventoryTracks = new Map();
   const albums = [];
   for (const value of data.albums) {
-    if (!keysAre(value, ['item_ref', 'catalog_ref', 'inventory_album_ref', 'album_ref', 'tracks'])) throw fail('Invalid Album Top queue album.', 502);
+    if (!keysAre(value, ['item_ref', 'catalog_ref', 'inventory_album_ref', 'album_ref', 'tracks'])
+      && !keysAre(value, ['item_ref', 'catalog_ref', 'inventory_album_ref', 'album_ref', 'tracks', 'listening_selection'])) throw fail('Invalid Album Top queue album.', 502);
     const album = {...value};
+    if (Object.hasOwn(album, 'listening_selection')) album.listening_selection = nativeListeningSelection(album.listening_selection);
     if (!canonicalUUID(album.item_ref) || members.has(album.item_ref) || !canonicalUUID(album.catalog_ref) || catalogs.has(album.catalog_ref)
       || !nativeInventoryReference(album.inventory_album_ref, library) || !nativeAlbumReference(album.album_ref)
       || !Array.isArray(album.tracks) || !album.tracks.length || album.tracks.length > 5000
@@ -444,6 +456,7 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
       }, 'account_ref')};
   };
   return {
+    ...createCurrentTopListeningProvider({transport, acceptsScope, isDisposed: () => disposed}),
     remoteContext,
     ...createSourceImportProviders({request}),
     async searchRemoteAlbums(payload, options) {

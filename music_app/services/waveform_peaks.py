@@ -12,6 +12,7 @@ import sys
 from typing import Awaitable, Callable
 
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
+from music_app.services.mp3_gapless import Mp3GaplessProbe
 
 
 PCM_READ_CHUNK_BYTES = 64 * 1024
@@ -19,6 +20,7 @@ MAX_STDERR_DIAGNOSTIC_BYTES = 64 * 1024
 MAX_AGGREGATE_OUTPUT_BYTES_PER_BIN = 160
 WAVEFORM_ANALYSIS_SAMPLE_RATE = 8_000
 WAVEFORM_ANALYZER_VERSION = "waveform-peaks-v3"
+_PROBE_RELEASE_SECONDS = 4.0
 _PEAK_LEVEL_PATTERN = re.compile(
     rb"^lavfi\.astats\.(?P<channel>[12])\.Peak_level=(?P<decibels>[^\r\n]+)$"
 )
@@ -226,6 +228,7 @@ async def build_waveform_peaks(
     *,
     bins: int,
     cancel_event: asyncio.Event,
+    probe: Mp3GaplessProbe,
 ) -> WaveformPeaks:
     if bins < 1:
         raise ValueError("waveform bin count must be positive")
@@ -236,7 +239,8 @@ async def build_waveform_peaks(
     duration_seconds = await asyncio.to_thread(_audio_duration_seconds, path)
     from music_app.services.mp3_gapless import ignored_mp3_gapless_info
 
-    gapless = await ignored_mp3_gapless_info(path, executable, cancel_event=cancel_event)
+    gapless = await ignored_mp3_gapless_info(
+        path, executable, probe=probe, cancel_event=cancel_event)
     sample_filter = (
         gapless.decode_filters(WAVEFORM_ANALYSIS_SAMPLE_RATE)[1]
         if gapless is not None else f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE}"
@@ -380,24 +384,40 @@ class WaveformPeaksRegistry:
         self._lock = asyncio.Lock()
         self._active_task: asyncio.Task[WaveformPeaks] | None = None
         self._active_cancel_event: asyncio.Event | None = None
+        self._active_probe: Mp3GaplessProbe | None = None
         self._release_tasks: set[asyncio.Task[None]] = set()
         self._shutting_down = False
 
     async def _release_completed_task(self, task: asyncio.Task[WaveformPeaks]) -> None:
         async with self._lock:
-            if self._active_task is task and task.done():
+            if (self._active_task is task and task.done()
+                    and (self._active_probe is None or self._active_probe.cleanup_complete)):
                 self._active_task = None
                 self._active_cancel_event = None
+                self._active_probe = None
+
+    async def _settle_completed_task(self, task: asyncio.Task[WaveformPeaks]) -> None:
+        async with self._lock:
+            probe = self._active_probe if self._active_task is task else None
+        if probe is not None:
+            try:
+                await probe.wait_closed()
+            except Exception as error:
+                _LOGGER.warning("Waveform MP3 probe cleanup unavailable: %s", error)
+                return
+        await self._release_completed_task(task)
 
     def _schedule_completed_task_release(self, task: asyncio.Task[WaveformPeaks]) -> None:
-        release_task = asyncio.create_task(self._release_completed_task(task))
+        release_task = asyncio.create_task(self._settle_completed_task(task))
         self._release_tasks.add(release_task)
         release_task.add_done_callback(self._release_tasks.discard)
 
     @property
     def active_job_count(self) -> int:
         task = self._active_task
-        return int(task is not None and not task.done())
+        return int(task is not None and (not task.done()
+                   or (self._active_probe is not None
+                       and not self._active_probe.cleanup_complete)))
 
     def _cache_identity(self, path: Path, *, bins: int) -> dict[str, object]:
         stat = path.stat()
@@ -455,7 +475,13 @@ class WaveformPeaksRegistry:
         cancel_event: asyncio.Event,
         cache_identity: dict[str, object] | None,
     ) -> WaveformPeaks:
-        peaks = await self._builder(path, bins=bins, cancel_event=cancel_event)
+        if self._builder is build_waveform_peaks:
+            peaks = await self._builder(
+                path, bins=bins, cancel_event=cancel_event, probe=self._active_probe)
+        else:
+            # Injected builders retain their existing API; they do not use this
+            # module's default native preflight/decoder ownership boundary.
+            peaks = await self._builder(path, bins=bins, cancel_event=cancel_event)
         repository = self._cache_repository
         if repository is None or cache_identity is None or cancel_event.is_set():
             return peaks
@@ -499,12 +525,16 @@ class WaveformPeaksRegistry:
                             return cached
                         cache_identity = current_cache_identity
         async with self._lock:
-            if self._active_task is not None and self._active_task.done():
+            if (self._active_task is not None and self._active_task.done()
+                    and (self._active_probe is None or self._active_probe.cleanup_complete)):
                 self._active_task = None
                 self._active_cancel_event = None
+                self._active_probe = None
             if self._shutting_down or self._active_task is not None:
                 raise WaveformPeaksBusyError("waveform peak job already active")
             cancel_event = asyncio.Event()
+            self._active_probe = (Mp3GaplessProbe()
+                                  if self._builder is build_waveform_peaks else None)
             task = asyncio.create_task(
                 self._build_and_cache(
                     path,
@@ -534,6 +564,8 @@ class WaveformPeaksRegistry:
             cancel_event = self._active_cancel_event
             if cancel_event is not None:
                 cancel_event.set()
+            if self._active_probe is not None:
+                self._active_probe.request_cancel()
         if task is not None:
             try:
                 await asyncio.shield(task)
@@ -544,7 +576,11 @@ class WaveformPeaksRegistry:
             await asyncio.shield(self._release_completed_task(task))
         while self._release_tasks:
             release_tasks = tuple(self._release_tasks)
-            await asyncio.gather(*release_tasks)
+            _, pending = await asyncio.wait(release_tasks, timeout=_PROBE_RELEASE_SECONDS)
+            if pending:
+                raise RuntimeError("Waveform MP3 probe cleanup unresolved; job remains unavailable")
+        if self._active_probe is not None and not self._active_probe.cleanup_complete:
+            raise RuntimeError("Waveform MP3 probe cleanup failed; job remains unavailable")
 
     async def shutdown(self) -> None:
         shutdown_task = asyncio.create_task(self._shutdown_and_release())

@@ -2912,6 +2912,12 @@ def _inventory_rows_from_albums(
         )
         if len({_key(name) for name in tagged_owner_names}) == 1:
             tagged_owner = tagged_owner_names[0]
+            if (
+                _is_various_artist(tagged_owner)
+                and classified_owner
+                and not _is_various_artist(classified_owner)
+            ):
+                return classified_owner
             tagged_members = split_album_artist_members(tagged_owner)
             if (
                 classified_owner is not None

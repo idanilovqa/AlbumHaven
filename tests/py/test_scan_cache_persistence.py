@@ -3910,6 +3910,44 @@ def test_local_album_inventory_retains_cover_revision_after_track_metadata_rewri
     assert album_rows[0]["metadata"]["cover_revision"] == "exact-cover-sha256"
 
 
+def test_local_album_inventory_publishes_proven_shared_members_instead_of_various_artists():
+    from music_app.services import scan_cache_persistence
+    from music_app.services.library import build_albums_from_file_cache
+
+    album_name = "Watcher Joint Credit Release"
+    members = ("Jordsjø", "Breidablik")
+    file_cache = {
+        f"C:/Music/Shared/{album_name}/{track_number:02}.mp3": {
+            "path": f"C:/Music/Shared/{album_name}/{track_number:02}.mp3",
+            "title": f"Track {track_number}",
+            "artist": member,
+            "album_artist": "Various Artists",
+            "album": album_name,
+            "year": 2013,
+            "track_number": track_number,
+            "disc_number": 1,
+            "disc_number_raw": "1",
+            "duration_seconds": 180,
+            "mtime": 1.0,
+            "size": 123,
+        }
+        for track_number, member in enumerate(members, start=1)
+    }
+
+    albums = build_albums_from_file_cache(file_cache)
+    artist_rows, album_rows, featured_rows, *_ = (
+        scan_cache_persistence._inventory_rows_from_albums(file_cache, albums)
+    )
+
+    assert album_rows[0]["artist_key"] is None
+    assert {row["name"] for row in artist_rows} == set(members)
+    assert {
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+        if row["featured_kind"] == "featured_member"
+    } == {(member.casefold(), "featured_member") for member in members}
+
+
 def test_postgres_scan_cache_snapshot_does_not_seed_ratings_by_default(monkeypatch):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter

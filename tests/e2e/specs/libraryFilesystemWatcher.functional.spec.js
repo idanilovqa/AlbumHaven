@@ -760,6 +760,8 @@ test('FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both co
         status.inventory_mutation_revision,
       );
       await appBarActions.waitForScanAndCoverRefreshIdle();
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
     });
 
     await stepLogger.step('Show one joint-credit album under each member without a synthetic artist', async () => {

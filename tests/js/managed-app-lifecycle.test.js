@@ -234,14 +234,14 @@ test('watcher cleanup emits a validated runner-owned directory identity and wait
           {
             nonce: 'watcher-cleanup-2',
             operation: 'watcher-cleanup',
-            ownedDirectoryName: 'gallery-native-response-overlap',
+            ownedDirectoryName: 'watcher-grouped-feature-credit',
           });
         fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({ nonce: 'watcher-cleanup-2', status: 'ready' }));
       },
     });
     assert.equal(typeof lifecycle.cleanupWatcherFixture, 'function');
     assert.deepEqual(
-      await lifecycle.cleanupWatcherFixture('gallery-native-response-overlap'),
+      await lifecycle.cleanupWatcherFixture('watcher-grouped-feature-credit'),
       { nonce: 'watcher-cleanup-2', status: 'ready' },
     );
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

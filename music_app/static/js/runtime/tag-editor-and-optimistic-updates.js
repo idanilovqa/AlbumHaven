@@ -2059,9 +2059,158 @@ function renderOwnTrackModalAlbumPreferences(album, header, retainedFocus = null
   Promise.resolve().then(() => {paint(); if (current() && lease.needsRead) void reconcile();});
 }
 
+let trackModalFoobarEvidence = null;
+function disposeTrackModalFoobarEvidence() {
+  const lease=trackModalFoobarEvidence;trackModalFoobarEvidence=null;
+  if(!lease)return;
+  lease.sequence++;lease.panel?.dispose();lease.host?.remove();lease.unsubscribe?.();lease.observer?.disconnect();
+  for(const {button,click} of lease.controls){button.removeEventListener('click',click);button.remove();}
+  lease.controls.length=0;
+}
+function loadFoobarTrackEvidencePresenter() {
+  const version=encodeURIComponent(String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__||''));
+  return import(`/static/js/foobar-history/track-evidence.mjs?v=${version}`);
+}
+function mountTrackModalFoobarEvidence(album,receipt,generation) {
+  const shell=document.getElementById('app-shell'),overlay=document.getElementById('track-modal');
+  if(shell?.dataset.accountFoobarHistoryAllowed!=='true'||album.read_only_subject||album.source_readable===false
+    ||album.allowed_actions?.can_read===false||typeof PrivateUITransport==='undefined'
+    ||typeof MutationObserver!=='function'||receipt.rows.length!==receipt.nodes.length)return;
+  const accountId=shell.dataset.nativeAccountId,libraryId=shell.dataset.nativeLibraryId;
+  if(!/^[1-9]\d{0,18}$/.test(accountId||'')||!/^[1-9]\d{0,18}$/.test(libraryId||''))return;
+  let context,transportGeneration;
+  try{context=PrivateUITransport.context();transportGeneration=PrivateUITransport.generation();}catch{return;}
+  const lease={controls:[],panel:null,host:null,sequence:0,observer:null,unsubscribe:null};trackModalFoobarEvidence=lease;
+  const current=()=>trackModalFoobarEvidence===lease&&generation===trackModalAlbumPreferenceRenderGeneration
+    &&getCurrentTrackModalAlbum()===album&&isTrackModalContentVisible()&&receipt.list.isConnected
+    &&shell.dataset.accountFoobarHistoryAllowed==='true'&&shell.dataset.nativeAccountId===accountId
+    &&shell.dataset.nativeLibraryId===libraryId&&shell.dataset.privateUiContext===context
+    &&PrivateUITransport.peekGeneration()===transportGeneration;
+  receipt.rows.forEach(({source},index)=>{
+    const ref=source?.inventory_track_ref,match=typeof ref==='string'?/^inventory-track:([1-9]\d{0,18}):([1-9]\d{0,18})$/.exec(ref):null;
+    if(!match||match[1]!==libraryId||BigInt(match[2])>9223372036854775807n||source.allowed_actions?.can_read===false)return;
+    const cell=receipt.nodes[index]?.querySelector('.album-track-table__title')?.parentElement;
+    if(!cell)return;
+    const button=document.createElement('button');button.type='button';button.className='playlists__note';
+    button.textContent='Foobar evidence';button.setAttribute('aria-label','Read Foobar imported evidence for '+String(source.title||'this track'));
+    const click=()=>{
+      if(!current())return;
+      const focused=document.activeElement===button,token=++lease.sequence;
+      lease.panel?.dispose();lease.panel=null;lease.host?.remove();
+      const host=document.createElement('div');host.className='foobar-history';receipt.list.appendChild(host);lease.host=host;
+      host.textContent='Loading imported evidence controls…';
+      void loadFoobarTrackEvidencePresenter().then(module=>{
+        if(!current()||lease.sequence!==token||!host.isConnected)return;
+        host.replaceChildren();
+        lease.panel=module.mountFoobarTrackEvidence(host,{transport:PrivateUITransport,
+          isCurrent:()=>current()&&lease.sequence===token,trackId:match[2],libraryId,accountId});
+        if(focused&&document.activeElement===button)lease.panel.focus();
+        void lease.panel.load();
+      }).catch(()=>{if(current()&&lease.sequence===token)host.textContent='Imported evidence is unavailable. Try again after reopening this track list.';});
+    };
+    button.addEventListener('click',click);cell.appendChild(button);lease.controls.push({button,click});
+  });
+  const retire=()=>{if(trackModalFoobarEvidence===lease&&!current())disposeTrackModalFoobarEvidence();};
+  lease.unsubscribe=PrivateUITransport.subscribe(retire);lease.observer=new MutationObserver(retire);
+  if(overlay)lease.observer.observe(overlay,{attributes:true,attributeFilter:['hidden']});
+  lease.observer.observe(shell,{attributes:true,attributeFilter:['data-native-account-id','data-native-library-id','data-private-ui-context','data-account-foobar-history-allowed']});
+  lease.observer.observe(receipt.list,{childList:true});
+}
+
+let trackModalListeningRead = null;
+function disposeTrackModalLocalListening() {
+  const read=trackModalListeningRead;trackModalListeningRead=null;
+  if(!read)return;
+  read.controller.abort();clearTimeout(read.timer);clearTimeout(read.continuationTimer);if(read.visibility)document.removeEventListener('visibilitychange',read.visibility);read.observer?.disconnect();read.unsubscribe?.();read.root.remove();
+}
+function loadLocalAlbumListeningPresenter() {
+  const version=encodeURIComponent(String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ || ''));
+  return import(`/static/js/album-tops/listening-presentation.mjs?v=${version}`);
+}
+function renderTrackModalLocalListening(album, header, generation) {
+  const shell=document.getElementById('app-shell');
+  if(shell?.dataset.positionCaptureEnabled!=='true'||album.read_only_subject||album.source_readable===false
+    ||album.allowed_actions?.can_read===false||typeof PrivateUITransport==='undefined'
+    ||typeof MutationObserver!=='function')return;
+  const albumKey=getTrackModalAlbumRequestKey(album);
+  const accountId=shell.dataset.nativeAccountId,libraryId=shell.dataset.nativeLibraryId;
+  let context,transportGeneration;
+  try{context=PrivateUITransport.context();transportGeneration=PrivateUITransport.generation();}catch{return;}
+  if(!albumKey||!accountId||!libraryId||!context)return;
+  const root=document.createElement('div');root.className='playlists__note';root.textContent='Recorded listening: loading…';
+  header.appendChild(root);
+  const read={controller:new AbortController(),root,observer:null,unsubscribe:null,timer:null,continuationTimer:null,inFlight:false};
+  trackModalListeningRead=read;
+  const current=()=>trackModalListeningRead===read&&root.isConnected
+    &&generation===trackModalAlbumPreferenceRenderGeneration&&getCurrentTrackModalAlbum()===album
+    &&isTrackModalContentVisible()&&getTrackModalAlbumRequestKey(album)===albumKey
+    &&shell.dataset.positionCaptureEnabled==='true'&&shell.dataset.nativeAccountId===accountId
+    &&shell.dataset.nativeLibraryId===libraryId&&PrivateUITransport.peekGeneration()===transportGeneration
+    &&shell.dataset.privateUiContext===context;
+  const retire=()=>{if(trackModalListeningRead===read&&!current())disposeTrackModalLocalListening();};
+  read.unsubscribe=PrivateUITransport.subscribe(retire);
+  read.observer=new MutationObserver(retire);
+  const overlay=document.getElementById('track-modal');
+  if(overlay)read.observer.observe(overlay,{attributes:true,attributeFilter:['hidden']});
+  read.observer.observe(header,{childList:true});
+  read.observer.observe(shell,{attributes:true,attributeFilter:['data-native-account-id','data-native-library-id','data-private-ui-context','data-position-capture-enabled']});
+  read.timer=setTimeout(()=>read.controller.abort(),2000);
+  const expected={albumKey,accountId,libraryId,context};
+  let recordedText='',recordedDetail='';
+  const showProgress=(presenter,response)=>{
+    if(!current()||typeof presenter.projectLocalAlbumFullProgress!=='function')return;
+    const progress=presenter.projectLocalAlbumFullProgress(expected,response);
+    if(!current()||!progress.available)return;
+    root.textContent=recordedText+' · '+progress.text;root.title=recordedDetail.replace('Full listens are not yet qualified by this view.','')+' '+progress.detail;
+    if(!progress.continuation)return;
+    clearTimeout(read.continuationTimer);
+    // Exactly one paced continuation for the currently visible Album modal.
+    // No gallery polling, scheduler, audio wait or detached retry loop.
+    read.continuationTimer=setTimeout(()=>{
+      if(!current()||read.inFlight)return;
+      if(document.hidden){
+        if(read.visibility)document.removeEventListener('visibilitychange',read.visibility);
+        read.visibility=()=>{if(!document.hidden){document.removeEventListener('visibilitychange',read.visibility);read.visibility=null;if(current())showProgress(presenter,response);}};
+        document.addEventListener('visibilitychange',read.visibility);return;
+      }
+      read.inFlight=true;
+      read.timer=setTimeout(()=>read.controller.abort(),2000);
+      void PrivateUITransport.request('/playback/capture/position/album-metrics/advance',{
+        method:'POST',body:{album_key:albumKey,state_revision:progress.revision},
+        signal:read.controller.signal,isCurrent:current
+      }).then(value=>{
+          if(!current())return;
+          const next=presenter.projectLocalAlbumFullProgress(expected,value);
+          if(next.available&&next.continuation&&next.revision===progress.revision){
+            root.title=recordedDetail+' Full-listen progress is unchanged. Reopen this album to resume.';return;
+          }
+          showProgress(presenter,value);
+        })
+        .catch(()=>{if(current())root.title=recordedDetail+' Full-listen processing paused. Reopen this album to resume.';})
+        .finally(()=>{read.inFlight=false;clearTimeout(read.timer);});
+    },1500);
+  };
+  // Album rendering precedes the native modal's synchronous unhide. Admit the
+  // optional read only after that owner turn, without delaying render/playback.
+  void Promise.resolve().then(()=>{
+    if(!current())throw new Error('Retired local listening read');
+    return Promise.all([loadLocalAlbumListeningPresenter(),PrivateUITransport.request(
+    '/playback/capture/position/album-metrics?album_key='+encodeURIComponent(albumKey),
+    {signal:read.controller.signal,isCurrent:current})]);
+  }).then(([presenter,response])=>{
+      if(!current())return;
+      const value=presenter.projectLocalAlbumRecordedPresentation(expected,response);
+      if(!current())return;recordedText=value.text;recordedDetail=value.detail;root.textContent=value.text;root.title=value.detail;
+      if(value.available)showProgress(presenter,response);
+    }).catch(()=>{if(current())root.textContent='Recorded listening unavailable.';})
+    .finally(()=>{clearTimeout(read.timer);if(!current()&&trackModalListeningRead===read)disposeTrackModalLocalListening();});
+}
+
 function renderTrackModalRelease(album, albumPreferenceFocus = null) {
   const albumPreferenceRenderGeneration = ++trackModalAlbumPreferenceRenderGeneration;
   disposeTrackModalAlbumPreferences();
+  disposeTrackModalLocalListening();
+  disposeTrackModalFoobarEvidence();
   if (typeof reconcileTrackModalSelectionAlbum === 'function') reconcileTrackModalSelectionAlbum(album);
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -2136,6 +2285,7 @@ function renderTrackModalRelease(album, albumPreferenceFocus = null) {
       els.header.appendChild(summary);
     } else {
       renderOwnTrackModalAlbumPreferences(album, els.header, albumPreferenceFocus, albumPreferenceRenderGeneration);
+      renderTrackModalLocalListening(album, els.header, albumPreferenceRenderGeneration);
     }
     els = getTrackModalElements();
   }
@@ -2322,6 +2472,7 @@ function renderTrackModalRelease(album, albumPreferenceFocus = null) {
       els.duplicateTabs.innerHTML = '';
     }
   }
+  DuplicateFolderRecoveryUI.mount(album, els.duplicateWarning, resolvedAlbumKey);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   const searchRenderRows = [];
   // Invalidate old node associations before any external mount callback.
@@ -2330,6 +2481,7 @@ function renderTrackModalRelease(album, albumPreferenceFocus = null) {
   const searchRenderReceipt = Object.freeze({album, list: els.list, rows: Object.freeze(searchRenderRows),
     nodes: Object.freeze([...els.list.querySelectorAll('.album-track-table__row')])});
   SearchAlbumPresentationProvenance.rendered(album, els.list, searchRenderReceipt);
+  if(!albumMissing)mountTrackModalFoobarEvidence(album,searchRenderReceipt,albumPreferenceRenderGeneration);
   if (typeof NativePlaytables !== 'undefined') {
     if (albumMissing) NativePlaytables.retire('album-tracks');
     else if (isTrackModalContentVisible()) NativePlaytables.mount('album-tracks', els.list);
@@ -2567,9 +2719,57 @@ function buildTrackListHtml(tracks, album = null, totalLength = null, searchRend
   });
 }
 
-function buildPlayerTrackPayload(track, album = null) {
+// One optional proof request per genuine Album queue construction. This is
+// session-local lookup context, never a membership manifest or media authority.
+function createAlbumListeningIntent(album) {
+  const albumKey = getAlbumPlaybackQueueRef(album);
+  const scope = typeof capturePlaybackOwnershipScope === 'function' ? capturePlaybackOwnershipScope() : null;
+  if (!albumKey || !scope) return null;
+  const current = () => typeof isPlaybackOwnershipScopeCurrent === 'function' && isPlaybackOwnershipScopeCurrent(scope);
+  let started = false, settled = false, descriptor = null;
+  return Object.freeze({albumKey, start(isCurrent) {
+    const valid = () => {try {return current() && isCurrent() === true;} catch {return false;}};
+    if (!valid() || started || typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || PLAYBACK_CAPTURE_ENABLED !== true) return;
+    if (typeof document === 'undefined' || document.getElementById('app-shell')?.dataset.listeningSelectionsEnabled !== 'true') return;
+    if (typeof canStartOrdinaryAlbumListening !== 'function' || !canStartOrdinaryAlbumListening()) return;
+    if (typeof PrivateUITransport === 'undefined' || typeof PrivateUITransport.request !== 'function') return;
+    started = true;
+    const controller = new AbortController();
+    // Bounds background qualification only. Audio never awaits this request.
+    const timer = setTimeout(() => controller.abort(), 2000);
+    void PrivateUITransport.request('/playback/capture/album-selection', {
+      method: 'POST', body: {album_key: albumKey}, signal: controller.signal, isCurrent: valid,
+    }).then(reply => {
+      if (!valid()) return;
+      const value = reply?.listening_selection;
+      if (value && typeof value === 'object' && !Array.isArray(value)
+          && Object.keys(value).sort().join(',') === 'membership_revision,selection_ref,version'
+          && value.version === 'local-edition-selection-v1'
+          && typeof value.selection_ref === 'string'
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.selection_ref)
+          && value.selection_ref !== '00000000-0000-0000-0000-000000000000'
+          && typeof value.membership_revision === 'string' && /^[0-9a-f]{64}$/.test(value.membership_revision)) descriptor = Object.freeze({...value});
+    }).catch(() => {descriptor = null;}).finally(() => {clearTimeout(timer); settled = true;});
+  }, ready() {return settled && current() ? descriptor : null;}});
+}
+
+function bindAlbumListeningIntent(track, intent) {
+  if (track && intent && !Object.hasOwn(track, 'albumListeningIntent')) Object.defineProperty(track, 'albumListeningIntent', {value: intent, enumerable: false});
+  return track;
+}
+
+function beginOrdinaryAlbumListening(track, isCurrent) {
+  // Qualification never supplies media authorization or waits on the audio path.
+  try {track?.albumListeningIntent?.start(isCurrent);} catch { /* Optional proof cannot interrupt audio. */ }
+}
+
+function settledOrdinaryAlbumListeningSelection(track) {
+  return track?.albumListeningIntent?.ready() || null;
+}
+
+function buildPlayerTrackPayload(track, album = null, listeningIntent = null) {
   if (!track) return null;
-  return {
+  return bindAlbumListeningIntent({
     src: `/track?path=${encodeURIComponent(track.path)}`,
     path: String(track.path || ''), inventory_track_ref: track.inventory_track_ref || null,
     title: track.title || 'Track',
@@ -2578,7 +2778,7 @@ function buildPlayerTrackPayload(track, album = null) {
     album: track.album || '',
     coverPath: track.cover_path || '',
     durationSeconds: Number(track.duration_seconds) || 0,
-  };
+  }, listeningIntent);
 }
 
 function getAlbumPlaybackQueueRef(album) {
@@ -2602,7 +2802,7 @@ function getAlbumPlaybackContext(album) {
   return playbackContext;
 }
 
-function buildQueueTracksForAlbum(album, startingTrackPath = '') {
+function buildQueueTracksForAlbum(album, startingTrackPath = '', listeningIntent = createAlbumListeningIntent(album)) {
   const tracks = Array.isArray(album?.tracks) ? album.tracks : [];
   const grouped = groupAlbumTracks(tracks);
   const matchingGroup = grouped.groups.find((group) => (
@@ -2610,7 +2810,7 @@ function buildQueueTracksForAlbum(album, startingTrackPath = '') {
   ));
   const fallbackGroup = grouped.groups.find((group) => Array.isArray(group.tracks) && group.tracks.length);
   const queueTracks = Array.isArray((matchingGroup || fallbackGroup)?.tracks)
-    ? (matchingGroup || fallbackGroup).tracks.map((track) => buildPlayerTrackPayload(track, album)).filter(Boolean)
+    ? (matchingGroup || fallbackGroup).tracks.map((track) => buildPlayerTrackPayload(track, album, listeningIntent)).filter(Boolean)
     : [];
   const currentIndex = queueTracks.findIndex((track) => String(track.path || '') === String(startingTrackPath || ''));
   return {
@@ -2619,8 +2819,8 @@ function buildQueueTracksForAlbum(album, startingTrackPath = '') {
   };
 }
 
-function buildAlbumPlaybackQueueState(album, startingTrackPath = '', playbackContext = null) {
-  const queueState = buildQueueTracksForAlbum(album, startingTrackPath);
+function buildAlbumPlaybackQueueState(album, startingTrackPath = '', playbackContext = null, listeningIntent = undefined) {
+  const queueState = buildQueueTracksForAlbum(album, startingTrackPath, listeningIntent);
   if (!queueState.tracks.length) return null;
   return {
     tracks: queueState.tracks,
@@ -2689,11 +2889,11 @@ function resolveNextPlaybackContextQueue(queue) {
   return null;
 }
 
-function setAlbumPlaybackQueue(album, startingTrackPath) {
+function setAlbumPlaybackQueue(album, startingTrackPath, listeningIntent = undefined) {
   state.player.playbackQueue = buildAlbumPlaybackQueueState(
     album,
     startingTrackPath,
-    getAlbumPlaybackContext(album),
+    getAlbumPlaybackContext(album), listeningIntent,
   );
 }
 
@@ -2932,3 +3132,98 @@ async function confirmProblemSuggestions() {
     syncProblemSuggestionSelection();
   }
 }
+
+// The album surface owns this panel. Retiring it never retries a file mutation.
+const DuplicateFolderRecoveryUI = (() => {
+  let active = null;
+  function mount(album, host, albumKey) {
+    active?.abort(); active = null;
+    if (!host || document.getElementById('app-shell')?.dataset?.duplicateRecoveryEnabled !== 'true'
+      || album?.allowed_actions?.['library.inventory.manage'] !== true
+      || trackModalPresentationRestrictions?.can_open_album_page === false) return;
+    const controller = new AbortController(), scope = TrackActionsRuntime.scope().token;
+    active = controller;
+    const panel = document.createElement('div');
+    panel.setAttribute('data-duplicate-folder-recovery', '');
+    controller.signal.addEventListener('abort', () => panel.remove(), {once: true});
+    host.append(panel); host.hidden = false;
+    let busy = false, keep = null, choices = null;
+    const current = () => !controller.signal.aborted && panel.isConnected
+      && !panel.closest('[hidden], [inert]')
+      && (typeof isTrackModalContentVisible !== 'function' || isTrackModalContentVisible())
+      && TrackActionsRuntime.scope().token === scope
+      && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey;
+    const button = (label, action, id, disabled = false) => ButtonComponent.renderButton({
+      label, variant: 'secondary', disabled,
+      attributes: {'data-duplicate-action': action, ...(id === undefined ? {} : {'data-duplicate-id': String(id)})},
+    });
+    const paint = () => {
+      if (!current()) return;
+      if (!choices) {panel.innerHTML = button('Manage duplicate copies', 'load', undefined, busy); return;}
+      panel.innerHTML = choices.sources.map(source => button(
+        keep === source.id ? `Keeping ${source.label}` : `Keep ${source.label}`, 'keep', source.id, busy)
+        + button(`Trash ${source.label}`, 'trash', source.id, busy || keep === null || keep === source.id)).join('')
+        + choices.operations.filter(op => op.state !== 'restored').map(op => button(
+          op.state === 'trashed' ? `Restore ${op.track_count} tracks` : 'Reconcile pending move',
+          op.state === 'trashed' ? 'restore' : 'reconcile', op.operation_id, busy)
+          + (op.state === 'pending_trash' ? button('Cancel pending move / restore', 'restore', op.operation_id, busy) : '')).join('')
+        + button('Refresh copies', 'load', undefined, busy);
+    };
+    const request = async (action, body) => {
+      const response = await PrivateUITransport.request(`/api/library/duplicate-folders/${action}`, {
+        method: 'POST', body, signal: controller.signal, isCurrent: current,
+      });
+      return response.data;
+    };
+    const load = async () => {
+      choices = await request('choices', {album_key: albumKey});
+      if (!Array.isArray(choices?.sources) || !Array.isArray(choices?.operations)) throw new Error('Invalid recovery response.');
+      if (!choices.sources.some(source => source.id === keep)) keep = null;
+    };
+    panel.addEventListener('click', async event => {
+      const target = event.target.closest('[data-duplicate-action]');
+      if (!target || !panel.contains(target) || busy || !current()) return;
+      const action = target.dataset.duplicateAction, id = target.dataset.duplicateId;
+      if (action === 'keep') {keep = Number(id); paint(); return;}
+      busy = true; paint();
+      let mutationStarted = false;
+      try {
+        if (action === 'load') await load();
+        else if (action === 'trash') {
+          if (!Number.isInteger(keep) || keep === Number(id)) return;
+          const body = {album_key: albumKey, keep_id: keep, remove_id: Number(id)};
+          const preview = await request('preview', body);
+          const accepted = await showAppConfirmDialog({title: 'Move duplicate copy to trash?',
+            message: `Keep ${preview.keep}. Move ${preview.remove} (${preview.track_count} tracks, ${preview.file_count} files) to recoverable trash. Nothing is permanently deleted.`,
+            acceptLabel: 'Move to trash', cancelLabel: 'Cancel', danger: true});
+          if (!accepted || !current()) return;
+          const command = {...body, fingerprint: preview.fingerprint, operation_id: crypto.randomUUID()};
+          mutationStarted = true;
+          await request('trash', command);
+          if (current()) {invalidateHydratedTrackModalAlbumDetails([album]); await load();}
+        } else if (action === 'restore' || action === 'reconcile') {
+          const operation = choices.operations.find(op => op.operation_id === id);
+          if (!operation) return;
+          const accepted = await showAppConfirmDialog({title: action === 'restore' ? 'Restore this copy?' : 'Reconcile this move?',
+            message: action === 'restore' ? 'Restore the copy to its original folder. Existing files will never be overwritten.'
+              : 'Check the saved operation and finish its original move only if the exact source is still unchanged.',
+            acceptLabel: action === 'restore' ? 'Restore' : 'Reconcile', cancelLabel: 'Cancel'});
+          if (!accepted || !current()) return;
+          mutationStarted = true;
+          await request(action, {operation_id: id});
+          if (current()) {invalidateHydratedTrackModalAlbumDetails([album]); await load();}
+        }
+        if (mutationStarted && current()) {
+          showToast('Duplicate copy updated. Refresh the album to see its current files.', 'info', 4500);
+        }
+      } catch (error) {
+        if (mutationStarted) choices = null;
+        if (current()) showToast(mutationStarted
+          ? 'The outcome is not confirmed. Refresh copies and reconcile the saved operation; do not repeat the move.'
+          : (error?.message || 'Duplicate recovery is unavailable.'), 'error', 6500);
+      } finally {busy = false; paint();}
+    }, {signal: controller.signal});
+    paint();
+  }
+  return Object.freeze({mount});
+})();

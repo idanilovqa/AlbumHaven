@@ -394,6 +394,7 @@ function renderTrackModalLoadingState(album) {
 }
 
 function clearTrackModalRenderedState() {
+  if (typeof DuplicateFolderRecoveryUI !== 'undefined') DuplicateFolderRecoveryUI.mount(null, null, '');
   if (typeof disposeTrackModalAlbumPreferences === 'function') disposeTrackModalAlbumPreferences();
   if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('album-tracks');
   const els = getTrackModalElements();
@@ -1473,6 +1474,7 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  if (typeof DuplicateFolderRecoveryUI !== 'undefined') DuplicateFolderRecoveryUI.mount(null, null, '');
   retireTrackModalSearchPresentation('close');
   if (typeof disposeTrackModalAlbumPreferences === 'function') disposeTrackModalAlbumPreferences();
   releaseTrackModalSelection('close');

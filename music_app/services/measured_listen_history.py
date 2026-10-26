@@ -51,9 +51,9 @@ def validate_playback_completion(entry):
     numeric_fields = (
         "duration_seconds", "duration", "started_at_unix", "timestamp",
         "total_listened_seconds",
-        "max_contiguous_seconds", "measured_listened_seconds",
-        "max_measured_contiguous_seconds",
+        "max_contiguous_seconds",
     )
+    measurement_fields = ("measured_listened_seconds", "max_measured_contiguous_seconds")
     boolean_fields = (
         "finalized", "finished_fully", "skipped", "scrobble_eligible", "scrobbled",
     )
@@ -61,6 +61,8 @@ def validate_playback_completion(entry):
         raise MeasuredListenError("Invalid playback completion")
     if any(key in entry and not _is_nonnegative_number(entry[key]) for key in numeric_fields):
         raise MeasuredListenError("Invalid playback completion")
+    if any(key in entry and not _is_nonnegative_number(entry[key]) for key in measurement_fields):
+        raise MeasuredListenError("Invalid listen measurement")
     if "sequence" in entry and (
         type(entry["sequence"]) is not int
         or not 0 <= entry["sequence"] <= 2**63 - 1

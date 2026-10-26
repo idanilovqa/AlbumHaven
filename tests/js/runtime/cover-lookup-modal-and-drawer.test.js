@@ -392,6 +392,30 @@ require('node:test')('closed drawer releases cards and renders terminal task sta
   assert.match(bodyElement.innerHTML, />Art chosen</);
 });
 
+require('node:test')('open drawer preserves its exact scroll position across task rerenders', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const task = { id: 'stable-task', status: 'running', artist: 'Artist', album: 'Album' };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+
+  let markup = bodyElement.innerHTML;
+  bodyElement.scrollTop = 71;
+  Object.defineProperty(bodyElement, 'innerHTML', {
+    configurable: true,
+    get: () => markup,
+    set(value) {
+      markup = value;
+      bodyElement.scrollTop = 15;
+    },
+  });
+
+  task.status = 'completed';
+  task.result_kind = 'matches-found';
+  context.renderCoverLookupDrawer();
+
+  assert.equal(bodyElement.scrollTop, 71);
+});
+
 require('node:test')('accepted remote save keeps its finished card in place without looking like another search', () => {
   const { context, bodyElement } = createDrawerHarness();
   const before = [

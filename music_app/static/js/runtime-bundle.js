@@ -30154,7 +30154,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     syncCoverLookupElapsedTimer();
     return;
   }
-  const restoreScrollTop = body.innerHTML ? null : Number(state.coverLookup.drawerScrollTop || 0);
+  const restoreScrollTop = body.innerHTML
+    ? Number(body.scrollTop || 0)
+    : Number(state.coverLookup.drawerScrollTop || 0);
   const renderWindow = getCoverLookupTaskRenderWindow(tasks, body);
   state.coverLookup.taskRenderWindowStart = renderWindow.start;
   const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
@@ -30293,7 +30295,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ${taskMarkup}
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
     `);
-    if (restoreScrollTop !== null) body.scrollTop = Math.max(0, restoreScrollTop);
+    body.scrollTop = Math.max(0, restoreScrollTop);
     const measuredCard = body.querySelector?.('.cover-lookup-task-card');
     const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
     const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;

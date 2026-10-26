@@ -677,7 +677,7 @@ border-radius: 12px;
 background-color: rgba(6, 78, 59, 0.26);
 background-position: center;
 background-repeat: no-repeat;
-background-size: cover;
+background-size: 100% 100%;
 color: #dcfce7;
 font-size: 0.9rem;
 cursor: pointer;

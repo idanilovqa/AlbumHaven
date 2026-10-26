@@ -139,6 +139,10 @@ test('album artwork stretches into every fixed display box without cropping or b
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'cover-lookup-drawer-and-related.css'),
     'utf8',
   );
+  const playerCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css'),
+    'utf8',
+  );
   const utilitiesCss = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
     'utf8',
@@ -149,8 +153,10 @@ test('album artwork stretches into every fixed display box without cropping or b
   assert.match(mobileCss, /\.mobile-page-cover\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(lookupCss, /\.cover-lookup-manual-attachment img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(lookupCss, /\.cover-lookup-art-preview-image\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(lookupCss, /\.cover-lookup-art-preview-fallback img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(lookupCss, /\.version-picker-option-cover img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(drawerCss, /\.cover-lookup-task-cover\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(playerCss, /\.player-cover-button\s*\{[^}]*background-size:\s*100% 100%/s);
   assert.match(utilitiesCss, /\.utility-detail-cover-image\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(utilitiesCss, /\.tag-editor-artwork img,[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.doesNotMatch(galleryCss, /\.cover img\s*\{[^}]*object-fit:/s);

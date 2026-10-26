@@ -1,0 +1,99 @@
+def _collect_sources(connection, live, *, payload, proof, first, command, ticket,
+                     lookup_result, plans, states, receipt_ref, constraints):
+    """All selected scalar sizing completes before any prior raw projection.
+
+    Both complete scans must terminate successfully, even after a capacity stop.
+    These are private source records, never a ready or committed response.
+    """
+    controls = _caller_controls(plans,states,len(lookup_result.identities))
+    sizes = []
+    stopped = False
+    scan = indexed.iter_source_rows(payload, offset=command.offset)
+    try:
+        while True:
+            try:
+                row = next(scan)
+            except StopIteration as done:
+                _terminal_matches(done.value,first)
+                break
+            index = row.ordinal-command.offset-1
+            if stopped or not 0 <= index < len(plans):
+                continue
+            record_size = _record_bytes(row)
+            if controls+sizing._base(len(lookup_result.identities))+evidence.row_phase_bytes(record_size) > MAX_PRIVATE_BYTES:
+                stopped = True
+                continue
+            fields = evidence.fields_from_row(row,upload_sha256=command.upload_sha256)
+            n = evidence.evidence_size(fields)
+            item,previous = lookup_result.identities[index],lookup_result.prior[index]
+            f = _size_frame_bytes(live,command,item,previous,n)
+            phase = max(sizing._base(len(lookup_result.identities))+6*n+evidence.CLASSIFIER_WORK_BYTES,
+                sizing.merged_source_size_phase_bytes(count=len(lookup_result.identities),incoming_bytes=n,
+                                                       prior_bytes=previous.evidence_bytes,prior_incoming_bytes=previous.incoming_evidence_bytes,frame_bytes=f))
+            if controls+phase > MAX_PRIVATE_BYTES:
+                del fields
+                stopped = True
+                continue
+            incoming = evidence.encode_evidence(fields)
+            size = sizing.size_foobar_source_merge_on_connection(connection,live,command=command,
+                ticket=ticket,lookup_result=lookup_result,index=index,incoming_payload=incoming,constraints=constraints)
+            del incoming,fields
+            if size is None:
+                stopped = True
+                continue
+            sizes.append(_SizedSource(size,n,record_size))
+    finally:
+        scan.close()
+    sizes = tuple(sizes)
+    retained = ()
+    stopped = False
+    scan = indexed.iter_source_rows(payload, offset=command.offset)
+    try:
+        while True:
+            try:
+                row = next(scan)
+            except StopIteration as done:
+                _terminal_matches(done.value,first)
+                break
+            index = row.ordinal-command.offset-1
+            if stopped or not 0 <= index < len(sizes):
+                continue
+            candidate_peak,unused_size = _candidate_phase_bytes(live,command=command,proof=proof,
+                plans=plans,states=states,lookup_result=lookup_result,sizes=sizes,count=index+1,
+                receipt_ref=receipt_ref,created_at=ticket.observed_at)
+            del unused_size
+            if candidate_peak > MAX_PRIVATE_BYTES:
+                stopped = True
+                continue
+            retained_cost = prior_merge._retained_bytes(retained)
+            if controls+sizing._base(len(lookup_result.identities))+retained_cost+evidence.row_phase_bytes(_record_bytes(row)) > MAX_PRIVATE_BYTES:
+                stopped = True
+                continue
+            fields = evidence.fields_from_row(row,upload_sha256=command.upload_sha256)
+            n = evidence.evidence_size(fields)
+            item,previous = lookup_result.identities[index],lookup_result.prior[index]
+            phase = prior_merge.source_prior_merge_phase_bytes(count=len(lookup_result.identities),retained=retained,
+                incoming_bytes=n,identity_bytes=item.identity_bytes,prior_bytes=previous.evidence_bytes,
+                prior_display_bytes=previous.display_bytes,prior_incoming_bytes=previous.incoming_evidence_bytes,merged_bytes=sizes[index].merge.evidence_bytes,
+                display_bytes=sizes[index].merge.display_bytes,frame_bytes=_merge_frame_bytes(live,command,item,previous))
+            row_bytes = 1024+item.identity_bytes+n+sizes[index].merge.evidence_bytes+sizes[index].merge.display_bytes
+            phase = max(phase,sizing._base(len(lookup_result.identities))+retained_cost+2*row_bytes+1024)
+            if controls+phase > MAX_PRIVATE_BYTES:
+                del fields
+                stopped = True
+                continue
+            value = prior_merge.reconstruct_foobar_source_on_connection(connection,live,command=command,
+                ticket=ticket,lookup_result=lookup_result,index=index,merged_sizes=sizes[index].merge,incoming_fields=fields,
+                retained=retained,constraints=constraints)
+            del fields
+            if value is None:
+                stopped = True
+                continue
+            # Name the old tuple, current result and new tuple before allocation.
+            row_bytes = 1024+len(value.identity_bytes)+len(value.incoming_evidence_bytes)+len(value.merged_evidence_bytes)+len(value.display_bytes)
+            _private(controls+sizing._base(len(lookup_result.identities))+retained_cost+2*row_bytes+1024)
+            retained = retained+(value,)
+            del value
+    finally:
+        scan.close()
+    return retained,sizes

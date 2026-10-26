@@ -32,6 +32,13 @@ async def home_activity(request: Request):
             return allowed_actions_for_request(request, ("library.browse.read",),
                 resource=ResourceScope(kind, str(resource_id)))
 
+        def lastfm_history_read():
+            from music_app.services.lastfm_home_snapshot import account_read_allowed
+            context, constraints = native_activity_context(request)
+            return account_read_allowed(context, constraints,
+                account_id=actor.account_id, session_id=actor.session_id)
+        resource_actions.lastfm_history_read = lastfm_history_read
+
         # Default policy is scope-wide. An injected narrowing resolver has no
         # revision contract, so the repository revalidates its full receipt.
         resource_actions.scope_wide = not callable(getattr(request.app.state, "policy_constraint_resolver", None))

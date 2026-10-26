@@ -93,7 +93,10 @@ async def _page(
             **await load_appearance_context(request),
             "profile": profile,
             "csrf_token": csrf_token,
-            "account_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
+            "account_allowed_actions": allowed_actions_for_request(
+                request, ("accounts.read", "account.self.foobar.write", "account.self.foobar.read"),
+                target_account_id=actor.account_id,
+            ),
             "changed": request.query_params.get("changed") == "1",
             "error": error,
             "password_minlength": password_minlength,

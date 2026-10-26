@@ -155,11 +155,13 @@ def read_goal_operation(request: Request, request_key: str):
 
 
 async def _watch_disconnect(request, cancelled):
+    # _remote_lookup consumes the bounded body before starting this sole reader.
+    # Await receive: is_disconnected() can cancel at middleware checkpoints.
     while not cancelled.is_set():
-        if await request.is_disconnected():
+        message = await request.receive()
+        if message['type'] == 'http.disconnect':
             cancelled.set()
             return
-        await asyncio.sleep(0.1)
 
 
 async def _remote_lookup(request, *, search):

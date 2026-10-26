@@ -305,6 +305,11 @@ class ActivityNativeTargets:
             granted=all(allows(target,action,ResourceScope(kind,str(identity)),constraints) for action in actions)
             browse=allows(replace(context,target_account_id=None),'library.browse.read',ResourceScope(kind,str(identity)),constraints)
             return AllowedActions(actions + (('library.browse.read',) if browse else ())) if granted else AllowedActions(())
+        def lastfm_history_read():
+            from music_app.services.lastfm_home_snapshot import account_read_allowed
+            return account_read_allowed(context, constraints,
+                account_id=scope.account_id, session_id=scope.session_id)
+        allowed.lastfm_history_read = lastfm_history_read
         allowed.scope_wide=(not callable(constraints)
             or type(constraints) is _ListenerNativePolicy and not callable(constraints.constraints))
         return HomeActivityPostgresRepository(self.config).read_native_selection(connection,scope=scope,
@@ -447,7 +452,9 @@ class ActivityNativeTargets:
             actions={**row.get('allowed_actions',{}),'can_resolve_native_play':False,
                 'can_resolve_native_details':False,'can_select_for_playlist':False}
             if resource is None:
-                actions['can_select_for_playlist']=create and origin['audience']!='comparison' and query.kind in {'tracks','listens'}
+                remote_only=(row.get('lastfm_observation') or {}).get('source')=='remote_only'
+                actions['can_select_for_playlist']=(not remote_only and create
+                    and origin['audience']!='comparison' and query.kind in {'tracks','listens'})
             else:
                 kind,identity=resource['kind'],resource['id']
                 readable=allows(live,'library.browse.read',ResourceScope(kind,str(identity)),constraints)

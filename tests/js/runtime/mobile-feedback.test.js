@@ -5,8 +5,17 @@ const vm = require('node:vm');
 const test = require('node:test');
 const runtime = path.join(__dirname, '../../../music_app/static/js/runtime');
 const preferences = require('../../../music_app/static/js/client-device-preferences.js');
+// Load the complete genuine Settings history sanitizer without mounting an app.
+const navigationBoundary = vm.createContext({ window: {}, structuredClone });
+vm.runInContext(fs.readFileSync(path.join(runtime, '../settings-navigation.js'), 'utf8'), navigationBoundary);
 function load(name, globals = {}) {
-  const context = vm.createContext({ window: { innerWidth: 390 }, console, ...globals });
+  // This isolated navigation VM has no mounted player. Browser events and
+  // location still exist even when the particular test supplies a small window.
+  const events = new EventTarget();
+  const context = vm.createContext({ Event, getPlayerElements: () => ({ player: null }), console, ...globals,
+    window: { innerWidth: 390, location: { href: 'https://example.test/?surface=albums' },
+      AlbumHavenSettingsNavigation: navigationBoundary.window.AlbumHavenSettingsNavigation,
+      dispatchEvent: event => events.dispatchEvent(event), ...globals.window } });
   vm.runInContext(fs.readFileSync(path.join(runtime, name), 'utf8'), context);
   return context;
 }

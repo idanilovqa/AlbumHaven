@@ -6,9 +6,8 @@ const {createLooseAuthorityFixture, looseRow, browsePayload, overlay, outcome, s
 
 function fixture() {
   const f = createLooseAuthorityFixture();
-  const sink = f.context.applyViewPayload;
-  f.loadRuntime('response-state-helpers.js');
-  f.context.applyViewPayload = sink;
+  // Response state is already bootstrapped before the request owners.
+  assert.equal(f.responseStateOwner.captureScope, f.context.captureRuntimeAlbumPreferenceScope);
   f.loadRuntime('view-state-helpers.js');
   f.context.window.AlbumHavenPlaylistRuntime = {snapshot: () => ({scopeKey: 'loose-review-ui-scope'})};
   f.context.window.AlbumHavenPlaytableUI = {mount(_host, options) {

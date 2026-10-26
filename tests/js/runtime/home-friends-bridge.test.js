@@ -703,6 +703,7 @@ test('friend Album hydration neutralizes actor taste without mutating the native
   const cached = {...album(), album_rating: 9, favorite: true, album_preference: {rating: 9},
     tracks: [{path: '/test-only/music/song.flac', inventory_track_ref: 'inventory-track:1:1', title: 'Track',
       rating: 5, love_tier: 'obsessed', track_scrobble_count: 23, track_preference: {rating: 5, love_tier: 'obsessed', allowed_actions: {can_set_love_tier: true}}}]};
+  const cacheBefore = JSON.stringify(cached);
   h.context.fetchTrackModalAlbumDetails = async () => cached;
   const read = h.bridge.configureActivityProvider({readActivity: async () => ({snapshot_ref: 'snapshot:subject',
     rows: [{id: 'row:subject', kind: 'album', title: 'Album', album_target: canonicalAlbum()}]})});
@@ -711,10 +712,15 @@ test('friend Album hydration neutralizes actor taste without mutating the native
   await h.bridge.resourceIntent('open', selection, {scopeKey, origin: selection.origin});
   const displayed = h.calls.opens[0][0];
   assert.notEqual(displayed, cached); assert.equal(displayed.album_rating, null); assert.equal(displayed.favorite, null);
-  assert.equal(displayed.tracks[0].rating, null); assert.equal(displayed.tracks[0].track_preference.love_tier, null);
-  assert.equal(displayed.tracks[0].track_preference.allowed_actions.can_set_love_tier, false);
-  assert.equal(displayed.tracks[0].track_scrobble_count, null);
+  assert.equal(displayed.tracks[0].rating, null); assert.equal(displayed.tracks[0].love_tier, null);
+  assert.equal(displayed.tracks[0].taste_state, 'unavailable');
+  assert.equal(displayed.tracks[0].track_preference, null);
+  assert.equal(displayed.tracks[0].track_preference_overlay, null);
+  assert.equal(displayed.tracks[0].can_edit_preferences, false);
+  assert.equal(Object.hasOwn(displayed.tracks[0], 'track_scrobble_count'), false,
+    'unproved actor listening facts are removed, not presented as subject facts');
   assert.equal(cached.album_rating, 9); assert.equal(cached.tracks[0].track_preference.love_tier, 'obsessed');
+  assert.equal(JSON.stringify(cached), cacheBefore);
 });
 
 test('review: direct and transitioned mobile Create retain the exact Home presentation owner', () => {
@@ -763,6 +769,7 @@ test('review v2: friend Album rows without inventory identity never inherit acto
     const h = setup(), scopeKey = h.bridge.snapshot().scopeKey;
     const cached = {...album(), tracks: [{path: '/test-only/music/song.flac', ...identity, title: 'Track',
       rating: 5, love_tier: 'obsessed', track_preference: {rating: 5, love_tier: 'obsessed', allowed_actions: {can_set_love_tier: true}}}]};
+    const cacheBefore = JSON.stringify(cached);
     h.context.fetchTrackModalAlbumDetails = async () => cached;
     const read = h.bridge.configureActivityProvider({readActivity: async () => ({snapshot_ref: 'snapshot:subject',
       rows: [{id: 'row:subject', kind: 'album', title: 'Album', album_target: canonicalAlbum()}]})});
@@ -770,9 +777,13 @@ test('review v2: friend Album rows without inventory identity never inherit acto
     const selection = projection.rows[0].album_target;
     await h.bridge.resourceIntent('open', selection, {scopeKey, origin: selection.origin});
     const displayed = h.calls.opens[0][0];
-    assert.equal(displayed.tracks[0].love_tier, null);
+    for (const key of ['rating', 'love_tier', 'track_preference', 'track_preference_overlay', 'taste_state']) {
+      assert.equal(Object.hasOwn(displayed.tracks[0], key), false, `${key} requires an inventory-bound subject fact`);
+    }
+    assert.equal(displayed.tracks[0].can_edit_preferences, false);
     assert.equal(displayed.tracks[0].read_only_subject, 'account:friend');
     assert.equal(cached.tracks[0].love_tier, 'obsessed');
+    assert.equal(JSON.stringify(cached), cacheBefore);
   }
 });
 
@@ -808,10 +819,10 @@ test('friend-source Queue details retain source grants but use actor taste on ow
 test('Activity Queue Add with denied Create preserves readable runtime source and needs no new playback resolution', async () => {
   const h=setup(), scopeKey=h.bridge.snapshot().scopeKey, rowId=`activity_${'a'.repeat(64)}`;
   const context={scopeKey,account_ref:'00000000-0000-4000-8000-000000000001',kind:'tracks',period:'week'};
-  let mediaReads=0, creates=0;
+  const resolutionIntents=[]; let creates=0;
   h.context.fetch=async url=>{creates++; throw Object.assign(new Error(`Create is denied: ${url}`),{status:403});};
   const read=h.bridge.configureActivityProvider({readActivity:async()=>({snapshot_ref:'A'.repeat(43),rows:[{id:rowId,kind:'track',title:'Track',availability:'local',source_readable:true,allowed_actions:{can_resolve_native_play:true}}]}),
-    resolveActivityNativeTarget:async()=>{mediaReads++;return {inventory_track_ref:'inventory-track:1:2',path:'/test-only/queued.flac',title:'Track'};}});
+    resolveActivityNativeTarget:async options=>{resolutionIntents.push(options.intent);return {inventory_track_ref:'inventory-track:1:2',path:'/test-only/queued.flac',title:'Track'};}});
   const projected=await read(context);h.context.createPrivatePlaytableSource=options=>options;
   const privateSource=h.bridge.createPlaytableSource({rows:projected.rows,context,instance:projected,revision:projected,isCurrent:()=>true});
   h.state.player.current=null;h.state.player.playbackQueue=null;
@@ -820,8 +831,54 @@ test('Activity Queue Add with denied Create preserves readable runtime source an
     observeStreamingFacadeCallback:promise=>void Promise.resolve(promise).catch(()=>{})});
   for(const file of ['playlist-queue.js','explicit-queue-planner.js','explicit-queue-runtime.js'])vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../../../music_app/static/js/runtime',file),'utf8'),h.context);
   const queue=h.window.AlbumHavenExplicitQueue, [id]=await queue.enqueue(privateSource.captureQueueRows(projected.rows));
+  assert.deepEqual(resolutionIntents,['metadata','play'],'enqueue separately validates metadata and native media');
+  const beforeAdd=[...resolutionIntents];
   const receipt=await queue.playlistSelection([id]);
   assert.equal(receipt.rows[0].source_provenance.kind,'activity');assert.equal(receipt.rows[0].source_provenance.origin.subject_ref,context.account_ref);
-  assert.equal(mediaReads,1,'only enqueue resolves native media');assert.equal(creates,0,'no Create-gated endpoint during Add preparation');
+  assert.deepEqual(resolutionIntents,beforeAdd,'Add reuses the established identity without another metadata or playback resolution');
+  assert.equal(resolutionIntents.filter(intent=>intent==='play').length,1,'only enqueue resolves native media');
+  assert.equal(creates,0,'no Create-gated endpoint during Add preparation');
   assert.equal(queue.getSnapshot().entries[0].sourceReadable,true);assert.equal(receipt.isCurrent(),true);assert.equal(h.calls.plays.length,0);
+});
+
+
+test('friend preference projections require matching nonduplicate available subject evidence', async () => {
+  for (const variant of ['matching', 'wrong-subject', 'duplicate-identity', 'missing-availability']) {
+    const h = setup(), scopeKey = h.bridge.snapshot().scopeKey, subject = 'account:friend';
+    const cached = {...album(), album_rating: 9, favorite: true,
+      tracks: [{path: '/test-only/music/song.flac', inventory_track_ref: 'inventory-track:1:1',
+        rating: 5, love_tier: 'obsessed', track_scrobble_count: 23,
+        track_preference: {rating: 5, love_tier: 'obsessed', allowed_actions: {can_set_love_tier: true}}}]};
+    const before = JSON.stringify(cached);
+    h.context.fetchTrackModalAlbumDetails = async () => cached;
+    const row = {inventory_track_ref: 'inventory-track:1:1', rating: 2, love_tier: 'loved',
+      ...(variant === 'missing-availability' ? {} : {taste_state: 'available'})};
+    const taste = {subject_ref: variant === 'wrong-subject' ? 'account:other' : subject,
+      read_only: true, taste_state: 'available', rating: 4, favorite: false,
+      tracks: variant === 'duplicate-identity' ? [row, {...row}] : [row]};
+    const read = h.bridge.configureActivityProvider({
+      readActivity: async () => ({snapshot_ref: 'snapshot:subject', rows: [{id: 'row:subject', kind: 'album', title: 'Album', album_target: canonicalAlbum()}]}),
+      resolveActivityNativeTarget: async () => ({album_ref: 'album:one', allowed_actions: {can_view_details: true}, subject_taste: taste}),
+    });
+    const projection = await read({scopeKey, account_ref: subject, kind: 'albums', period: 'week'});
+    const selection = projection.rows[0].album_target;
+    // Resolve the native target through the real source owner before opening;
+    // hydration correctly rejects a changed grant fingerprint mid-operation.
+    await h.bridge.readAlbumProjection({scopeKey, kind: 'album', ref: selection.ref, origin: selection.origin});
+    await h.bridge.resourceIntent('open', selection, {scopeKey, origin: selection.origin});
+    const displayed = h.calls.opens[0][0], track = displayed.tracks[0];
+    assert.notEqual(displayed, cached); assert.notEqual(track, cached.tracks[0]);
+    assert.equal(track.read_only_subject, subject); assert.equal(track.can_edit_preferences, false);
+    assert.equal(Object.hasOwn(track, 'track_scrobble_count'), false);
+    if (variant === 'matching') {
+      assert.equal(displayed.album_rating, 4); assert.equal(displayed.favorite, false);
+      assert.equal(track.taste_state, 'available'); assert.equal(track.rating, 2); assert.equal(track.love_tier, 'loved');
+      assert.deepEqual(plain(track.track_preference), {rating: 2, love_tier: 'loved', allowed_actions: {can_set_love_tier: false}});
+    } else {
+      assert.equal(track.taste_state, 'unavailable');
+      assert.equal(track.track_preference, null); assert.equal(track.track_preference_overlay, null);
+      assert.notEqual(track.love_tier, 'obsessed', 'actor taste never becomes a fallback');
+    }
+    assert.equal(JSON.stringify(cached), before); assert.equal(h.calls.plays.length, 0);
+  }
 });

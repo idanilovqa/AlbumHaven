@@ -401,16 +401,20 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /--cdt-columns: 36px minmax\(0,1fr\) 220px 36px 20px 54px/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);
   assert.match(markup, /data-cdt-column="path"/);
+  assert.match(markup, /data-cdt-column="love"/);
+  const loveCells = [...markup.matchAll(/<div role="cell" data-cdt-column="love"[^>]*>(.*?)<\/div>/g)].map(match => match[1]);
+  assert.deepEqual(loveCells, Array(2).fill('<span data-track-love-cell="1"><span role="img" aria-label="Love unavailable">–</span></span>'),
+    'both Love cells are only the shared inert unavailable placeholder, never an editing control');
   assert.match(markup, /data-cdt-column="problem"/);
   assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div role="columnheader" data-cdt-column="love"[^>]*>Love<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
   assert.match(markup, /class="album-track-table__secondary">Main Artist feat\. Guest</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);

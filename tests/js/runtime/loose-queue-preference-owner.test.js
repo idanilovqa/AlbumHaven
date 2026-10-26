@@ -6,6 +6,8 @@ const assert = require('node:assert/strict');
 const {
   createLooseAuthorityFixture, looseRow, browsePayload, overlay, outcome,
 } = require('./loose-authority-harness.cjs');
+const {ordinaryNativeState} = require('./ordinary-native-state-fixture.cjs');
+const {runtimeRoot} = require('./loose-authority-harness.cjs');
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const plain = value => JSON.parse(JSON.stringify(value));
 
@@ -17,12 +19,12 @@ function queueRow(id, patch = {}) {
 }
 function fixture(rows) {
   const f = createLooseAuthorityFixture();
-  f.state.player = {current: null, playbackQueue: null, loopActive: false};
+  f.state.player = ordinaryNativeState(runtimeRoot).player;
   const starts = [];
   Object.assign(f.context, {
     playerTrackSelectionToken: 1,
     activateSharedTrackButton() {throw new Error('Preference/Queue metadata must not activate a track');},
-    getPlayerPlaybackSnapshot: () => ({}), streamingEngineState: () => null,
+    getPlayerPlaybackSnapshot: () => ({}),
     resolveNextPlaybackContextQueue: () => null, peekNextOrdinaryQueuedTrack: () => null,
     playTrackFromPayload: async (payload, options) => {starts.push({payload, options}); return true;},
     buildApiUrl: (_view, options) => {
@@ -32,7 +34,9 @@ function fixture(rows) {
   });
   f.context.window.AlbumHavenCapabilities = {allows: () => true};
   f.actionContext.activateSharedTrackButton = f.context.activateSharedTrackButton;
-  for (const file of ['explicit-queue-planner.js', 'explicit-queue-runtime.js', 'explicit-queue-sources.js']) f.loadRuntime(file);
+  for (const file of ['player-streaming-engine.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js', 'explicit-queue-sources.js']) f.loadRuntime(file);
+  assert.equal(f.context.streamingEngineState(), f.state.player.streaming);
+  assert.equal(f.requests.length, 0, 'whole streaming owner evaluation dispatches no network or audio work');
   const view = browsePayload(rows), queue = f.context.window.AlbumHavenExplicitQueue;
   const captures = f.context.captureNativeLooseQueueSources(view, rows);
   assert.equal(captures.length, rows.length);

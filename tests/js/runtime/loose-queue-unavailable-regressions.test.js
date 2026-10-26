@@ -4,21 +4,25 @@ const nodeTest = require('node:test');
 const test = (name, body) => nodeTest(name, {timeout: 5000}, body);
 const assert = require('node:assert/strict');
 const {createLooseAuthorityFixture, looseRow, browsePayload, overlay, outcome} = require('./loose-authority-harness.cjs');
+const {ordinaryNativeState} = require('./ordinary-native-state-fixture.cjs');
+const {runtimeRoot} = require('./loose-authority-harness.cjs');
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const plain = value => JSON.parse(JSON.stringify(value));
 function fixture() {
   const f = createLooseAuthorityFixture();
-  f.state.player = {current: null, playbackQueue: null, loopActive: false};
+  f.state.player = ordinaryNativeState(runtimeRoot).player;
   Object.assign(f.context, {playerTrackSelectionToken: 1,
     activateSharedTrackButton() {assert.fail('Queue metadata cannot activate playback');},
-    getPlayerPlaybackSnapshot: () => ({}), streamingEngineState: () => null,
+    getPlayerPlaybackSnapshot: () => ({}),
     resolveNextPlaybackContextQueue: () => null, peekNextOrdinaryQueuedTrack: () => null,
     playTrackFromPayload: async () => {assert.fail('Queue metadata cannot start playback');},
     buildApiUrl: (_view, options) => {assert.equal(options.payloadTier, 'full'); return '/view-data?surface=albums&payload_tier=full';},
   });
   f.context.window.AlbumHavenCapabilities = {allows: () => true};
   f.actionContext.activateSharedTrackButton = f.context.activateSharedTrackButton;
-  for (const file of ['explicit-queue-planner.js', 'explicit-queue-runtime.js', 'explicit-queue-sources.js']) f.loadRuntime(file);
+  for (const file of ['player-streaming-engine.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js', 'explicit-queue-sources.js']) f.loadRuntime(file);
+  assert.equal(f.context.streamingEngineState(), f.state.player.streaming);
+  assert.equal(f.requests.length, 0, 'whole streaming owner evaluation dispatches no network or audio work');
   return {...f, queue: f.context.window.AlbumHavenExplicitQueue};
 }
 const unknownRow = (id, patch = {}) => looseRow(id, {availability: 'local', duration_seconds: 193,

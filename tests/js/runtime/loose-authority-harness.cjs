@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {loadNativeResponseState} = require('./ordinary-native-state-fixture.cjs');
 const repositoryRoot = process.env.LOOSE_AUTHORITY_REPOSITORY_ROOT || path.resolve(__dirname, '../../..');
 const runtimeRoot = path.join(repositoryRoot, 'music_app/static/js/runtime');
 const outcome = promise => Promise.resolve(promise).then(value => ({value}), error => ({error}));
@@ -72,6 +73,8 @@ function createLooseAuthorityFixture() {
   });
   const context = vm.createContext({...bindings, TrackActionsRuntime: observed});
   const loadRuntime = file => vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'), context, {filename: file});
+  // Whole response owner precedes the modal and foreground request owners, as served.
+  const responseStateOwner = loadNativeResponseState(context, runtimeRoot);
   loadRuntime('track-modal-lightbox-helpers.js');
   loadRuntime('gallery-refresh-and-status.js');
   // Keep fetchAndRender, readGalleryResponse, currentness, pagination and
@@ -98,7 +101,7 @@ function createLooseAuthorityFixture() {
   const source = row => context.getTrackModalPreferenceSource(row);
   const preference = row => {const value = source(row); return value && runtime.preference(value);};
   return {context, actionContext, runtime, observed, requests, batches, directReads, epochReads, state, shell, scroll, nodes, document,
-    applied, frames, paint, redirects, read, respond, load, source, preference, loadRuntime,
+    applied, frames, paint, redirects, read, respond, load, source, preference, loadRuntime, responseStateOwner,
     changeSession: () => {generation++;}};
 }
 module.exports = {createLooseAuthorityFixture, looseRow, browsePayload, overlay, outcome, settle, repositoryRoot, runtimeRoot};

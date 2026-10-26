@@ -66,12 +66,21 @@ function nativeDetails(env, album) {
     formatTrackDuration: value => value == null ? '' : `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`,
     formatAlbumDuration: () => ''});
   context.renderTrackModalRelease(album);
+  assert.equal(album.read_only_subject, 'account:friend');
+  assert.equal(album.can_edit_preferences, false);
+  assert.equal(Object.hasOwn(album, 'album_preference'), false);
+  assert.equal(context.getTrackModalAlbumPreferenceLease(), null, 'subject summary never acquires an own-preference lease');
+  assert.equal(els.header.querySelectorAll('[data-album-preference-action]').length, 0);
+  assert.doesNotMatch(els.header.textContent, /Your (?:album|rating|favorite)/);
+  assert.equal(env.forbiddenCalls.includes('fetch'), false, 'subject presentation must not dispatch a preference POST or read');
   return els;
 }
 const cell = (element, index = 0) => element.querySelectorAll('[role="cell"][data-cdt-column="rating"]')[index];
 function assertUnrated(element, kind) {
   const stars = element.querySelector('.stars'); assert.ok(stars, 'canonical shared stars must be present');
-  assert.equal(stars.getAttribute('aria-label'), `${kind === 'album' ? 'Album' : 'Track'} unrated`);
+  assert.equal(element.querySelectorAll('.stars').length, 1);
+  assert.equal(stars.getAttribute('role'), 'img');
+  assert.equal(stars.getAttribute('aria-label'), `${kind === 'album' ? 'Subject album' : 'Track'} unrated`);
   assert.equal(stars.querySelectorAll('.star').length, kind === 'album' ? 10 : 5);
   assert.equal(stars.querySelectorAll('.filled').length, 0);
   assert.equal(element.querySelector('.rating-text'), null);
@@ -97,11 +106,17 @@ test('authorized subject Album header and tracks show empty stars while actor ca
   assert.equal(env.opens.at(-1).options.presentationRestrictions.can_play_album, false);
 });
 
-test('valid positive subject Album and track values keep existing numeric presentation and return to actor remains untouched', async () => {
+test('positive subject Album uses shared ten-point stars while track numeric presentation and return to actor remain untouched', async () => {
   const env = setup(), taste = baseTaste(); taste.rating = 7; taste.tracks[0].rating = 2;
   const {album} = await openSubject(env, taste);
   const details = nativeDetails(env, album);
-  assert.match(details.header.textContent, /Rating: 7/); assert.equal(details.header.querySelector('.stars'), null);
+  const stars = details.header.querySelector('.stars');
+  assert.ok(stars); assert.equal(details.header.querySelectorAll('.stars').length, 1);
+  assert.equal(stars.getAttribute('role'), 'img');
+  assert.equal(stars.getAttribute('aria-label'), 'Subject album rating 7/10');
+  assert.equal(stars.querySelectorAll('.star').length, 10);
+  assert.equal(stars.querySelectorAll('.filled').length, 7);
+  assert.equal(details.header.querySelector('.rating-text').textContent, '7/10');
   assert.equal(cell(details.list).textContent, '2'); assert.equal(cell(details.list).querySelector('.stars'), null);
   const own = await openSubject(env, taste, null);
   assert.strictEqual(own.album, env.cached); assert.equal(own.album.album_rating, 9); assert.equal(own.album.tracks[0].rating, 5);
@@ -121,7 +136,9 @@ test('subject missing, mismatched, inherited, unavailable and malformed nullable
   for (const taste of variants) {
     const env = setup(), {album} = await openSubject(env, taste);
     const details = nativeDetails(env, album);
-    assert.equal(details.header.querySelector('.stars'), null); assert.match(details.header.textContent, /Rating: –/);
+    assert.equal(album.taste_state, 'unavailable'); assert.equal(album.album_rating, null);
+    assert.equal(details.header.querySelector('.stars'), null); assert.equal(details.header.querySelector('.rating-text'), null);
+    assert.equal(details.header.querySelector('.playlists__note').textContent, 'Rating: Unavailable · Favorite: Unavailable');
     assert.equal(cell(details.list).textContent, '–'); assert.equal(cell(details.list).querySelector('.stars'), null);
     assert.equal(env.cached.album_rating, 9); assert.equal(env.cached.tracks[0].rating, 5);
   }

@@ -153,6 +153,7 @@ function loadHelpers(overrides = {}) {
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-main-components.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'trigger-anchor.js'), 'utf8'), context, {filename: 'trigger-anchor.js'});
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
@@ -261,21 +262,26 @@ test('choice dropdown opens above the persistent player when the lower space is 
 test('shared choice dropdown toggles, switches triggers, preserves IDs and Foobar strings', () => {
   const { context } = loadHelpers();
   const menus = [], selected = [];
-  const makeNode = () => ({
-    style: {}, listeners: {}, attributes: {}, isConnected: true,
+  // Keep this fixture's explicit menu callback seam, but use actual collection
+  // semantics for the DOM state observed by the genuine anchor owner.
+  const makeNode = () => {
+    const classes = new Set(), styles = new Map();
+    return {
+    style: {setProperty: (key, value) => styles.set(key, value), removeProperty: key => styles.delete(key)},
+    dataset: {}, classList: {add: value => classes.add(value), remove: value => classes.delete(value), contains: value => classes.has(value)},
+    listeners: {}, attributes: {}, isConnected: true,
     setAttribute(key, value) { this.attributes[key] = value; },
     getAttribute(key) { return this.attributes[key] ?? null; },
     addEventListener(type, callback) { this.listeners[type] = callback; },
-    remove() { this.removed = true; }, contains: () => false,
+    remove() { this.removed = true; this.isConnected = false; }, contains: () => false,
     focus() { this.focused = true; },
-    getBoundingClientRect: () => ({ left: 10, bottom: 50 }),
-  });
+    getBoundingClientRect: () => ({ left: 10, right: 110, top: 20, bottom: 50, width: 100, height: 30 }),
+  }; };
   const firstButton = makeNode();
   context.document = { body: { append: menu => menus.push(menu) }, addEventListener() {}, removeEventListener() {},
     createElement: () => ({ ...makeNode(), querySelector: () => firstButton, querySelectorAll: () => [firstButton] }) };
   context.addEventListener = () => {}; context.removeEventListener = () => {};
   context.innerWidth = 1000; context.innerHeight = 800;
-  context.syncTriggerAnchor = () => {}; context.clearTriggerAnchor = () => {};
   const first = makeNode(), second = makeNode();
   const firstLabel = {}, secondLabel = {};
   first.querySelector = () => firstLabel; second.querySelector = () => secondLabel;
@@ -297,6 +303,13 @@ test('shared choice dropdown toggles, switches triggers, preserves IDs and Fooba
   context.openUtilityChoiceDropdown(first, options);
   context.openUtilityChoiceDropdown(first, options);
   assert.equal(menus.length, 5); assert.equal(menus[4].removed, true); assert.equal(first.attributes['aria-expanded'], 'false');
+  assert.equal(context.isTriggerSurfaceAnchorCurrent(menus[4], first), false);
+  first.isConnected = false;
+  assert.equal(context.openUtilityChoiceDropdown(first, options), null);
+  first.isConnected = true; first.disabled = true;
+  assert.equal(context.openUtilityChoiceDropdown(first, options), null);
+  assert.equal(menus.length, 5);
+  assert.deepEqual(selected, ['id-one', ''], 'denied opens never invoke the supplied selection callback');
 });
 
 test('library failures use shared escaped alerts and retain the retry action', async () => {

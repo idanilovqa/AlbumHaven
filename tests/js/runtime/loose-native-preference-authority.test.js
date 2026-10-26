@@ -100,8 +100,10 @@ test('Frozen response rows survive real normalization, compaction and private Lo
     looseRow(102, {exception_type: 'Non-album rarity'})], payload = freeze(browsePayload(rows));
   const before = JSON.stringify(payload);
   await f.load(payload);
-  const sink = f.context.applyViewPayload;
-  f.loadRuntime('response-state-helpers.js'); f.context.applyViewPayload = sink;
+  // The complete response owner now precedes the genuine request, as served.
+  // Do not reexecute its const declarations after admission.
+  assert.equal(typeof f.context.normalizeViewPayload, 'function');
+  assert.equal(typeof f.context.compactRuntimeViewPayload, 'function');
   const normalized = f.context.compactRuntimeViewPayload(f.context.normalizeViewPayload(payload));
   rows.forEach((row, index) => assert.equal(normalized.non_album_tracks[index], row,
     'DTO compaction must preserve exact receipt-bearing rows, not transfer receipts to clones'));

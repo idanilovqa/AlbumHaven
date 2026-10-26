@@ -5,6 +5,8 @@ const nodeTest = require('node:test');
 const test = (name, body) => nodeTest(name, {timeout: 5000}, body);
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const {ordinaryNativeState, loadNativeResponseState} = require('./ordinary-native-state-fixture.cjs');
 const vm = require('node:vm');
 const {URL, URLSearchParams} = require('node:url');
 const companion = require('./shared-request-unit-fixture.cjs');
@@ -110,10 +112,12 @@ test('the known sink preserves a thrown error and performs no fabricated assignm
   assert.equal(f.state.view, retained);
 });
 
-test('later real response-state load and explicit sink restoration retain the assigned result', () => {
+test('the bootstrapped real response-state owner and explicit sink restoration retain the assigned result', () => {
   const f = companion.looseAuthority().createLooseAuthorityFixture();
   const sink = f.context.applyViewPayload;
-  f.loadRuntime('response-state-helpers.js');
+  const actual = f.responseStateOwner;
+  assert.equal(actual.captureScope, f.context.captureRuntimeAlbumPreferenceScope);
+  f.context.applyViewPayload = actual.applyViewPayload;
   assert.notEqual(f.context.applyViewPayload, sink, 'the real owner can replace the seam normally');
   f.context.applyViewPayload = sink;
   const payload = browsePayload([]);
@@ -179,3 +183,56 @@ for (const returned of [undefined, null, false]) {
     assert.equal(f.context.applyViewPayload, replacement);
   });
 }
+
+
+test('missing whole response owner fails without installing an authority substitute', () => {
+  const context = vm.createContext({});
+  assert.throws(() => loadNativeResponseState(context,
+    path.join(runtimeRoot, '__missing_response_owner__')), error => error.code === 'ENOENT');
+  assert.equal(context.captureRuntimeAlbumPreferenceScope, undefined);
+  assert.equal(context.admitRuntimeAlbumPreferenceRead, undefined);
+});
+
+test('Album hydration cannot dispatch when its genuine response owner is absent', async () => {
+  const requests = [], shell = {dataset: {nativeAccountId: '7', nativeLibraryId: '9'}};
+  const context = vm.createContext({state: {ui: {}, view: {}, player: {}, status: {}},
+    window: {}, document: {getElementById: id => id === 'app-shell' ? shell : null},
+    PrivateUITransport: {generation: () => 1}, fetch: (...args) => requests.push(args)});
+  for (const file of ['track-actions.js', 'track-modal-lightbox-helpers.js'])
+    vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'), context, {filename: file});
+  await assert.rejects(context.fetchTrackModalAlbumDetails('unavailable-owner'),
+    /captureRuntimeAlbumPreferenceScope is not defined/);
+  assert.equal(requests.length, 0);
+});
+
+test('whole response owner does not fabricate Album taste authority from ordinary Track receipt context', () => {
+  const f = companion.looseAuthority().createLooseAuthorityFixture();
+  assert.equal(f.responseStateOwner.captureScope, f.context.captureRuntimeAlbumPreferenceScope);
+  assert.equal(f.context.captureRuntimeAlbumPreferenceScope(), null,
+    'numeric actor/library without private continuity is not an Album taste scope');
+  const copied = {album_ref: 'inventory-album:9:11', context_ref: 'a'.repeat(64),
+    rating: 10, is_favorite: true, favorite_override: true, favorite_source: 'personal',
+    taste_state: 'available', preference_revision: 1, can_edit: true,
+    allowed_actions: {can_manage_album_preferences: true}};
+  assert.equal(f.context.normalizeRuntimeAlbumPreference(copied, null), null);
+  assert.equal(f.requests.length, 0); assert.equal(f.batches.length, 0);
+});
+
+test('ordinary modal initialization cannot hide explicitly invalid current modal state', async () => {
+  const f = companion.looseAuthority().createLooseAuthorityFixture();
+  assert.equal(f.context.getCurrentTrackModalAlbum(), null);
+  f.state.modalReleases = null;
+  const result = await f.read('/view-data?surface=albums');
+  assert.equal(result.error?.name, 'TypeError');
+  assert.match(result.error.message, /Cannot read properties of null/);
+  assert.equal(f.requests.length, 0);
+});
+
+test('whole bootstrap and core owners provide fresh stopped state without application startup effects', () => {
+  const first = ordinaryNativeState(runtimeRoot), second = ordinaryNativeState(runtimeRoot);
+  assert.notEqual(first, second); assert.notEqual(first.player.streaming, second.player.streaming);
+  assert.equal(first.player.current, null); assert.equal(first.player.playbackQueue, null);
+  assert.equal(first.player.streaming.mode, 'stopped'); assert.equal(first.player.streaming.context, null);
+  assert.equal(first.player.streaming.node, null); assert.equal(first.player.streaming.socket, null);
+  assert.equal(first.modalReleases.length, 0); assert.equal(first.modalReleaseIndex, 0);
+});

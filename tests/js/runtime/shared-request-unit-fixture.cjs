@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const {URL, URLSearchParams} = require('node:url');
+const {ordinaryNativeState} = require('./ordinary-native-state-fixture.cjs');
 
 function installRequestClassification(context, runtimeRoot) {
   assert.ok(context && typeof context === 'object', 'An existing unit context is required');
@@ -18,10 +19,12 @@ function installRequestClassification(context, runtimeRoot) {
   vm.runInContext(fs.readFileSync(filename, 'utf8'), owner, {filename});
   assert.equal(typeof owner.isPrivateSearchExpression, 'function');
   assert.equal(typeof owner.isPrivateSearchRequestUrl, 'function');
+  assert.equal(typeof owner.isPopularitySearchExpression, 'function');
   if (context.URL === undefined) context.URL = URL;
   if (context.URLSearchParams === undefined) context.URLSearchParams = URLSearchParams;
   context.isPrivateSearchExpression = owner.isPrivateSearchExpression;
   context.isPrivateSearchRequestUrl = owner.isPrivateSearchRequestUrl;
+  context.isPopularitySearchExpression = owner.isPopularitySearchExpression;
   return context;
 }
 
@@ -62,7 +65,15 @@ function lazyFixtureModule(loadOriginal, factoryName, runtimeRoot, sinkKind) {
       // All four audited factories return before their first browse/read. Wrap
       // their returned default once, after any protected save/load/restore work.
       const fixture = Reflect.apply(originalFactory, this, args);
-      installRequestClassification(fixture.context, runtimeRoot(original));
+      const root = runtimeRoot(original), state = fixture.context.state;
+      // Match the served core state's ordinary closed-modal initialization.
+      // Never overwrite an explicitly supplied test state or fake its owner.
+      if (!Object.hasOwn(state, 'modalReleases') || !Object.hasOwn(state, 'modalReleaseIndex')) {
+        const initial = ordinaryNativeState(root);
+        if (!Object.hasOwn(state, 'modalReleases')) state.modalReleases = initial.modalReleases;
+        if (!Object.hasOwn(state, 'modalReleaseIndex')) state.modalReleaseIndex = initial.modalReleaseIndex;
+      }
+      installRequestClassification(fixture.context, root);
       composeDefaultSink(fixture, sinkKind);
       return fixture;
     }};

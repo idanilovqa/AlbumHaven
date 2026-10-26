@@ -94,7 +94,9 @@ test('the template loads persistent shell ownership after modal styles and befor
     (match) => match[1],
   );
 
-  assert.equal(runtimeStyles.at(-1), 'trigger-anchor.css');
+  for (const stylesheet of ['cover-lookup-modal.css', 'shell-persistent-player.css', 'trigger-anchor.css']) {
+    assert.equal(runtimeStyles.filter(name => name === stylesheet).length, 1, `${stylesheet} must load exactly once`);
+  }
   assert.ok(runtimeStyles.indexOf('trigger-anchor.css') > runtimeStyles.indexOf('shell-persistent-player.css'));
   assert.ok(
     runtimeStyles.indexOf('shell-persistent-player.css')

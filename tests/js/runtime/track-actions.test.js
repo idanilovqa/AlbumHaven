@@ -125,7 +125,8 @@ test('denial blocks further writes until fresh authority, while ambiguous transp
   h.transport(async () => response(null, 403));
   await assert.rejects(h.home.setTrackLove({row: {id: 'listen:one'}, context: h.options(), love_tier: 'loved'}), {status: 403});
   assert.equal(h.home.trackPreference({id: 'listen:one'}, h.options()).allowed_actions.can_set_love_tier, false);
-  await assert.rejects(h.home.setTrackLove({row: {id: 'listen:one'}, context: h.options(), love_tier: 'loved'}), {status: 403});
+  // The rejected identity is retired before dispatch, rather than issuing another HTTP denial.
+  await assert.rejects(h.home.setTrackLove({row: {id: 'listen:one'}, context: h.options(), love_tier: 'loved'}), {name: 'AbortError'});
   assert.equal(h.calls.writes.length, 1);
   await read(h.options()); h.transport(async () => {throw new TypeError('Network failure');});
   await assert.rejects(h.home.setTrackLove({row: {id: 'listen:one'}, context: h.options(), love_tier: 'loved'}), /Network failure/);

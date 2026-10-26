@@ -200,6 +200,7 @@ function loadHelper(options = {}) {
       getElementById(id) {
         return elementsById[id] || null;
       },
+      querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
       querySelectorAll(selector) {
         if (selector.includes('.track-modal')) return [trackModal, utilityModal, lightboxOverlay];
         if (selector === '[data-open-tracklist="1"]') {
@@ -418,9 +419,22 @@ function loadHelper(options = {}) {
     },
   };
 
+  context.window = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'bootstrap-state.js'), 'utf8'), context);
+  // Served prerequisite: metadata-only fixtures have no authenticated preference
+  // scope. The real owner rejects admission instead of inventing one for tests.
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'response-state-helpers.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'album-artbox.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
+  if (typeof options.compactCurrentViewForIdle === 'function') {
+    // Keep the original scheduling observation seam after, not instead of,
+    // genuine cleanup now supplied by the complete response-state owner.
+    const compact = context.compactCurrentViewForIdle;
+    context.compactCurrentViewForIdle = (...args) => {
+      const result = compact(...args); options.compactCurrentViewForIdle(...args); return result;
+    };
+  }
 
   return {
     context,
@@ -2559,3 +2573,20 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+test('metadata-only hydration cannot mint an authenticated Album preference receipt', async () => {
+  const {context} = loadHelper();
+  const album = {key: 'alpha', album_id: 1, tracks: [], album_preference: {
+    album_ref: 'inventory-album:1:1', context_ref: 'a'.repeat(64), rating: 9,
+    is_favorite: true, favorite_override: true, favorite_source: 'personal',
+    taste_state: 'available', preference_revision: 1, can_edit: true,
+    allowed_actions: {can_manage_album_preferences: true},
+  }};
+  const before = JSON.stringify(album);
+  context.fetch = async () => ({ok: true, json: async () => ({ok: true, album})});
+  assert.equal(context.captureRuntimeAlbumPreferenceScope(), null);
+  assert.equal(await context.fetchTrackModalAlbumDetails('alpha'), album);
+  assert.equal(context.runtimeAlbumPreferenceForAlbum(album), null);
+  assert.equal(context.runtimeAlbumPreferenceForAlbum({...album}), null);
+  assert.equal(JSON.stringify(album), before, 'metadata read cannot rewrite the source as authority');
+});

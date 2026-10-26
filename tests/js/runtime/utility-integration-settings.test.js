@@ -19,6 +19,26 @@ function load(overrides = {}) {
   return context;
 }
 
+// Install the genuine policy owner only for scenarios with explicit grants.
+// The default load() remains denied; restricted-user cases do not inherit access.
+function grantActions(context, actions) {
+  context.document = {
+    readyState: 'complete',
+    getElementById: id => id === 'capability-bootstrap'
+      ? {textContent: JSON.stringify({allowed_actions: actions, available_tabs: ['integrations']})} : null,
+    querySelectorAll: () => [],
+  };
+  vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/capability-ui.js'), 'utf8'), context);
+  return context;
+}
+function grantIntegrationNavigation(context) {
+  return grantActions(context, {
+    'integration.settings.read': true,
+    'library.settings.read': true,
+    'account.self.foobar.write': true,
+  });
+}
+
 function loadLastfmActions(overrides = {}) {
   const context = load(overrides);
   vm.runInContext(fs.readFileSync(path.join(root,'music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'),'utf8'),context);
@@ -75,6 +95,7 @@ test('loading Integrations renders local data before the Last.fm provider summar
   assert.equal(url,'/utilities/integrations/lastfm/scrobbles');
   return new Promise(resolve=>{resolveProvider=resolve;});
  }});
+ grantActions(c, {'integration.settings.read': true});
  await c.loadUtilityIntegrations(true);
  assert.deepEqual(requests,['/utilities/integrations','/utilities/integrations/lastfm/scrobbles']);
  assert.equal(c.state.utility.integrationsLoading,false);
@@ -207,6 +228,7 @@ test('reopening loaded Integrations explicitly retries the Last.fm summary witho
  c.state.utility.integrationsLoaded=true;
  c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
  c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
+ grantActions(c, {'integration.settings.read': true});
  await c.loadUtilityIntegrations();
  assert.equal(c.state.utility.lastfmScrobbles.loading,true);
  const refresh=c.state.utility.lastfmScrobbles.loadPromise;
@@ -226,11 +248,31 @@ test('playlist integration exposes only one disabled Import control',()=>{
  assert.doesNotMatch(html,/data-analyze-local-playlist|textarea|target_recommendation|Album Top/);
 });
 
-test('Foobar uses shared format trigger and truthful unavailable import with left guide action',()=>{
- const html=load().buildUtilityIntegrationDetail({key:'foobar',help_route:'/utilities/integrations/foobar/help'});
- assert.match(html,/SQLite database/);assert.match(html,/data-foobar-format-trigger/);assert.match(html,/Playback Statistics XML/);
- assert.match(html,/data-foobar-import[^>]*disabled|disabled[^>]*data-foobar-import/);
- assert.match(html,/Read setup instructions/);assert.match(html,/unavailable in this build/i);assert.doesNotMatch(html,/<select|<iframe/);
+test('Foobar account permission exposes the genuine import mount instead of obsolete disabled controls',()=>{
+ const c=grantActions(load(), {'account.self.foobar.write': true});
+ const html=c.buildUtilityIntegrationDetail({key:'foobar',help_route:'/utilities/integrations/foobar/help'});
+ assert.match(html,/Foobar2000/);assert.match(html,/data-foobar-import-host/);
+ assert.match(html,/role="status">Loading import controls/);
+ assert.doesNotMatch(html,/unavailable|data-foobar-import(?:\s|=)|data-foobar-format-trigger|<select|<iframe/);
+});
+
+test('missing and administration-only grants cannot expose account Foobar import controls',()=>{
+ for (const actions of [{}, {'integration.settings.read': true, 'library.settings.read': true}]) {
+  const c=grantActions(load(), actions);
+  const html=c.buildUtilityIntegrationDetail({key:'foobar'});
+  assert.match(html,/Foobar import is unavailable/);
+  assert.doesNotMatch(html,/data-foobar-import-host|data-foobar-import(?:\s|=)/);
+  assert.equal(Array.from(c.buildUtilityIntegrationItems(), item=>item.key).includes('foobar'),false);
+ }
+});
+
+test('denied integration reads never dispatch administrative requests',async()=>{
+ for (const actions of [{}, {'account.self.foobar.write': true}]) {
+  const c=grantActions(loadLastfmActions({fetch:()=>assert.fail('denied administrative fetch')}),actions);
+  await c.loadUtilityIntegrations(true);
+  assert.equal(c.state.utility.integrationsLoaded,false);
+  assert.deepEqual(Array.from(c.state.utility.integrations),[]);
+ }
 });
 
 test('root path rows keep browse and destructive remove inside one accessible input shell',()=>{
@@ -311,7 +353,7 @@ test('remove then add preserves unique root IDs for saved move policy',()=>{
 
 
 test('integration navigation uses the four approved section names',()=>{
- const c=load();c.state.utility.integrations=[{key:'lastfm',title:'Last.FM'},{key:'foobar',title:'Foobar2000'},{key:'local_playlist_import',title:'Import Local Playlist'}];
+ const c=grantIntegrationNavigation(load());c.state.utility.integrations=[{key:'lastfm',title:'Last.FM'},{key:'foobar',title:'Foobar2000'},{key:'local_playlist_import',title:'Import Local Playlist'}];
  assert.deepEqual(Array.from(c.buildUtilityIntegrationItems(),item=>item.title),['Library','Scrobbling','Foobar2000','Import Local Playlist']);
 });
 
@@ -337,11 +379,11 @@ test('picker selects only server-returned paths and changes draft only after Cho
 
 
 test('integration selection retains mounted tree buttons and scroll instead of rebuilding',()=>{
- const c=load();const keys=['library','lastfm','foobar','local_playlist_import'];
+ const c=grantIntegrationNavigation(load());const keys=['library','lastfm','foobar','local_playlist_import'];
  const nodes=keys.map(key=>({getAttribute:()=>key,remove:()=>assert.fail('existing row removed')}));
  nodes.forEach((node,index)=>Object.defineProperty(node,'nextElementSibling',{get:()=>nodes[index+1]||null}));
  const list={dataset:{utilityNavigationOwner:'integrations'},scrollTop:123,querySelectorAll:()=>nodes,get firstElementChild(){return nodes[0];},insertBefore:()=>assert.fail('existing row moved'),set innerHTML(value){assert.fail('tree rebuilt');}};
- c.getUtilityModalElements=()=>({overlay:{},list,detail:{innerHTML:''},count:{}});
+ c.getUtilityModalElements=()=>({overlay:{},list,detail:{innerHTML:'',querySelector:()=>null},count:{}});
  c.window.NavigationTree={setItemSelected:(node,selected)=>{node.selected=selected;}};
  c.state.utility.integrations=keys.slice(1).map(key=>({key,title:key}));c.state.utility.selectedIntegrationKey='lastfm';
  c.buildUtilityIntegrationDetail=()=>'<div>Detail</div>';

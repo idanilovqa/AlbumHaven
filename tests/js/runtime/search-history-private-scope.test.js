@@ -26,12 +26,14 @@ function harness({storage = new Map(), actor = 'account:a', library = 'library:a
     clearBrowserTimeout() {},
     scheduleBrowserTimeout(callback) {callbacks.push(callback); return callbacks.length;},
     withActiveGallerySources: view => ({...view}),
-    buildApiUrl: view => `/view-data?q=${encodeURIComponent(view.query)}`,
     fetchAndRender(url) {requests.push(url); return Promise.resolve();},
   });
-  for (const file of ['private-ui-transport.js', 'browser-storage-helpers.js', 'bootstrap-gallery-event-handlers.js']) {
+  for (const file of ['view-state-helpers.js', 'browser-storage-helpers.js', 'search-shorthand-model.js',
+    'bootstrap-gallery-event-handlers.js', 'private-ui-transport.js']) {
     vm.runInContext(fs.readFileSync(path.join(runtimeRoot, file), 'utf8'), context, {filename: file});
   }
+  // Keep the existing request-observation seam after loading its real owner.
+  context.buildApiUrl = view => `/view-data?q=${encodeURIComponent(view.query)}`;
   const transport = context.AlbumHavenPrivateUITransport;
   const move = (nextActor = actor, nextLibrary = library, nextStamp = STAMP_B) => {
     Object.assign(shell.dataset, {nativeAccountId: nextActor, nativeLibraryId: nextLibrary, privateUiContext: nextStamp});
@@ -132,7 +134,7 @@ test('shared transport context rejection retires history without another search 
 
 test('a detached option from the previous actor cannot select an index belonging to the next actor', () => {
   const h = harness(); h.record('Actor A private'); h.open();
-  const oldOption = h.popover.querySelector('[data-recent-search-index]');
+  const oldOption = h.popover.querySelector('[data-search-suggestion-index]');
   assert.ok(oldOption);
   h.move('account:b', 'library:a'); h.record('Actor B private'); h.open();
   assert.equal(oldOption.isConnected, false);
@@ -221,7 +223,7 @@ for (const [name, actor, library] of [
 ]) {
   test(`a ${name}-only shell mutation retires history and old callbacks even before the opaque stamp changes`, () => {
     const h = harness(); h.record('Old shell private query'); h.open();
-    const oldOption = h.popover.querySelector('[data-recent-search-index]');
+    const oldOption = h.popover.querySelector('[data-search-suggestion-index]');
     assert.ok(oldOption);
     h.context.scheduleGallerySearchCommit('Old shell queued query', {recordRecentSearch: true});
     assert.equal(h.callbacks.length, 1);

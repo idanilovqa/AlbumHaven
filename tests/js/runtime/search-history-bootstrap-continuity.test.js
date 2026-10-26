@@ -41,10 +41,11 @@ function boot({productionOrder = false} = {}) {
       setItem(key, value) {writes.push([key, value]); storage.set(key, value);}, removeItem: key => storage.delete(key)},
     MutationObserver: BatchedObserver,
     clearBrowserTimeout() {}, scheduleBrowserTimeout(callback) {callbacks.push(callback); return callbacks.length;},
-    withActiveGallerySources: view => ({...view}), buildApiUrl: view => `/view-data?q=${encodeURIComponent(view.query)}`,
+    withActiveGallerySources: view => ({...view}),
     fetchAndRender(url) {requests.push(url); return Promise.resolve();},
   });
-  let files = ['private-ui-transport.js', 'browser-storage-helpers.js', 'bootstrap-gallery-event-handlers.js'];
+  let files = ['view-state-helpers.js', 'browser-storage-helpers.js', 'search-shorthand-model.js',
+    'bootstrap-gallery-event-handlers.js', 'private-ui-transport.js'];
   if (productionOrder) {
     // Read the actual build manifest without running the builder. Whole relevant
     // modules share one Script lexical environment, just as its concatenation does.
@@ -53,11 +54,14 @@ function boot({productionOrder = false} = {}) {
     assert.ok(declaration, 'the production runtime manifest is present');
     const listed = [...declaration[1].matchAll(/'js\/runtime\/([^']+)'/g)].map(match => match[1]);
     files = listed.filter(file => files.includes(file));
-    assert.deepEqual(files, ['browser-storage-helpers.js', 'bootstrap-gallery-event-handlers.js', 'private-ui-transport.js']);
+    assert.deepEqual(files, ['view-state-helpers.js', 'browser-storage-helpers.js', 'search-shorthand-model.js',
+      'bootstrap-gallery-event-handlers.js', 'private-ui-transport.js']);
   }
   const chunks = files.map(file => fs.readFileSync(path.join(runtimeRoot, file), 'utf8'));
   if (productionOrder) vm.runInContext(chunks.join('\n\n'), context, {filename: 'production-search-owner-concatenation.js'});
   else files.forEach((file, index) => vm.runInContext(chunks[index], context, {filename: file}));
+  // Keep the existing request-observation seam after loading its real owner.
+  context.buildApiUrl = view => `/view-data?q=${encodeURIComponent(view.query)}`;
   const flush = () => {
     // One mutation-observer delivery checkpoint. Nothing observes intermediate
     // shell values; each callback receives the complete pending mutation list.
@@ -92,7 +96,7 @@ test('production concatenation order boots and subscribes to later shared-transp
 for (const mode of ['queued', 'mobile']) {
   test(`batched exact-scope A to B to A retires the ${mode} callback and visible history`, () => {
     const h = boot(); h.record('Before batched boundary'); h.open();
-    const oldOption = h.popover.querySelector('[data-recent-search-index]');
+    const oldOption = h.popover.querySelector('[data-search-suggestion-index]');
     assert.ok(oldOption);
     let resume;
     if (mode === 'queued') {

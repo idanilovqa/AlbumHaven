@@ -63,6 +63,12 @@ function createElement() {
     getAttribute(name) {
       return attributes.has(name) ? attributes.get(name) : null;
     },
+    hasAttribute(name) { return attributes.has(name); },
+    toggleAttribute(name, force) {
+      const present = arguments.length > 1 ? Boolean(force) : !attributes.has(name);
+      if (present) attributes.set(name, ''); else attributes.delete(name);
+      return present;
+    },
     removeAttribute(name) {
       attributes.delete(name);
     },
@@ -367,7 +373,7 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 {
   const { context, drawerRail, drawerBackdrop, body } = loadHelper({ isMobile: true });
   context.state.ui.artistsDrawerOpen = true;
-  context.state.view.shell_layout.slots.navigation_rail.content_kind = 'playlist_sidebar';
+  context.state.view.shell_layout.slots.navigation_rail.content_kind = 'unsupported_fixture_sidebar';
 
   context.syncArtistsDrawerVisibility();
 
@@ -379,7 +385,7 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 
 {
   const { context } = loadHelper({ isMobile: true });
-  context.state.view.shell_layout.slots.navigation_rail.content_kind = 'playlist_sidebar';
+  context.state.view.shell_layout.slots.navigation_rail.content_kind = 'unsupported_fixture_sidebar';
 
   const opened = context.openArtistsDrawer();
 
@@ -413,4 +419,33 @@ for (const pendingArtist of ['', 'Latest Artist']) {
   assert.equal(opener.getAttribute('aria-expanded'), 'true');
   assert.equal(opener.getAttribute('data-search-results'), null);
   assert.equal(opener.getAttribute('aria-description'), null);
+}
+// Faithful DOM presence/force semantics, independent of the drawer owner.
+{
+  const node = createElement();
+  assert.equal(node.hasAttribute('inert'), false);
+  assert.equal(node.toggleAttribute('inert'), true);
+  assert.equal(node.getAttribute('inert'), '');
+  assert.equal(node.toggleAttribute('inert', true), true);
+  assert.equal(node.toggleAttribute('inert', false), false);
+  assert.equal(node.hasAttribute('inert'), false);
+  assert.equal(node.toggleAttribute('inert', false), false);
+  node.setAttribute('inert', 'existing');
+  assert.equal(node.toggleAttribute('inert'), false);
+  assert.equal(node.getAttribute('inert'), null);
+}
+
+// Accepted shared library drawer supports both collection panes, not unknown kinds.
+for (const kind of ['playlist_sidebar', 'album_tops_sidebar']) {
+  const {context, drawerRail, drawerBackdrop, body} = loadHelper({isMobile: true});
+  context.state.view.shell_layout.slots.navigation_rail.content_kind = kind;
+  assert.equal(context.openArtistsDrawer(), true);
+  assert.equal(context.state.ui.artistsDrawerOpen, true);
+  assert.equal(drawerRail.classList.contains('is-mobile-drawer'), true);
+  assert.equal(drawerBackdrop.hidden, false);
+  assert.equal(body.classList.contains('artists-drawer-open'), true);
+  context.closeArtistsDrawer();
+  assert.equal(context.state.ui.artistsDrawerOpen, false);
+  assert.equal(drawerBackdrop.hidden, true);
+  assert.equal(body.classList.contains('artists-drawer-open'), false);
 }

@@ -3,7 +3,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const {installRequestClassification} = require('./shared-request-unit-fixture.cjs');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
@@ -143,8 +142,11 @@ test('failed search preserves the view', async () => {
 test('ordinary gallery refresh works without a browser host or optional draft navigation services', async () => {
   for (const browserHost of [undefined, {}]) {
     const {context, calls, pendingRequests} = createContext();
-    assert.equal(typeof context.window, 'undefined', 'the isolated gallery owner does not require window');
-    if (browserHost) context.window = browserHost;
+    if (browserHost === undefined) {
+      delete context.window;
+      assert.equal(typeof context.window, 'undefined', 'the isolated gallery owner does not require window');
+    } else context.window = browserHost;
+    assert.equal(context.window?.AlbumHavenSettingsNavigation, undefined);
     const refresh = context.fetchAndRender('/view-data', false, {preserveScroll: true});
     assert.equal(pendingRequests.length, 1);
     pendingRequests[0].resolveWith({artist_groups: []});
@@ -235,8 +237,6 @@ test('a noninterrupting canonical same-URL refresh queues behind an obsolete mut
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(context.state.busy, false);
 });
-const responseStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'response-state-helpers.js');
-const responseStateHelperSource = fs.readFileSync(responseStateHelperPath, 'utf8');
 const viewValueHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-value-helpers.js');
 const viewValueHelperSource = fs.readFileSync(viewValueHelperPath, 'utf8');
 
@@ -315,6 +315,8 @@ function createContext() {
       },
     },
     AbortController,
+    URL,
+    URLSearchParams,
     HTMLFormElement: function HTMLFormElement() {},
     HTMLImageElement: function HTMLImageElement() {},
     Promise,
@@ -334,6 +336,7 @@ function createContext() {
         if (id === 'albums-spacer-bottom') return bottomSpacer;
         return null;
       },
+      querySelector() { return null; },
       querySelectorAll() {
         return [];
       },
@@ -571,7 +574,17 @@ function createContext() {
   };
 
   vm.createContext(context);
-  installRequestClassification(context, path.dirname(helperPath));
+  // Complete served dependencies, preserving only this unit's explicit URL,
+  // final-apply and Sidebar observation seams after the real owners load.
+  const unitSeams = {buildApiUrl: context.buildApiUrl, applyViewPayload: context.applyViewPayload,
+    clearPendingSidebarSelection: context.clearPendingSidebarSelection};
+  for (const filename of ['bootstrap-state.js', 'response-state-helpers.js', 'view-state-helpers.js', 'search-shorthand-model.js']) {
+    const sourcePath = path.join(path.dirname(helperPath), filename);
+    vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, {filename: sourcePath});
+  }
+  const runtimeResponseState = {applyViewPayload: context.applyViewPayload,
+    clearPendingSidebarSelection: context.clearPendingSidebarSelection};
+  Object.assign(context, unitSeams);
   vm.runInContext(helperSource, context, { filename: helperPath });
   const runtimeRenderView = context.renderView;
   context.renderView = function renderViewStub(options) {
@@ -582,6 +595,7 @@ function createContext() {
     calls,
     pendingRequests,
     runtimeRenderView,
+    runtimeResponseState,
     searchInput,
     lastError,
     hiddenInputs,
@@ -638,17 +652,7 @@ function createArtistFamilyOwnershipContext() {
     reusableSelectedArtistBrowseViews: {},
     reusableSelectedArtistBrowseViewOrder: [],
   };
-  fixture.context.appBootstrap = {
-    getInitialView() {
-      return {};
-    },
-    getBootstrap() {
-      return {};
-    },
-  };
-  vm.runInContext(responseStateHelperSource, fixture.context, {
-    filename: responseStateHelperPath,
-  });
+  Object.assign(fixture.context, fixture.runtimeResponseState);
   return fixture;
 }
 
@@ -3590,6 +3594,16 @@ test('pollStatus preserves mutation-owned hydrated membership and reconciles it 
   context.state.view.artist_groups = [{ artist: 'Artist', albums: [optimistic] }];
   const status = { scan_in_progress: false, relations_in_progress: false, covers_in_progress: false, inventory_mutation_revision: 12 };
   context.state.status = { ...status };
+  const defaultsOwner = vm.createContext({URL, window: {location: new URL('https://albumhaven.test/')},
+    document: {querySelector: () => null}});
+  for (const filename of ['bootstrap-state.js', 'response-state-helpers.js', 'core-state-and-helpers.js']) {
+    const sourcePath = path.join(path.dirname(helperPath), filename);
+    vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), defaultsOwner, {filename: sourcePath});
+  }
+  const defaults = vm.runInContext('state', defaultsOwner);
+  assert.equal(defaults.modalReleases.length, 0); assert.equal(defaults.modalReleaseIndex, 0);
+  context.state.modalReleases = defaults.modalReleases;
+  context.state.modalReleaseIndex = defaults.modalReleaseIndex;
   const cachePath = path.join(path.dirname(helperPath), 'track-modal-lightbox-helpers.js');
   vm.runInContext(fs.readFileSync(cachePath, 'utf8'), context, { filename: cachePath });
   context.cacheHydratedTrackModalAlbum(albumKey, optimistic, { aliases: [albumKey], tagEditMutationClaim: claim });
@@ -6608,4 +6622,15 @@ test('search progress belongs to the latest request and clears on failure', asyn
   await assert.rejects(second, /search failed/);
   assert.equal(context.state.ui.pendingGallerySearch, false);
   assert.equal(context.state.ui.pendingViewTransition, false);
+});
+
+test('ordinary gallery fixture cannot manufacture authenticated Album preference scope', () => {
+  const {context} = createContext();
+  assert.equal(context.window.AlbumHavenPrivateUITransport, undefined);
+  assert.equal(context.document.getElementById('app-shell'), null);
+  assert.equal(context.captureRuntimeAlbumPreferenceScope(), null);
+  assert.equal(context.normalizeRuntimeAlbumPreference({album_ref: 'inventory-album:1:2', context_ref: 'a'.repeat(64),
+    rating: 5, is_favorite: false, favorite_override: null, favorite_source: null,
+    taste_state: 'available', preference_revision: 1, can_edit: true,
+    allowed_actions: {can_manage_album_preferences: true}}, null), null);
 });

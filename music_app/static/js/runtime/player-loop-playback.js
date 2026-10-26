@@ -316,7 +316,10 @@ let playerTrackSelectionToken = 0;
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
-  if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) {
+  const ownershipAlreadyClaimed = options.ownershipClaimed === true
+    && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
+  if (shouldAutoplay && !ownershipAlreadyClaimed
+      && typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) {
     return false;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
@@ -324,13 +327,17 @@ async function playTrackFromPayload(track, options = {}) {
   if (!track?.path) return false;
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
+  const requestedStartSeconds = Number(options.startSeconds);
+  const startSeconds = Number.isFinite(requestedStartSeconds)
+    ? Math.max(0, requestedStartSeconds)
+    : (resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0);
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
-      startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
+      startSeconds,
       autoplay: shouldAutoplay,
     });
   } catch (error) {
@@ -361,10 +368,22 @@ async function playTrackFromPayload(track, options = {}) {
     }
   }
   if (shouldAutoplay) {
-    beginStreamingPlayerListenSession(track, resetTime ? 0 : previousPlaybackSnapshot.currentTime);
+    beginStreamingPlayerListenSession(track, startSeconds);
   }
   updatePlayerUi();
   return true;
+}
+
+function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
+  const track = state.player.current;
+  if (!track || typeof isActivePlaybackOwner !== 'function' || !isActivePlaybackOwner()) {
+    return Promise.resolve(false);
+  }
+  return playTrackFromPayload(track, {
+    autoplay: true,
+    ownershipClaimed: true,
+    startSeconds: Number(playbackSnapshot?.currentTime) || 0,
+  });
 }
 
 let handledStreamingFirstFrameIdentity = '';

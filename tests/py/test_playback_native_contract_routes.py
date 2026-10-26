@@ -1,9 +1,11 @@
 """Native playback mutations share the authenticated browser security boundary."""
 
 import asyncio
+import hashlib
 
 import pytest
 
+from music_app.routes import playback_control_asgi
 from music_app.services.current_actor import CurrentActor
 from tests.py.asgi_testing import decode_json, run_asgi_request
 from tests.py.test_playback_stream_asgi import decoder_factory, media_path, open_command, playback_app
@@ -15,6 +17,7 @@ from tests.py.asgi_websocket_testing import websocket_session
     ("GET", "/playback/state"),
     ("PUT", "/playback/state"),
     ("DELETE", "/playback/state"),
+    ("POST", "/playback/state/handoff"),
 ])
 def test_native_playback_contract_requires_authentication(playback_app, method, path):
     class AnonymousResolver:
@@ -30,6 +33,7 @@ def test_native_playback_contract_requires_authentication(playback_app, method, 
     ("POST", "/playback/refs"),
     ("PUT", "/playback/state"),
     ("DELETE", "/playback/state"),
+    ("POST", "/playback/state/handoff"),
 ])
 def test_native_playback_mutation_rejects_foreign_origin(playback_app, method, path):
     status, _, _ = run_asgi_request(
@@ -37,6 +41,57 @@ def test_native_playback_mutation_rejects_foreign_origin(playback_app, method, p
         headers={"origin": "https://foreign.example"},
     )
     assert status == 403
+
+
+def test_short_listen_stages_reload_handoff_without_completion(playback_app, monkeypatch):
+    calls = []
+
+    class Claims:
+        def __init__(self, _config):
+            pass
+
+        def stage_handoff(self, actor, **kwargs):
+            calls.append((actor, kwargs))
+            return {
+                "protocol": 1,
+                "staged": True,
+                "expiresAt": "2026-10-25T12:00:15+00:00",
+            }
+
+    monkeypatch.setattr(playback_control_asgi, "PostgresPlaybackClaims", Claims)
+    client_id = "11111111-1111-4111-8111-111111111111"
+    handoff_id = "22222222-2222-4222-8222-222222222222"
+    status, _, body = run_asgi_request(
+        playback_app,
+        "POST",
+        "/playback/state/handoff",
+        json_body={
+            "protocol": 1,
+            "clientId": client_id,
+            "claimToken": "p" * 43,
+            "handoff": {"id": handoff_id, "token": "h" * 43},
+            "completion": None,
+        },
+    )
+
+    assert status == 200, decode_json(body)
+    assert decode_json(body) == {
+        "protocol": 1,
+        "staged": True,
+        "expiresAt": "2026-10-25T12:00:15+00:00",
+    }
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs == {
+        "client_id": client_id,
+        "claim_token": "p" * 43,
+        "handoff_id": handoff_id,
+        "handoff_token": "h" * 43,
+        "completion_digest": hashlib.sha256(
+            b"album-haven:playback-handoff-completion:v1:null"
+        ).digest(),
+        "persist_completion": None,
+    }
 
 
 @pytest.mark.parametrize("tracks", [[], [

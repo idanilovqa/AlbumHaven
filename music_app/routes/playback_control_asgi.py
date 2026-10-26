@@ -5,8 +5,20 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
+from music_app.services.lastfm import get_saved_lastfm_session, scrobble_track
+from music_app.services.lastfm_sync_bridge import (
+    playback_handoff_completion_fingerprint,
+    persist_measured_playback_completion,
+    record_playback_session_complete,
+)
+from music_app.services.listen_history import (
+    append_listen_history_entry,
+    is_meaningful_listen_session,
+    update_listen_history_entry,
+)
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
+from music_app.services.playback_session_payloads import normalize_playback_track_payload
 
 
 router = APIRouter()
@@ -59,7 +71,81 @@ async def acquire_playback(request: Request):
     result = await playback_call(PostgresPlaybackClaims(playback_config(request)).acquire,
         request.state.current_actor, client_id=payload.get("clientId"),
         client_surface=payload.get("clientSurface"), track=payload.get("track"),
-        claim_token=payload.get("claimToken"))
+        claim_token=payload.get("claimToken"), handoff=payload.get("handoff"))
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/playback/state/handoff")
+async def stage_playback_handoff(request: Request):
+    payload = await playback_payload(request)
+    handoff = payload.get("handoff")
+    if not isinstance(handoff, dict) or set(handoff) != {"id", "token"}:
+        raise HTTPException(400, "Invalid playback handoff.")
+    if "completion" not in payload:
+        raise HTTPException(400, "Invalid playback completion.")
+    completion = payload.get("completion")
+    if completion is not None and (not isinstance(completion, dict)
+            or completion.get("measurement_version") != "rendered-pcm-v1"
+            or completion.get("finalized") is not True):
+        raise HTTPException(400, "Invalid playback completion.")
+    config = playback_config(request)
+    persisted = []
+    actor = request.state.current_actor
+    try:
+        completion_digest = playback_handoff_completion_fingerprint(
+            completion,
+            user_timezone="UTC",
+            account_id=actor.account_id,
+            library_id=actor.current_library_id,
+            is_meaningful_listen_session=is_meaningful_listen_session,
+        )
+    except ValueError as error:
+        raise HTTPException(getattr(error, "status_code", 400), str(error)) from None
+
+    def persist_completion(connection, account_id, library_id):
+        receipt = persist_measured_playback_completion(
+            config,
+            completion,
+            account_id=account_id,
+            library_id=library_id,
+            connection=connection,
+            user_timezone="UTC",
+            is_meaningful_listen_session=is_meaningful_listen_session,
+            append_listen_history_entry=append_listen_history_entry,
+        )
+        persisted.append((receipt, account_id, library_id))
+        return receipt
+
+    try:
+        result = await playback_call(PostgresPlaybackClaims(config).stage_handoff,
+            actor, client_id=payload.get("clientId"),
+            claim_token=payload.get("claimToken"), handoff_id=handoff.get("id"),
+            handoff_token=handoff.get("token"),
+            completion_digest=completion_digest,
+            persist_completion=persist_completion if completion is not None else None)
+    except ValueError as error:
+        raise HTTPException(getattr(error, "status_code", 400), "Invalid playback completion.") from None
+
+    if persisted:
+        receipt, account_id, library_id = persisted[0]
+        lastfm_session = await playback_call(
+            get_saved_lastfm_session, config, account_id=account_id)
+        await playback_call(
+            record_playback_session_complete,
+            config,
+            completion,
+            account_id=account_id,
+            library_id=library_id,
+            lastfm_session=lastfm_session,
+            user_timezone="UTC",
+            normalize_playback_track_payload=normalize_playback_track_payload,
+            is_meaningful_listen_session=is_meaningful_listen_session,
+            append_listen_history_entry=append_listen_history_entry,
+            update_listen_history_entry=update_listen_history_entry,
+            scrobble_track=scrobble_track,
+            log_lastfm_scrobble_event=lambda *_args, **_kwargs: None,
+            persisted_measured_entry=receipt,
+        )
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 

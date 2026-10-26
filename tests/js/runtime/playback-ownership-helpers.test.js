@@ -39,6 +39,7 @@ function loadHelper(overrides = {}) {
       },
     },
     window: {},
+    Blob,
     AbortController,
     getLocalStorageItem: () => '',
     setLocalStorageItem: () => true,
@@ -81,6 +82,440 @@ const localTrack = {
   album: 'Local Album',
   coverPath: '',
 };
+
+function activeOwnershipState() {
+  return {
+    player: {
+      current: localTrack,
+      ownership: {
+        tabId: 'departing-client',
+        lockStatus: 'unlocked',
+        blockedReason: '',
+        mirroredTrack: null,
+        activeClaim: {
+          claimToken: 'departing-claim',
+          expiresAt: '2099-10-23T23:00:30Z',
+          track: { playbackRef: 'departing-ref' },
+        },
+        channel: null,
+        heartbeatTimer: 0,
+        initialized: true,
+      },
+    },
+  };
+}
+
+test('rejected handoff beacon removes the unusable session envelope', () => {
+  const storage = new Map();
+  const removed = [];
+  let beacons = 0;
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    crypto: require('node:crypto').webcrypto,
+    window: { crypto: require('node:crypto').webcrypto },
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false }),
+    getSessionStorageItem: key => storage.get(key) || '',
+    setSessionStorageItem: (key, value) => { storage.set(key, value); return true; },
+    removeSessionStorageItem: key => {
+      if (storage.has(key)) removed.push(key);
+      storage.delete(key);
+    },
+    navigator: { sendBeacon: () => { beacons += 1; return false; } },
+  });
+
+  assert.equal(context.stagePlaybackOwnershipHandoff(null), false);
+  assert.equal(beacons, 1);
+  assert.equal(storage.size, 0);
+  assert.deepEqual(removed, ['albumhaven.playbackHandoff.v1']);
+  assert.equal(context.stagePlaybackOwnershipHandoff(null), false);
+  assert.equal(beacons, 1, 'one lifecycle cannot emit another handoff after a rejected beacon');
+});
+
+for (const failureMode of ['beacon', 'storage']) {
+  test(`BFCache ${failureMode} failure renews the retained live claim without a null acquire`, async () => {
+    const storage = new Map();
+    const requests = [];
+    let beacons = 0;
+    const { context } = loadHelper({
+      state: activeOwnershipState(),
+      crypto: require('node:crypto').webcrypto,
+      window: { crypto: require('node:crypto').webcrypto },
+      getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 19 }),
+      getSessionStorageItem: key => storage.get(key) || '',
+      setSessionStorageItem: (key, value) => {
+        if (failureMode === 'storage') return false;
+        storage.set(key, value);
+        return true;
+      },
+      removeSessionStorageItem: key => storage.delete(key),
+      navigator: { sendBeacon: () => { beacons += 1; return false; } },
+      fetch: async (url, options = {}) => {
+        const body = JSON.parse(options.body);
+        requests.push({ url, body });
+        if (url === '/playback/refs') return jsonResponse({ protocol: 1,
+          tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'retained-ref' }] });
+        return jsonResponse({ protocol: 1, claimToken: body.claimToken,
+          expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+      },
+    });
+
+    assert.equal(context.stagePlaybackOwnershipHandoff(null), false);
+    assert.equal(beacons, failureMode === 'beacon' ? 1 : 0);
+    assert.equal(storage.size, 0);
+    assert.equal(await context.restorePlaybackOwnershipFromPageCache({
+      paused: false, ended: false, currentTime: 19,
+    }), true);
+
+    const renewal = requests.find(({ url }) => url === '/playback/state');
+    assert.ok(renewal);
+    assert.equal(renewal.body.clientId, 'departing-client');
+    assert.equal(renewal.body.claimToken, 'departing-claim');
+    assert.equal(Object.prototype.hasOwnProperty.call(renewal.body, 'handoff'), false);
+    assert.equal(requests.filter(({ url }) => url === '/playback/state').length, 1);
+  });
+}
+
+test('expired handoff renews the still-live retained claim without a null acquire', async () => {
+  const startedAt = Date.parse('2026-10-25T12:00:00Z');
+  let now = startedAt;
+  const storage = new Map();
+  const requests = [];
+  const state = activeOwnershipState();
+  state.player.ownership.activeClaim.expiresAt = new Date(startedAt + 30_000).toISOString();
+  const { context } = loadHelper({
+    Date: class extends Date { static now() { return now; } },
+    state,
+    crypto: require('node:crypto').webcrypto,
+    window: { crypto: require('node:crypto').webcrypto },
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 19 }),
+    getSessionStorageItem: key => storage.get(key) || '',
+    setSessionStorageItem: (key, value) => { storage.set(key, value); return true; },
+    removeSessionStorageItem: key => storage.delete(key),
+    navigator: { sendBeacon: () => true },
+    fetch: async (url, options = {}) => {
+      const body = JSON.parse(options.body);
+      requests.push({ url, body });
+      if (url === '/playback/refs') return jsonResponse({ protocol: 1,
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'retained-ref' }] });
+      return jsonResponse({ protocol: 1, claimToken: body.claimToken,
+        expiresAt: new Date(now + 30_000).toISOString(), playbackState: { is_playing_here: true } });
+    },
+  });
+
+  assert.equal(context.stagePlaybackOwnershipHandoff(null), true);
+  now = startedAt + 16_000;
+  assert.equal(await context.restorePlaybackOwnershipFromPageCache({
+    paused: false, ended: false, currentTime: 19,
+  }), true);
+  const renewal = requests.find(({ url }) => url === '/playback/state');
+  assert.ok(renewal);
+  assert.equal(renewal.body.clientId, 'departing-client');
+  assert.equal(renewal.body.claimToken, 'departing-claim');
+  assert.equal(Object.prototype.hasOwnProperty.call(renewal.body, 'handoff'), false);
+  assert.equal(requests.filter(({ url }) => url === '/playback/state').length, 1);
+});
+
+for (const snapshot of [
+  { paused: true, ended: false, currentTime: 19 },
+  { paused: false, ended: true, currentTime: 19 },
+]) {
+  test(`BFCache fallback rejects a ${snapshot.paused ? 'paused' : 'ended'} saved snapshot`, async () => {
+    let requests = 0;
+    const { context } = loadHelper({
+      state: activeOwnershipState(),
+      getSessionStorageItem: () => '',
+      removeSessionStorageItem: () => {},
+      fetch: async () => { requests += 1; return jsonResponse({ protocol: 1 }); },
+    });
+
+    assert.equal(await context.restorePlaybackOwnershipFromPageCache(snapshot), false);
+    assert.equal(requests, 0);
+  });
+}
+
+test('BFCache fallback rejects an expired retained claim without acquiring anonymously', async () => {
+  const now = Date.parse('2026-10-25T12:00:00Z');
+  const state = activeOwnershipState();
+  state.player.ownership.activeClaim.expiresAt = new Date(now - 1).toISOString();
+  let requests = 0;
+  const { context } = loadHelper({
+    Date: class extends Date { static now() { return now; } },
+    state,
+    getSessionStorageItem: () => '',
+    removeSessionStorageItem: () => {},
+    fetch: async () => { requests += 1; return jsonResponse({ protocol: 1 }); },
+  });
+
+  assert.equal(await context.restorePlaybackOwnershipFromPageCache({
+    paused: false, ended: false, currentTime: 19,
+  }), false);
+  assert.equal(requests, 0);
+});
+
+test('new document restore rejects a malformed envelope without retained ownership', async () => {
+  let requests = 0;
+  const { context } = loadHelper({
+    state: { player: { current: localTrack, ownership: { tabId: '', activeClaim: null, initialized: true } } },
+    getSessionStorageItem: () => '{not-json',
+    removeSessionStorageItem: () => {},
+    fetch: async () => { requests += 1; return jsonResponse({ protocol: 1 }); },
+  });
+
+  assert.equal(await context.restorePlaybackOwnershipFromPageCache({
+    paused: false, ended: false, currentTime: 19,
+  }), false);
+  assert.equal(requests, 0);
+});
+
+test('BFCache fallback fails closed when retained claim renewal is rejected', async () => {
+  const requests = [];
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    getSessionStorageItem: () => '',
+    removeSessionStorageItem: () => {},
+    fetch: async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      requests.push({ url, body });
+      if (!body) return jsonResponse({ protocol: 1, is_playing_here: false, is_playing_elsewhere: false });
+      if (url === '/playback/refs') return jsonResponse({ protocol: 1,
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'retained-ref' }] });
+      return jsonResponse({ error: 'claim expired' }, { ok: false, status: 409 });
+    },
+  });
+
+  assert.equal(await context.restorePlaybackOwnershipFromPageCache({
+    paused: false, ended: false, currentTime: 19,
+  }), false);
+  const renewal = requests.find(({ url }) => url === '/playback/state');
+  assert.ok(renewal);
+  assert.equal(renewal.body.claimToken, 'departing-claim');
+  assert.equal(Object.prototype.hasOwnProperty.call(renewal.body, 'handoff'), false);
+  assert.equal(requests.filter(({ url }) => url === '/playback/state').length, 1);
+});
+
+test('BFCache valid handoff ignores the retained heartbeat until consume completes', async () => {
+  const envelope = {
+    id: '12345678-1234-4123-8123-123456789abc',
+    token: 'H'.repeat(43),
+    expiresAt: '2099-10-23T23:00:15Z',
+  };
+  const pendingConsume = deferred();
+  const requests = [];
+  let heartbeat = null;
+  let storageReads = 0;
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    crypto: require('node:crypto').webcrypto,
+    window: { crypto: { randomUUID: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } },
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 19 }),
+    getSessionStorageItem: () => (++storageReads === 1 ? '' : JSON.stringify(envelope)),
+    removeSessionStorageItem: () => {},
+    setInterval: (callback) => { heartbeat = callback; return 17; },
+    fetch: async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      requests.push({ url, method: options.method, body });
+      if (url === '/playback/refs') return jsonResponse({ protocol: 1,
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'handoff-ref' }] });
+      if (options.method === 'PUT') {
+        await pendingConsume.promise;
+        return jsonResponse({ protocol: 1, claimToken: body.claimToken,
+          expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+      }
+      if (options.method === 'GET') return jsonResponse({ protocol: 1,
+        is_playing_here: false, is_playing_elsewhere: true, track: localTrack });
+      return jsonResponse({ protocol: 1 });
+    },
+  });
+  context.startPlaybackOwnershipHeartbeat();
+
+  const recovery = context.restorePlaybackOwnershipFromPageCache({
+    paused: false, ended: false, currentTime: 19,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof heartbeat, 'function');
+  heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  pendingConsume.resolve();
+
+  assert.equal(await recovery, true);
+  assert.equal(requests.filter(({ method }) => method === 'GET').length, 0,
+    'the departing-client heartbeat cannot reject the fresh handoff client as another owner');
+  assert.equal(context.isActivePlaybackOwner(), true);
+  assert.equal(context.getPlaybackOwnershipState().tabId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(context.getPlaybackOwnershipState().heartbeatTimer, 17,
+    'the retained heartbeat remains armed after recovery');
+});
+
+test('BFCache retained-claim fallback defers its heartbeat until the exact renewal completes', async () => {
+  const pendingRenewal = deferred();
+  const puts = [];
+  let heartbeat = null;
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 19 }),
+    getSessionStorageItem: () => '',
+    removeSessionStorageItem: () => {},
+    setInterval: (callback) => { heartbeat = callback; return 23; },
+    fetch: async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (url === '/playback/refs') return jsonResponse({ protocol: 1,
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'retained-ref' }] });
+      if (url === '/playback/state' && options.method === 'PUT') {
+        puts.push(body);
+        if (puts.length === 1) await pendingRenewal.promise;
+        return jsonResponse({ protocol: 1, claimToken: body.claimToken,
+          expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+      }
+      return jsonResponse({ protocol: 1, is_playing_here: true, is_playing_elsewhere: false });
+    },
+  });
+  context.startPlaybackOwnershipHeartbeat();
+
+  const recovery = context.restorePlaybackOwnershipFromPageCache({
+    paused: false, ended: false, currentTime: 19,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof heartbeat, 'function');
+  heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  pendingRenewal.resolve();
+
+  assert.equal(await recovery, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(puts.length, 1, 'the mid-recovery heartbeat cannot enqueue a second renewal');
+  assert.equal(puts[0].clientId, 'departing-client');
+  assert.equal(puts[0].claimToken, 'departing-claim');
+  assert.equal(Object.prototype.hasOwnProperty.call(puts[0], 'handoff'), false);
+  assert.equal(context.isActivePlaybackOwner(), true);
+  assert.equal(context.getPlaybackOwnershipState().heartbeatTimer, 23);
+
+  heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(puts.length, 2, 'the retained heartbeat resumes ordinary renewal after recovery');
+});
+
+test('handoff retry reuses the same fresh runtime pair', async () => {
+  const now = Date.parse('2026-10-25T12:00:00Z');
+  const envelope = { id: '12345678-1234-4123-8123-123456789abc',
+    token: 'A'.repeat(43), expiresAt: new Date(now + 15_000).toISOString() };
+  const puts = [];
+  const storageEvents = [];
+  const { context } = loadHelper({
+    Date: class extends Date { static now() { return now; } },
+    crypto: require('node:crypto').webcrypto,
+    window: { crypto: { randomUUID: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } },
+    state: { player: { current: null, ownership: { tabId: '', initialized: true } } },
+    getSessionStorageItem: () => { storageEvents.push('get'); return JSON.stringify(envelope); },
+    removeSessionStorageItem: () => { storageEvents.push('remove'); },
+    setTimeout: (callback, delay) => { if (delay === 100) callback(); return delay; },
+    fetch: async (url, options = {}) => {
+      const body = JSON.parse(options.body);
+      if (url === '/playback/refs') return jsonResponse({ protocol: 1,
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'handoff-ref' }] });
+      puts.push(body);
+      if (puts.length === 1) return jsonResponse({ error: 'not staged yet' }, { ok: false, status: 409 });
+      return jsonResponse({ protocol: 1, claimToken: body.claimToken,
+        expiresAt: new Date(now + 30_000).toISOString(), playbackState: { is_playing_here: true } });
+    },
+  });
+
+  assert.deepEqual(storageEvents, ['get', 'remove'], 'the envelope is recovered before restore starts');
+  assert.equal(await context.canRestoreActivePlayback({ track: localTrack }), true);
+  assert.equal(puts.length, 2);
+  assert.equal(puts[0].clientId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(puts[0].claimToken.length, 43);
+  assert.deepEqual(puts[1], puts[0]);
+  assert.deepEqual(puts[0].handoff, { id: envelope.id, token: envelope.token });
+});
+
+test('lost committed consume response retries the exact runtime pair', async () => {
+  const now = Date.parse('2026-10-25T12:00:00Z');
+  const envelope = { id: '12345678-1234-4123-8123-123456789abc',
+    token: 'C'.repeat(43), expiresAt: new Date(now + 15_000).toISOString() };
+  const puts = [];
+  let committed = false;
+  const { context } = loadHelper({
+    Date: class extends Date { static now() { return now; } },
+    crypto: require('node:crypto').webcrypto,
+    window: { crypto: { randomUUID: () => 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' } },
+    state: { player: { current: null, ownership: { tabId: '', initialized: true } } },
+    getSessionStorageItem: () => JSON.stringify(envelope),
+    removeSessionStorageItem: () => {},
+    setTimeout: (callback, delay) => { if (delay === 100) callback(); return delay; },
+    fetch: async (url, options = {}) => {
+      const body = JSON.parse(options.body);
+      if (url === '/playback/refs') return jsonResponse({ protocol: 1,
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'handoff-ref' }] });
+      puts.push(body);
+      if (!committed) {
+        committed = true;
+        throw new Error('response lost after commit');
+      }
+      return jsonResponse({ protocol: 1, claimToken: body.claimToken,
+        expiresAt: new Date(now + 30_000).toISOString(), playbackState: { is_playing_here: true } });
+    },
+  });
+
+  assert.equal(await context.canRestoreActivePlayback({ track: localTrack }), true);
+  assert.equal(puts.length, 2);
+  assert.deepEqual(puts[1], puts[0]);
+  assert.equal(puts[0].clientId, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+  assert.equal(puts[0].claimToken.length, 43);
+  assert.deepEqual(puts[0].handoff, { id: envelope.id, token: envelope.token });
+});
+
+test('copied handoff envelope has one winner and bounded loser with fresh document credentials', async () => {
+  const baseNow = Date.parse('2026-10-25T12:00:00Z');
+  const envelope = { id: '12345678-1234-4123-8123-123456789abc',
+    token: 'B'.repeat(43), expiresAt: new Date(baseNow + 500).toISOString() };
+  let acceptedRuntimeClaim = '';
+  const attempts = [];
+
+  async function restoreCopy(clientId) {
+    let now = baseNow;
+    let storageReads = 0;
+    const { context } = loadHelper({
+      Date: class extends Date { static now() { return now; } },
+      crypto: require('node:crypto').webcrypto,
+      window: { crypto: { randomUUID: () => clientId } },
+      state: { player: { current: localTrack, ownership: { tabId: '', initialized: true } } },
+      getSessionStorageItem: () => (++storageReads === 1 ? '' : JSON.stringify(envelope)),
+      removeSessionStorageItem: () => {},
+      setTimeout: (callback, delay) => {
+        if (delay <= 100) { now += 500; callback(); }
+        return delay;
+      },
+      fetch: async (url, options = {}) => {
+        const body = options.body ? JSON.parse(options.body) : null;
+        if (!body) return jsonResponse({ protocol: 1, is_playing_here: false, is_playing_elsewhere: false });
+        if (url === '/playback/refs') return jsonResponse({ protocol: 1,
+          tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'handoff-ref' }] });
+        attempts.push(body);
+        if (!acceptedRuntimeClaim) {
+          acceptedRuntimeClaim = body.claimToken;
+          return jsonResponse({ protocol: 1, claimToken: body.claimToken,
+            expiresAt: new Date(baseNow + 30_000).toISOString(), playbackState: { is_playing_here: true } });
+        }
+        return jsonResponse({ error: 'handoff consumed' }, { ok: false, status: 409 });
+      },
+    });
+    return context.restorePlaybackOwnershipFromPageCache({
+      paused: false, ended: false, currentTime: 19,
+    });
+  }
+
+  assert.equal(await restoreCopy('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), true);
+  assert.equal(await restoreCopy('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'), false);
+  assert.equal(attempts.length, 2, 'the copied-envelope loser stops at the handoff deadline');
+  assert.notEqual(attempts[0].clientId, attempts[1].clientId);
+  assert.notEqual(attempts[0].claimToken, attempts[1].claimToken);
+  assert.deepEqual(attempts.map(({ handoff }) => handoff), [
+    { id: envelope.id, token: envelope.token },
+    { id: envelope.id, token: envelope.token },
+  ]);
+  assert.equal(attempts.every(({ claimToken, handoff }) => Boolean(claimToken && handoff)), true,
+    'a copied-envelope loser never falls back to an anonymous acquire');
+});
 
 test('server claim acquisition uses protocol v1 and keeps paths out of ownership state', async () => {
   const requests = [];

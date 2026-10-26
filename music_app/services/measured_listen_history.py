@@ -1,6 +1,6 @@
 """Atomic scoped rendered-frame sessions in the existing listen ledger."""
 from datetime import datetime, timezone
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import math
@@ -8,6 +8,12 @@ import uuid
 
 VERSION = "rendered-pcm-v1"
 SOURCE = "rendered_local_listen_session"
+_SERVER_FIELDS = {"id", "recorded_at", "scrobbled", "scrobble_error",
+                  "scrobble_retryable", "sync_problem"}
+_HANDOFF_FINGERPRINT_DOMAIN = b"album-haven:playback-handoff-completion:v1:json\0"
+NO_HANDOFF_COMPLETION_DIGEST = hashlib.sha256(
+    b"album-haven:playback-handoff-completion:v1:null"
+).digest()
 
 
 class MeasuredListenError(ValueError):
@@ -50,15 +56,34 @@ def normalize_measurement(entry, *, account_id, library_id):
     return item
 
 
-def append_measured(adapter, entry, *, account_id, library_id):
+def playback_handoff_completion_digest(entry, *, account_id, library_id):
+    if entry is None:
+        return NO_HANDOFF_COMPLETION_DIGEST
+    item = normalize_measurement(entry, account_id=account_id, library_id=library_id)
+    if item["finalized"] is not True:
+        raise MeasuredListenError("Listen handoff completion must be finalized")
+    submitted = {
+        key: value for key, value in item.items()
+        if key not in _SERVER_FIELDS and not key.startswith("scrobble_")
+    }
+    canonical = json.dumps(
+        submitted, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(_HANDOFF_FINGERPRINT_DOMAIN + canonical).digest()
+
+
+def append_measured(adapter, entry, *, account_id, library_id, connection=None):
     from psycopg.types.json import Jsonb
     item = normalize_measurement(entry, account_id=account_id, library_id=library_id)
     identity = f"{account_id}:{library_id}:{item['device_id']}:{item['session_id']}"
     item["id"] = hashlib.sha256(identity.encode()).hexdigest()
-    server_fields = {"id", "recorded_at", "scrobbled", "scrobble_error", "scrobble_retryable", "sync_problem"}
     def submitted_fields(value):
-        return {key: item for key, item in value.items() if key not in server_fields and not key.startswith("scrobble_")}
-    with adapter._connect_to_database() as connection:
+        return {key: item for key, item in value.items()
+                if key not in _SERVER_FIELDS and not key.startswith("scrobble_")}
+    connection_scope = (nullcontext(connection) if connection is not None
+                        else adapter._connect_to_database())
+    with connection_scope as connection:
         # The transaction-scoped identity lock also serializes first-row creation.
         lock_key = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
         connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
@@ -111,6 +136,16 @@ def append_measured(adapter, entry, *, account_id, library_id):
     return item
 
 
+def load_measured(connection, *, account_id, library_id, device_id, session_id):
+    row = connection.execute("""select metadata from integration.listen_history
+        where account_id=%s and library_id=%s and device_id=%s and session_id=%s
+          and measurement_version=%s""",
+        (account_id, library_id, device_id, session_id, VERSION)).fetchone()
+    if row is None:
+        raise MeasuredListenError("Persisted listen completion is unavailable", 409)
+    return dict(row["metadata"]["source_payload"])
+
+
 @contextmanager
 def measured_provider_guard(config, *, account_id, library_id, device_id, session_id):
     from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
@@ -118,4 +153,4 @@ def measured_provider_guard(config, *, account_id, library_id, device_id, sessio
     lock_key = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
     with PostgresListenHistoryAdapter(config)._connect_to_database() as connection:
         connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
-        yield
+        yield connection

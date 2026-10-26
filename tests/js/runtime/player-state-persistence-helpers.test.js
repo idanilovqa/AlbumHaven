@@ -287,10 +287,11 @@ test('album artist and album snapshot survive streaming persistence and restore'
   });
 }
 
-test('paired unload events preserve the first rendered snapshot exactly once', () => {
+test('cancelled beforeunload is inert and pagehide preserves its first rendered snapshot', () => {
   const storedSnapshots = [];
-  const flushedReasons = [];
+  const flushedSnapshots = [];
   let releaseCalls = 0;
+  let snapshotReads = 0;
   let renderedCurrentTime = 3.219;
   const currentTrack = {
     src: '/track?path=song.flac',
@@ -308,19 +309,22 @@ test('paired unload events preserve the first rendered snapshot exactly once', (
         lastPersistedSnapshot: '',
       },
     },
-    getPlayerPlaybackSnapshot: () => ({
-      src: currentTrack.src,
-      paused: true,
-      ended: false,
-      currentTime: renderedCurrentTime,
-      duration: 10,
-    }),
+    getPlayerPlaybackSnapshot: () => {
+      snapshotReads += 1;
+      return {
+        src: currentTrack.src,
+        paused: true,
+        ended: false,
+        currentTime: renderedCurrentTime,
+        duration: 10,
+      };
+    },
     setLocalStorageItem: (_key, value) => {
       storedSnapshots.push(JSON.parse(value));
       return true;
     },
-    flushListenSessionOnUnload: (reason) => {
-      flushedReasons.push(reason);
+    flushListenSessionOnUnload: (reason, snapshot) => {
+      flushedSnapshots.push({ reason, snapshot: { ...snapshot } });
     },
   });
   context.releasePlaybackOwnership = () => {
@@ -329,15 +333,23 @@ test('paired unload events preserve the first rendered snapshot exactly once', (
     context.persistPlayerState();
   };
 
-  context.persistPlayerStateForUnload('pagehide');
+  assert.equal(context.persistPlayerStateForUnload('beforeunload'), false);
+  assert.equal(snapshotReads, 0);
+  assert.deepEqual(flushedSnapshots, []);
+  assert.deepEqual(storedSnapshots, []);
+
+  assert.equal(context.persistPlayerStateForUnload('pagehide'), true);
   renderedCurrentTime = 0;
-  context.persistPlayerStateForUnload('beforeunload');
+  assert.equal(context.persistPlayerStateForUnload('pagehide'), false);
 
   assert.equal(releaseCalls, 0, 'unload leaves claim expiry to bound recovery after final beacon effects');
-  assert.deepEqual(flushedReasons, ['pagehide']);
+  assert.equal(snapshotReads, 1);
+  assert.deepEqual(flushedSnapshots.map(({ reason }) => reason), ['pagehide']);
+  assert.deepEqual(flushedSnapshots.map(({ snapshot }) => snapshot.currentTime), [3.219]);
   assert.deepEqual(storedSnapshots.map((snapshot) => snapshot.paused), [false]);
   assert.equal(storedSnapshots.at(-1).currentTime, 3.22);
   assert.equal(storedSnapshots.at(-1).paused, false);
+  assert.equal(context.resetPlayerUnloadPersistence().currentTime, 3.219);
 });
 
 test('delayed pageshow cannot autoplay with an expired restore claim', async () => {

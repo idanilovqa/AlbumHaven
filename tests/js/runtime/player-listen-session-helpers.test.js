@@ -16,8 +16,10 @@ const helperPath = path.join(
   'player-listen-session-helpers.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const ownershipHelperPath = path.join(path.dirname(helperPath), 'playback-ownership-helpers.js');
+const ownershipHelperSource = fs.readFileSync(ownershipHelperPath, 'utf8');
 
-function loadHelper(overrides = {}) {
+function loadHelper(overrides = {}, prependSource = '') {
   const fetchCalls = [];
   const beaconCalls = [];
   const context = {
@@ -53,6 +55,7 @@ function loadHelper(overrides = {}) {
   };
   Object.assign(context, overrides);
   vm.createContext(context);
+  if (prependSource) vm.runInContext(prependSource, context, { filename: ownershipHelperPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, fetchCalls, beaconCalls };
 }
@@ -161,6 +164,64 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test('active short listen unload stages one reload handoff without separate completion or release', async () => {
+  const track = { path: 'C:/Music/short.flac', title: 'Short', artist: 'Artist', album: 'Album' };
+  const storedEnvelopes = [];
+  const state = {
+    player: {
+      current: track,
+      listenSession: null,
+      ownership: {
+        tabId: 'departing-client',
+        activeClaim: {
+          claimToken: 'departing-claim',
+          expiresAt: '2099-10-23T23:00:30Z',
+          track: { playbackRef: 'short-ref' },
+        },
+        initialized: true,
+      },
+    },
+  };
+  const { context, fetchCalls, beaconCalls } = loadHelper({
+    state,
+    crypto: require('node:crypto').webcrypto,
+    window: { crypto: require('node:crypto').webcrypto },
+    getLocalStorageItem: () => '',
+    setLocalStorageItem: () => true,
+    getSessionStorageItem: () => '',
+    setSessionStorageItem: (_key, value) => {
+      storedEnvelopes.push(JSON.parse(value));
+      return true;
+    },
+    removeSessionStorageItem: () => true,
+    canEmitPlaybackSessionSideEffects: () => true,
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 8, duration: 240 }),
+  }, ownershipHelperSource);
+  context.startListenSession(track);
+  context.state.player.listenSession.segmentActive = true;
+  context.state.player.listenSession.activeSegmentStartSeconds = 0;
+
+  assert.equal(context.flushListenSessionOnUnload('pagehide'), true);
+  assert.equal(context.flushListenSessionOnUnload('beforeunload'), false);
+  assert.equal(beaconCalls.length, 1);
+  assert.equal(beaconCalls[0][0], '/playback/state/handoff');
+  const body = JSON.parse(await beaconCalls[0][1].text());
+  assert.equal(body.protocol, 1);
+  assert.equal(body.clientId, 'departing-client');
+  assert.equal(body.claimToken, 'departing-claim');
+  assert.equal(body.completion, null);
+  assert.equal(typeof body.handoff?.id, 'string');
+  assert.equal(typeof body.handoff?.token, 'string');
+  assert.equal(storedEnvelopes.length, 1);
+  assert.deepEqual(Object.keys(storedEnvelopes[0]).sort(), ['expiresAt', 'id', 'token']);
+  assert.equal(storedEnvelopes[0].id, body.handoff.id);
+  assert.equal(storedEnvelopes[0].token, body.handoff.token);
+  assert.equal(Number.isFinite(Date.parse(storedEnvelopes[0].expiresAt)), true);
+  assert.equal(JSON.stringify(storedEnvelopes[0]).includes('departing-claim'), false);
+  assert.equal(beaconCalls.some(([url]) => url === '/playback/session/complete'), false);
+  assert.equal(fetchCalls.some(([, options]) => options?.method === 'DELETE'), false);
+});
 
 test('authorized pause leaves a durable checkpoint when unowned unload discards local state', async () => {
   let authorized = true;
@@ -632,29 +693,69 @@ async function run() {
       pause_offset_seconds: 0,
       scrobbled: false,
       completionState: '',
+      measurement: {
+        deviceId: 'browser-device',
+        sessionId: 'measured-session',
+        sequence: 4,
+        total: 120,
+        contiguous: 120,
+        longest: 120,
+        finalized: false,
+      },
     };
+    const storedEnvelopes = [];
     const { context, beaconCalls } = loadHelper({
-      getPlaybackClaimContext: () => ({ clientId: 'unload-client', claimToken: 'unload-claim' }),
+      crypto: require('node:crypto').webcrypto,
+      window: { crypto: require('node:crypto').webcrypto },
       state: {
         player: {
+          current: flushSession.track,
           listenSession: flushSession,
+          ownership: {
+            tabId: 'unload-client',
+            activeClaim: {
+              claimToken: 'unload-claim',
+              expiresAt: '2099-10-23T23:00:30Z',
+              track: { playbackRef: 'unload-ref' },
+            },
+            initialized: true,
+          },
         },
       },
+      getSessionStorageItem: () => '',
+      setSessionStorageItem: (_key, value) => {
+        storedEnvelopes.push(JSON.parse(value));
+        return true;
+      },
+      removeSessionStorageItem: () => true,
       getPlayerPlaybackSnapshot: () => ({
         currentTime: 130,
         duration: 240,
       }),
-    });
+    }, ownershipHelperSource);
 
     assert.equal(context.flushListenSessionOnUnload('pagehide'), true);
-    assert.equal(beaconCalls.length, 2);
-    assert.equal(beaconCalls[0][0], '/playback/session/complete');
-    assert.equal(beaconCalls[1][0], '/playback/session/scrobble');
-    for (const [, body] of beaconCalls) {
-      const payload = JSON.parse(await body.text());
-      assert.equal(payload.clientId, 'unload-client');
-      assert.equal(payload.claimToken, 'unload-claim');
-    }
+    assert.equal(beaconCalls.length, 1);
+    assert.equal(beaconCalls[0][0], '/playback/state/handoff');
+    const payload = JSON.parse(await beaconCalls[0][1].text());
+    assert.equal(payload.clientId, 'unload-client');
+    assert.equal(payload.claimToken, 'unload-claim');
+    assert.equal(payload.completion.measurement_version, 'rendered-pcm-v1');
+    assert.equal(payload.completion.device_id, 'browser-device');
+    assert.equal(payload.completion.session_id, 'measured-session');
+    assert.equal(payload.completion.sequence, 5);
+    assert.equal(payload.completion.finalized, true);
+    assert.equal(payload.completion.measured_listened_seconds, 120);
+    assert.equal(payload.completion.max_measured_contiguous_seconds, 120);
+    assert.equal(payload.completion.duration_seconds, 240);
+    assert.equal(payload.completion.total_listened_seconds, 120);
+    assert.deepEqual(JSON.parse(JSON.stringify(payload.completion.segments)), [
+      { start_seconds: 10, end_seconds: 130 },
+    ]);
+    assert.equal(payload.completion.scrobbled, false);
+    assert.equal(storedEnvelopes.length, 1);
+    assert.equal(storedEnvelopes[0].id, payload.handoff.id);
+    assert.equal(storedEnvelopes[0].token, payload.handoff.token);
     assert.equal(context.state.player.listenSession, null);
   }
   {

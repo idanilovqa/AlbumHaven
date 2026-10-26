@@ -427,15 +427,17 @@ window.addEventListener('pagehide', () => {
 });
 window.addEventListener('pageshow', (event) => {
   if (event?.persisted) {
-    resetPlayerUnloadPersistence();
+    const playbackSnapshot = resetPlayerUnloadPersistence();
     unloadStreamingCleanupPromise = null;
+    if (typeof restorePlaybackOwnershipFromPageCache === 'function') {
+      void Promise.resolve(restorePlaybackOwnershipFromPageCache(playbackSnapshot)).then((restored) => {
+        if (!restored || typeof resumePlayerPlaybackFromPageCache !== 'function') return;
+        return resumePlayerPlaybackFromPageCache(playbackSnapshot);
+      }).catch(() => {});
+    }
   }
   if (!state.player.loopActive) return;
   setLoopActive(false);
-});
-window.addEventListener('beforeunload', () => {
-  persistPlayerStateForUnload('beforeunload');
-  void cleanupStreamingPlaybackForUnload();
 });
 window.addEventListener('resize', () => {
   hideAlbumCardContextMenu();

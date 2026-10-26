@@ -99,10 +99,14 @@ def is_meaningful_listen_session(entry: object) -> bool:
     return max(total_listened_seconds, max_contiguous_seconds) > _MIN_RECORDED_LISTEN_SECONDS
 
 
-def append_listen_history_entry(config: dict, entry: dict[str, object], *, account_id=None, library_id=None) -> dict[str, object]:
+def append_listen_history_entry(config: dict, entry: dict[str, object], *, account_id=None,
+                                library_id=None, connection=None) -> dict[str, object]:
     if entry.get("measurement_version") is not None:
         from music_app.services.measured_listen_history import append_measured
-        return append_measured(_listen_history_adapter(config), entry, account_id=account_id, library_id=library_id)
+        return append_measured(_listen_history_adapter(config), entry, account_id=account_id,
+                               library_id=library_id, connection=connection)
+    if connection is not None:
+        raise ValueError("Caller-owned connections require a measured listen")
     if account_id is not None or library_id is not None:
         raise ValueError("Scoped completions require a supported measurement version")
     items = load_listen_history(config)

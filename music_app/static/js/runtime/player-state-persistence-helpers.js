@@ -171,10 +171,14 @@ function attachAlbumSnapshotToRestoredPlaybackQueue(album, currentTrack) {
 
 let playerUnloadWasPlaying = null;
 let playerUnloadStatePersisted = false;
+let playerUnloadPlaybackSnapshot = null;
 
 function resetPlayerUnloadPersistence() {
+  const playbackSnapshot = playerUnloadPlaybackSnapshot;
   playerUnloadWasPlaying = null;
   playerUnloadStatePersisted = false;
+  playerUnloadPlaybackSnapshot = null;
+  return playbackSnapshot;
 }
 
 function persistPlayerState(force = false, options = {}) {
@@ -197,14 +201,14 @@ function persistPlayerState(force = false, options = {}) {
 }
 
 function persistPlayerStateForUnload(reason) {
-  if (playerUnloadStatePersisted) return false;
+  if (reason !== 'pagehide' || playerUnloadStatePersisted) return false;
   playerUnloadStatePersisted = true;
-  const playbackSnapshot = getPlayerPlaybackSnapshot();
+  const playbackSnapshot = playerUnloadPlaybackSnapshot = getPlayerPlaybackSnapshot();
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
   // Let the lease expire: an unload release could overtake the final beacon.
-  flushListenSessionOnUnload(reason);
+  flushListenSessionOnUnload(reason, playbackSnapshot);
   persistPlayerState(true, {
     preservePlayingState: true,
     wasPlaying: playerUnloadWasPlaying,

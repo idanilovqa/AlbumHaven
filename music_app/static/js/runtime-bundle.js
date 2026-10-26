@@ -9868,6 +9868,53 @@ function buildDisplayGroups(groups) {
 
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
+const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
+const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
+const PLAYBACK_HANDOFF_RETRY_MS = 100;
+let pendingPlaybackOwnershipHandoff = takePlaybackOwnershipHandoffEnvelope();
+let playbackOwnershipRuntimeClaimToken = pendingPlaybackOwnershipHandoff.handoff
+  ? createPlaybackOwnershipToken() : '';
+
+function createPlaybackOwnershipToken() {
+  if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') return '';
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  let token = '';
+  for (let index = 0; index < bytes.length; index += 3) {
+    const value = (bytes[index] << 16) | ((bytes[index + 1] || 0) << 8) | (bytes[index + 2] || 0);
+    token += alphabet[(value >> 18) & 63] + alphabet[(value >> 12) & 63];
+    if (index + 1 < bytes.length) token += alphabet[(value >> 6) & 63];
+    if (index + 2 < bytes.length) token += alphabet[value & 63];
+  }
+  return token;
+}
+
+function normalizePlaybackOwnershipHandoff(value) {
+  if (!value || typeof value !== 'object') return null;
+  const id = String(value.id || '').toLowerCase();
+  const token = String(value.token || '');
+  const expiresAt = String(value.expiresAt || '');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)
+      || !/^[A-Za-z0-9_-]{43}$/.test(token)
+      || !(Date.parse(expiresAt) > Date.now())) return null;
+  return { id, token, expiresAt };
+}
+
+function takePlaybackOwnershipHandoffEnvelope() {
+  if (typeof getSessionStorageItem !== 'function') return { found: false, handoff: null };
+  const raw = getSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY);
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY);
+  if (!raw) return { found: false, handoff: null };
+  try { return { found: true, handoff: normalizePlaybackOwnershipHandoff(JSON.parse(raw)) }; }
+  catch (_error) { return { found: true, handoff: null }; }
+}
+
+function createPlaybackOwnershipHandoff() {
+  const id = createPlaybackOwnershipTabId();
+  const token = createPlaybackOwnershipToken();
+  if (!id || !token) return null;
+  return { id, token, expiresAt: new Date(Date.now() + PLAYBACK_HANDOFF_WINDOW_MS).toISOString() };
+}
 
 function getPlaybackOwnershipState() {
   return state.player.ownership ||= { tabId: '', activeClaim: null, lockStatus: 'unlocked',
@@ -9890,14 +9937,18 @@ function normalizePlaybackOwnershipTrack(track) {
     album: String(track.album || ''), artworkUrl: track.artworkUrl || null };
 }
 
-async function playbackOwnershipRequest(method, url, payload) {
+async function playbackOwnershipRequest(method, url, payload, timeoutMs = PLAYBACK_OWNERSHIP_HEARTBEAT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
       signal: controller.signal,
       ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
-    if (!response.ok) throw new Error('Playback ownership is unavailable.');
+    if (!response.ok) {
+      const error = new Error('Playback ownership is unavailable.');
+      error.status = response.status;
+      throw error;
+    }
     return await response.json();
   } finally { clearTimeout(timeout); }
 }
@@ -9963,16 +10014,58 @@ function announcePlaybackOwnership() {
   getPlaybackOwnershipState().channel?.postMessage({ type: 'changed' });
 }
 
+function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = null) {
+  const ownership = getPlaybackOwnershipState();
+  const claim = ownership.activeClaim;
+  const playback = playbackSnapshot
+    || (typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null);
+  if (ownership.handoffAttempted || !claim?.claimToken || playback?.paused || playback?.ended
+      || typeof navigator?.sendBeacon !== 'function') return false;
+  ownership.handoffAttempted = true;
+  const handoff = createPlaybackOwnershipHandoff();
+  if (!handoff || typeof setSessionStorageItem !== 'function'
+      || !setSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY, JSON.stringify(handoff))) return false;
+  let accepted = false;
+  try {
+    accepted = navigator.sendBeacon('/playback/state/handoff', new Blob([JSON.stringify({
+      protocol: 1,
+      clientId: getPlaybackOwnershipTabId(),
+      claimToken: claim.claimToken,
+      handoff: { id: handoff.id, token: handoff.token },
+      completion,
+    })], { type: 'application/json' }));
+  } catch (_error) {
+    accepted = false;
+  }
+  if (!accepted && typeof removeSessionStorageItem === 'function') {
+    removeSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY);
+  }
+  return accepted;
+}
+
 function startPlaybackOwnershipHeartbeat() {
   const ownership = getPlaybackOwnershipState();
-  if (ownership.heartbeatTimer) return;
+  if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
   ownership.heartbeatTimer = setInterval(() => {
+    if (ownership.recoveryPromise) return;
     if (ownership.activeClaim) {
       const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
       if (!playback?.paused && !playback?.ended) void refreshPlaybackOwnershipClaim();
     }
     else void handlePlaybackOwnershipEvent();
   }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+}
+
+function recoverPlaybackOwnership(callback) {
+  const ownership = getPlaybackOwnershipState();
+  stopPlaybackOwnershipHeartbeat();
+  const recovery = Promise.resolve().then(callback);
+  ownership.recoveryPromise = recovery;
+  return recovery.finally(() => {
+    if (ownership.recoveryPromise !== recovery) return;
+    ownership.recoveryPromise = null;
+    startPlaybackOwnershipHeartbeat();
+  });
 }
 
 async function playbackOwnershipTrack(track, previous = null) {
@@ -10044,10 +10137,32 @@ async function refreshPlaybackOwnershipClaim(track = null) {
   return operation;
 }
 
+async function acquirePlaybackOwnershipHandoff(prepared, handoff) {
+  playbackOwnershipRuntimeClaimToken ||= createPlaybackOwnershipToken();
+  if (!playbackOwnershipRuntimeClaimToken) throw new Error('Playback handoff is unavailable.');
+  const deadline = Math.min(Date.parse(handoff.expiresAt), Date.now() + PLAYBACK_HANDOFF_WINDOW_MS);
+  while (Date.now() < deadline) {
+    try {
+      return await playbackOwnershipRequest('PUT', '/playback/state', { protocol: 1,
+        clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
+        claimToken: playbackOwnershipRuntimeClaimToken, state: 'playing', track: prepared.track,
+        handoff: { id: handoff.id, token: handoff.token } },
+      Math.max(1, Math.min(PLAYBACK_OWNERSHIP_HEARTBEAT_MS, deadline - Date.now())));
+    } catch (error) {
+      if (error?.status && error.status !== 409) throw error;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise(resolve => setTimeout(resolve, Math.min(PLAYBACK_HANDOFF_RETRY_MS, remaining)));
+    }
+  }
+  throw new Error('Playback handoff expired.');
+}
+
 async function claimPlaybackOwnership(track, options = {}) {
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   const previousOperation = ownership.pendingOperation;
+  const handoff = options.handoff || null;
   const operation = (async () => {
     await previousOperation;
     if (version !== ownership.requestVersion) return false;
@@ -10055,9 +10170,11 @@ async function claimPlaybackOwnership(track, options = {}) {
     try {
       const prepared = await playbackOwnershipTrack(track, claim);
       if (version !== ownership.requestVersion) return false;
-      const result = await playbackOwnershipRequest('PUT', '/playback/state', { protocol: 1,
-        clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
-        claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
+      const result = handoff
+        ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
+        : await playbackOwnershipRequest('PUT', '/playback/state', { protocol: 1,
+          clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
+          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
       if (version !== ownership.requestVersion) {
         if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
@@ -10108,7 +10225,38 @@ function notifyBlockedPlaybackStart() {
 }
 
 function canRestoreActivePlayback(parsedState) {
-  return claimPlaybackOwnership(parsedState?.track, { showBlockedToast: false });
+  const stored = pendingPlaybackOwnershipHandoff;
+  pendingPlaybackOwnershipHandoff = null;
+  if (stored?.found && !stored.handoff) return false;
+  return recoverPlaybackOwnership(() => claimPlaybackOwnership(parsedState?.track, {
+    showBlockedToast: false,
+    handoff: stored?.handoff || null,
+  }));
+}
+
+function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
+  const ownership = getPlaybackOwnershipState();
+  ownership.handoffAttempted = false;
+  const stored = takePlaybackOwnershipHandoffEnvelope();
+  const handoff = stored.handoff;
+  if (!handoff) {
+    if (!state.player.current || playbackSnapshot?.paused !== false
+        || playbackSnapshot?.ended || !isActivePlaybackOwner()) return false;
+    return recoverPlaybackOwnership(() => claimPlaybackOwnership(
+      state.player.current, { showBlockedToast: false },
+    ));
+  }
+  if (!state.player.current) return false;
+  const runtimeClientId = createPlaybackOwnershipTabId();
+  const runtimeClaimToken = createPlaybackOwnershipToken();
+  if (!runtimeClientId || !runtimeClaimToken) return false;
+  return recoverPlaybackOwnership(() => {
+    ownership.tabId = runtimeClientId;
+    playbackOwnershipRuntimeClaimToken = runtimeClaimToken;
+    ownership.activeClaim = null;
+    if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
+    return claimPlaybackOwnership(state.player.current, { showBlockedToast: false, handoff });
+  });
 }
 
 function canStartPlaybackInThisTab(track) { return claimPlaybackOwnership(track); }
@@ -31213,10 +31361,14 @@ function attachAlbumSnapshotToRestoredPlaybackQueue(album, currentTrack) {
 
 let playerUnloadWasPlaying = null;
 let playerUnloadStatePersisted = false;
+let playerUnloadPlaybackSnapshot = null;
 
 function resetPlayerUnloadPersistence() {
+  const playbackSnapshot = playerUnloadPlaybackSnapshot;
   playerUnloadWasPlaying = null;
   playerUnloadStatePersisted = false;
+  playerUnloadPlaybackSnapshot = null;
+  return playbackSnapshot;
 }
 
 function persistPlayerState(force = false, options = {}) {
@@ -31239,14 +31391,14 @@ function persistPlayerState(force = false, options = {}) {
 }
 
 function persistPlayerStateForUnload(reason) {
-  if (playerUnloadStatePersisted) return false;
+  if (reason !== 'pagehide' || playerUnloadStatePersisted) return false;
   playerUnloadStatePersisted = true;
-  const playbackSnapshot = getPlayerPlaybackSnapshot();
+  const playbackSnapshot = playerUnloadPlaybackSnapshot = getPlayerPlaybackSnapshot();
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
   // Let the lease expire: an unload release could overtake the final beacon.
-  flushListenSessionOnUnload(reason);
+  flushListenSessionOnUnload(reason, playbackSnapshot);
   persistPlayerState(true, {
     preservePlayingState: true,
     wasPlaying: playerUnloadWasPlaying,
@@ -31800,26 +31952,31 @@ async function persistPausedListenSession(session = state.player.listenSession) 
   return true;
 }
 
-function flushListenSessionOnUnload(reason = 'unload') {
+function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) {
+  if (reason !== 'pagehide') return false;
+  const snapshot = playbackSnapshot || getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
-  if (!session || session.completionState === 'pending' || session.completionState === 'done') return false;
+  if (!session || session.completionState === 'pending' || session.completionState === 'done') {
+    return typeof stagePlaybackOwnershipHandoff === 'function'
+      ? stagePlaybackOwnershipHandoff(null, snapshot) : false;
+  }
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) {
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
     return false;
   }
-  closeListenSegment();
-  session.duration_seconds = Math.round((Number(getPlayerPlaybackSnapshot().duration) || Number(session.duration_seconds) || 0) * 1000) / 1000;
-  session.ended_at = session.paused_at || isoNow();
-  if (!shouldPersistListenSession(session)) {
+  if (typeof stagePlaybackOwnershipHandoff !== 'function') {
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
     return false;
   }
+  closeListenSegment(snapshot.currentTime);
+  session.duration_seconds = Math.round((Number(snapshot.duration) || Number(session.duration_seconds) || 0) * 1000) / 1000;
+  session.ended_at = session.paused_at || isoNow();
   session.completionState = 'pending';
-  const payload = {
+  const completion = shouldPersistListenSession(session) ? {
     ...buildNowPlayingPayload(session.track, session),
     ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
@@ -31835,22 +31992,15 @@ function flushListenSessionOnUnload(reason = 'unload') {
       start_seconds: Number(segment.start_seconds || 0),
       end_seconds: Number(segment.end_seconds || 0),
     })),
-  };
-  try {
-    if (navigator?.sendBeacon) {
-      const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-      navigator.sendBeacon('/playback/session/complete', body);
-      if (!payload.measurement_version && payload.scrobble_eligible && !payload.scrobbled) {
-        navigator.sendBeacon('/playback/session/scrobble', new Blob([JSON.stringify(buildNowPlayingPayload(session.track, session))], { type: 'application/json' }));
-      }
-    }
-  } catch (_error) {
-    // Ignore unload delivery errors.
-  }
+  } : null;
+  const accepted = stagePlaybackOwnershipHandoff(
+    completion?.measurement_version ? completion : null,
+    snapshot,
+  );
   session.completionState = 'done';
   clearListenPauseMarker(session);
   state.player.listenSession = null;
-  return true;
+  return accepted;
 }
 
 // END js/runtime/player-listen-session-helpers.js
@@ -35724,7 +35874,10 @@ let playerTrackSelectionToken = 0;
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
-  if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) {
+  const ownershipAlreadyClaimed = options.ownershipClaimed === true
+    && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
+  if (shouldAutoplay && !ownershipAlreadyClaimed
+      && typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) {
     return false;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
@@ -35732,13 +35885,17 @@ async function playTrackFromPayload(track, options = {}) {
   if (!track?.path) return false;
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
+  const requestedStartSeconds = Number(options.startSeconds);
+  const startSeconds = Number.isFinite(requestedStartSeconds)
+    ? Math.max(0, requestedStartSeconds)
+    : (resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0);
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
-      startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
+      startSeconds,
       autoplay: shouldAutoplay,
     });
   } catch (error) {
@@ -35769,10 +35926,22 @@ async function playTrackFromPayload(track, options = {}) {
     }
   }
   if (shouldAutoplay) {
-    beginStreamingPlayerListenSession(track, resetTime ? 0 : previousPlaybackSnapshot.currentTime);
+    beginStreamingPlayerListenSession(track, startSeconds);
   }
   updatePlayerUi();
   return true;
+}
+
+function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
+  const track = state.player.current;
+  if (!track || typeof isActivePlaybackOwner !== 'function' || !isActivePlaybackOwner()) {
+    return Promise.resolve(false);
+  }
+  return playTrackFromPayload(track, {
+    autoplay: true,
+    ownershipClaimed: true,
+    startSeconds: Number(playbackSnapshot?.currentTime) || 0,
+  });
 }
 
 let handledStreamingFirstFrameIdentity = '';
@@ -42474,15 +42643,17 @@ window.addEventListener('pagehide', () => {
 });
 window.addEventListener('pageshow', (event) => {
   if (event?.persisted) {
-    resetPlayerUnloadPersistence();
+    const playbackSnapshot = resetPlayerUnloadPersistence();
     unloadStreamingCleanupPromise = null;
+    if (typeof restorePlaybackOwnershipFromPageCache === 'function') {
+      void Promise.resolve(restorePlaybackOwnershipFromPageCache(playbackSnapshot)).then((restored) => {
+        if (!restored || typeof resumePlayerPlaybackFromPageCache !== 'function') return;
+        return resumePlayerPlaybackFromPageCache(playbackSnapshot);
+      }).catch(() => {});
+    }
   }
   if (!state.player.loopActive) return;
   setLoopActive(false);
-});
-window.addEventListener('beforeunload', () => {
-  persistPlayerStateForUnload('beforeunload');
-  void cleanupStreamingPlaybackForUnload();
 });
 window.addEventListener('resize', () => {
   hideAlbumCardContextMenu();

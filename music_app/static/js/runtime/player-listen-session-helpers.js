@@ -407,26 +407,31 @@ async function persistPausedListenSession(session = state.player.listenSession) 
   return true;
 }
 
-function flushListenSessionOnUnload(reason = 'unload') {
+function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) {
+  if (reason !== 'pagehide') return false;
+  const snapshot = playbackSnapshot || getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
-  if (!session || session.completionState === 'pending' || session.completionState === 'done') return false;
+  if (!session || session.completionState === 'pending' || session.completionState === 'done') {
+    return typeof stagePlaybackOwnershipHandoff === 'function'
+      ? stagePlaybackOwnershipHandoff(null, snapshot) : false;
+  }
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) {
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
     return false;
   }
-  closeListenSegment();
-  session.duration_seconds = Math.round((Number(getPlayerPlaybackSnapshot().duration) || Number(session.duration_seconds) || 0) * 1000) / 1000;
-  session.ended_at = session.paused_at || isoNow();
-  if (!shouldPersistListenSession(session)) {
+  if (typeof stagePlaybackOwnershipHandoff !== 'function') {
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
     return false;
   }
+  closeListenSegment(snapshot.currentTime);
+  session.duration_seconds = Math.round((Number(snapshot.duration) || Number(session.duration_seconds) || 0) * 1000) / 1000;
+  session.ended_at = session.paused_at || isoNow();
   session.completionState = 'pending';
-  const payload = {
+  const completion = shouldPersistListenSession(session) ? {
     ...buildNowPlayingPayload(session.track, session),
     ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
@@ -442,20 +447,13 @@ function flushListenSessionOnUnload(reason = 'unload') {
       start_seconds: Number(segment.start_seconds || 0),
       end_seconds: Number(segment.end_seconds || 0),
     })),
-  };
-  try {
-    if (navigator?.sendBeacon) {
-      const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-      navigator.sendBeacon('/playback/session/complete', body);
-      if (!payload.measurement_version && payload.scrobble_eligible && !payload.scrobbled) {
-        navigator.sendBeacon('/playback/session/scrobble', new Blob([JSON.stringify(buildNowPlayingPayload(session.track, session))], { type: 'application/json' }));
-      }
-    }
-  } catch (_error) {
-    // Ignore unload delivery errors.
-  }
+  } : null;
+  const accepted = stagePlaybackOwnershipHandoff(
+    completion?.measurement_version ? completion : null,
+    snapshot,
+  );
   session.completionState = 'done';
   clearListenPauseMarker(session);
   state.player.listenSession = null;
-  return true;
+  return accepted;
 }

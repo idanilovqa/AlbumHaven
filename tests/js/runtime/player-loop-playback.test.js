@@ -1056,6 +1056,45 @@ test('playTrackFromPayload claims ownership and dispatches streaming start witho
   assert.deepEqual(nativeSrcAssignments, []);
 });
 
+test('BFCache resume uses consumed ownership once and opens one listen at the saved offset', async () => {
+  const streamingStarts = [];
+  const listenStarts = [];
+  let owned = true;
+  const { context } = loadHelper({
+    isActivePlaybackOwner: () => owned,
+    canStartPlaybackInThisTab: () => assert.fail('consumed ownership must not issue a second claim'),
+    async startStreamingTrack(track, options) {
+      streamingStarts.push({ track, options });
+    },
+    resumeListenSessionPlayback(track, startSeconds) {
+      listenStarts.push({ track, startSeconds });
+      return Promise.resolve(null);
+    },
+  });
+  const track = {
+    path: 'C:/Music/restored.flac',
+    src: '/track?path=restored.flac',
+    title: 'Restored',
+    artist: 'Artist',
+    album: 'Album',
+  };
+  context.state.player.current = track;
+
+  assert.equal(await context.resumePlayerPlaybackFromPageCache({ currentTime: 37.25 }), true);
+  assert.equal(streamingStarts.length, 1);
+  assert.strictEqual(streamingStarts[0].track, track);
+  assert.equal(streamingStarts[0].options.startSeconds, 37.25);
+  assert.equal(streamingStarts[0].options.autoplay, true);
+  assert.equal(listenStarts.length, 1);
+  assert.strictEqual(listenStarts[0].track, track);
+  assert.equal(listenStarts[0].startSeconds, 37.25);
+
+  owned = false;
+  assert.equal(await context.resumePlayerPlaybackFromPageCache({ currentTime: 41 }), false);
+  assert.equal(streamingStarts.length, 1);
+  assert.equal(listenStarts.length, 1);
+});
+
 test('playTrackFromPayload awaits server ownership before opening audible streaming', async () => {
   let resolveClaim;
   const claim = new Promise((resolve) => { resolveClaim = resolve; });

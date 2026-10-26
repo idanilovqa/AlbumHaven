@@ -112,6 +112,9 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0083_add_album_raw_artist_search_index.sql
 0084_create_local_artist_search_projection.sql
 0085_add_stale_track_file_candidate_index.sql
+0086_create_root_gallery_projection.sql
+0087_create_playback_claims.sql
+0088_add_playback_claim_handoffs.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -188,10 +191,10 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0085` are unreleased branch migrations. Their presence in a
-working checkout or sandbox does not establish that a deployment ledger has
-recorded them. Release rollout must apply and checksum them in lexical order
-before starting the matching application version. Run `0083` outside an
+Migration files in a working checkout or sandbox do not establish that a
+deployment ledger has recorded them. Release rollout must apply and checksum
+them in lexical order before starting the matching application version. Run
+`0083` outside an
 explicit transaction because it uses `CREATE INDEX CONCURRENTLY`; record its
 ledger entry only after PostgreSQL reports the index valid. Apply `0084`
 transactionally, then let normal relation readiness publish the first matching
@@ -212,3 +215,25 @@ Set `PGPASSFILE` when passwordless local automation is required. Keep migration 
 Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated stale-file predicate used by missing-album discovery. It avoids scanning every active file when the stale set is empty or small. The partial index is maintained by PostgreSQL as files become stale or return; it changes no rows, result semantics, or privileges. Older application versions remain compatible. Rollback removes only this index through a subsequent migration.
 
 This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.
+
+Migration `0087_create_playback_claims.sql` adds the durable, account-and-library-
+scoped playback ownership lease used by web and mobile clients. PostgreSQL stores
+only the 32-byte digest of each renewable claim token; the raw credential is not
+persisted. The table is additive, and older application versions leave it unused.
+
+Migration `0088_add_playback_claim_handoffs.sql` extends each claim with four
+nullable fields: the one-time handoff ID, 32-byte handoff-token digest, 32-byte
+completion fingerprint, and handoff expiry. Its constraint requires all four
+fields to be null or present together and validates both digests. These fields
+hold short-lived ownership-transfer state only; they do not add credentials or
+metadata markers to listen history.
+
+Apply `0087` and then `0088`, with their checksums recorded, before starting an
+application version that reads or writes playback claims or reload handoffs.
+Existing application versions remain compatible with both additive migrations.
+For rollback, stop or roll back the claim-aware application before changing this
+schema. Prefer retaining the table and nullable columns: expired claim and
+handoff rows are harmless, while rewriting or removing an applied migration
+would invalidate ledger history. Dropping the table discards only transient
+ownership leases, not listen-history rows, but must not occur while any running
+application depends on durable ownership.

@@ -1115,6 +1115,72 @@ test('playTrackFromPayload awaits server ownership before opening audible stream
   assert.equal(streamingStarts.length, 1);
 });
 
+test('different-track selection cancels optional waveform work before awaiting ownership', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  const current = { path: 'C:/Music/current.flac', src: '/track?path=current.flac' };
+  const events = [];
+  const { context } = loadHelper({
+    state: {
+      player: {
+        current,
+        streaming: { generation: 7 },
+        loopActive: false,
+        loopStart: 0,
+        loopEnd: 30,
+        waveform: { renderToken: 0 },
+      },
+      utility: {
+        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+        selectedLoopDetailMode: '', activeTab: '',
+      },
+    },
+    cancelStreamingWaveformGeneration: (generation) => events.push(`cancel:${generation}`),
+    canStartPlaybackInThisTab: () => { events.push('claim'); return claim; },
+    startStreamingTrack: async () => { events.push('stream'); },
+  });
+
+  const pendingStart = context.playTrackFromPayload({
+    path: 'C:/Music/next.flac', src: '/track?path=next.flac', title: 'Next',
+  });
+
+  assert.deepEqual(events, ['cancel:7', 'claim']);
+  resolveClaim(false);
+  assert.equal(await pendingStart, false);
+  assert.deepEqual(events, ['cancel:7', 'claim']);
+  assert.strictEqual(context.state.player.current, current);
+});
+
+test('same-track and malformed selections do not cancel current waveform work', async () => {
+  const current = { path: 'C:/Music/current.flac', src: '/track?path=current.flac' };
+  const cancellations = [];
+  const starts = [];
+  const { context } = loadHelper({
+    state: {
+      player: {
+        current,
+        streaming: { generation: 7 },
+        loopActive: false,
+        loopStart: 0,
+        loopEnd: 30,
+        waveform: { renderToken: 0 },
+      },
+      utility: {
+        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+        selectedLoopDetailMode: '', activeTab: '',
+      },
+    },
+    cancelStreamingWaveformGeneration: (generation) => cancellations.push(generation),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: async (track) => { starts.push(track); },
+  });
+
+  assert.equal(await context.playTrackFromPayload(current), true);
+  assert.equal(await context.playTrackFromPayload({ path: '', src: '' }), false);
+  assert.deepEqual(cancellations, []);
+  assert.deepEqual(starts, [current]);
+});
+
 test('resume awaits server ownership and never treats its Promise as authorization', async () => {
   let resolveClaim;
   const claim = new Promise((resolve) => { resolveClaim = resolve; });

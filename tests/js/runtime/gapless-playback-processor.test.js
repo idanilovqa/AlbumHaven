@@ -585,6 +585,306 @@ test('prepared seek cuts over on the render clock without a silent frame', () =>
   assert.equal(fixture.events('first-frame').at(-1).streamId, 42);
 });
 
+test('buffered forward seek cuts within unread current PCM and preserves queued continuity', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
+  enqueue(fixture, {
+    streamId: 41,
+    role: 'current',
+    sequence: 0,
+    left: Array.from({ length: 384 }, (_value, index) => index + 1),
+  });
+  enqueue(fixture, {
+    streamId: 42,
+    role: 'continuity',
+    sequence: 0,
+    left: Array(128).fill(-0.25),
+  });
+  play(fixture);
+  assert.deepEqual(renderQuantum(fixture).left, Array.from({ length: 128 }, (_value, index) => index + 1));
+
+  fixture.send({
+    type: 'reserve-buffered-seek',
+    generation: fixture.generation,
+    requestId: 1,
+    streamId: 41,
+    timelineFrame: 256,
+  });
+
+  assert.deepEqual(fixture.events('buffered-seek-reserved'), [{
+    type: 'buffered-seek-reserved',
+    generation: fixture.generation,
+    requestId: 1,
+    streamId: 41,
+    timelineFrame: 256,
+  }]);
+  const rendered = renderQuantum(fixture);
+  assert.deepEqual(rendered.left, Array.from({ length: 128 }, (_value, index) => index + 257));
+  assert.equal(rendered.left.includes(0), false);
+  assert.equal(fixture.processor.continuity.streamId, 42);
+  assert.equal(fixture.processor.continuity.bufferedFrames, 128);
+  assert.equal(fixture.events('underrun').length, 0);
+  assert.equal(fixture.events('consumed').at(-1).frames, 128);
+  assert.deepEqual(fixture.events('buffered-seek-boundary').map((event) => ({
+    type: event.type,
+    generation: event.generation,
+    requestId: event.requestId,
+    streamId: event.streamId,
+    renderedFrame: event.renderedFrame,
+    timelineFrame: event.timelineFrame,
+    skippedFrames: event.skippedFrames,
+    bufferedFrames: event.bufferedFrames,
+    silentFrames: event.silentFrames,
+    outgoing: Array.from(event.capture.outgoing.left).slice(0, event.capture.outgoing.frames),
+    incoming: Array.from(event.capture.incoming.left).slice(0, event.capture.incoming.frames),
+  })), [{
+    type: 'buffered-seek-boundary',
+    generation: fixture.generation,
+    requestId: 1,
+    streamId: 41,
+    renderedFrame: 128,
+    timelineFrame: 256,
+    skippedFrames: 128,
+    bufferedFrames: 128,
+    silentFrames: 0,
+    outgoing: Array.from({ length: 64 }, (_value, index) => index + 65),
+    incoming: [257],
+  }]);
+});
+
+test('buffered forward seek accepts the final unread frame through known EOS continuity', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
+  enqueue(fixture, {
+    streamId: 41,
+    role: 'current',
+    sequence: 0,
+    left: Array.from({ length: 255 }, (_value, index) => index + 1),
+  });
+  enqueue(fixture, {
+    streamId: 42, role: 'continuity', sequence: 0, left: Array(128).fill(-1),
+  });
+  markEos(fixture, { streamId: 41, role: 'current', emittedFrames: 255 });
+  play(fixture);
+  renderQuantum(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 2, streamId: 41, timelineFrame: 254,
+  });
+
+  const rendered = renderQuantum(fixture);
+
+  assert.equal(rendered.left[0], 255);
+  assert.deepEqual(rendered.left.slice(1), Array(127).fill(-1));
+  assert.equal(rendered.left.includes(0), false);
+  assert.equal(fixture.events('underrun').length, 0);
+  assert.equal(fixture.events('buffered-seek-boundary').at(-1).timelineFrame, 254);
+  assert.equal(fixture.processor.current.streamId, 42);
+});
+
+test('buffered forward seek rejects a target at the unread current PCM endpoint', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 256 });
+  enqueue(fixture, {
+    streamId: 41, role: 'current', sequence: 0, left: Array(128).fill(0.25),
+  });
+  play(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 2, streamId: 41, timelineFrame: 128,
+  });
+
+  assert.deepEqual(fixture.events('buffered-seek-rejected').at(-1), {
+    type: 'buffered-seek-rejected',
+    generation: fixture.generation,
+    requestId: 2,
+    streamId: 41,
+    timelineFrame: 128,
+    reason: 'unavailable',
+  });
+  assert.equal(fixture.processor.pendingBufferedSeek, null);
+});
+
+test('buffered forward seek rejects when the target lacks one full render quantum', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 256 });
+  enqueue(fixture, {
+    streamId: 41, role: 'current', sequence: 0, left: Array(255).fill(0.25),
+  });
+  play(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 3, streamId: 41, timelineFrame: 128,
+  });
+  const rendered = renderQuantum(fixture);
+
+  assert.deepEqual(fixture.events('buffered-seek-rejected').at(-1), {
+    type: 'buffered-seek-rejected',
+    generation: fixture.generation,
+    requestId: 3,
+    streamId: 41,
+    timelineFrame: 128,
+    reason: 'target-unavailable',
+  });
+  assert.equal(fixture.processor.pendingBufferedSeek, null);
+  assert.equal(rendered.left.includes(0), false);
+  assert.equal(fixture.events('underrun').length, 0);
+});
+
+test('buffered forward seek rejects a target outside current ring capacity', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 256, continuityCapacityFrames: 256 });
+  enqueue(fixture, {
+    streamId: 41, role: 'current', sequence: 0, left: Array(128).fill(0.25),
+  });
+  play(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek',
+    generation: fixture.generation,
+    requestId: 2,
+    streamId: 41,
+    timelineFrame: 256,
+  });
+
+  assert.deepEqual(fixture.events('buffered-seek-rejected'), [{
+    type: 'buffered-seek-rejected',
+    generation: fixture.generation,
+    requestId: 2,
+    streamId: 41,
+    timelineFrame: 256,
+    reason: 'unavailable',
+  }]);
+  assert.equal(fixture.events('buffered-seek-reserved').length, 0);
+});
+
+test('new buffered forward seek explicitly rejects the superseded request', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 256 });
+  enqueue(fixture, {
+    streamId: 41, role: 'current', sequence: 0, left: Array(128).fill(0.25),
+  });
+  play(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 3, streamId: 41, timelineFrame: 64,
+  });
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 4, streamId: 41, timelineFrame: 80,
+  });
+
+  assert.deepEqual(fixture.events('buffered-seek-rejected'), [{
+    type: 'buffered-seek-rejected',
+    generation: fixture.generation,
+    requestId: 3,
+    streamId: 41,
+    timelineFrame: 64,
+    reason: 'superseded',
+  }]);
+  assert.equal(fixture.processor.pendingBufferedSeek.requestId, 4);
+});
+
+test('prepared replacement seek explicitly rejects a reserved buffered seek', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 256 });
+  enqueue(fixture, {
+    streamId: 41, role: 'current', sequence: 0, left: Array(128).fill(0.25),
+  });
+  enqueue(fixture, {
+    streamId: 42, role: 'continuity', sequence: 0, left: Array(128).fill(-0.25),
+  });
+  play(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 5, streamId: 41, timelineFrame: 64,
+  });
+
+  fixture.send({
+    type: 'reserve-seek', generation: fixture.generation,
+    streamId: 42, timelineStartFrame: 64,
+  });
+
+  assert.deepEqual(fixture.events('buffered-seek-rejected').at(-1), {
+    type: 'buffered-seek-rejected',
+    generation: fixture.generation,
+    requestId: 5,
+    streamId: 41,
+    timelineFrame: 64,
+    reason: 'superseded',
+  });
+  assert.equal(fixture.processor.pendingBufferedSeek, null);
+});
+
+test('buffered forward seek rejects if queued continuity becomes current first', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 256, continuityCapacityFrames: 256 });
+  enqueue(fixture, {
+    streamId: 41, role: 'current', sequence: 0, left: Array(128).fill(0.25),
+  });
+  enqueue(fixture, {
+    streamId: 42, role: 'continuity', sequence: 0, left: Array(128).fill(-0.25),
+  });
+  play(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 5, streamId: 41, timelineFrame: 64,
+  });
+
+  fixture.processor.promoteContinuity();
+  renderQuantum(fixture);
+
+  assert.equal(fixture.processor.current.streamId, 42);
+  assert.equal(fixture.events('buffered-seek-boundary').length, 0);
+  assert.deepEqual(fixture.events('buffered-seek-rejected').at(-1), {
+    type: 'buffered-seek-rejected',
+    generation: fixture.generation,
+    requestId: 5,
+    streamId: 41,
+    timelineFrame: 64,
+    reason: 'stream-changed',
+  });
+});
+
+test('loop activation rejects a reserved buffered forward seek', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 256 });
+  enqueue(fixture, {
+    streamId: 41, role: 'current', sequence: 0, left: Array(128).fill(0.25),
+  });
+  enqueue(fixture, {
+    streamId: 42, role: 'continuity', sequence: 0, left: Array(128).fill(-0.25),
+  });
+  play(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 5, streamId: 41, timelineFrame: 64,
+  });
+  fixture.send({
+    type: 'set-loop', generation: fixture.generation, active: true,
+    kind: 'long-loop', startFrame: 0, endFrame: 256, retainedStreamId: 42,
+  });
+
+  assert.deepEqual(fixture.events('buffered-seek-rejected'), [{
+    type: 'buffered-seek-rejected', generation: fixture.generation,
+    requestId: 5, streamId: 41, timelineFrame: 64, reason: 'loop-changed',
+  }]);
+  assert.equal(fixture.processor.pendingBufferedSeek, null);
+});
+
+test('pause rejects a reserved buffered forward seek before render', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 256 });
+  enqueue(fixture, {
+    streamId: 41, role: 'current', sequence: 0, left: Array(256).fill(0.25),
+  });
+  play(fixture);
+  fixture.send({
+    type: 'reserve-buffered-seek', generation: fixture.generation,
+    requestId: 6, streamId: 41, timelineFrame: 64,
+  });
+
+  fixture.send({ type: 'pause', generation: fixture.generation });
+  const rendered = renderQuantum(fixture);
+
+  assert.deepEqual(fixture.events('buffered-seek-rejected').at(-1), {
+    type: 'buffered-seek-rejected', generation: fixture.generation,
+    requestId: 6, streamId: 41, timelineFrame: 64, reason: 'paused',
+  });
+  assert.equal(fixture.processor.pendingBufferedSeek, null);
+  assert.deepEqual(rendered.left, Array(128).fill(0));
+  assert.equal(fixture.events('buffered-seek-boundary').length, 0);
+});
+
 test('initial playback waits for its configured PCM cushion before rendering the first frame', () => {
   const fixture = createProcessor({ startupBufferFrames: QUANTUM_FRAMES * 2 });
   enqueue(fixture, {

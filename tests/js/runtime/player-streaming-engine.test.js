@@ -1433,6 +1433,24 @@ test('pause and explicit resume keep context, processor, and snapshot state alig
   assert.equal(harness.contexts[0].state, 'running');
   assert.equal(harness.portMessages('play').length, 2);
   assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.api.snapshot().mode, 'starting');
+});
+
+test('resume restores playing mode when current already rendered its first frame', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  await harness.api.pause();
+
+  await harness.api.resume();
+
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.api.snapshot().mode, 'playing');
 });
 
 test('pause invalidates a pending AudioContext resume before it can command audible playback', async () => {
@@ -1653,7 +1671,7 @@ test('playing seek keeps current audible until a buffered continuity head commit
     generation: target.generation,
     streamId: target.streamId,
     sequence: 1,
-    samples: [0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4],
+    samples: new Array(12_000 * 2).fill(0.25),
   }, { role: 'current' });
   assert.equal(harness.api.snapshot().diagnostics.staleMessages, staleBeforePromotedWirePcm);
   assert.equal(harness.portMessages('enqueue').at(-1).role, 'current');
@@ -1662,8 +1680,8 @@ test('playing seek keeps current audible until a buffered continuity head commit
     generation: target.generation,
     streamId: target.streamId,
     role: 'continuity',
-    emittedFrames: 12_004,
-    authoritativeTotalFrames: 156_004,
+    emittedFrames: 24_000,
+    authoritativeTotalFrames: 168_000,
   });
   assert.equal(
     harness.api.snapshot().duration,
@@ -1688,8 +1706,353 @@ test('playing seek keeps current audible until a buffered continuity head commit
     renderedFrame: 128, contextTime: 2,
   });
   await harness.settle();
-  assert.equal(harness.sent('open').at(-1).path, 'C:/Music/Album/queued.flac');
-  assert.equal(harness.sent('open').at(-1).role, 'continuity');
+  const restoredQueued = harness.sent('open').at(-1);
+  assert.equal(restoredQueued.path, 'C:/Music/Album/queued.flac');
+  assert.equal(restoredQueued.role, 'continuity');
+  assert.deepEqual([...harness.api.snapshot().diagnostics.activeRoles], ['current', 'continuity']);
+
+  const restoredCreditCount = harness.sent('credit')
+    .filter(({ streamId }) => streamId === restoredQueued.streamId).length;
+  acceptMetadata(harness, restoredQueued);
+  const restoredCredits = harness.sent('credit')
+    .filter(({ streamId }) => streamId === restoredQueued.streamId);
+  assert.equal(
+    restoredCredits.length,
+    restoredCreditCount + 1,
+    'an EOS seek tail shorter than one second must not defer queued-next initial credit',
+  );
+  assert.ok(restoredCredits.at(-1).frames > 0);
+  assert.equal(harness.engine.roles.continuity.initialCreditDeferred, false);
+});
+
+test('forward seek within current ring preserves prepared queued-next PCM', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  harness.engine.diagnostics.inFlightFrames.current = 0;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  const queued = harness.sent('open').at(-1);
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+  const openCount = harness.sent('open').length;
+  const currentCreditCount = harness.sent('credit')
+    .filter(({ streamId }) => streamId === current.streamId).length;
+
+  const seek = harness.api.seek(3);
+  const reservation = harness.portMessages('reserve-buffered-seek').at(-1);
+  assert.deepEqual({ ...reservation }, {
+    type: 'reserve-buffered-seek',
+    generation: current.generation,
+    requestId: 1,
+    streamId: current.streamId,
+    timelineFrame: 144_000,
+  });
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved',
+    generation: current.generation,
+    requestId: 1,
+    streamId: current.streamId,
+    timelineFrame: 144_000,
+  });
+  const firstFrameBeforeSeek = harness.engine.diagnostics.firstFrameAtMs;
+  harness.setNow(1001);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary',
+    generation: current.generation,
+    requestId: 1,
+    streamId: current.streamId,
+    renderedFrame: 128,
+    timelineFrame: 144_000,
+    skippedFrames: 120_000,
+    bufferedFrames: 72_000,
+    silentFrames: 0,
+    capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+  assert.equal(await seek, harness.engine.roles.current);
+
+  assert.equal(harness.sent('open').length, openCount);
+  assert.equal(harness.sent('close').length, 0);
+  assert.equal(harness.sent('promote').length, 0);
+  assert.equal(harness.engine.roles.current.streamId, current.streamId);
+  assert.equal(harness.engine.roles.continuity.streamId, queued.streamId);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 72_000);
+  const currentCredits = harness.sent('credit')
+    .filter(({ streamId }) => streamId === current.streamId);
+  assert.equal(currentCredits.length, currentCreditCount + 1);
+  assert.ok(currentCredits.at(-1).frames > 0);
+  assert.equal(harness.api.snapshot().currentTime, 3);
+  assert.equal(harness.api.snapshot().diagnostics.seekSilentFrames, 0);
+  assert.ok(harness.api.snapshot().diagnostics.firstFrameAtMs > firstFrameBeforeSeek);
+  assert.ok(
+    harness.api.snapshot().diagnostics.firstFrameAtMs
+      >= harness.api.snapshot().diagnostics.seekCommittedAtMs,
+  );
+  assert.deepEqual(harness.api.snapshot().diagnostics.seekCapture, {
+    outgoing: { frames: 64 }, incoming: { frames: 1 },
+  });
+});
+
+test('forward seek beyond unread current PCM uses continuity replacement', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const replacement = await harness.api.seek(3);
+
+  assert.equal(harness.portMessages('reserve-buffered-seek').length, 0);
+  assert.equal(replacement.continuityOptions.kind, 'seek');
+  assert.equal(harness.sent('close').at(-1).reason, 'seek-replaced');
+  assert.equal(harness.sent('open').at(-1).path, current.path);
+});
+
+test('new fallback seek supersedes a pending buffered forward seek once', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.snapshot.currentTime = 2;
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+  assert.equal(harness.engine.roles.continuity.continuityOptions.kind, 'queued-next');
+  assert.equal(harness.engine.snapshot.paused, false);
+
+  const bufferedSeek = harness.api.seek(3);
+  assert.ok(harness.engine.pendingBufferedSeek);
+  const fallbackSeek = harness.api.seek(1);
+
+  assert.equal(harness.engine.pendingBufferedSeek, null);
+  assert.equal(await bufferedSeek, null);
+  const replacement = await fallbackSeek;
+  assert.equal(replacement.continuityOptions.kind, 'seek');
+  assert.equal(harness.sent('open').filter(({ path }) => path === current.path).length, 2);
+});
+
+test('pause supersedes a pending buffered forward seek without starting fallback', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+  const openCount = harness.sent('open').length;
+
+  const seek = harness.api.seek(3);
+  assert.ok(harness.engine.pendingBufferedSeek);
+  await harness.api.pause();
+
+  assert.equal(await seek, null);
+  assert.equal(harness.engine.pendingBufferedSeek, null);
+  assert.equal(harness.api.snapshot().paused, true);
+  assert.equal(harness.sent('open').length, openCount);
+});
+
+test('late buffered boundary after pause still reconciles skipped PCM accounting', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  harness.engine.diagnostics.inFlightFrames.current = 0;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const seek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+  });
+  const staleMessages = harness.engine.diagnostics.staleMessages;
+  await harness.api.pause();
+  assert.equal(await seek, null);
+
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+    renderedFrame: 128, skippedFrames: 120_000, bufferedFrames: 72_000,
+    silentFrames: 0, capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.diagnostics.staleMessages, staleMessages);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 72_000);
+  assert.equal(harness.api.snapshot().currentTime, 3);
+  assert.ok(harness.engine.deferredCreditFrames.current > 0);
+});
+
+test('late superseded buffered boundary reconciles accounting without completing newer seek', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const firstSeek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+  });
+  const secondSeek = harness.api.seek(3.5);
+  assert.equal(await firstSeek, null);
+  assert.equal(harness.engine.pendingBufferedSeek, null);
+  assert.equal(harness.engine.supersededBufferedSeek.requestId, 1);
+  const staleMessages = harness.engine.diagnostics.staleMessages;
+
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+    renderedFrame: 128, skippedFrames: 120_000, bufferedFrames: 72_000,
+    silentFrames: 0, capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.diagnostics.staleMessages, staleMessages);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 72_000);
+  assert.equal(harness.engine.pendingBufferedSeek, null);
+  assert.equal(harness.engine.supersededBufferedSeek, null);
+  assert.equal(harness.engine.diagnostics.seekCommittedAtMs, 0);
+  const replacement = await secondSeek;
+  assert.equal(replacement.continuityOptions.kind, 'seek');
+  assert.equal(replacement.generation, current.generation);
+  assert.equal(replacement.track.path, current.path);
+  await harness.api.pause();
+});
+
+test('prepared track replacement retains late buffered boundary accounting', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  harness.engine.diagnostics.inFlightFrames.current = 0;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const seek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+  });
+  const replacementStart = harness.api.start(makeTrack('replacement.flac'));
+  assert.equal(await seek, null);
+  const staleMessages = harness.engine.diagnostics.staleMessages;
+
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+    renderedFrame: 128, skippedFrames: 120_000, bufferedFrames: 72_000,
+    silentFrames: 0, capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.diagnostics.staleMessages, staleMessages);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 72_000);
+  assert.equal(harness.api.snapshot().currentTime, 3);
+  assert.equal(harness.engine.supersededBufferedSeek, null);
+  await harness.api.pause();
+  await replacementStart;
+});
+
+test('late buffered boundary clears its retained identity after current role changes', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const seek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+  });
+  await harness.api.pause();
+  assert.equal(await seek, null);
+  harness.engine.roles.current = harness.engine.roles.continuity;
+  harness.engine.roles.continuity = null;
+  const staleMessages = harness.engine.diagnostics.staleMessages;
+
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+    renderedFrame: 128, skippedFrames: 120_000, bufferedFrames: 72_000,
+    silentFrames: 0, capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.diagnostics.staleMessages, staleMessages + 1);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 192_000);
+  assert.equal(harness.engine.supersededBufferedSeek, null);
+});
+
+test('rejected buffered forward seek falls back to continuity replacement', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  const queued = harness.sent('open').at(-1);
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const seek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-rejected',
+    generation: current.generation,
+    requestId: 1,
+    streamId: current.streamId,
+    timelineFrame: 144_000,
+    reason: 'unavailable',
+  });
+  const replacement = await seek;
+
+  assert.equal(replacement.role, 'continuity');
+  assert.equal(replacement.startFrame, 144_000);
+  assert.equal(harness.sent('close').at(-1).streamId, queued.streamId);
+  assert.equal(harness.sent('close').at(-1).reason, 'seek-replaced');
+  assert.equal(harness.sent('open').at(-1).streamId, replacement.streamId);
+  assert.equal(harness.portMessages('reserve-seek').at(-1).streamId, replacement.streamId);
 });
 
 test('current EOS cannot replace an in-progress seek target with queued-next continuity', async () => {
@@ -4235,7 +4598,7 @@ test('concurrent restore and manual resume post play exactly once', async () => 
   assert.equal(harness.engine.roles.current, restored);
   assert.equal(harness.contexts[0].state, 'running');
   assert.equal(harness.api.snapshot().paused, false);
-  assert.equal(harness.api.snapshot().mode, 'starting');
+  assert.equal(harness.api.snapshot().mode, 'playing');
   assert.equal(harness.portMessages('play').length, 1);
   assert.equal(
     harness.sent('credit').filter(({ streamId }) => streamId === current.streamId).length,

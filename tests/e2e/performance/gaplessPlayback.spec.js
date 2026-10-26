@@ -10,6 +10,7 @@ import {
   createStreamingReplacementDiagnosticsObserver,
   observeWaveformTraffic,
   readGaplessPlaybackDiagnostics,
+  runWithPlaybackEventWindowAttachment,
   waitForActivePlaybackWindow,
   waitForGaplessBoundary,
 } from '../helpers/index.js';
@@ -27,7 +28,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
   trackModalActions,
   utilityAppearanceActions,
   utilityTabBarActions,
-}) => {
+}, testInfo) => {
   const traffic = playbackEvidence;
   {
     await stepLogger.step('Open the generated lossless-boundary album through visible controls', async () => {
@@ -145,77 +146,100 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
     gaplessPlaybackReport.recordBoundary({ diagnostics, controls });
 
     await stepLogger.step('Honor a visible near-end seek, move its waveform cursor, and keep playing into queued-next', async () => {
-      const selected = await trackModalActions.playTrackAt(nearEndIndex);
-      expect(selected.path).toBe(nearEnd.path);
-      await globalPlayerActions.waitForCurrentTrack({ path: nearEnd.path, trackTitle: nearEnd.title });
-      await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
-      const waveform = await globalPlayerActions.waitForRenderedWaveform({ path: nearEnd.path });
-      expect(waveform.path).toBe(nearEnd.path);
-      expect(waveform.leftBins).toBe(720);
-      expect(waveform.rightBins).toBe(720);
-      expect(waveform.nonTransparentPixels).toBeGreaterThan(0);
-      expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
+      const nearEndEventMark = traffic.eventMark();
+      let preparedSuccessorStreamId = 0;
+      await runWithPlaybackEventWindowAttachment({
+        attach: (eventWindow) => testInfo.attach('near-end-successor-protocol-events', {
+          body: Buffer.from(JSON.stringify(eventWindow, null, 2)),
+          contentType: 'application/json',
+        }),
+        events: () => traffic.eventsSince(nearEndEventMark),
+        streamId: () => preparedSuccessorStreamId,
+      }, async () => {
+        const selected = await trackModalActions.playTrackAt(nearEndIndex);
+        expect(selected.path).toBe(nearEnd.path);
+        await globalPlayerActions.waitForCurrentTrack({ path: nearEnd.path, trackTitle: nearEnd.title });
+        await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
+        const waveform = await globalPlayerActions.waitForRenderedWaveform({ path: nearEnd.path });
+        expect(waveform.path).toBe(nearEnd.path);
+        expect(waveform.leftBins).toBe(720);
+        expect(waveform.rightBins).toBe(720);
+        expect(waveform.nonTransparentPixels).toBeGreaterThan(0);
+        expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
 
-      const cursorTarget = Math.max(0.5, Number(nearEnd.durationSeconds) - 2);
-      await globalPlayerActions.seekToSeconds(cursorTarget, {
-        toleranceSeconds: 0.25,
-      });
-      await globalPlayerActions.togglePlaybackWithSpace({ paused: true });
-      const playhead = await globalPlayerActions.waitForWaveformPlayheadAt(cursorTarget, {
-        path: nearEnd.path,
-        toleranceSeconds: 0.5,
-      });
-      expect(Math.abs(playhead.timelineValue - cursorTarget)).toBeLessThanOrEqual(0.5);
-      expect(playhead.topPlayheadPixels).toBeGreaterThan(0);
-      const resumeMark = await traffic.playbackMark();
-      await globalPlayerActions.togglePlaybackWithSpace({ paused: false });
-      const resumeEvidence = await traffic.waitForTrackPlaybackEvidence({
-        after: resumeMark,
-        path: nearEnd.path,
-      });
-      expect(resumeEvidence.nonZeroSamples).toBeGreaterThan(0);
-      expect(resumeEvidence.renderedFrameDelta).toBeGreaterThan(0);
+        const cursorTarget = Math.max(0.5, Number(nearEnd.durationSeconds) - 2);
+        await globalPlayerActions.seekToSeconds(cursorTarget, {
+          toleranceSeconds: 0.25,
+        });
+        await globalPlayerActions.togglePlaybackWithSpace({ paused: true });
+        const playhead = await globalPlayerActions.waitForWaveformPlayheadAt(cursorTarget, {
+          path: nearEnd.path,
+          toleranceSeconds: 0.5,
+        });
+        expect(Math.abs(playhead.timelineValue - cursorTarget)).toBeLessThanOrEqual(0.5);
+        expect(playhead.topPlayheadPixels).toBeGreaterThan(0);
+        const resumeMark = await traffic.playbackMark();
+        await globalPlayerActions.togglePlaybackWithSpace({ paused: false });
+        const resumeEvidence = await traffic.waitForTrackPlaybackEvidence({
+          after: resumeMark,
+          path: nearEnd.path,
+        });
+        expect(resumeEvidence.nonZeroSamples).toBeGreaterThan(0);
+        expect(resumeEvidence.renderedFrameDelta).toBeGreaterThan(0);
 
-      const nearEndTrafficMark = traffic.mark();
-      const seekTarget = Number(nearEnd.durationSeconds) - 0.5;
-      const seekResult = await globalPlayerActions.seekToSeconds(seekTarget, {
-        toleranceSeconds: 0.25,
-      });
-      await globalPlayerActions.waitForStreamingContinuity(nearEndSuccessor.path, {
-        generation: seekResult.generation,
-      });
-      const nearEndDiagnostics = await readGaplessPlaybackDiagnostics(page);
-      expect(nearEndDiagnostics.underruns).toBe(diagnostics.underruns);
-      const nearEndControls = traffic.snapshotSince(nearEndTrafficMark);
-      assertNearEndSeekContract(expect, {
-        activeSocketCount: traffic.activeSocketCount(),
-        controls: nearEndControls,
-        currentAlreadySelected: true,
-        diagnostics: nearEndDiagnostics,
-        path: nearEnd.path,
-        seekResult,
-        socketCount: traffic.socketCount(),
-        successorPath: nearEndSuccessor.path,
-        expectedSeekCapture: nearEnd.expectedSeekCapture,
-      });
+        const preNearEndDiagnostics = await readGaplessPlaybackDiagnostics(page);
+        await globalPlayerActions.waitForStreamingContinuity(nearEndSuccessor.path, {
+          generation: preNearEndDiagnostics.generation,
+        });
+        await expect.poll(async () => (
+          await readGaplessPlaybackDiagnostics(page)
+        ).bufferedFrames.continuity).toBeGreaterThan(0);
+        const preparedNearEndDiagnostics = await readGaplessPlaybackDiagnostics(page);
+        preparedSuccessorStreamId = preparedNearEndDiagnostics.continuityStreamId;
+        const nearEndTrafficMark = traffic.mark();
+        const seekTarget = Number(nearEnd.durationSeconds) - 0.5;
+        const seekResult = await globalPlayerActions.seekToSeconds(seekTarget, {
+          toleranceSeconds: 0.25,
+        });
+        const nearEndDiagnostics = await readGaplessPlaybackDiagnostics(page);
+        expect(nearEndDiagnostics.underruns).toBe(diagnostics.underruns);
+        const nearEndControls = traffic.snapshotSince(nearEndTrafficMark);
+        assertNearEndSeekContract(expect, {
+          activeSocketCount: traffic.activeSocketCount(),
+          controls: nearEndControls,
+          currentAlreadySelected: true,
+          diagnostics: nearEndDiagnostics,
+          path: nearEnd.path,
+          seekResult,
+          socketCount: traffic.socketCount(),
+          successorPath: nearEndSuccessor.path,
+          expectedSeekCapture: nearEnd.expectedSeekCapture,
+          preservedCurrentStreamId: preparedNearEndDiagnostics.currentStreamId,
+          preservedContinuityStreamId: preparedNearEndDiagnostics.continuityStreamId,
+        });
 
-      const successorOpen = nearEndControls.findLast((control) => (
-        control.type === 'open'
-          && control.role === 'continuity'
-          && control.path === nearEndSuccessor.path
-      ));
-      expect(successorOpen).toBeTruthy();
-      const successorBoundary = await waitForGaplessBoundary(page, {
-        expectedPromotedStreamId: successorOpen.streamId,
+        const successorOpen = traffic.snapshotSince(0).findLast((control) => (
+          control.type === 'open'
+            && control.role === 'continuity'
+            && control.streamId === preparedNearEndDiagnostics.continuityStreamId
+        ));
+        expect(successorOpen).toBeTruthy();
+        await traffic.waitForControl({
+          type: 'promote',
+          streamId: preparedNearEndDiagnostics.continuityStreamId,
+        });
+        const successorBoundary = await waitForGaplessBoundary(page, {
+          expectedPromotedStreamId: preparedNearEndDiagnostics.continuityStreamId,
+        });
+        await globalPlayerActions.waitForCurrentTrack({
+          path: nearEndSuccessor.path,
+          trackTitle: nearEndSuccessor.title,
+        });
+        await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
+        assertAudibleBoundaryCapture(expect, successorBoundary.boundaryCapture);
+        expect(successorBoundary.underruns).toBe(diagnostics.underruns);
+        expect(traffic.activeSocketCount()).toBe(1);
       });
-      await globalPlayerActions.waitForCurrentTrack({
-        path: nearEndSuccessor.path,
-        trackTitle: nearEndSuccessor.title,
-      });
-      await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
-      assertAudibleBoundaryCapture(expect, successorBoundary.boundaryCapture);
-      expect(successorBoundary.underruns).toBe(diagnostics.underruns);
-      expect(traffic.activeSocketCount()).toBe(1);
     });
 
     await stepLogger.step('Replace active Album Details playback without pausing or restarting resources', async () => {
@@ -274,6 +298,14 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       for (let index = 0; index < encodedChain.length - 1; index += 1) {
         const currentTrack = encodedChain[index];
         const nextTrack = encodedChain[index + 1];
+        const preSeekDiagnostics = await readGaplessPlaybackDiagnostics(page);
+        await globalPlayerActions.waitForStreamingContinuity(nextTrack.path, {
+          generation: preSeekDiagnostics.generation,
+        });
+        await expect.poll(async () => (
+          await readGaplessPlaybackDiagnostics(page)
+        ).bufferedFrames.continuity).toBeGreaterThan(0);
+        const preparedDiagnostics = await readGaplessPlaybackDiagnostics(page);
         const trafficMark = traffic.mark();
         const seekTarget = Number(currentTrack.durationSeconds) - 0.5;
         const seekResult = await globalPlayerActions.seekToSeconds(seekTarget, {
@@ -293,11 +325,13 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
           seekResult,
           socketCount: traffic.socketCount(),
           successorPath: nextTrack.path,
+          preservedCurrentStreamId: preparedDiagnostics.currentStreamId,
+          preservedContinuityStreamId: preparedDiagnostics.continuityStreamId,
         });
-        const nextOpen = transitionControls.find((control) => (
+        const nextOpen = traffic.snapshotSince(0).findLast((control) => (
           control.type === 'open'
             && control.role === 'continuity'
-            && control.path === nextTrack.path
+            && control.streamId === preparedDiagnostics.continuityStreamId
         ));
         expect(nextOpen).toBeTruthy();
         const boundary = await waitForGaplessBoundary(page, {

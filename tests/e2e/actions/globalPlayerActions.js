@@ -327,14 +327,25 @@ export class GlobalPlayerActions {
     });
     await this.globalPlayer.waitForPageCondition((expected) => {
       if (typeof getPlayerPlaybackSnapshot !== 'function'
-          || typeof getStreamingPlaybackSnapshot !== 'function') return false;
+          || typeof getStreamingPlaybackSnapshot !== 'function'
+          || typeof state === 'undefined') return false;
       const playback = getPlayerPlaybackSnapshot();
       const streaming = getStreamingPlaybackSnapshot();
+      const current = state.player?.streaming?.roles?.current || null;
       const currentTime = Number(playback.currentTime || 0);
+      const currentPath = String(current?.track?.path || '');
+      const currentStreamId = Number(current?.streamId || 0);
+      const sameCurrentStream = currentStreamId === expected.currentStreamId;
+      const replacementCurrentStream = currentStreamId !== expected.currentStreamId
+        && currentStreamId !== expected.continuityStreamId;
       const firstFrameAtMs = Number(streaming.diagnostics?.firstFrameAtMs || 0);
       const seekCommittedAtMs = Number(streaming.diagnostics?.seekCommittedAtMs || 0);
       return streaming.mode === 'playing'
         && Number(streaming.generation || 0) === expected.generation
+        && currentPath === expected.currentPath
+        && currentStreamId > 0
+        && currentStreamId !== expected.continuityStreamId
+        && (sameCurrentStream || replacementCurrentStream)
         && seekCommittedAtMs > expected.seekCommittedAtMs
         && firstFrameAtMs > expected.firstFrameAtMs
         && Math.abs(currentTime - expected.targetSeconds) <= expected.toleranceSeconds;
@@ -342,6 +353,9 @@ export class GlobalPlayerActions {
       targetSeconds,
       toleranceSeconds: Number(options.toleranceSeconds || 1),
       generation: beforeSeek.generation,
+      currentPath: beforeSeek.currentPath,
+      currentStreamId: beforeSeek.currentStreamId,
+      continuityStreamId: beforeSeek.continuityStreamId,
       firstFrameAtMs: beforeSeek.firstFrameAtMs,
       seekCommittedAtMs: beforeSeek.seekCommittedAtMs,
     });
@@ -360,6 +374,8 @@ export class GlobalPlayerActions {
       seekCommittedAtMs: completion.seekCommittedAtMs,
       seekSilentFrames: completion.seekSilentFrames,
       seekCapture: completion.seekCapture,
+      currentPath: completion.currentPath,
+      currentStreamId: completion.currentStreamId,
       continuityStreamIdBeforeSeek: beforeSeek.continuityStreamId,
       visibleReadinessErrors: await this.globalPlayer.readinessErrorToasts.allTextContents(),
     };

@@ -186,6 +186,7 @@ export class GlobalPlayer extends BasePage {
       const snapshot = getStreamingPlaybackSnapshot();
       const playback = getPlayerPlaybackSnapshot();
       const timeline = document.querySelector(timelineSelector);
+      const current = state.player?.streaming?.roles?.current || null;
       return {
         completedAtMs: performance.now(),
         generation: Number(snapshot.generation || 0),
@@ -196,6 +197,8 @@ export class GlobalPlayer extends BasePage {
         seekCapture: snapshot.diagnostics?.seekCapture || null,
         duration: Number(playback.duration || 0),
         timelineValue: Number(timeline?.value || 0),
+        currentPath: String(current?.track?.path || ''),
+        currentStreamId: Number(current?.streamId || 0),
       };
     }, this.timelineSelector);
   }
@@ -206,10 +209,13 @@ export class GlobalPlayer extends BasePage {
       const snapshot = typeof getStreamingPlaybackSnapshot === 'function'
         ? getStreamingPlaybackSnapshot()
         : null;
+      const current = state.player?.streaming?.roles?.current || null;
       return {
         generation: Number(snapshot?.generation || 0),
         firstFrameAtMs: Number(snapshot?.diagnostics?.firstFrameAtMs || 0),
         seekCommittedAtMs: Number(snapshot?.diagnostics?.seekCommittedAtMs || 0),
+        currentPath: String(current?.track?.path || ''),
+        currentStreamId: Number(current?.streamId || 0),
         continuityStreamId: Number(state.player?.streaming?.roles?.continuity?.streamId || 0),
       };
     });

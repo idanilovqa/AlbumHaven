@@ -107,6 +107,7 @@ export {
   observePlaybackPcmTraffic,
   observeWaveformTraffic,
   readGaplessPlaybackDiagnostics,
+  runWithPlaybackEventWindowAttachment,
   waitForActivePlaybackWindow,
   waitForGaplessBoundary,
 } from './gaplessPlaybackHelpers.js';

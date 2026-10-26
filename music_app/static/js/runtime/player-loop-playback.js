@@ -316,6 +316,13 @@ let playerTrackSelectionToken = 0;
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
+  const requestedTrackPath = String(track?.path || '');
+  const currentTrackPath = String(state.player.current?.path || '');
+  if (shouldAutoplay && requestedTrackPath && currentTrackPath
+      && requestedTrackPath !== currentTrackPath
+      && typeof cancelStreamingWaveformGeneration === 'function') {
+    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
+  }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
   if (shouldAutoplay && !ownershipAlreadyClaimed

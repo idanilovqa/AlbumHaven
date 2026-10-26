@@ -8203,6 +8203,41 @@ function settlePendingStreamingCutover(error = null, roleState = null) {
   else resolve?.(roleState);
 }
 
+function bufferedSeekKey({ generation, requestId, streamId, currentStreamId, timelineFrame, startFrame }) {
+  return [
+    Number(generation),
+    Number(requestId),
+    Number(streamId ?? currentStreamId),
+    Number(timelineFrame ?? startFrame),
+  ].join(':');
+}
+
+function findBufferedSeekForMessage(message) {
+  const engine = streamingEngineState();
+  const pending = engine.pendingBufferedSeek;
+  if (pending && bufferedSeekKey(pending) === bufferedSeekKey(message)) {
+    return { pending, active: true };
+  }
+  const superseded = engine.supersededBufferedSeek;
+  return superseded && bufferedSeekKey(superseded) === bufferedSeekKey(message)
+    ? { pending: superseded, active: false }
+    : null;
+}
+
+function settlePendingBufferedSeek(outcome, { retainForAcknowledgement = false } = {}) {
+  const engine = streamingEngineState();
+  const pending = engine.pendingBufferedSeek;
+  if (!pending) return false;
+  engine.pendingBufferedSeek = null;
+  pending.resolve(outcome);
+  if (retainForAcknowledgement) engine.supersededBufferedSeek = pending;
+  return true;
+}
+
+function discardSupersededBufferedSeek() {
+  streamingEngineState().supersededBufferedSeek = null;
+}
+
 function handleStreamingPcm(buffer) {
   const engine = streamingEngineState();
   const failProtocol = (message) => failStreamingEngine(
@@ -8321,6 +8356,78 @@ function handleStreamingWorkletMessage(message) {
       },
       'processor-protocol-reject',
     );
+    return;
+  }
+  if (message.type === 'buffered-seek-reserved') {
+    const match = findBufferedSeekForMessage(message);
+    if (!match) {
+      engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    match.pending.reserved = true;
+    return;
+  }
+  if (message.type === 'buffered-seek-rejected') {
+    const match = findBufferedSeekForMessage(message);
+    if (!match) {
+      engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    if (match.active) settlePendingBufferedSeek('rejected');
+    else engine.supersededBufferedSeek = null;
+    return;
+  }
+  if (message.type === 'buffered-seek-boundary') {
+    const match = findBufferedSeekForMessage(message);
+    const pending = match?.pending || null;
+    const current = engine.roles.current;
+    if (!pending || !pending.reserved || !current
+        || pending.generation !== message.generation
+        || pending.requestId !== message.requestId
+        || pending.currentStreamId !== message.streamId
+        || pending.startFrame !== message.timelineFrame
+        || current.streamId !== message.streamId
+        || !Number.isInteger(message.bufferedFrames) || message.bufferedFrames < 0
+        || !Number.isInteger(message.skippedFrames) || message.skippedFrames < 0) {
+      if (match && !match.active) engine.supersededBufferedSeek = null;
+      engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    engine.diagnostics.bufferedFrames.current = Math.min(
+      message.bufferedFrames,
+      streamingRoleCapacityFrames(current),
+    );
+    if (match.active) {
+      engine.diagnostics.seekCapture = message.capture || null;
+      engine.diagnostics.seekSilentFrames = Number(message.silentFrames) || 0;
+      const committedAtMs = performance.now();
+      engine.diagnostics.seekCommittedAtMs = committedAtMs;
+      engine.diagnostics.firstFrameAtMs = Math.max(
+        committedAtMs,
+        (Number(engine.diagnostics.firstFrameAtMs) || 0) + 0.001,
+      );
+    }
+    engine.positionFacadeAtMs = 0;
+    Object.assign(engine.snapshot, {
+      currentTime: message.timelineFrame / STREAMING_SAMPLE_RATE,
+      requestedStartFrame: message.timelineFrame,
+      renderedFrame: Math.max(0, message.timelineFrame - (Number(current.startFrame) || 0)),
+      ended: false,
+      readyState: 4,
+    });
+    if (!current.eosReceived) {
+      const targetFrames = Number(current.targetBufferFrames)
+        || streamingRoleCommittedCapacityFrames(current);
+      refillStreamingRoleCredit(current, Math.max(
+        0,
+        targetFrames
+          - engine.diagnostics.bufferedFrames.current
+          - engine.diagnostics.inFlightFrames.current,
+      ));
+    }
+    publishStreamingDiagnostics();
+    if (match.active) settlePendingBufferedSeek('committed');
+    else engine.supersededBufferedSeek = null;
     return;
   }
   if (message.type === 'seek-boundary') {
@@ -8904,6 +9011,7 @@ async function startStreamingTrack(track, {
   transportRecoveryAttempt = null,
 } = {}) {
   const engine = streamingEngineState();
+  settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
@@ -9143,6 +9251,7 @@ async function pauseStreamingPlayback() {
   const engine = streamingEngineState();
   const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
+  settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   engine.snapshot.paused = true;
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
   if (engine.pendingSeek?.kind === 'replacement') {
@@ -9209,7 +9318,9 @@ async function resumeStreamingPlayback(
     const grantedFrames = grantStreamingCredit(roleState, deferredFrames);
     engine.deferredCreditFrames[role] = deferredFrames - grantedFrames;
   }
-  if (engine.mode !== 'error' && engine.roles.current) engine.mode = 'starting';
+  if (engine.mode !== 'error' && engine.roles.current) {
+    engine.mode = engine.roles.current.firstFrameNotified ? 'playing' : 'starting';
+  }
   if (typeof onPlaybackStarted === 'function') onPlaybackStarted();
   return true;
 }
@@ -9220,6 +9331,7 @@ async function seekStreamingPlayback(seconds) {
   if (!currentTrack || !engine.node) return;
   const current = engine.roles.current;
   if (!current) return null;
+  settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (engine.pendingPromotion) {
     const pendingPromotion = engine.pendingPromotion;
     if (pendingPromotion.generation === engine.generation
@@ -9228,6 +9340,54 @@ async function seekStreamingPlayback(seconds) {
       pendingPromotion.requestedSeekSeconds = Math.max(0, Number(seconds) || 0);
     }
     return null;
+  }
+  const startSeconds = Math.max(0, Number(seconds) || 0);
+  const startFrame = Math.round(startSeconds * STREAMING_SAMPLE_RATE);
+  const currentFrame = Math.round(
+    Math.max(0, Number(engine.snapshot.currentTime) || 0) * STREAMING_SAMPLE_RATE,
+  );
+  const queuedContinuity = engine.roles.continuity;
+  const bufferedSeekEligible = queuedContinuity?.continuityOptions?.kind === 'queued-next'
+    && engine.diagnostics.bufferedFrames.continuity > 0
+    && !engine.snapshot.paused
+    && !engine.loopContinuity
+    && !engine.pendingSeek
+    && !engine.supersededBufferedSeek
+    && startFrame >= currentFrame
+    && startFrame - currentFrame < streamingRoleCapacityFrames(current)
+    && startFrame - currentFrame < engine.diagnostics.bufferedFrames.current
+    && startFrame < Math.round((Number(engine.snapshot.duration) || 0) * STREAMING_SAMPLE_RATE);
+  if (bufferedSeekEligible) {
+    const requestId = engine.nextBufferedSeekRequestId =
+      (Number(engine.nextBufferedSeekRequestId) || 0) + 1;
+    const outcome = new Promise((resolve) => {
+      engine.pendingBufferedSeek = {
+        generation: engine.generation,
+        currentStreamId: current.streamId,
+        requestId,
+        startFrame,
+        resolve,
+      };
+    });
+    engine.diagnostics.seekRequestedAtMs = performance.now();
+    engine.diagnostics.seekCapture = null;
+    engine.diagnostics.seekSilentFrames = null;
+    engine.diagnostics.seekCommittedAtMs = 0;
+    engine.snapshot.requestedStartFrame = startFrame;
+    engine.snapshot.currentTime = startSeconds;
+    engine.node.port.postMessage({
+      type: 'reserve-buffered-seek',
+      generation: engine.generation,
+      requestId,
+      streamId: current.streamId,
+      timelineFrame: startFrame,
+    });
+    publishStreamingDiagnostics();
+    const result = await outcome;
+    if (result === 'committed') return current;
+    if (result === 'superseded') return null;
+    if (engine.generation !== current.generation
+        || engine.roles.current !== current) return null;
   }
   cancelStreamingWaveformGeneration(engine.generation);
   const staleContinuity = engine.roles.continuity;
@@ -9269,8 +9429,6 @@ async function seekStreamingPlayback(seconds) {
   engine.pendingContinuityOptions = queuedOptions;
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
-  const startSeconds = Math.max(0, Number(seconds) || 0);
-  const startFrame = Math.round(startSeconds * STREAMING_SAMPLE_RATE);
   const replacement = openStreamingRole('continuity', currentTrack, startFrame, {
     kind: 'seek', startSeconds, endSeconds: startSeconds,
   });
@@ -9405,6 +9563,8 @@ async function cleanupStreamingResources(reason, {
     cancelStreamingWaveformGeneration(engine.generation);
   }
   settleStreamingReplacementCushionWaiter(false);
+  settlePendingBufferedSeek('superseded');
+  discardSupersededBufferedSeek();
   settlePendingStreamingCutover(new Error(`Prepared track replacement stopped: ${reason}`));
   engine.context = null;
   engine.node = null;
@@ -39200,6 +39360,13 @@ let playerTrackSelectionToken = 0;
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
+  const requestedTrackPath = String(track?.path || '');
+  const currentTrackPath = String(state.player.current?.path || '');
+  if (shouldAutoplay && requestedTrackPath && currentTrackPath
+      && requestedTrackPath !== currentTrackPath
+      && typeof cancelStreamingWaveformGeneration === 'function') {
+    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
+  }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
   if (shouldAutoplay && !ownershipAlreadyClaimed

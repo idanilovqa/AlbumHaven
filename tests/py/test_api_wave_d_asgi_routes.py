@@ -1620,7 +1620,6 @@ def test_asgi_local_cover_selection_response_and_runtime_preserve_explicit_autho
         persisted.append(kwargs)
         return {"album_rows_updated": 1, "track_file_rows_updated": 1}
     monkeypatch.setattr(api_cover_helpers, "persist_cover_selection_for_tracks_for_config", persist_selection)
-    monkeypatch.setattr(api_cover_helpers, "build_problematic_albums_payload", lambda **_kwargs: {"albums": []})
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
     status, _headers, body = _run_asgi_request(
         asgi_app, "POST", "/utilities/cover-lookup/local-select",

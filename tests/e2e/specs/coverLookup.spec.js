@@ -806,7 +806,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
       ].filter(Boolean).join(' · '));
       if (index === 1) {
         await coverLookupActions.coverLookup.modalSubtitle.click();
-        await coverLookupActions.waitForDrawerClosed();
+        await coverLookupActions.coverLookup.waitForDrawerState(false);
         const details = await trackModalActions.waitForLoadedSummary();
         expect(details.title).toContain(identity.album);
         expect(details.subtitle).toContain(identity.artist);

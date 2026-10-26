@@ -123,6 +123,7 @@ require('node:test')('notification thumbnails show the best candidate when no us
     artist: 'Susanne Sundfør',
     album: 'Revelations of Divine Love',
     album_payload: { cover_preview_url: '/images/automatic-or-stale-cover.jpg' },
+    current_cover_preview_url: '/cover?album=revelations&v=current-art',
     best_candidate_id: 'revelations-best',
     best_candidate_preview_url: 'https://images.example/revelations-best.jpg',
   }];
@@ -134,6 +135,24 @@ require('node:test')('notification thumbnails show the best candidate when no us
     /src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages.example%2Frevelations-best.jpg&key=revelations-best"/,
   );
   assert.doesNotMatch(bodyElement.innerHTML, /automatic-or-stale-cover|is-placeholder/);
+  assert.doesNotMatch(bodyElement.innerHTML, /current-art/);
+});
+
+require('node:test')('notification thumbnails fall back to current album art when lookup found nothing', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  context.state.coverLookup.tasks = [{
+    id: 'kuryokhin-task',
+    status: 'completed',
+    result_kind: 'no-results',
+    artist: 'Аквариум',
+    album: 'Сергей Курёхин в «Аквариуме»',
+    current_cover_preview_url: '/cover?album=kuryokhin&v=current-art',
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, /src="\/cover\?album=kuryokhin&v=current-art"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /is-placeholder/);
 });
 
 require('node:test')('cover updates preserve unrelated pathless notification artwork', () => {

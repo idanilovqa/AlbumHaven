@@ -4232,7 +4232,11 @@ def test_local_cover_selection_uses_postgres_inventory_with_empty_runtime_state(
 def test_postgres_local_cover_commit_updates_live_runtime_not_inventory_snapshot(app, monkeypatch, partial_cache):
     from music_app.routes import api_wave_d_asgi_routes as routes
     from music_app.routes import api_cover_helpers
-    monkeypatch.setattr(api_cover_helpers, "build_problematic_albums_payload", lambda **kwargs: {"items": []})
+    monkeypatch.setattr(
+        api_cover_helpers,
+        "build_problematic_album_detail_payload",
+        lambda *_args, **_kwargs: None,
+    )
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
@@ -4504,6 +4508,7 @@ def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_t
     def queue_lookup(album, track_paths, _manual_urls, **_kwargs):
         captured["queued_album"] = album
         captured["queued_paths"] = track_paths
+        captured.update(_kwargs)
         return "new-eden-lookup"
 
     monkeypatch.setattr(
@@ -4548,6 +4553,8 @@ def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_t
     assert status == 200, body
     assert captured["fallback_track_paths"] == {str(track_path)}
     assert captured["queued_paths"] == {str(track_path)}
+    assert captured["preferred_task_id"] == persisted_task["id"]
+    assert captured["allow_preferred_path_rebind"] is True
 
 
 def test_cover_lookup_reconciliation_uses_inline_album_detail_track_rows():

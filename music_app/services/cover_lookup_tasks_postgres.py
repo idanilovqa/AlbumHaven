@@ -375,13 +375,23 @@ def _compact_notification_summary(summary: dict[str, object]) -> dict[str, objec
     compact = dict(summary)
     current_user_cover_path = compact.pop("current_user_cover_path", None)
     current_user_cover_revision = compact.pop("current_user_cover_revision", None)
-    if current_user_cover_path:
+    current_cover_path = compact.pop("current_cover_path", None)
+    current_cover_revision = compact.pop("current_cover_revision", None)
+    if current_user_cover_path or current_cover_path:
         from music_app.services.startup_bootstrap import build_startup_cover_url
 
+    if current_user_cover_path:
         compact["current_user_cover_preview_url"] = build_startup_cover_url(
             {
                 "cover_path": current_user_cover_path,
                 "cover_revision": current_user_cover_revision,
+            }
+        )
+    if current_cover_path:
+        compact["current_cover_preview_url"] = build_startup_cover_url(
+            {
+                "cover_path": current_cover_path,
+                "cover_revision": current_cover_revision,
             }
         )
     for key in (
@@ -741,6 +751,8 @@ def _load_notification_summaries_sql() -> str:
                     then current_album.metadata ->> 'cover_revision'
                     else null
                 end,
+                'current_cover_path', current_album.cover_path,
+                'current_cover_revision', current_album.metadata ->> 'cover_revision',
                 'best_candidate_preview_url', (
                     select coalesce(
                         nullif(candidate ->> 'thumbnail_url', ''),
@@ -919,6 +931,8 @@ def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) 
                 then current_album.metadata ->> 'cover_revision'
                 else null
               end,
+              'current_cover_path', current_album.cover_path,
+              'current_cover_revision', current_album.metadata ->> 'cover_revision',
               'best_candidate_preview_url', (
                 select coalesce(
                   nullif(candidate ->> 'thumbnail_url', ''),

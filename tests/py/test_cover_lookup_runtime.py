@@ -367,7 +367,8 @@ def test_queue_cover_lookup_task_registers_background_future(config, logger, lib
     monkeypatch.setattr(
         cover_lookup_runtime,
         "create_cover_lookup_task",
-        lambda album, track_paths, manual_urls=None, *, config=None: (
+        lambda album, track_paths, manual_urls=None, *, config=None,
+        preferred_task_id="", allow_preferred_path_rebind=False: (
             queue_events.append("create-task") or ("task-123", cancel_event)
         ),
     )
@@ -418,6 +419,37 @@ def test_queue_cover_lookup_task_registers_background_future(config, logger, lib
         "artist_website_fallback",
     ]
     assert calls["registered"] == ("task-123", "fake-future")
+
+
+def test_retry_queue_preserves_the_existing_notification_id(config, logger, monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+    album = _album_payload(tmp_path / "Eden" / "Perelandra" / "01.mp3")
+    requested_track_paths = {str(tmp_path / "Eden" / "Perelandra" / "01.mp3")}
+
+    class FakeExecutor:
+        def submit(self, _fn, _job):
+            return "fake-future"
+
+    def create_task(_album, _track_paths, _manual_urls=None, **kwargs):
+        captured.update(kwargs)
+        return "eden-existing-task", object()
+
+    monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", FakeExecutor())
+    monkeypatch.setattr(cover_lookup_runtime, "create_cover_lookup_task", create_task)
+    monkeypatch.setattr(cover_lookup_runtime, "register_cover_lookup_future", lambda *_args, **_kwargs: None)
+
+    task_id = cover_lookup_runtime.queue_cover_lookup_task(
+        album=album,
+        requested_track_paths=requested_track_paths,
+        config=config,
+        logger=logger,
+        preferred_task_id="eden-existing-task",
+        allow_preferred_path_rebind=True,
+    )
+
+    assert task_id == "eden-existing-task"
+    assert captured["preferred_task_id"] == "eden-existing-task"
+    assert captured["allow_preferred_path_rebind"] is True
 
 
 def test_run_cover_lookup_job_starts_provider_deadline_inside_worker(monkeypatch):

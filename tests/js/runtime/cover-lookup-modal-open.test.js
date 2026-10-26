@@ -828,6 +828,80 @@ test('background lookup marks its trigger busy before the start request settles'
   );
 });
 
+test('retry immediately queues the existing notification without adding another card', async () => {
+  const album = {
+    album_artist: 'Eden',
+    name: 'Perelandra',
+    year: 1980,
+  };
+  const interruptedTask = {
+    id: 'eden-interrupted-task',
+    status: 'failed',
+    result_kind: 'interrupted',
+    progress_label: 'Interrupted',
+    album_payload: album,
+  };
+  let resolveStartRequest;
+  const startResponse = new Promise((resolve) => { resolveStartRequest = resolve; });
+  const renderSnapshots = [];
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [interruptedTask],
+        tasksSnapshot: '',
+        appliedTaskUpdateSignatures: {},
+        modal: { pastedImages: [] },
+      },
+    },
+    URLSearchParams,
+    console,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async (url, options) => {
+      if (url === '/utilities/cover-lookup/start') {
+        assert.equal(JSON.parse(options.body).task_id, interruptedTask.id);
+        return startResponse;
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    document: { getElementById: () => null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.renderCoverLookupDrawer = () => {
+    renderSnapshots.push(context.state.coverLookup.tasks.map((task) => ({
+      id: task.id,
+      status: task.status,
+      progressLabel: task.progress_label,
+    })));
+  };
+  context.loadCoverLookupTasks = async () => {};
+
+  const retryPromise = context.startCoverLookupForAlbum(album, {
+    backgroundOnly: true,
+    taskId: interruptedTask.id,
+  });
+
+  assert.deepEqual(renderSnapshots.at(-1), [{
+    id: interruptedTask.id,
+    status: 'pending',
+    progressLabel: 'Queued',
+  }]);
+
+  resolveStartRequest({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      task: { ...interruptedTask, status: 'pending', progress_label: 'Queued' },
+    }),
+  });
+  await retryPromise;
+
+  assert.equal(context.state.coverLookup.tasks.length, 1);
+  assert.equal(context.state.coverLookup.tasks[0].id, interruptedTask.id);
+});
+
 
 test('gallery responses cannot overwrite another album or a newer gallery request', async () => {
   const requests = [], applied = [];

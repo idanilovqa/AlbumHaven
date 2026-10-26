@@ -685,6 +685,7 @@ def _reusable_cover_lookup_task_id(
     *,
     config: Mapping[str, object] | None,
     preferred_task_id: str = "",
+    allow_preferred_path_rebind: bool = False,
 ) -> str:
     def path_key(value: object) -> str:
         text = str(value or "").strip()
@@ -713,7 +714,10 @@ def _reusable_cover_lookup_task_id(
             and (not preferred_task_id or task_id == preferred_task_id)
             and not bool(task.get("internal"))
             and is_terminal_cover_lookup_task(task)
-            and sorted(filter(None, (path_key(path) for path in (task.get("track_paths") or [])))) == normalized_paths
+            and (
+                (allow_preferred_path_rebind and bool(preferred_task_id))
+                or sorted(filter(None, (path_key(path) for path in (task.get("track_paths") or [])))) == normalized_paths
+            )
         ):
             return task_id
     return ""
@@ -727,6 +731,7 @@ def create_cover_lookup_task(
     internal: bool = False,
     config: Mapping[str, object] | None = None,
     preferred_task_id: str = "",
+    allow_preferred_path_rebind: bool = False,
 ) -> tuple[str, Event]:
     reusable_task_id = (
         ""
@@ -735,6 +740,7 @@ def create_cover_lookup_task(
             requested_track_paths,
             config=config,
             preferred_task_id=str(preferred_task_id or "").strip(),
+            allow_preferred_path_rebind=allow_preferred_path_rebind,
         )
     )
     task_id = reusable_task_id or uuid.uuid4().hex

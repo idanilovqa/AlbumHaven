@@ -232,12 +232,16 @@ def queue_cover_lookup_task(
     config: Mapping[str, object],
     logger,
     user_agent: str | None = None,
+    preferred_task_id: str = "",
+    allow_preferred_path_rebind: bool = False,
 ) -> str:
     task_id, cancel_event = create_cover_lookup_task(
         album,
         requested_track_paths,
         manual_urls,
         config=config,
+        preferred_task_id=preferred_task_id,
+        allow_preferred_path_rebind=allow_preferred_path_rebind,
     )
     resolved_user_agent = str(user_agent or config["MUSICBRAINZ_USER_AGENT"])
     runtime_job = CoverLookupRuntimeJob(

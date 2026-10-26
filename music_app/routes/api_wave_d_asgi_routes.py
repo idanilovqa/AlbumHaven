@@ -868,6 +868,8 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         config=config,
         logger=logger,
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+        preferred_task_id=task_id,
+        allow_preferred_path_rebind=bool(task_payload),
     )
     log_app_event(
         config,

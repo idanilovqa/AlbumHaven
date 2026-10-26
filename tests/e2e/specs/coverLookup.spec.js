@@ -617,6 +617,18 @@ test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved w
     const retryIcon = coverLookupActions.coverLookup.taskRetryIconByTitle(failedTaskTitle);
     await expect(retryIcon).toBeVisible();
     await expect(retryIcon).toHaveClass(/\bui-icon--refresh\b/);
+    const failedTaskCard = coverLookupActions.coverLookup.taskCardByTitle(failedTaskTitle);
+    await expect(failedTaskCard).toHaveCount(1);
+    await coverLookupActions.setProviderFixtureMode('normal');
+    await coverLookupActions.holdLaterProviderFixture();
+    await retryIcon.click();
+    await expect(failedTaskCard).toHaveCount(1);
+    await coverLookupActions.waitForTaskActive(failedTaskTitle);
+    await coverLookupActions.waitForLaterProviderFixtureBlocked();
+    await coverLookupActions.setProviderFixtureMode('failed');
+    await coverLookupActions.releaseLaterProviderFixture();
+    await coverLookupActions.waitForTaskStatus(failedTaskTitle, 'Lookup failed');
+    await expect(failedTaskCard).toHaveCount(1);
     await coverLookupActions.setProviderFixtureMode('normal');
     await coverLookupActions.closeDrawer();
   });

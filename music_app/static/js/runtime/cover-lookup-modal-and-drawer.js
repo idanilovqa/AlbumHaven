@@ -1604,10 +1604,13 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       || bestCandidate?.url
       || '',
     ).trim();
-    const coverUrl = currentUserCoverUrl || buildRemoteCoverLookupImageUrl(
+    const bestCandidateCoverUrl = buildRemoteCoverLookupImageUrl(
       bestCandidatePreviewUrl,
       bestCandidateId || bestCandidate?.id || '',
     );
+    const coverUrl = currentUserCoverUrl
+      || bestCandidateCoverUrl
+      || String(task?.current_cover_preview_url || '').trim();
     const coverMarkup = coverUrl
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
@@ -2723,6 +2726,10 @@ function closeCoverLookupDeleteConfirm() {
 async function startCoverLookupForAlbum(album, options = {}) {
   if (!album) return;
   const backgroundOnly = Boolean(options?.backgroundOnly);
+  const retryTaskId = String(options?.taskId || '').trim();
+  const retryTask = retryTaskId
+    ? (state.coverLookup.tasks || []).find((task) => String(task?.id || '') === retryTaskId)
+    : null;
   const triggerButton = backgroundOnly ? options?.triggerButton : null;
   const triggerWasDisabled = Boolean(triggerButton?.disabled);
   if (!backgroundOnly) {
@@ -2743,6 +2750,27 @@ async function startCoverLookupForAlbum(album, options = {}) {
     if (triggerButton) {
       triggerButton.disabled = true;
       triggerButton.setAttribute?.('aria-busy', 'true');
+    }
+    if (backgroundOnly && retryTask) {
+      const queuedAt = new Date().toISOString();
+      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
+        String(task?.id || '') === retryTaskId
+          ? {
+            ...task,
+            status: 'pending',
+            result_kind: '',
+            progress: 0,
+            progress_label: 'Queued',
+            message: '',
+            created_at: queuedAt,
+            started_at: '',
+            updated_at: queuedAt,
+            finished_at: '',
+            notification_completed_at: '',
+          }
+          : task
+      ));
+      renderCoverLookupDrawer();
     }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = true;
@@ -2794,6 +2822,12 @@ async function startCoverLookupForAlbum(album, options = {}) {
       await loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     }
   } catch (error) {
+    if (backgroundOnly && retryTask) {
+      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
+        String(task?.id || '') === retryTaskId ? retryTask : task
+      ));
+      renderCoverLookupDrawer();
+    }
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);
     showToast(error.message || 'Failed to start cover art lookup.', 'error', 2800);
   } finally {

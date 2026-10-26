@@ -642,6 +642,62 @@ def test_repeated_lookup_reuses_completed_notification_for_same_files(config, mo
     }
 
 
+def test_retry_reuses_preferred_terminal_notification_after_album_paths_change(config, monkeypatch):
+    old_path = (config["MUSIC_DIR"] / "Eden" / "Perelandra Disc 1" / "01.mp3").resolve()
+    current_path = (config["MUSIC_DIR"] / "Eden" / "Perelandra" / "01.mp3").resolve()
+    task_id = "eden-interrupted-task"
+    _install_fake_notification_adapter(
+        monkeypatch,
+        config,
+        [{
+            "id": task_id,
+            "status": "failed",
+            "result_kind": "interrupted",
+            "track_paths": [str(old_path)],
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "finished_at": "2026-10-20T01:58:00+00:00",
+        }],
+    )
+
+    retried_id, _cancel_event = create_cover_lookup_task(
+        _album_payload(current_path),
+        {str(current_path)},
+        config=config,
+        preferred_task_id=task_id,
+        allow_preferred_path_rebind=True,
+    )
+
+    assert retried_id == task_id
+    assert cover_lookup_result(task_id)["status"] == "pending"
+    assert cover_lookup_result(task_id)["track_paths"] == [str(current_path)]
+
+
+def test_preferred_task_id_does_not_bypass_path_match_without_validated_rebind(config, monkeypatch):
+    old_path = (config["MUSIC_DIR"] / "Artist A" / "Album A" / "01.mp3").resolve()
+    unrelated_path = (config["MUSIC_DIR"] / "Artist B" / "Album B" / "01.mp3").resolve()
+    preferred_id = "unrelated-terminal-task"
+    _install_fake_notification_adapter(
+        monkeypatch,
+        config,
+        [{
+            "id": preferred_id,
+            "status": "failed",
+            "track_paths": [str(old_path)],
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "finished_at": "2026-10-20T00:01:00+00:00",
+        }],
+    )
+
+    task_id, _cancel_event = create_cover_lookup_task(
+        _album_payload(unrelated_path),
+        {str(unrelated_path)},
+        config=config,
+        preferred_task_id=preferred_id,
+    )
+
+    assert task_id != preferred_id
+
+
 def test_cover_lookup_tasks_list_serializes_without_raw_bytes(config, monkeypatch):
     _install_fake_notification_adapter(monkeypatch, config)
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()

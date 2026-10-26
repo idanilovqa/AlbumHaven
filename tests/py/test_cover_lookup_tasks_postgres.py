@@ -375,6 +375,35 @@ def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_can
     assert "with ordinality as candidates(candidate, ordinal)" in page_sql
 
 
+def test_notification_summary_page_keeps_current_album_cover_as_last_preview_fallback():
+    row = _row("kuryokhin", "2026-10-18T18:00:00+00:00")
+    row["task_summary"].update(
+        {
+            "current_cover_path": "C:/Music/Aquarium/Kuryokhin/cover.jpg",
+            "current_cover_revision": "current-cover-revision",
+        }
+    )
+    connection = _Connection(
+        count_rows=[{"total_count": 1, "active_count": 0, "finished_count": 1}],
+        page_rows=[row],
+    )
+
+    page = _adapter(connection).load_notification_summary_page(
+        limit=50, cursor=None, active_only=False
+    )
+
+    item = page["items"][0]
+    assert "current_cover_path" not in item
+    assert "current_cover_revision" not in item
+    assert item["current_cover_preview_url"] == (
+        "/cover?path=C%3A/Music/Aquarium/Kuryokhin/cover.jpg"
+        "&size=480&v=current-cover-revision"
+    )
+    page_sql = connection.operations[-1][0]
+    assert "'current_cover_path', current_album.cover_path" in page_sql
+    assert "'current_cover_revision', current_album.metadata ->> 'cover_revision'" in page_sql
+
+
 def test_unpaged_notification_summaries_do_not_expose_current_user_cover_paths():
     row = _row("revelations", "2026-10-17T18:00:00+00:00")
     row["task_summary"].update(

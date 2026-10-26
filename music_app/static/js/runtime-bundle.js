@@ -29937,6 +29937,26 @@ function getCoverLookupTaskRenderWindow(tasks, body) {
   return { start, end, rowHeight };
 }
 
+function replaceCoverLookupDrawerMarkup(body, markup) {
+  const retainedImages = new Map();
+  body.querySelectorAll?.('[data-open-cover-lookup-task]').forEach((taskElement) => {
+    const taskId = String(taskElement.getAttribute?.('data-open-cover-lookup-task') || '');
+    const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
+    const src = String(image?.getAttribute?.('src') || '');
+    const failed = image?.complete === true && Number(image?.naturalWidth || 0) <= 0;
+    if (taskId && src && !failed) retainedImages.set(taskId, { image, src });
+  });
+  body.innerHTML = markup;
+  body.querySelectorAll?.('[data-open-cover-lookup-task]').forEach((taskElement) => {
+    const taskId = String(taskElement.getAttribute?.('data-open-cover-lookup-task') || '');
+    const retained = retainedImages.get(taskId);
+    const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
+    if (retained && image && retained.src === String(image.getAttribute?.('src') || '')) {
+      image.replaceWith(retained.image);
+    }
+  });
+}
+
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
@@ -30159,11 +30179,11 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   if (!preserveSelectedNotificationText) {
     const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
     const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
-    body.innerHTML = `
+    replaceCoverLookupDrawerMarkup(body, `
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
       ${taskMarkup}
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
-    `;
+    `);
     const measuredCard = body.querySelector?.('.cover-lookup-task-card');
     const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
     const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;

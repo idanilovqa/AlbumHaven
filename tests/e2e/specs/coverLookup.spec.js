@@ -779,6 +779,9 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
   await coverLookupActions.waitForTaskStatusById(selected.taskId, 'Art chosen');
   expect(await readTargetOrder()).toEqual(orderBeforeSave);
+  for (const { taskId } of notifications) {
+    await coverLookupActions.waitForTaskCoverDecodedById(taskId);
+  }
 
   const afterSave = await readCards();
   for (const { taskId } of notifications.slice(0, -1)) {
@@ -795,6 +798,9 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await coverLookupActions.closeDrawer();
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
+  for (const { taskId } of notifications) {
+    await coverLookupActions.waitForTaskCoverDecodedById(taskId);
+  }
   expect(await readCards()).toEqual(afterSave);
   expect(await readTargetOrder()).toEqual(orderBeforeSave);
   await verifyCardDestinations();

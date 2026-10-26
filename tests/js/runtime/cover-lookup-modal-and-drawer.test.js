@@ -93,6 +93,64 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
   );
 });
 
+require('node:test')('notification rerenders retain only each task\'s own unchanged image node', () => {
+  const retainedFirst = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=1' : '',
+  };
+  const retainedSecond = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=1' : '',
+  };
+  const retainedFailed = {
+    complete: true,
+    naturalWidth: 0,
+    getAttribute: (name) => name === 'src' ? '/cover?album=retry&v=1' : '',
+  };
+  const replacementFirst = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=1' : '',
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  const replacementSecond = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=2' : '',
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  const replacementFailed = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=retry&v=1' : '',
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  const taskNode = (taskId, image) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? taskId : '',
+    querySelector: () => image,
+  });
+  let rendered = false;
+  const body = {
+    innerHTML: '',
+    querySelectorAll() {
+      return rendered
+        ? [
+          taskNode('first-task', replacementFirst),
+          taskNode('second-task', replacementSecond),
+          taskNode('failed-task', replacementFailed),
+        ]
+        : [
+          taskNode('first-task', retainedFirst),
+          taskNode('second-task', retainedSecond),
+          taskNode('failed-task', retainedFailed),
+        ];
+    },
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated cards</div>');
+
+  assert.strictEqual(replacementFirst.replacedWith, retainedFirst);
+  assert.equal(replacementSecond.replacedWith, undefined);
+  assert.equal(replacementFailed.replacedWith, undefined);
+});
+
 require('node:test')('notification thumbnails prefer the current user cover over stale lookup artwork', () => {
   const { context, bodyElement } = createDrawerHarness({
     buildAlbumDisplayCoverUrl: () => '/images/stale-lookup-cover.jpg',

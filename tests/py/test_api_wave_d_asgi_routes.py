@@ -996,7 +996,7 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     assert snapshot_reads == [41, 41]
 
 
-def test_asgi_cover_lookup_gallery_keeps_task_scope_out_of_unknown_catch_all(
+def test_asgi_cover_lookup_gallery_keeps_persisted_task_scope_out_of_any_superset(
     app, monkeypatch
 ):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
@@ -1040,16 +1040,16 @@ def test_asgi_cover_lookup_gallery_keeps_task_scope_out_of_unknown_catch_all(
 
         def resolve_album_track_context(self, *, album_id, album_key):
             assert album_id == 417655
-            assert album_key in {None, "unknown artist::"}
+            assert album_key in {None, "legacy catch-all::"}
             return {
                 "album_id": 417655,
-                "album_key": "unknown artist::",
+                "album_key": "legacy catch-all::",
                 "track_paths": [str(track_path), str(unrelated_path)],
             }
 
         def get_for_album_context(self, *, album_id):
             raise AssertionError(
-                "A task-scoped lookup must not read the catch-all album snapshot"
+                "A task-scoped lookup must not read a superset album snapshot"
             )
 
     def build_cover_state_entries(_self, track_paths):

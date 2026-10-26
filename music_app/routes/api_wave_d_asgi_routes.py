@@ -233,8 +233,12 @@ async def _resolve_album_payload_context(
     album: Mapping[str, object],
     *,
     fallback_track_paths: set[str] | None = None,
+    task_scoped: bool = False,
 ):
     normalized_album = _album_with_context_tracks(album)
+    normalized_album.pop("_cover_lookup_task_scoped_context", None)
+    if task_scoped:
+        normalized_album["_cover_lookup_task_scoped_context"] = True
     repository = AlbumCoverCandidateSnapshotRepository(config)
     fallback_paths = {
         str(path or "").strip()
@@ -248,7 +252,7 @@ async def _resolve_album_payload_context(
         or ""
     ).strip().casefold()
     if (
-        album_key == "unknown artist::"
+        (album_key == "unknown artist::" or task_scoped)
         and fallback_paths
         and fallback_paths < _album_track_paths(normalized_album)
     ):
@@ -279,8 +283,11 @@ async def _resolve_album_payload_context(
                     if str(path or "").strip()
                 }
                 if (
-                    str(track_context.get("album_key") or "").strip().casefold()
-                    == "unknown artist::"
+                    (
+                        str(track_context.get("album_key") or "").strip().casefold()
+                        == "unknown artist::"
+                        or task_scoped
+                    )
                     and fallback_paths < context_paths
                 ):
                     normalized_album.pop("id", None)
@@ -705,6 +712,8 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         config,
         album,
         fallback_track_paths=task_track_paths,
+        task_scoped=bool(task_track_paths)
+        and album.get("identity_resolution") != "album_split_choice",
     )
     if album_context is None:
         split_response = await _cover_lookup_album_split_response(config, task_track_paths)

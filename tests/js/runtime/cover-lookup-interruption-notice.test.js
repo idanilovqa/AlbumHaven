@@ -81,3 +81,16 @@ test('only an active lookup may publish its current progress copy', () => {
   assert.equal(context.state.coverLookup.modal.statusText, 'Searching providers…');
   assert.equal(context.state.coverLookup.modal.failureNotice || '', '');
 });
+
+test('completed lookup preserves its terminal status copy', () => {
+  const { context } = loadContext();
+
+  context.applyCoverLookupTaskModalStatus({
+    id: 'completed-lookup',
+    status: 'completed',
+    message: 'Possible matches are ready.',
+  });
+
+  assert.equal(context.state.coverLookup.modal.statusText, 'Possible matches are ready.');
+  assert.equal(context.state.coverLookup.modal.failureNotice || '', '');
+});

@@ -42,11 +42,15 @@ function applyCoverLookupTaskModalStatus(task) {
     modal.failureNotice = '';
     return;
   }
-  modal.statusText = '';
-  modal.statusTone = 'neutral';
   modal.failureNotice = '';
   const taskId = String(task?.id || '').trim();
-  if (String(task?.result_kind || '') !== 'interrupted' || !taskId) return;
+  if (String(task?.result_kind || '') !== 'interrupted' || !taskId) {
+    modal.statusText = String(task?.message || task?.progress_label || '');
+    modal.statusTone = getCoverLookupStatusTone(task);
+    return;
+  }
+  modal.statusText = '';
+  modal.statusTone = 'neutral';
   const noticeKey = `${COVER_LOOKUP_INTERRUPTION_NOTICE_KEY_PREFIX}${taskId}`;
   if (getLocalStorageItem(noticeKey)) return;
   modal.failureNotice = 'Previous cover lookup was interrupted.';

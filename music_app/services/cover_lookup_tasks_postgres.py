@@ -1013,9 +1013,8 @@ def _current_notification_album_joins_sql() -> str:
         left join library.local_albums as current_album_by_id
           on current_album_by_id.library_id = ops.cover_lookup_tasks.library_id
          and current_album_by_id.id = identity.album_id
-         and (identity.album_key is null or current_album_by_id.album_key = identity.album_key)
         left join library.local_albums as current_album_by_key
-          on identity.album_id is null
+          on current_album_by_id.id is null
          and current_album_by_key.library_id = ops.cover_lookup_tasks.library_id
          and current_album_by_key.album_key = identity.album_key
         cross join lateral (

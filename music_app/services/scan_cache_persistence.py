@@ -1373,6 +1373,7 @@ class PostgresScanCacheAdapter:
                 result.get("inventory_mutation_revision") or 0
             )
             source_album_id = int(result.get("source_album_id") or 0)
+            source_album_key = str(result.get("source_album_key") or "").strip()
             destination_album_id = int(result.get("destination_album_id") or 0)
             persisted_separate_release_key = str(
                 result.get("separate_release_key") or ""
@@ -1408,6 +1409,25 @@ class PostgresScanCacheAdapter:
                     connection.execute(_upsert_local_artist_sql(), row)
                 for row in destination_credits:
                     connection.execute(_upsert_local_album_featured_artist_sql(), row)
+            if (
+                source_album_id
+                and source_album_track_file_count == input_path_count
+            ):
+                connection.execute(
+                    _rebind_cover_lookup_tasks_after_structural_edit_sql(),
+                    {
+                        "source_album_id": source_album_id,
+                        "source_album_key": source_album_key,
+                        "destination_album_id": destination_album_id,
+                        "destination_album_key": destination_album_key,
+                        "destination_album_title": str(
+                            getattr(destination_album, "name", "")
+                            or "Unknown Album"
+                        ),
+                        "destination_artist_name": destination_album.album_artist,
+                        "destination_release_year": destination_release_year,
+                    },
+                )
             _execute_semantic_local_album_reconciliation(
                 connection,
                 target_album_ids=(destination_album_id,),
@@ -2265,7 +2285,24 @@ def _semantic_local_album_key_adoption_sql() -> tuple[str, ...]:
           and assertions.target_kind = 'album';
 
         update ops.cover_lookup_tasks as tasks
-        set album_key = adoptions.canonical_album_key
+        set album_key = adoptions.canonical_album_key,
+            metadata = jsonb_set(
+              coalesce(tasks.metadata, '{}'::jsonb),
+              '{source_payload}',
+              coalesce(tasks.metadata -> 'source_payload', '{}'::jsonb)
+                || jsonb_build_object(
+                     'album_payload',
+                     coalesce(
+                       tasks.metadata #> '{source_payload,album_payload}',
+                       '{}'::jsonb
+                     ) || jsonb_build_object(
+                       'id', adoptions.album_id,
+                       'album_id', adoptions.album_id,
+                       'key', adoptions.canonical_album_key
+                     )
+                   ),
+              true
+            )
         from pg_temp.semantic_album_key_adoptions as adoptions
         where tasks.library_id = adoptions.library_id
           and tasks.album_key = adoptions.previous_album_key;
@@ -3950,7 +3987,27 @@ def _reconcile_semantic_local_albums_sql(
           );
 
         update ops.cover_lookup_tasks
-        set album_key = semantic_album_candidates.canonical_album_key
+        set album_key = semantic_album_candidates.canonical_album_key,
+            metadata = jsonb_set(
+              coalesce(ops.cover_lookup_tasks.metadata, '{}'::jsonb),
+              '{source_payload}',
+              coalesce(
+                ops.cover_lookup_tasks.metadata -> 'source_payload',
+                '{}'::jsonb
+              ) || jsonb_build_object(
+                'album_payload',
+                coalesce(
+                  ops.cover_lookup_tasks.metadata
+                    #> '{source_payload,album_payload}',
+                  '{}'::jsonb
+                ) || jsonb_build_object(
+                  'id', semantic_album_candidates.canonical_album_id,
+                  'album_id', semantic_album_candidates.canonical_album_id,
+                  'key', semantic_album_candidates.canonical_album_key
+                )
+              ),
+              true
+            )
         from semantic_album_candidates
         where ops.cover_lookup_tasks.library_id =
               semantic_album_candidates.library_id
@@ -4010,6 +4067,65 @@ def _execute_semantic_local_album_reconciliation(
             )
         else:
             connection.execute(statement)
+
+
+def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )
+        update ops.cover_lookup_tasks as tasks
+        set album_key = %(destination_album_key)s,
+            metadata = jsonb_set(
+              coalesce(tasks.metadata, '{}'::jsonb),
+              '{source_payload}',
+              coalesce(tasks.metadata -> 'source_payload', '{}'::jsonb)
+                || jsonb_build_object(
+                     'artist', %(destination_artist_name)s::text,
+                     'album', %(destination_album_title)s::text,
+                     'year', %(destination_release_year)s::integer,
+                     'album_payload',
+                     coalesce(
+                       tasks.metadata #> '{source_payload,album_payload}',
+                       '{}'::jsonb
+                     ) || jsonb_build_object(
+                       'id', %(destination_album_id)s::bigint,
+                       'album_id', %(destination_album_id)s::bigint,
+                       'key', %(destination_album_key)s::text,
+                       'name', %(destination_album_title)s::text,
+                       'album', %(destination_album_title)s::text,
+                       'album_artist', %(destination_artist_name)s::text,
+                       'artist', %(destination_artist_name)s::text,
+                       'year', %(destination_release_year)s::integer
+                     )
+                   ),
+              true
+            )
+        from bootstrap_context
+        where tasks.library_id = bootstrap_context.library_id
+          and (
+                coalesce(
+                  tasks.metadata #>> '{source_payload,album_payload,id}',
+                  tasks.metadata #>> '{source_payload,album_payload,album_id}',
+                  ''
+                ) = %(source_album_id)s::text
+                or (
+                     coalesce(
+                       tasks.metadata #>> '{source_payload,album_payload,id}',
+                       tasks.metadata #>> '{source_payload,album_payload,album_id}',
+                       ''
+                     ) = ''
+                     and tasks.album_key = %(source_album_key)s
+                   )
+              );
+    """
 
 
 def _persist_blank_album_tag_edit_sql() -> str:
@@ -5167,6 +5283,7 @@ def _persist_structural_album_tag_edit_sql(
           0 as destination_conflict_count,
           (select count(*) from destination_album) as destination_album_count,
           (select id from validated_source_album) as source_album_id,
+          (select album_key from validated_source_album) as source_album_key,
           (select id from destination_album) as destination_album_id,
           exists (select 1 from inserted_destination_album) as inserted_destination_album,
           (select count(*) from destination_album) as album_rows_updated,

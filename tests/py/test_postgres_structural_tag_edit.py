@@ -2052,6 +2052,49 @@ def test_semantic_album_reconciliation_rekeys_version_and_cover_dependencies():
     ) in normalized_sql
     assert "update ops.cover_lookup_tasks" in normalized_sql
     assert "set album_key = semantic_album_candidates.canonical_album_key" in normalized_sql
+    cover_task_sql = normalized_sql.split(
+        "update ops.cover_lookup_tasks", 1
+    )[1].split("update library.local_tracks", 1)[0]
+    assert "semantic_album_candidates.canonical_album_id" in cover_task_sql
+    assert "{source_payload,album_payload}" in cover_task_sql
+
+
+def test_semantic_album_key_adoption_rebinds_lookup_payload_identity():
+    from music_app.services.scan_cache_persistence import (
+        _semantic_local_album_key_adoption_sql,
+    )
+
+    normalized_sql = _normalized_sql(
+        " ".join(_semantic_local_album_key_adoption_sql())
+    )
+    cover_task_sql = normalized_sql.split(
+        "update ops.cover_lookup_tasks", 1
+    )[1].split("with updated_album_ratings", 1)[0]
+
+    assert "adoptions.album_id" in cover_task_sql
+    assert "adoptions.canonical_album_key" in cover_task_sql
+    assert "{source_payload,album_payload}" in cover_task_sql
+
+
+def test_structural_album_identity_rebind_preserves_lookup_task_state():
+    from music_app.services.scan_cache_persistence import (
+        _rebind_cover_lookup_tasks_after_structural_edit_sql,
+    )
+
+    normalized_sql = _normalized_sql(
+        _rebind_cover_lookup_tasks_after_structural_edit_sql()
+    )
+
+    assert "update ops.cover_lookup_tasks as tasks" in normalized_sql
+    assert "set album_key = %(destination_album_key)s" in normalized_sql
+    assert "{source_payload,album_payload}" in normalized_sql
+    assert "%(source_album_id)s::text" in normalized_sql
+    assert "%(source_album_key)s" in normalized_sql
+    assert "tasks.album_key = %(source_album_key)s" in normalized_sql
+    assert "%(destination_album_id)s::bigint" in normalized_sql
+    assert "jsonb_strip_nulls" not in normalized_sql
+    assert "requested_at" not in normalized_sql
+    assert "completed_at" not in normalized_sql
 
 
 def test_semantic_album_reconciliation_serializes_bootstrap_library_before_candidates(

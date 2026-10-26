@@ -5,12 +5,17 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const flush = () => new Promise(setImmediate);
+const settingsSource = fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/settings-navigation.js'), 'utf8');
+// Load the genuine history sanitizer without mounting a Settings document.
+const settingsExports = vm.createContext({window: {}, structuredClone});
+vm.runInContext(settingsSource, settingsExports);
+const {sanitizeHistorySnapshot} = settingsExports.window.AlbumHavenSettingsNavigation;
 
 function setup(width = 390) {
   const nodes = new Map(), historyEntries = [{state: {albumHavenNavigationPosition: 0}, url: 'https://albumhaven.test/?surface=playlists'}];
   let position = 0, queuedTraversal = null, context, capturePop = null;
-  const document = {getElementById: id => nodes.get(id), querySelectorAll: () => [],
-    createElement: tag => node(tag), createComment: () => node(), addEventListener() {}, removeEventListener() {}};
+  const document = Object.assign(new EventTarget(), {getElementById: id => nodes.get(id), querySelectorAll: () => [],
+    createElement: tag => node(tag), createComment: () => node()});
   function node(tag = 'div') {
     const attributes = new Map(), listeners = new Map(), classes = new Set();
     const element = {tagName: tag.toUpperCase(), hidden: false, inert: false, disabled: false, isConnected: true,
@@ -38,18 +43,28 @@ function setup(width = 390) {
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true');
   document.body.appendChild(modal); modal.appendChild(panel); panel.appendChild(nodes.get('app-form-content'));
   modal.querySelector = () => panel; modal.hidden = true;
-  const window = {innerWidth: width, location: new URL(historyEntries[0].url),
-    addEventListener(name, handler, capture) {if (name === 'popstate' && capture) capturePop = handler;}, removeEventListener() {}, history: {
+  const window = Object.assign(new EventTarget(), {Event, CustomEvent, EventTarget, innerWidth: width, location: new URL(historyEntries[0].url),
+    // Keep explicit traversal ordering while all platform listeners remain real.
+    addEventListener(name, handler, options) {
+      EventTarget.prototype.addEventListener.call(this, name, handler, options);
+      if (name === 'popstate' && (options === true || options?.capture)) capturePop = handler;
+    },
+    removeEventListener(name, handler, options) {
+      // Node requires the object form to remove a browser-style capture listener.
+      EventTarget.prototype.removeEventListener.call(this, name, handler,
+        typeof options === 'boolean' ? {capture: options} : options);
+      if (name === 'popstate' && (options === true || options?.capture) && capturePop === handler) capturePop = null;
+    }, history: {
     get state() {return historyEntries[position].state;},
     pushState(state, _title, url) {historyEntries.splice(position + 1); historyEntries.push({state, url: String(url)}); position++; window.location.href = String(url);},
     replaceState(state, _title, url) {historyEntries[position] = {state, url: String(url)}; window.location.href = String(url);},
     go(delta) {assert.equal(queuedTraversal, null, 'only one parent traversal may be pending'); queuedTraversal = delta;},
-  }};
-  window.AlbumHavenSettingsNavigation = {instance: {pushLibraryHistory(url, state) {
-    window.history.pushState({...state, albumHavenNavigationPosition: position + 1}, '', url);
+  }});
+  window.AlbumHavenSettingsNavigation = {sanitizeHistorySnapshot, instance: {pushLibraryHistory(url, state) {
+    window.history.pushState(sanitizeHistorySnapshot({...state, albumHavenNavigationPosition: position + 1}), '', url);
   }}};
   const restorations = [];
-  context = vm.createContext({document, window, URL, Promise, AbortController,
+  context = vm.createContext({document, window, URL, Promise, AbortController, Event, CustomEvent, EventTarget, structuredClone,
     state: {view: {}, utility: {activeTab: 'appearance'}}, buildUrl: () => '/?surface=playlists',
     requestAnimationFrame: callback => callback(), closeArtistsDrawer() {}, closeGalleryMainSurface() {},
     handleGalleryBootstrapPopState: options => restorations.push(options),
@@ -71,9 +86,8 @@ function setup(width = 390) {
 }
 
 function installSettings(h) {
-  const host = h.node(), outlet = h.node(), nav = h.node(), requests = [], listeners = new Map();
+  const host = h.node(), outlet = h.node(), nav = h.node(), requests = [];
   host.hidden = true;
-  h.document.addEventListener = (name, listener) => listeners.set(name, listener);
   h.document.querySelector = selector => ({'[data-settings-host]': host, '[data-settings-outlet]': outlet,
     '[data-settings-nav]': nav, '#app-shell': h.nodes.get('app-shell')})[selector] || null;
   h.window.NavigationTree = {setSelection() {}};
@@ -86,9 +100,102 @@ function installSettings(h) {
   // Browsers expose classic-script functions on window; the VM keeps it explicit.
   for (const name of ['getActiveAppFormPage', 'handleMobilePagePopState', 'handleGalleryBootstrapPopState', 'deferAppFormPageReplacement',
     'isMobileFormReturning', 'cancelSupersededMobileFormReturn']) h.window[name] = h.context[name];
-  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/settings-navigation.js'), 'utf8'), h.context);
-  return {host, requests, navigation: h.window.AlbumHavenSettingsNavigation.instance, click: event => listeners.get('click')(event)};
+  vm.runInContext(settingsSource, h.context);
+  return {host, requests, navigation: h.window.AlbumHavenSettingsNavigation.instance, click(event) {
+    const click = new h.window.Event('click', {cancelable: true});
+    Object.defineProperties(click, {target: {value: event.target}, button: {value: event.button}});
+    h.document.dispatchEvent(click);
+    if (click.defaultPrevented) event.preventDefault();
+  }};
 }
+
+test('form fixture event targets deliver same-realm events and honor listener removal', () => {
+  const h = setup();
+  for (const target of [h.window, h.document]) {
+    assert.ok(target instanceof h.context.EventTarget);
+    assert.equal(h.context.Event, h.window.Event);
+    assert.equal(h.context.CustomEvent, h.window.CustomEvent);
+    const calls = [], detail = {surface: h.modal};
+    const listener = event => calls.push([event, event.target, event.currentTarget]);
+    target.addEventListener('fixture-event', listener);
+    target.addEventListener('fixture-event', listener);
+    const event = new h.context.CustomEvent('fixture-event', {detail});
+    assert.ok(event instanceof h.context.Event);
+    assert.equal(target.dispatchEvent(event), true);
+    assert.deepEqual(calls, [[event, target, target]], 'duplicate registration does not duplicate delivery');
+    assert.equal(event.detail, detail);
+    target.removeEventListener('fixture-event', listener);
+    target.dispatchEvent(new h.window.Event('fixture-event'));
+    assert.equal(calls.length, 1);
+    target.addEventListener('fixture-event', event => event.preventDefault(), {once: true});
+    assert.equal(target.dispatchEvent(new h.window.Event('fixture-event', {cancelable: true})), false);
+    assert.equal(target.dispatchEvent(new h.window.Event('fixture-event', {cancelable: true})), true);
+  }
+  let captures = 0;
+  const capture = event => {captures++; event.stopImmediatePropagation();};
+  h.window.addEventListener('popstate', capture, true);
+  h.traverse(0); h.window.dispatchEvent(new h.window.Event('popstate'));
+  assert.equal(captures, 2, 'the explicit traversal seam and real dispatch share the same listener');
+  h.window.removeEventListener('popstate', capture, true);
+  h.traverse(0); h.window.dispatchEvent(new h.window.Event('popstate'));
+  assert.equal(captures, 2, 'removal retires both the capture seam and platform registration');
+});
+
+test('real layout and surface notifications cannot replace the retained form or its authority', async () => {
+  const h = setup(), view = h.context.state.view, search = h.node('form');
+  h.nodes.set('search-form', search);
+  const owner = h.context.openReactFormDialog({pageId: 'create-playlist'});
+  const page = h.context.getActiveAppFormPage(), content = h.nodes.get('app-form-content').children[0];
+  const history = JSON.stringify(h.historyEntries), focus = h.document.activeElement;
+  const layouts = [], surfaces = [];
+  const layout = event => layouts.push(event);
+  const surface = event => surfaces.push(event);
+  h.window.addEventListener('albumhaven:search-match-layout', layout);
+  h.document.addEventListener('album-haven:surface-opening', surface);
+  h.context.syncMobilePageShell();
+  h.context.setMobileSearchOpen(true);
+  assert.equal(layouts.length, 1);
+  assert.equal(layouts[0].target, h.window);
+  assert.ok(layouts[0] instanceof h.context.Event);
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0].target, h.document);
+  assert.ok(surfaces[0] instanceof h.context.CustomEvent);
+  assert.equal(surfaces[0].detail.surface, search);
+  h.window.removeEventListener('albumhaven:search-match-layout', layout);
+  h.document.removeEventListener('album-haven:surface-opening', surface);
+  h.context.syncMobilePageShell(); h.context.setMobileSearchOpen(true);
+  assert.equal(layouts.length, 1); assert.equal(surfaces.length, 1);
+  assert.equal(h.context.getActiveAppFormPage(), page);
+  assert.equal(h.context.state.view, view);
+  assert.equal(h.nodes.get('app-form-content').children[0], content);
+  assert.equal(JSON.stringify(h.historyEntries), history);
+  assert.equal(h.document.activeElement, focus);
+  assert.equal(h.queuedTraversal, null);
+  owner.close(null, {force: true, restoreFocus: false, returnToParent: false}); await owner.promise;
+});
+
+test('real Settings history sanitizer removes private receipts without mutating their source', () => {
+  const h = setup(), privateRow = {label: 'Retained', canonical_track_ref: 'private-track',
+    inventory_track_ref: 'inventory-track', track_preference: {rating: 'loved'},
+    track_preference_state: 'ready', track_preference_overlay: {rating: 'loved'}, can_edit_preferences: true};
+  const snapshot = {albumHavenNavigationPosition: 0, mobilePages: [], rows: [privateRow], alias: privateRow};
+  snapshot.self = snapshot;
+  const cleaned = h.window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(snapshot);
+  assert.notEqual(cleaned, snapshot);
+  assert.equal(cleaned.self, cleaned); assert.equal(cleaned.rows[0], cleaned.alias);
+  assert.deepEqual(Object.keys(cleaned.rows[0]), ['label']);
+  assert.equal(cleaned.albumHavenNavigationPosition, 0);
+  assert.equal(privateRow.canonical_track_ref, 'private-track');
+  assert.equal(privateRow.track_preference.rating, 'loved');
+  assert.equal(privateRow.can_edit_preferences, true);
+  assert.equal(snapshot.rows[0], privateRow); assert.equal(snapshot.self, snapshot);
+  const clean = {mobilePages: []};
+  assert.equal(h.window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(clean), clean);
+  h.window.AlbumHavenSettingsNavigation.instance.pushLibraryHistory(h.window.location.href, snapshot);
+  assert.equal(h.window.history.state.rows[0].canonical_track_ref, undefined);
+  assert.equal(h.window.history.state.rows[0].can_edit_preferences, undefined);
+  assert.equal(snapshot.rows[0], privateRow);
+});
 
 for (const width of [390, 1180]) {
   test(`source-first form preserves the live Home entry and source through native return at ${width}px`, async () => {
@@ -98,7 +205,6 @@ for (const width of [390, 1180]) {
     h.window.history.replaceState({albumHavenNavigationPosition: 0}, '', 'https://albumhaven.test/?surface=home');
     h.context.state.view = {recent_local_albums: [], recent_not_local_albums: []}; h.context.state.ui = {};
     h.context.shouldShowMobileHome = () => !shell.hidden && !h.context.state.ui.pendingViewTransition;
-    h.context.Event = Event; h.window.dispatchEvent = () => {};
     h.context.escapeHtml = String;
     h.context.buildUrl = () => '/?surface=home';
     installPrivateContext(h.context);

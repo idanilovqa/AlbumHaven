@@ -53,6 +53,12 @@ test('actual Gallery completion mutation retires native source authority before 
   await f.open(); const retained = f.presentations[0].owner;
   const button = f.host.querySelector('[data-gallery-card-intent="complete"]'); assert.ok(button);
   f.click(button); await N.drain();
+  assert.equal(f.service.count('execute'), 0); assert.equal(retained.isCurrent(), true);
+  assert.equal(f.document.getElementById('app-confirm-modal').hidden, false);
+  f.click(f.document.getElementById('app-confirm-cancel')); await N.drain();
+  assert.equal(f.service.count('execute'), 0); assert.equal(retained.isCurrent(), true);
+  f.click(f.host.querySelector('[data-gallery-card-intent="complete"]')); await N.drain();
+  f.click(f.document.getElementById('app-confirm-accept')); await N.drain();
   assert.equal(f.service.count('execute'), 1); assert.equal((await entered.promise).action, 'set_manual_completion');
   assert.equal(retained.isCurrent(), false);
   gate.reject(Object.assign(new Error('Mutation conflict fixture'), {status: 409})); await N.drain();

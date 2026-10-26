@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 
@@ -175,18 +176,37 @@ test('AlbumTrackTable reserves a headerless problem column immediately before Le
     }],
   });
 
-  assert.match(html, /--cdt-columns: 36px minmax\(0, 1fr\) 20px minmax\(54px, auto\)/);
-  assert.doesNotMatch(html, /data-cdt-column="play"/);
-  assert.match(html, /data-cdt-column="title"[^>]*>Track<\/div><div data-cdt-column="problem" data-cdt-action aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"/);
-  assert.match(html, /data-cdt-column="title"[^>]*><span[^>]*>Problem Track<\/span><\/div><div role="cell" data-cdt-column="problem" data-cdt-action><button class="track-problem-link"/);
-  assert.match(html, /data-cdt-column="problem" data-cdt-action><button[\s\S]*data-open-track-problematic="1"[\s\S]*aria-label="Open this track in Problematic Files">!<\/button><\/div><div role="cell" data-cdt-column="duration"/);
-  assert.match(html, /data-cdt-row-key="clean\.flac"[\s\S]*data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
+  const {document} = createNativeHomeRuntime(), host = document.createElement('div');
+  host.innerHTML = html;
+  assert.equal(host.querySelector('.compact-data-table').getAttribute('style'), '--cdt-columns: 36px minmax(0,1fr) 36px 20px 54px');
+  assert.equal(host.querySelector('[data-cdt-column="play"]'), null);
+  const header = host.querySelector('.compact-data-table-header');
+  assert.deepEqual([...header.children].map(cell => cell.getAttribute('data-cdt-column')), ['number', 'title', 'love', 'problem', 'duration']);
+  assert.equal(header.querySelector('[data-cdt-column="love"]').textContent, 'Love');
+  const problemHeader = header.querySelector('[data-cdt-column="problem"]');
+  assert.equal(problemHeader.textContent, ''); assert.equal(problemHeader.getAttribute('aria-hidden'), 'true');
+  assert.equal(problemHeader.hasAttribute('data-cdt-action'), true);
+  assert.equal(header.querySelector('[data-cdt-column="title"]').textContent, 'Track');
+  assert.equal(header.querySelector('[data-cdt-column="duration"]').textContent, 'Length');
+  const problemRow = host.querySelector('[data-cdt-row-key="problem.flac"]');
+  assert.equal(problemRow.querySelector('[data-cdt-column="title"]').textContent, 'Problem Track');
+  const action = problemRow.querySelector('[data-cdt-column="problem"] button');
+  assert.equal(action.getAttribute('type'), 'button');
+  assert.equal(action.className, 'track-problem-link'); assert.equal(action.getAttribute('data-track-path'), 'problem.flac');
+  assert.equal(action.getAttribute('data-open-track-problematic'), '1');
+  assert.equal(action.getAttribute('aria-label'), 'Open this track in Problematic Files'); assert.equal(action.textContent, '!');
+  for (const row of host.querySelectorAll('.compact-data-table-row')) {
+    assert.deepEqual([...row.children].map(cell => cell.getAttribute('data-cdt-column')), ['number', 'title', 'love', 'problem', 'duration']);
+    assert.equal(row.querySelector('[data-cdt-column="problem"]').hasAttribute('data-cdt-action'), true);
+  }
+  assert.equal(host.querySelector('[data-cdt-row-key="clean.flac"] [data-cdt-column="problem"]').innerHTML, '');
 });
 
 test('AlbumTrackTable Loose Tracks variant inserts File path before the existing problem slot', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({
     showPath: true,
+    showProblem: true,
     forceGroupLabels: true,
     ariaLabel: 'Loose tracks',
     groups: [{
@@ -203,13 +223,23 @@ test('AlbumTrackTable Loose Tracks variant inserts File path before the existing
     totalLength: '4:05',
   });
 
-  assert.match(html, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  const {document} = createNativeHomeRuntime(), host = document.createElement('div');
+  host.innerHTML = html;
+  assert.equal(host.querySelector('.compact-data-table').getAttribute('style'), '--cdt-columns: 36px minmax(0,1fr) 220px 36px 20px 54px');
+  const expectedColumns = ['number', 'title', 'path', 'love', 'problem', 'duration'];
+  for (const row of host.querySelectorAll('[role="row"]')) {
+    assert.deepEqual([...row.children].map(cell => cell.getAttribute('data-cdt-column')), expectedColumns);
+  }
+  const header = host.querySelector('.compact-data-table-header');
+  assert.deepEqual([...header.children].map(cell => cell.textContent), ['#', 'Track', 'File path', 'Love', '', 'Length']);
+  assert.equal(header.querySelector('[data-cdt-column="problem"]').getAttribute('aria-hidden'), 'true');
+  const row = host.querySelector('.compact-data-table-row');
+  assert.equal(row.querySelector('[data-cdt-column="problem"]').innerHTML, '');
+  assert.equal(row.querySelector('[data-cdt-column="problem"]').hasAttribute('data-cdt-action'), true);
   assert.match(html, /aria-label="Loose tracks — Non-album rarity"/);
   assert.match(html, /album-track-table__disc-heading[^>]*>Non-album rarity<\/h4>/);
-  assert.match(html, /data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<[\s\S]*data-cdt-column="problem"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="duration"[^>]*>Length/);
   assert.match(html, /class="album-track-table__secondary">Guest Artist<\/span>/);
   assert.match(html, /data-cdt-column="path"[^>]*><span class="album-track-table__path" title="Artist\/Rare\.flac">Artist\/Rare\.flac<\/span>/);
-  assert.match(html, /data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
   assert.match(html, /class="album-track-table__total"><div class="album-track-table__aggregate-total">Total Length: 4:05<\/div><\/div>/);
 });
 
@@ -358,4 +388,14 @@ test('track number shares one cell with its original animated play control', () 
   assert.equal(row.cells.play, undefined);
   assert.match(row.cells.number.content, /album-track-table__number">7</);
   assert.match(row.cells.number.content, /play-track-button/);
+});
+
+test('clean native track tables omit the optional Problem column unless explicitly reserved', () => {
+  const context = loadTrackTable(), groups = [{tracks: [{path: 'clean.flac', title: 'Clean', duration: '3:22'}]}];
+  const ordinary = context.buildAlbumTrackTableHtml({groups});
+  assert.doesNotMatch(ordinary, /data-cdt-column="problem"|data-open-track-problematic/);
+  assert.match(ordinary, /data-cdt-column="love"/);
+  const reserved = context.buildAlbumTrackTableHtml({groups, showProblem: true});
+  assert.match(reserved, /data-cdt-column="problem"/);
+  assert.doesNotMatch(reserved, /data-open-track-problematic/);
 });

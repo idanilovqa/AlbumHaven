@@ -6,7 +6,10 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from music_app.services.covers import image_dimensions
-from music_app.services.generated_preview_storage import is_managed_preview_path
+from music_app.services.generated_preview_storage import (
+    is_generated_cover_artifact,
+    is_managed_preview_path,
+)
 from music_app.services.library import album_to_dict
 
 
@@ -100,15 +103,8 @@ def resolve_authoritative_album_track_paths(
     return authoritative_track_paths
 
 
-def iter_local_cover_candidates(
-    album_root: Path,
-    *,
-    image_extensions: set[str],
-    image_dimensions,
-    is_squareish_cover,
-    active_cover_path: Path | None,
-) -> list[dict[str, object]]:
-    candidates: list[dict[str, object]] = []
+def _iter_local_image_paths(album_root: Path, image_extensions: set[str]) -> list[Path]:
+    paths: list[Path] = []
     pending_directories = [album_root]
     while pending_directories:
         directory = pending_directories.pop()
@@ -128,24 +124,41 @@ def iter_local_cover_candidates(
             except OSError:
                 continue
             path = Path(entry.path)
-            if is_managed_preview_path(path):
-                continue
-            width, height = image_dimensions(path)
-            relative_path = path.relative_to(album_root)
-            candidates.append(
-                {
-                    "path": str(path),
-                    "filename": path.name,
-                    "relative_path": str(relative_path),
-                    "width": width,
-                    "height": height,
-                    "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
-                    "is_squareish": is_squareish_cover(width, height),
-                    "is_active": bool(active_cover_path and path == active_cover_path),
-                    "area": width * height if width > 0 and height > 0 else 0,
-                    "depth": len(relative_path.parts),
-                }
-            )
+            if not is_managed_preview_path(path) and not is_generated_cover_artifact(path, album_root):
+                paths.append(path)
+    return paths
+
+
+def count_local_cover_images(album_root: Path, *, image_extensions: set[str]) -> int:
+    return len(_iter_local_image_paths(album_root, image_extensions))
+
+
+def iter_local_cover_candidates(
+    album_root: Path,
+    *,
+    image_extensions: set[str],
+    image_dimensions,
+    is_squareish_cover,
+    active_cover_path: Path | None,
+) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = []
+    for path in _iter_local_image_paths(album_root, image_extensions):
+        width, height = image_dimensions(path)
+        relative_path = path.relative_to(album_root)
+        candidates.append(
+            {
+                "path": str(path),
+                "filename": path.name,
+                "relative_path": str(relative_path),
+                "width": width,
+                "height": height,
+                "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
+                "is_squareish": is_squareish_cover(width, height),
+                "is_active": bool(active_cover_path and path == active_cover_path),
+                "area": width * height if width > 0 and height > 0 else 0,
+                "depth": len(relative_path.parts),
+            }
+        )
     if (
         active_cover_path
         and active_cover_path.suffix.lower() in image_extensions

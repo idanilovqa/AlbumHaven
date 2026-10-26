@@ -375,6 +375,7 @@ const state = {
       currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
+      expectedLocalCount: 0,
       activeLocalSelectionPath: '',
       remoteSelectionOverrideGeneration: '',
       seenCandidateImprovementToken: '',

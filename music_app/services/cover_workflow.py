@@ -13,7 +13,10 @@ from typing import Callable
 
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
 from music_app.services.covers import Image, reserve_existing_cover_variant
-from music_app.services.generated_preview_storage import is_managed_preview_path
+from music_app.services.generated_preview_storage import (
+    is_generated_cover_artifact,
+    is_managed_preview_path,
+)
 from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
@@ -28,20 +31,8 @@ _ALBUM_RELEASE_PART_FOLDER_RE = re.compile(
     r"|bonus\s+(?:disc|tracks?))(?:\s*[-_.]\s*.*)?$",
     re.IGNORECASE,
 )
-_GENERATED_COVER_PREVIEW_STEM = "album-haven-preview"
-_APP_ARTIFACT_DIRECTORY = ".album-haven"
 _LOCAL_COVER_SELECTION_LOCKS_GUARD = Lock()
 _LOCAL_COVER_SELECTION_LOCKS: dict[str, tuple[Lock, int]] = {}
-
-
-def is_generated_cover_artifact(path: Path, album_root: Path) -> bool:
-    stem = path.stem.casefold()
-    relative_parts = path.relative_to(album_root).parts
-    return (
-        _APP_ARTIFACT_DIRECTORY in (part.casefold() for part in relative_parts)
-        or stem == _GENERATED_COVER_PREVIEW_STEM
-        or stem.startswith(f"{_GENERATED_COVER_PREVIEW_STEM}-")
-    )
 
 
 @dataclass(frozen=True)

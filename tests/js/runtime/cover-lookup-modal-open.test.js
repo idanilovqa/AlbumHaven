@@ -17,7 +17,7 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
-test('opening Cover Lookup starts one gallery request without loading notification history', async () => {
+test('opening Cover Lookup starts gallery and local inventory requests without loading notification history', async () => {
   class TestButton {
     constructor() {
       this.hidden = false;
@@ -80,11 +80,11 @@ test('opening Cover Lookup starts one gallery request without loading notificati
   const openPromise = context.openCoverLookupModal(album, { taskId: 'sola-scriptura-lookup' });
 
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(galleryRequestCount, 1);
+  assert.equal(galleryRequestCount, 2);
 
   await openPromise;
 
-  assert.equal(galleryRequestCount, 1);
+  assert.equal(galleryRequestCount, 2);
 });
 
 test('opening a compact album does not inherit an unrelated compact lookup task', async () => {
@@ -112,6 +112,7 @@ test('opening a compact album does not inherit an unrelated compact lookup task'
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.renderCoverLookupModal = () => {};
   context.refreshCoverLookupGallery = async () => {};
+  context.refreshCoverLookupLocalInventoryCount = async () => {};
   context.ensureCoverLookupPolling = () => {};
 
   await context.openCoverLookupModal({ album_id: 41, name: 'Current Release' });
@@ -202,7 +203,10 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
 
   assert.equal(context.state.coverLookup.modal.album.album_id, 42);
   assert.equal(context.state.coverLookup.modal.taskId, 'stale-task');
-  assert.deepEqual(requests[1], { album: secondRelease, task_id: 'stale-task' });
+  assert.deepEqual(
+    requests.find((request) => request.album?.album_id === secondRelease.album_id && !request.inventory_only),
+    { album: secondRelease, task_id: 'stale-task' },
+  );
 });
 
 test('notification Cover Lookup uses a sheet on mobile without presenting a mobile page', async () => {
@@ -238,6 +242,7 @@ test('notification Cover Lookup uses a sheet on mobile without presenting a mobi
   context.renderCoverLookupModal = () => {};
   context.ensureCoverLookupPolling = () => {};
   context.refreshCoverLookupGallery = async () => {};
+  context.refreshCoverLookupLocalInventoryCount = async () => {};
 
   await context.openCoverLookupModal({ name: 'Album' }, { mobileSheet: true });
 
@@ -280,6 +285,7 @@ test('ordinary mobile Cover Lookup keeps the existing mobile-page presentation',
   context.renderCoverLookupModal = () => {};
   context.ensureCoverLookupPolling = () => {};
   context.refreshCoverLookupGallery = async () => {};
+  context.refreshCoverLookupLocalInventoryCount = async () => {};
 
   await context.openCoverLookupModal({ name: 'Album' });
 
@@ -361,7 +367,9 @@ test('opening a persisted notification renders usable cached art and loads unres
     best_candidate_id: 'candidate-without-preview',
   };
   let resolveGallery;
+  let resolveInventory;
   const galleryResponse = new Promise((resolve) => { resolveGallery = resolve; });
+  const inventoryResponse = new Promise((resolve) => { resolveInventory = resolve; });
   const overlay = { hidden: true };
   const renderSnapshots = [];
   const context = {
@@ -379,8 +387,10 @@ test('opening a persisted notification renders usable cached art and loads unres
     console,
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
     showToast: () => {},
-    fetch: async (url) => {
-      if (url === '/utilities/cover-lookup/gallery') return galleryResponse;
+    fetch: async (url, options) => {
+      if (url === '/utilities/cover-lookup/gallery') {
+        return JSON.parse(options.body).inventory_only ? inventoryResponse : galleryResponse;
+      }
       throw new Error(`Unexpected request: ${url}`);
     },
     document: {
@@ -397,6 +407,7 @@ test('opening a persisted notification renders usable cached art and loads unres
     renderSnapshots.push({
       loading: context.state.coverLookup.modal.loading,
       candidates: [...context.state.coverLookup.modal.possibleMatches],
+      expectedLocalCount: context.state.coverLookup.modal.expectedLocalCount,
       expectedRemoteCount: context.state.coverLookup.modal.expectedRemoteCount,
     });
   };
@@ -411,9 +422,17 @@ test('opening a persisted notification renders usable cached art and loads unres
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(renderSnapshots.some((snapshot) => (
-    snapshot.loading === false
+    snapshot.loading === true
     && snapshot.candidates.some((item) => item.id === candidate.id)
   )));
+
+  resolveInventory({
+    ok: true,
+    json: async () => ({ ok: true, local_image_count: 29 }),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(renderSnapshots.at(-1).loading, true);
+  assert.equal(renderSnapshots.at(-1).expectedLocalCount, 29);
 
   context.state.coverLookup.tasks = [idOnlyTask];
   const idOnlyOpenPromise = context.openCoverLookupModal(album, { taskId: idOnlyTask.id });
@@ -474,6 +493,7 @@ test('Cover Lookup loading markup renders the exact persisted remote candidate c
     URLSearchParams,
     window: {},
     escapeHtml: (value) => String(value || ''),
+    state: { coverLookup: { modal: {} } },
     document: { getElementById: () => null },
   };
   vm.createContext(context);
@@ -490,6 +510,34 @@ test('Cover Lookup loading markup renders the exact persisted remote candidate c
   assert.equal((markup.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 4);
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="local"/);
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="other-art"/);
+});
+
+test('Cover Lookup loading markup keeps cached remote candidates usable while local art resolves', () => {
+  const context = {
+    URLSearchParams,
+    window: {},
+    escapeHtml: (value) => String(value || ''),
+    state: { coverLookup: { modal: {} } },
+    document: { getElementById: () => null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+
+  const markup = context.buildCoverLookupGalleryLoadingMarkup({
+    album: { album_artist: 'Artist', name: 'Album' },
+    expectedLocalCount: 29,
+    expectedRemoteCount: 2,
+    possibleMatches: [{
+      id: 'cached-candidate',
+      source: 'youtube_music',
+      url: 'https://images.example/cached.jpg',
+      thumbnail_url: 'https://images.example/cached-thumb.jpg',
+    }],
+  });
+
+  assert.match(markup, /cached-thumb\.jpg/);
+  assert.equal((markup.match(/data-cover-lookup-loading-section="local"/g) || []).length, 29);
+  assert.equal((markup.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 1);
 });
 
 test('starting lookup publishes visible feedback before the start request settles', async () => {
@@ -977,6 +1025,7 @@ function loadCapabilityCoverRoute(actions, { initial = false, parent = false } =
   context.ensureCoverLookupPolling = () => effects.push('poll');
   context.loadCoverLookupTasks = async () => effects.push('tasks');
   context.refreshCoverLookupGallery = async () => effects.push('gallery');
+    context.refreshCoverLookupLocalInventoryCount = async () => effects.push('inventory');
   if (parent) vm.runInContext("mobilePageState.pages.push({ kind: 'album', albumKey: 'one', title: 'Album' })", context);
   const restore = () => initial ? context.initMobileNavigation() : context.handleMobilePagePopState();
   return { context, effects, overlay, history, location, restore };
@@ -1006,7 +1055,7 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
     const f = loadCapabilityCoverRoute(actions, { initial: true });
     f.restore();
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(f.effects, ['present', 'body', 'render', 'gallery', 'history', 'poll']);
+    assert.deepEqual(f.effects, ['present', 'body', 'render', 'inventory', 'gallery', 'history', 'poll']);
     assert.equal(f.overlay.hidden, false);
     assert.equal(f.context.state.coverLookup.modal.album.key, 'one');
     assert.equal(vm.runInContext('coverLookupModalSession', f.context), 1);

@@ -5448,6 +5448,7 @@ const state = {
       currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
+      expectedLocalCount: 0,
       activeLocalSelectionPath: '',
       remoteSelectionOverrideGeneration: '',
       seenCandidateImprovementToken: '',
@@ -30462,24 +30463,40 @@ function buildCoverLookupGalleryLoadingCards(section, count) {
 
 function buildCoverLookupGalleryLoadingMarkup(modalState) {
   const album = modalState?.album || {};
-  const localCount = String(album.cover_path || '').trim()
-    && !String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
+  const localCount = Math.max(
+    Number(modalState?.expectedLocalCount || 0) || 0,
+    String(album.cover_path || '').trim()
+      && !String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0,
+  );
   const savedRemoteCount = String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
+  const cachedRemoteCandidates = Array.isArray(modalState?.possibleMatches)
+    ? modalState.possibleMatches.filter((candidate) => (
+      String(candidate?.thumbnail_url || candidate?.url || '').trim()
+    ))
+    : [];
   const remoteCount = Math.max(
     Number(modalState?.expectedRemoteCount || 0) || 0,
     Array.isArray(modalState?.possibleMatches) ? modalState.possibleMatches.length : 0,
   ) + savedRemoteCount;
-  const section = (title, key, count) => count > 0 ? `
+  const section = (title, key, count, cards = '') => count > 0 ? `
     <section class="cover-lookup-section">
       <h4 class="cover-lookup-section-title">${title} · ${formatCoverLookupImageCount(count)}</h4>
       <div class="cover-lookup-gallery cover-lookup-gallery-loading">
-        ${buildCoverLookupGalleryLoadingCards(key, count)}
+        ${cards}${buildCoverLookupGalleryLoadingCards(
+          key,
+          count - (key === 'remote' ? cachedRemoteCandidates.length : 0),
+        )}
       </div>
     </section>
   ` : '';
   return `<div role="status" aria-label="Loading cover art">
     ${section('LOCAL', 'local', localCount)}
-    ${section('REMOTE', 'remote', remoteCount)}
+    ${section(
+      'REMOTE',
+      'remote',
+      remoteCount,
+      cachedRemoteCandidates.map((candidate) => buildCoverLookupCard(candidate, 'remote')).join(''),
+    )}
   </div>`;
 }
 
@@ -31025,7 +31042,7 @@ async function refreshCoverLookupGallery(showLoading = true) {
   if (!album) return;
   const request = ++coverLookupGalleryRequest;
   const isCurrent = () => request === coverLookupGalleryRequest;
-  state.coverLookup.modal.loading = Boolean(showLoading);
+  if (showLoading) state.coverLookup.modal.loading = true;
   renderCoverLookupModal();
   try {
     const response = await fetch('/utilities/cover-lookup/gallery', {
@@ -31060,6 +31077,31 @@ async function refreshCoverLookupGallery(showLoading = true) {
     console.error('[AlbumHaven][CoverLookup] Failed to load gallery.', error);
     renderCoverLookupModal();
     showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+  }
+}
+
+async function refreshCoverLookupLocalInventoryCount(album, session) {
+  try {
+    const response = await fetch('/utilities/cover-lookup/gallery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        album,
+        task_id: state.coverLookup.modal.taskId || '',
+        inventory_only: true,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (
+      session !== coverLookupModalSession
+      || state.coverLookup.modal.album !== album
+      || !response.ok
+      || !data.ok
+    ) return;
+    state.coverLookup.modal.expectedLocalCount = Math.max(0, Number(data.local_image_count || 0) || 0);
+    if (state.coverLookup.modal.loading) renderCoverLookupModal();
+  } catch (error) {
+    console.warn('[AlbumHaven][CoverLookup] Failed to count local cover art.', error);
   }
 }
 
@@ -31102,9 +31144,6 @@ async function openCoverLookupModal(album, options = {}) {
     Number(matchingTask?.possible_match_count || 0) || 0,
     cachedCandidates.length,
   );
-  const hasCachedPreview = cachedCandidates.some((candidate) => (
-    String(candidate?.thumbnail_url || candidate?.url || '').trim()
-  ));
   state.coverLookup.modal.album = album;
   state.coverLookup.modal.taskId = String(requestedTaskId || matchingTask?.id || '');
   state.coverLookup.modal.remoteCover = null;
@@ -31122,6 +31161,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.candidateGeneration = cachedCandidates.length
     ? String(matchingTask?.id || '')
     : '';
+  state.coverLookup.modal.expectedLocalCount = 0;
   state.coverLookup.modal.expectedRemoteCount = expectedRemoteCount;
   state.coverLookup.modal.activeLocalSelectionPath = '';
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
@@ -31133,7 +31173,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.failureNotice = '';
   state.coverLookup.modal.manualUrlText = '';
   state.coverLookup.modal.manualBusy = false;
-  state.coverLookup.modal.loading = !hasCachedPreview;
+  state.coverLookup.modal.loading = true;
   state.coverLookup.modal.saving = false;
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
@@ -31142,7 +31182,8 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.disabled = true;
   }
   renderCoverLookupModal();
-  await refreshCoverLookupGallery(!hasCachedPreview);
+  void refreshCoverLookupLocalInventoryCount(album, coverLookupModalSession);
+  await refreshCoverLookupGallery(false);
   if (!els.overlay.hidden) ensureCoverLookupPolling();
 }
 
@@ -31174,6 +31215,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = '';
+  state.coverLookup.modal.expectedLocalCount = 0;
   state.coverLookup.modal.expectedRemoteCount = 0;
   state.coverLookup.modal.statusText = '';
   state.coverLookup.modal.statusTone = 'neutral';

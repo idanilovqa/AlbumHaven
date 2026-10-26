@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 from types import SimpleNamespace
 
+from music_app.services import cover_state
 from music_app.services.cover_state import (
     apply_cover_selection_for_tracks,
     serialize_cover_gallery_payload,
@@ -19,6 +20,20 @@ def _write_jpeg(path: Path, color: tuple[int, int, int], *, size: tuple[int, int
     buffer = io.BytesIO()
     Image.new("RGB", size, color).save(buffer, format="JPEG", quality=95)
     path.write_bytes(buffer.getvalue())
+
+
+def test_count_local_cover_images_recurses_without_reading_dimensions(tmp_path: Path):
+    album_root = tmp_path / "Artist" / "Album"
+    _write_jpeg(album_root / "cover.jpg", (220, 40, 40))
+    _write_jpeg(album_root / "Disc 1" / "front.png", (40, 220, 40))
+    _write_jpeg(album_root / "album-haven-preview.jpg", (40, 40, 220))
+    _write_jpeg(album_root / ".album-haven" / "cover_variants" / "generated.jpg", (40, 40, 220))
+    (album_root / "notes.txt").write_text("not artwork", encoding="utf-8")
+
+    assert cover_state.count_local_cover_images(
+        album_root,
+        image_extensions={".jpg", ".png"},
+    ) == 2
 
 
 def test_cover_gallery_excludes_managed_preview_files(tmp_path: Path):

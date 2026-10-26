@@ -254,6 +254,28 @@ async def _resolve_album_payload_context(
                 album_key=None,
             )
             if isinstance(track_context, Mapping):
+                context_paths = {
+                    str(path or "").strip()
+                    for path in list(track_context.get("track_paths") or [])
+                    if str(path or "").strip()
+                }
+                if (
+                    str(track_context.get("album_key") or "").strip().casefold()
+                    == "unknown artist::"
+                    and fallback_paths < context_paths
+                ):
+                    normalized_album.pop("id", None)
+                    normalized_album.pop("album_id", None)
+                    normalized_album["tracks"] = [
+                        {"path": path} for path in sorted(fallback_paths)
+                    ]
+                    normalized_album["_cover_lookup_task_scoped_context"] = True
+                    resolved_context = (
+                        resolve_album_context(config, normalized_album)
+                        or _resolve_distributed_album_context(config, normalized_album)
+                    )
+                    if resolved_context is not None:
+                        return normalized_album, resolved_context
                 normalized_album["id"] = track_context.get("album_id")
                 normalized_album["album_id"] = track_context.get("album_id")
                 normalized_album["key"] = track_context.get("album_key")
@@ -694,12 +716,14 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         return _json_response(
             ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)
         )
-    try:
-        candidate_snapshot = repository.get_for_album_context(album_id=int(album_id))
-    except Exception:
-        candidate_snapshot = _candidate_snapshot_read_failure(
-            "candidate_snapshot_read_failed"
-        )
+    candidate_snapshot = None
+    if not album.get("_cover_lookup_task_scoped_context"):
+        try:
+            candidate_snapshot = repository.get_for_album_context(album_id=int(album_id))
+        except Exception:
+            candidate_snapshot = _candidate_snapshot_read_failure(
+                "candidate_snapshot_read_failed"
+            )
     return JSONResponse(
         await _serialize_cover_gallery_from_asgi(
             request,

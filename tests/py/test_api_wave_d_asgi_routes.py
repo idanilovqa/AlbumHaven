@@ -977,6 +977,97 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     assert snapshot_reads == [41, 41]
 
 
+def test_asgi_cover_lookup_gallery_keeps_task_scope_out_of_unknown_catch_all(
+    app, monkeypatch
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (
+        app.config["MUSIC_DIR"] / "Яруга" / "Я хочу умереть в лесу" / "01.flac"
+    ).resolve()
+    unrelated_path = (
+        app.config["MUSIC_DIR"] / "Unrelated" / "Unknown Album" / "99.flac"
+    ).resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+
+    reset_cover_lookup_runtime_state()
+    task_id, _cancel_event = cover_lookup_tasks.create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+    )
+    cover_lookup_tasks.update_cover_lookup_task(
+        task_id,
+        status="completed",
+        possible_matches=[
+            {
+                "id": "yaruga-caa-cover",
+                "source": "cover_art_archive",
+                "url": "https://coverartarchive.org/release/yaruga/front",
+                "thumbnail_url": "https://coverartarchive.org/release/yaruga/front-250",
+            }
+        ],
+    )
+
+    class FakeSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 417655
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            assert album_id == 417655
+            assert album_key in {None, "unknown artist::"}
+            return {
+                "album_id": 417655,
+                "album_key": "unknown artist::",
+                "track_paths": [str(track_path), str(unrelated_path)],
+            }
+
+        def get_for_album_context(self, *, album_id):
+            raise AssertionError(
+                "A task-scoped lookup must not read the catch-all album snapshot"
+            )
+
+    def build_cover_state_entries(_self, track_paths):
+        assert track_paths == {str(track_path)}
+        return {}
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        FakeSnapshotRepository,
+    )
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_cover_state_entries_by_paths",
+        build_cover_state_entries,
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={
+            "album": {
+                "name": "Я хочу умереть в лесу",
+                "album_artist": "Яруга",
+                "year": 2021,
+            },
+            "task_id": task_id,
+        },
+    )
+
+    payload = _decode_json(body)
+    assert status == 200, payload
+    assert payload["album_root"] == str(track_path.parent)
+    assert payload["task"]["possible_matches"][0]["id"] == "yaruga-caa-cover"
+
+
 def test_asgi_cover_lookup_save_remote_rehydrates_compact_notification_album(
     app,
     monkeypatch,

@@ -1102,7 +1102,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
-    await coverLookupActions.setProviderFixtureMode('no-results');
+    await coverLookupActions.setProviderFixtureMode('normal');
     const expectedCover = findFixtureCoverBySubtitle(
       Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
@@ -1111,7 +1111,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     const task = await coverLookupActions.startSearch();
     taskId = String(task.task?.id || '').trim();
     expect(taskId).not.toBe('');
-    await coverLookupActions.waitForModalSearchCompleted();
+    await coverLookupActions.waitForRemoteCandidateCountAtLeast(1, { timeout: 120_000 });
     const candidates = await coverLookupActions.readRemoteCandidateSummaries();
     candidateId = String(candidates[0]?.id || '').trim();
     expect(candidateId).not.toBe('');

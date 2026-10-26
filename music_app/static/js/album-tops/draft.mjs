@@ -74,10 +74,13 @@ export function createAlbumTopDraft(configuration) {
     if (disposed || retired && !adding) return false;
     if (remoteActive && !remoteScoped()) retireRemote();
     const current = controller.getSnapshot();
-    if (scoped && (providers.listScopedAlbums !== populationMethod || providers.admitAlbum !== admissionMethod) || current.scopeKey !== scopeKey || (current.selectedTopRef || null) !== topRef
+    const readDenied = editing && !adding && current.detail.status === 'ready'
+      && (current.detail.data?.top_ref !== topRef || current.detail.data.allowed_actions?.can_read !== true
+        || current.detail.data.allowed_actions?.['library.browse.read'] !== true);
+    if (readDenied || scoped && (providers.listScopedAlbums !== populationMethod || providers.admitAlbum !== admissionMethod) || current.scopeKey !== scopeKey || (current.selectedTopRef || null) !== topRef
       || current.directory.status === 'denied' || current.detail.status === 'denied') {
       if (retired && state.denied) return false;
-      retired = true; abortAll(); results = []; emit({denied: true, busy: false, ...(adding ? {title: '', description: '', items: [], query: '', submittedRequestKey: null} : {}), search: {status: 'denied', items: [], next_cursor: null}}); return false;
+      retired = true; abortAll(); results = []; emit({denied: true, busy: false, ...(adding || editing ? {title: '', description: '', items: [], query: '', submittedRequestKey: null} : {}), search: {status: 'denied', items: [], next_cursor: null}}); return false;
     }
     if (retired) return false;
     if (adding && state.submittedRequestKey && current.mutation.command?.request_key === state.submittedRequestKey
@@ -116,7 +119,7 @@ export function createAlbumTopDraft(configuration) {
   const excluded = () => new Set([...baseline.items, ...state.items].map(row => row.album_ref));
   const visible = () => {const omit = excluded(); return results.filter(row => !row.album_ref || !omit.has(row.album_ref));};
   const deny = error => {
-    if ([401, 403].includes(error?.status)) {controller.observeDenial?.(scopeKey, error); retired = true; abortAll(); if (adding) results = []; emit({denied: true, error, ...(adding ? {busy: false, title: '', description: '', items: [], query: '', submittedRequestKey: null} : {}), search: {status: 'denied', items: [], next_cursor: null}});}
+    if ([401, 403].includes(error?.status)) {controller.observeDenial?.(scopeKey, error); retired = true; abortAll(); if (adding) results = []; emit({denied: true, error, ...(adding || editing ? {busy: false, title: '', description: '', items: [], query: '', submittedRequestKey: null} : {}), search: {status: 'denied', items: [], next_cursor: null}});}
     else emit({error});
   };
   async function search(query, cursor = null) {
@@ -436,6 +439,7 @@ export function createAlbumTopDraft(configuration) {
     refreshArtistPopulation, setArtistFamily, setArtistFilters,
     resetArtistFilters() {return scoped ? setArtistFilters(initialArtistFilters()) : false;},
     getSnapshot: () => state,
+    isRetired: () => disposed || retired,
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);}, refresh,
     canEdit: () => allowed(), canEditMembership: () => allowed(true),
     edit(patch) {

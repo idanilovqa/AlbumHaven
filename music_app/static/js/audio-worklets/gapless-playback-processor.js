@@ -10,9 +10,59 @@
     return Number.isInteger(value) && value >= minimum && value <= maximum;
   }
 
+  // Fixed storage independent of PCM capacity: three queues cost 24 KiB.
+  // Entries are output-start/end, absolute-source-start, alias serial.
+  class CaptureRanges {
+    constructor() { this.data = new Float64Array(256 * 4); this.clear(); }
+    clear() { this.head = 0; this.count = 0; this.cursor = 0; this.last = -1; this.serial = 0; this.source = 0; }
+    add(start, end, source, serial) {
+      if (this.count === 256) return false;
+      const i = ((this.head + this.count) % 256) * 4;
+      this.data[i] = start; this.data[i + 1] = end; this.data[i + 2] = source; this.data[i + 3] = serial;
+      this.count += 1;
+      return true;
+    }
+    select(frame, retained = false) {
+      this.serial = 0;
+      if (retained) {
+        if (frame < this.last) this.cursor = 0;
+        this.last = frame;
+        while (this.cursor < this.count) {
+          const i = ((this.head + this.cursor) % 256) * 4;
+          if (frame >= this.data[i + 1]) { this.cursor += 1; continue; }
+          if (frame >= this.data[i]) { this.serial = this.data[i + 3]; this.source = this.data[i + 2] + frame - this.data[i]; }
+          return;
+        }
+      } else {
+        while (this.count) {
+          const i = this.head * 4;
+          if (frame >= this.data[i + 1]) { this.head = (this.head + 1) % 256; this.count -= 1; continue; }
+          if (frame >= this.data[i]) { this.serial = this.data[i + 3]; this.source = this.data[i + 2] + frame - this.data[i]; }
+          return;
+        }
+      }
+    }
+    has(serial) {
+      if (!serial) return false;
+      for (let n = 0; n < this.count; n += 1) if (this.data[((this.head + n) % 256) * 4 + 3] === serial) return true;
+      return false;
+    }
+    copy(sourceQueue, first, count, targetStart) {
+      for (let n = 0; n < sourceQueue.count; n += 1) {
+        const i = ((sourceQueue.head + n) % 256) * 4;
+        const start = Math.max(first, sourceQueue.data[i]);
+        const end = Math.min(first + count, sourceQueue.data[i + 1]);
+        if (end > start && !this.add(targetStart + start - first, targetStart + end - first,
+            sourceQueue.data[i + 2] + start - sourceQueue.data[i], sourceQueue.data[i + 3])) return;
+      }
+    }
+  }
+
   function createRing(capacityFrames) {
     return {
       samples: new Float32Array(capacityFrames * CHANNELS),
+      captureRanges: new CaptureRanges(),
+      captureReadFrame: 0,
       capacityFrames,
       readFrame: 0,
       writeFrame: 0,
@@ -29,6 +79,8 @@
 
   function clearRing(ring) {
     ring.captureSerial = 0;
+    ring.captureRanges.clear();
+    ring.captureReadFrame = 0;
     ring.captureSource = 0;
     ring.readFrame = 0;
     ring.writeFrame = 0;
@@ -90,7 +142,7 @@
       this.probe = null;
       this.unboundLoss = { first: 0, last: 0, frames: 0, outputFirst: 0, outputLast: 0, epoch: 0 };
       this.slots = Array.from({ length: 8 }, () => ({ serial: 0, pending: false,
-        stream: 0, generation: 0, base: 0, lost: 0, first: 0, last: 0,
+        stream: 0, generation: 0, base: 0, mappedSerial: 0, lost: 0, first: 0, last: 0,
         outputFirst: 0, outputLast: 0, reasons: 0, epoch: 0, final: 0 }));
     }
 
@@ -131,6 +183,15 @@
       if (!this.enabled || message.generation !== this.processor.generation) return;
       if (message.type === 'capture-bind') {
         const slot = this.slots[message.slot - 1];
+        if (message.mapped === true) {
+          if (this.packetVersion !== 2 || !slot || !slot.serial || slot.pending || slot.mappedSerial
+              || message.baseBindingSerial !== slot.serial || message.streamId !== slot.stream
+              || message.generation !== slot.generation || message.sourceBase48 !== 0 || slot.base !== 0
+              || !this.safe(message.bindingSerial, this.lastSerial + 1)) return;
+          slot.mappedSerial = message.bindingSerial;
+          this.lastSerial = message.bindingSerial;
+          return;
+        }
         if (!slot || slot.serial || !this.safe(message.bindingSerial, this.lastSerial + 1)
             || !this.safe(message.streamId, 1) || !this.safe(message.sourceBase48)
             || this.slots.some(item => item.serial && item.stream === message.streamId
@@ -138,7 +199,7 @@
         const rings = [this.processor.current, this.processor.continuity];
         if (rings.some(ring => ring.streamId === message.streamId && ring.receivedFrames > 0)) return;
         Object.assign(slot, { serial: message.bindingSerial, stream: message.streamId,
-          generation: message.generation, base: message.sourceBase48, pending: false,
+          generation: message.generation, base: message.sourceBase48, mappedSerial: 0, pending: false,
           final: 0, lost: 0, first: 0, last: 0, outputFirst: 0, outputLast: 0, reasons: 0, epoch: 0 });
         this.lastSerial = message.bindingSerial;
       } else if (message.type === 'capture-unbind') {
@@ -171,7 +232,10 @@
 
     live(slot) {
       const p = this.processor;
-      return p.current.captureSerial === slot.serial && p.current.bufferedFrames > 0
+      return p.current.captureRanges.has(slot.mappedSerial) && p.current.bufferedFrames > 0
+        || p.continuity.captureRanges.has(slot.mappedSerial) && p.continuity.bufferedFrames > 0
+        || p.retainedCaptureRanges.has(slot.mappedSerial) && p.retainedLoopFrames > 0 && p.retainedLoopStreamId !== null
+        || p.current.captureSerial === slot.serial && p.current.bufferedFrames > 0
         || p.continuity.captureSerial === slot.serial && p.continuity.bufferedFrames > 0
         || p.retainedCaptureSerial === slot.serial && p.retainedLoopFrames > 0
           && p.retainedLoopStreamId !== null;
@@ -197,7 +261,7 @@
       const ordinal = this.ordinal++;
       let slot = null;
       if (serial > 0) for (let index = 0; index < 8; index++) {
-        if (this.slots[index].serial === serial) { slot = this.slots[index]; break; }
+        if (this.slots[index].serial === serial || this.slots[index].mappedSerial === serial) { slot = this.slots[index]; break; }
       }
       if (!slot) {
         if (this.packetVersion === 2) this.pendingBreak = true;
@@ -283,7 +347,7 @@
           const offset = 96 + data[9]++ * 4;
           data[offset] = slot.serial; data[offset + 1] = this.packet;
           data[offset + 2] = slot.final; data[offset + 3] = this.epoch;
-          slot.serial = 0; slot.pending = false;
+          slot.serial = 0; slot.mappedSerial = 0; slot.pending = false;
         }
       }
       if (this.probe) { data[10] = 1; data.set(this.probe, 128); this.probe = null; }
@@ -308,6 +372,8 @@
       super();
       this.positionCapture = new PositionCapture(this);
       this.retainedCaptureSerial = 0;
+      this.retainedCaptureSource = 0;
+      this.retainedCaptureRanges = new CaptureRanges();
       this.generation = 0;
       this.sampleRate = 0;
       this.configured = false;
@@ -345,6 +411,8 @@
     reset(generation, timelineStartFrame = 0) {
       this.positionCapture.barrier();
       this.retainedCaptureSerial = 0;
+      this.retainedCaptureSource = 0;
+      this.retainedCaptureRanges.clear();
       this.generation = generation;
       clearRing(this.current);
       clearRing(this.continuity);
@@ -478,8 +546,31 @@
         const binding = this.positionCapture.binding(message.streamId);
         ring.captureSerial = binding?.serial || 0;
         ring.captureSource = binding?.base || 0;
-        if (message.streamId === this.retainedLoopStreamId) this.retainedCaptureSerial = ring.captureSerial;
+        if (message.streamId === this.retainedLoopStreamId) {
+          this.retainedCaptureSerial = ring.captureSerial;
+          this.retainedCaptureSource = ring.captureSource;
+        }
       }
+      const positions = message.capturePositions;
+      if (positions && this.positionCapture.enabled && Number.isSafeInteger(ring.receivedFrames + message.frameCount)
+          && Array.isArray(positions.ranges)
+          && positions.ranges.length > 0 && positions.ranges.length <= 32
+          && positions.ranges.length <= 256 - ring.captureRanges.count) {
+        const binding = this.positionCapture.binding(message.streamId);
+        let valid = binding && !binding.pending && binding.mappedSerial === positions.bindingSerial;
+        let end = 0;
+        for (let n = 0; valid && n < positions.ranges.length; n += 1) {
+          const range = positions.ranges[n];
+          valid = Array.isArray(range) && range.length === 3
+            && range.every(value => Number.isSafeInteger(value) && !Object.is(value, -0))
+            && range[0] >= end && range[1] >= 0 && range[2] > 0
+            && range[0] <= message.frameCount - range[2] && range[1] <= Number.MAX_SAFE_INTEGER - range[2];
+          if (valid) end = range[0] + range[2];
+        }
+        if (valid) for (const range of positions.ranges) ring.captureRanges.add(
+          ring.receivedFrames + range[0], ring.receivedFrames + range[0] + range[2], range[1], positions.bindingSerial);
+      }
+      const receivedBefore = ring.receivedFrames;
       appendInterleaved(ring, message.pcm, message.frameCount);
       if (message.role === 'continuity'
           && this.shortLoopActive
@@ -495,6 +586,7 @@
           this.retainedLoopSamples[target] = message.pcm[source];
           this.retainedLoopSamples[target + 1] = message.pcm[source + 1];
         }
+        this.retainedCaptureRanges.copy(ring.captureRanges, receivedBefore, retainedFrames, this.retainedLoopCapturedFrames);
         this.retainedLoopCapturedFrames += retainedFrames;
       }
       ring.nextSequence += 1;
@@ -625,6 +717,8 @@
       }
       this.retainedLoopStreamId = message.retainedStreamId;
       this.retainedCaptureSerial = this.continuity.captureSerial || 0;
+      this.retainedCaptureSource = this.continuity.captureSource || 0;
+      this.retainedCaptureRanges.clear();
       this.retainedLoopFrames = shortLoop ? loopFrames : 0;
       this.retainedLoopCapturedFrames = 0;
       this.retainedLoopReadFrame = 0;
@@ -639,6 +733,7 @@
         this.retainedLoopSamples[target] = this.continuity.samples[source];
         this.retainedLoopSamples[target + 1] = this.continuity.samples[source + 1];
       }
+      this.retainedCaptureRanges.copy(this.continuity.captureRanges, this.continuity.captureReadFrame, retainedFrames, 0);
       this.retainedLoopCapturedFrames = retainedFrames;
     }
 
@@ -908,8 +1003,12 @@
           const loopRight = this.retainedLoopSamples[retainedSource + 1];
           left[outputFrame] = loopLeft;
           right[outputFrame] = loopRight;
-          if (this.positionCapture.enabled) this.positionCapture.record(this.retainedCaptureSerial,
-            this.loopStartFrame + this.retainedLoopReadFrame, currentFrame + outputFrame);
+          if (this.positionCapture.enabled) {
+            this.retainedCaptureRanges.select(this.retainedLoopReadFrame, true);
+            this.positionCapture.record(this.retainedCaptureRanges.serial || this.retainedCaptureSerial,
+              this.retainedCaptureRanges.serial ? this.retainedCaptureRanges.source : this.retainedCaptureSource + this.retainedLoopReadFrame,
+              currentFrame + outputFrame);
+          }
           recordConsumedSample(
             this.current,
             this.retainedLoopStreamId,
@@ -959,8 +1058,12 @@
             const loopRight = this.retainedLoopSamples[retainedSource + 1];
             left[outputFrame] = loopLeft;
             right[outputFrame] = loopRight;
-            if (this.positionCapture.enabled) this.positionCapture.record(this.retainedCaptureSerial,
-              this.loopStartFrame + this.retainedLoopReadFrame, currentFrame + outputFrame);
+            if (this.positionCapture.enabled) {
+            this.retainedCaptureRanges.select(this.retainedLoopReadFrame, true);
+            this.positionCapture.record(this.retainedCaptureRanges.serial || this.retainedCaptureSerial,
+              this.retainedCaptureRanges.serial ? this.retainedCaptureRanges.source : this.retainedCaptureSource + this.retainedLoopReadFrame,
+              currentFrame + outputFrame);
+          }
             recordConsumedSample(
               this.current,
               this.retainedLoopStreamId,
@@ -1034,9 +1137,12 @@
         }
         takeFrame(ring, left, right, outputFrame);
         if (this.positionCapture.enabled) {
-          this.positionCapture.record(ring.captureSerial, ring.captureSource, currentFrame + outputFrame);
+          ring.captureRanges.select(ring.captureReadFrame);
+          this.positionCapture.record(ring.captureRanges.serial || ring.captureSerial,
+            ring.captureRanges.serial ? ring.captureRanges.source : ring.captureSource, currentFrame + outputFrame);
           ring.captureSource += 1;
         }
+        ring.captureReadFrame += 1;
         const leftSample = left[outputFrame];
         const rightSample = right[outputFrame];
         const isBoundaryIncoming = boundaryPending && ring.streamId === boundaryIncomingStreamId;

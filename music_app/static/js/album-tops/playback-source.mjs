@@ -23,7 +23,8 @@ export function createTopPlaybackSource({capture, providers, scopeKey, isCurrent
       const source = Object.freeze(Object.fromEntries(sourceFields.map(key => [key, original?.[key]])));
       if (!sourceFields.every(key => text(source[key])) || source.revision !== revision || source.item_ref !== album.item_ref || source.catalog_ref !== album.catalog_ref
         || source.inventory_album_ref !== album.inventory_album_ref) throw new TypeError('Invalid Top playback binding.');
-      sources.set(track.queue_item_ref, Object.freeze({source, albumRef: album.album_ref}));
+      sources.set(track.queue_item_ref, Object.freeze({source, albumRef: album.album_ref,
+        listeningSelection: album.listening_selection == null ? null : Object.freeze({...album.listening_selection})}));
       if (track.popularity != null) {
         const evidence = track.popularity;
         if (evidence.provider !== 'lastfm' || evidence.metric !== 'overall_scrobbles'
@@ -142,7 +143,8 @@ export function createTopPlaybackSource({capture, providers, scopeKey, isCurrent
           const target = {...fresh.native_target};
           const payload = Object.freeze({sourceKind: 'album-top', src: `/track?path=${encodeURIComponent(target.path)}`,
             path: target.path, title: target.title, artist: target.artist, album: target.album_title,
-            durationSeconds: target.duration_seconds, inventory_track_ref: target.inventory_track_ref, albumRef: captured.albumRef});
+            durationSeconds: target.duration_seconds, inventory_track_ref: target.inventory_track_ref, albumRef: captured.albumRef,
+            ...(captured.listeningSelection ? {listeningSelection: captured.listeningSelection} : {})});
           requireCurrent(request);
           const receipt = Object.freeze({snapshot: request.expected, occurrenceId: id, payload});
           const binding = Object.freeze({owner, request, payload, occurrenceId: id});

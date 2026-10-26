@@ -1,3 +1,4 @@
+import {createListeningSettingsSession} from './listening-settings-session.mjs';
 import {mountArtistListenThroughCreation} from './artist-creation.mjs';
 import {createAlbumTopController} from './model.mjs';
 import {createEditRequestNotifications} from '../home-friends/edit-request-notifications.mjs';
@@ -28,6 +29,8 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   const tree = sidebar ? make(sidebar) : null; if (tree) tree.className = 'navigation-tree';
   const sidebarRows = new Map();
   function schedule() {if (disposed) return; queued = true; if (running) return; running = true; try {while (queued && !disposed) {queued = false; render();}} finally {running = false;}}
+  const listeningSettings = createListeningSettingsSession({runtime,
+    fetch: (...args) => host.ownerDocument.defaultView.fetch(...args), onChange: schedule});
   const mountNotifications = () => {
     if (disposed || notifications || !runtime.notificationRegistry?.()?.registerSource) return;
     notifications = createEditRequestNotifications({runtime, notifications: runtime.notificationRegistry(), providers,
@@ -63,6 +66,7 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
     const shell = runtime.snapshot(), scope = shell.authenticated ? shell.scopeKey : null;
     if (previousInLibrary !== shell.inLibrary) {previousInLibrary = shell.inLibrary; if (!shell.inLibrary) sourceReplay.invalidate();}
     const enabled = shell.authenticated && shell.inLibrary && (shell.active || shell.sidebarMode === 'album_tops');
+    listeningSettings.update({enabled: enabled && shell.visible});
     if (previousScope !== scope) {previousScope = scope; savedForm = null; sourceReplay.invalidate(); controller.setScope(scope);}
     const enabledKey = JSON.stringify([enabled, shell.scopeKey]);
     if (enabledKey !== previousEnabled) {previousEnabled = enabledKey; if (enabled) controller.load();}
@@ -91,7 +95,7 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
     if (!errorHost.hidden) errorHost.innerHTML = runtime.alertHtml({severity: 'error', role: 'alert', message: 'This Album Top could not be opened. Try again.'});
     loadingHost.hidden = !visible || showView || Boolean(navigationError);
     if ((!showView && !shell.sampleSuspended) || viewScope !== shell.scopeKey || viewNavigation !== shell.viewVersion) {view?.dispose(); view = null; viewScope = null; viewNavigation = null;}
-    if (showView) {const options = {runtime, controller, state, providers, sourceReplay, imageExportCoordinator, onOpen: open, onFormSaved: formSaved, shareRequest,
+    if (showView) {const options = {runtime, controller, state, providers, sourceReplay, imageExportCoordinator, listeningSettingsController: listeningSettings.getController(), onOpen: open, onFormSaved: formSaved, shareRequest,
       canImport: sourceImports?.canStart() === true, onImport: returnFocus => sourceImports?.start(returnFocus),
       onShareRequestHandled: request => {if (shareRequest === request) shareRequest = null;}};
       if (view) view.update(options); else {viewScope = shell.scopeKey; viewNavigation = shell.viewVersion; view = mountAlbumTopsView(viewHost, runtime, options);}}
@@ -112,6 +116,6 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   artistCreation = mountArtistListenThroughCreation({runtime, providers});
   mountNotifications(); schedule();
   return Object.freeze({refresh() {if (!disposed && runtime.acceptsPrivateScope(controller.getSnapshot().scopeKey)) return controller.load();},
-    dispose() {if (disposed) return; disposed = true; artistCreation?.dispose(); sourceImports.dispose(); sourceReplay.dispose(); unsubscribe(); unsubscribeShell(); unsubscribeNotifications?.(); notifications?.dispose(); view?.dispose(); all?.dispose(); directory?.dispose(); retry.dispose(); loading.dispose();
+    dispose() {if (disposed) return; disposed = true; listeningSettings.dispose(); artistCreation?.dispose(); sourceImports.dispose(); sourceReplay.dispose(); unsubscribe(); unsubscribeShell(); unsubscribeNotifications?.(); notifications?.dispose(); view?.dispose(); all?.dispose(); directory?.dispose(); retry.dispose(); loading.dispose();
       for (const row of sidebarRows.values()) row.element.removeEventListener('click', row.listener); sidebarRows.clear(); sidebar?.remove(); controller.dispose(); providers.dispose?.(); errorHost.remove(); retryHost.remove(); loadingHost.remove(); viewHost.remove();}});
 }

@@ -1,3 +1,4 @@
+import {recordedTrackDetails} from './recorded-track-details.mjs';
 // Pure, inactive presentation of separately admitted owner outputs. This does
 // not authenticate evidence, qualify listens, persist a target or wire the UI.
 import {isManualProgress} from './progress.mjs';
@@ -146,18 +147,27 @@ function proposedCandidates(current, observation, scope, target) {
       && record(candidate.metrics)) value = candidate;
   }
   const targetCurrent = value !== null && target.value !== null && value.target === target.value;
+  const historyIncomplete = value !== null && value.reasons.includes('history_incomplete');
   const metrics = candidateFields.map(([key, label, isRational, targetDependent]) => {
     let projected = !value ? unavailable('candidate_unavailable')
       : targetDependent && !targetCurrent ? unavailable('target_not_current') : metric(value.metrics[key], isRational);
-    if (projected.status !== 'unavailable' && (projected.status !== 'exact_recorded'
+    if (projected.status !== 'unavailable' && (projected.status !== (historyIncomplete ? 'lower_bound' : 'exact_recorded')
+      || historyIncomplete && key === 'partial'
+      || projected.reasons.includes('history_incomplete') !== historyIncomplete
       || !projected.reasons.includes('candidate_only') || !projected.reasons.includes('qualification_pending'))) {
       projected = unavailable('invalid_candidate_metric');
+    }
+    if (projected.status === 'lower_bound') {
+      const listens = projected.value === 1 ? 'listen' : 'listens';
+      label = key === 'full' ? `Proposed: at least ${projected.value} full ${listens}`
+        : key === 'uninterrupted_full' ? `Proposed: at least ${projected.value} uninterrupted full ${listens}`
+        : `${label} (lower bound)`;
     }
     return freeze({key, label, ...projected});
   });
   return freeze({status: value ? 'proposed' : 'unavailable', label: 'Proposed candidates', target_current: targetCurrent,
     reasons: freeze(value ? value.reasons.slice() : ['candidate_unavailable']),
-    help: 'Proposed arithmetic only, not qualified listens or completion. Full includes overlapping candidates; uninterrupted is separate and must not be added to Full.',
+    help: 'Proposed arithmetic only, not qualified listens or completion. Full includes overlapping candidates; uninterrupted is separate and must not be added to Full. Incomplete history supplies lower bounds, not exact totals or leftover partials.',
     metrics: freeze(metrics)});
 }
 
@@ -189,4 +199,86 @@ export function projectTopListeningPresentation(current, observations = {}, conf
   ].map(([key, label, value, help]) => freeze({key, label, value, help}));
   return freeze({target, statuses: freeze(statuses), completion: freeze({manual, automatic: unknown}),
     sources: sourceTimes(lifetime), candidates: proposedCandidates(current, input.candidates, scope, target)});
+}
+
+// Additive local-edition path. It does not relax the catalog/lifetime adapter.
+export function projectLocalAlbumRecordedPresentation(current, value) {
+  const invalid = () => freeze({available:false,text:'Recorded listening unavailable.',detail:''});
+  if (!record(current) || !record(value) || value.ok !== true
+    || value.version !== 'local-album-recorded-metrics-v1' || value.album_key !== current.albumKey
+    || value.account_id !== current.accountId || value.library_id !== current.libraryId
+    || value.context_ref !== current.context || !digest(value.membership_revision)
+    || value.history_complete !== false || typeof value.window_truncated !== 'boolean'
+    || value.compatibility_policy !== 'healthy-local-inventory-version-v1') return invalid();
+  const metrics=value.metrics;
+  if (!record(metrics) || metrics.status !== 'partial' || metrics.basis !== 'local-edition-recorded-v1'
+    || metrics.history_status !== 'partial' || metrics.full !== null || metrics.listened !== 'unknown'
+    || !integer(metrics.recorded_frames) || !Array.isArray(metrics.tracks)
+    || !metrics.tracks.length || metrics.tracks.length>512 || !integer(metrics.unsupported_run_count)
+    || !integer(metrics.tracks_with_supported_coverage)) return invalid();
+  let total=0,covered=0;const seen=new Set();
+  for(const track of metrics.tracks){
+    if(!record(track)||!revision(track.track_id)||seen.has(track.track_id)||!integer(track.recorded_frames))return invalid();
+    seen.add(track.track_id);total+=track.recorded_frames;if(!integer(total))return invalid();
+    if(track.coverage_status==='unknown'){
+      if(track.covered_frames!==null||track.extent_frames48!==null)return invalid();
+    }else if(track.coverage_status==='supported_lower_bound'){
+      if(!integer(track.covered_frames)||!positive(track.extent_frames48)||track.covered_frames>track.extent_frames48)return invalid();
+      covered++;
+    }else return invalid();
+  }
+  if(total!==metrics.recorded_frames||covered!==metrics.tracks_with_supported_coverage)return invalid();
+  const expanded=value.full_progress?.recorded_details;
+  if(expanded != null && (!['processing','complete_at_cutoff','lower_bound_at_cutoff','blocked'].includes(value.full_progress?.status)
+    || !projectLocalAlbumFullProgress(current,value).available))return invalid();
+  const recorded=expanded == null ? null : recordedTrackDetails(expanded,expanded.target);
+  if(expanded != null && !recorded)return invalid();
+  if(recorded?.recorded_frames != null) {
+    const seconds=Math.floor(recorded.recorded_frames/48000),minutes=Math.floor(seconds/60);
+    return freeze({available:true,text:`Recorded: at least ${minutes?`${minutes} min`:`${seconds} sec`}`,
+      detail:recorded.explanation});
+  }
+  const seconds=Math.floor(total/48000),minutes=Math.floor(seconds/60);
+  const amount=minutes?`${minutes} min`:`${seconds} sec`;
+  return freeze({available:true,text:`Recorded: at least ${amount} · Coverage known: ${covered}/${metrics.tracks.length} tracks`,
+    detail:'Your app-reported rendered listening in the retained local-edition window. Older or unsupported history may be missing. '
+      +'Coverage uses compatible healthy local file versions, not equal duration or imported play counts. '
+      +(value.window_truncated?'Only the latest bounded window is shown. ':'')
+      +'Full listens are not yet qualified by this view.'});
+}
+
+// Additive local-version progress, never recast as authoritative catalog history.
+export function projectLocalAlbumFullProgress(current,value) {
+  const invalid=()=>freeze({available:false,continuation:false,text:'',detail:''});
+  if(!record(current)||!record(value)||value.ok!==true
+    ||!['local-album-recorded-metrics-v1','local-album-full-progress-v1'].includes(value.version)
+    ||value.album_key!==current.albumKey||value.account_id!==current.accountId
+    ||value.library_id!==current.libraryId||value.context_ref!==current.context
+    ||!digest(value.membership_revision))return invalid();
+  const progress=value.full_progress;
+  if(!record(progress)||progress.available!==true||typeof progress.state_revision!=='string'
+    ||!/^(0|[1-9][0-9]{0,15})$/.test(progress.state_revision)||!Number.isSafeInteger(Number(progress.state_revision))
+    ||typeof progress.continuation!=='boolean')return invalid();
+  if(['not_started','recalculating'].includes(progress.status))return freeze({available:true,
+    continuation:progress.continuation,revision:progress.state_revision,text:'Full listens: calculating…',
+    detail:'Processing retained measured listening in bounded pages; no imported play counts are used.'});
+  if(progress.policy_version!=='local-edition-overlap-total-margin-v1'
+    ||progress.basis!=='healthy-local-inventory-version-v1'||progress.history_complete!==false
+    ||!['processing','complete_at_cutoff','lower_bound_at_cutoff','blocked'].includes(progress.status)
+    ||!integer(progress.full)||!integer(progress.uninterrupted_full)
+    ||progress.uninterrupted_full>progress.full||progress.partial!==null
+    ||progress.listened!==(progress.full>0?true:'unknown')||typeof progress.derived_pruned!=='boolean'
+    ||(progress.cutoff_checkpoint_id!==null&&!revision(progress.cutoff_checkpoint_id))
+    ||(progress.completed_cutoff_checkpoint_id!==null&&!revision(progress.completed_cutoff_checkpoint_id)))return invalid();
+  const details=progress.recorded_details == null ? null : recordedTrackDetails(progress.recorded_details,progress.recorded_details.target);
+  if(progress.recorded_details != null && !details)return invalid();
+  const count=progress.full>0?`Full: at least ${progress.full} (${progress.uninterrupted_full} uninterrupted)`:'Full listens: not yet established';
+  return freeze({available:true,continuation:progress.continuation,revision:progress.state_revision,
+    text:count+(details?.partial_stretches != null ? ` · ${details.partial_stretches} partial stretches` : '')+(progress.status==='processing'?' · calculating…':''),
+    detail:'Measured local-edition lower bound, including qualifying overlapping sessions. Each main track is required. '
+      +'Uninterrupted listens are included, not added again. Lifetime completeness remains unknown. '
+      +(details ? details.explanation+' ' : 'Partial counts remain unknown. ')
+      +(progress.recorded_details_reason==='derived_detail_capacity'?'Optional detail retention reached its bounded capacity; Full processing and original evidence remain available. ':'')
+      +(progress.derived_pruned?'Some derived overlap combinations were conservatively omitted; original listening remains retained. ':'')
+      +(progress.status==='blocked'?'Processing paused because its bounded state could not be retained. ':'')});
 }

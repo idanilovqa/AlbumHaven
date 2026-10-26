@@ -4,6 +4,8 @@ import {createCollectionFilterSession} from '../collections/native-filter-sessio
 import {mountCollectionFilterSurface} from '../collections/native-filter-surface.mjs';
 import {DEFAULT_TOP_READ_VIEW, normalizeTopReadView, topReadViewDirty} from './read-view.mjs';
 
+import {TOP_STATUS_OPTIONS, topHasStatusPresentation, topStatusCoverage} from './status-presentation.mjs';
+
 let serial = 0;
 const node = (host, tag = 'span', className = '') => {const element = host.ownerDocument.createElement(tag); element.className = className; host.append(element); return element;};
 export function mountAlbumTopReadControls(toolsHost, panelHost, runtime, initial) {
@@ -31,17 +33,26 @@ export function mountAlbumTopReadControls(toolsHost, panelHost, runtime, initial
     const change = patch => {if (current() && props.state.detail.data.items.length) props.onChange({...normalizeTopReadView(props.view), ...patch});};
     const search = mountCreationSearch(searchHost, runtime, {id: `${id}-search`, label: 'Search albums or artists',
       placeholder: 'Album or artist', className: 'collection-filter-search', value: props.view.query, onChange: query => change({query})});
+    const note = node(host, 'p');
     const choices = [
       ['sort', 'Sort', [['curator', 'Curator order'], ['original', 'Original rank'], ['year', 'Year'], ['artist', 'Artist'], ['album', 'Album']]],
       ['direction', 'Direction', [['asc', 'Ascending'], ['desc', 'Descending']]],
+      ['status', 'Status', TOP_STATUS_OPTIONS],
       ['completion', 'Manual completion', [['all', 'Any completion'], ['complete', 'Manually completed'], ['incomplete', 'Not manually completed']]],
     ].map(([key, label, options]) => ({key, label, options, host: node(choicesHost), owner: null}));
     function update() {
       const value = normalizeTopReadView(props.view), disabled = !current() || !props.state.detail.data.items.length;
+      const unavailable = value.status !== 'all' && topStatusCoverage(props.presentationDetail ?? props.state.detail.data, value.status).known === 0;
+      note.textContent = unavailable
+        ? 'Unassessed albums remain visible while their status is checked.'
+        : topHasStatusPresentation(props.presentationDetail ?? props.state.detail.data) ? 'Unassessed rows remain visible, not confirmed matches. Listened means a qualified Full; automatic completion also needs fresh play and rating. Manual marks stay separate.'
+        : 'Listening status unavailable. Manual completion remains available where permitted.';
       search.update({id: `${id}-search`, label: 'Search albums or artists', placeholder: 'Album or artist',
         className: 'collection-filter-search', value: value.query, maxLength: 200, disabled, onChange: query => change({query})});
       for (const item of choices) {
-        const next = {label: item.label, value: value[item.key], options: item.options, disabled,
+        const next = {label: item.label, value: value[item.key],
+          options: item.key === 'status' ? item.options.map(([key, label]) =>
+            [key, label, false]) : item.options, disabled,
           onChange: value => change({[item.key]: value})};
         if (item.owner) item.owner.update(next); else item.owner = mountChoice(item.host, runtime, next);
       }

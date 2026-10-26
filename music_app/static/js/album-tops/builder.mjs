@@ -426,12 +426,21 @@ function mountEditor(host, runtime, options, inline, close) {
   const acknowledgedSave = current => {const mutation = current.mutation; return mutation !== initialMutation && mutation.status === 'ready' && mutation.action === 'save'
     && mutation.command?.top_ref === existing.top_ref && mutation.command.revision === existing.revision
     && mutation.data?.top_ref === existing.top_ref && mutation.data.request_key === mutation.command.request_key;};
+  const editorRetired = (current, snapshot) => draft.isRetired() || current.scopeKey !== snapshot.scopeKey
+    || current.selectedTopRef !== existing.top_ref || current.directory.status === 'denied' || current.detail.status === 'denied'
+    || current.detail.status === 'ready' && (current.detail.data?.top_ref !== existing.top_ref
+      || current.detail.data.allowed_actions?.can_read !== true || current.detail.data.allowed_actions?.['library.browse.read'] !== true);
   function currentGuard() {
     const snapshot = draft.getSnapshot(), current = controller.getSnapshot();
-    if (disposed || snapshot.denied || current.scopeKey !== snapshot.scopeKey || current.selectedTopRef !== existing.top_ref || current.directory.status === 'denied' || current.detail.status === 'denied') return false;
+    if (disposed || editorRetired(current, snapshot)) return false;
     const saved = acknowledgedSave(current);
     if (saved && current.mutation.refreshing === true && current.detail.status === 'loading') return true;
-    return albumTopActionAllowed(current, 'save', existing.top_ref) && (saved ? current.detail.data?.revision === current.mutation.data.revision : !snapshot.stale && current.detail.data?.revision === existing.revision);
+    // Navigation protects the retained dirty draft, not permission to write it.
+    // An in-scope refresh has no new revision/read denial until its reply arrives.
+    if (['loading', 'error'].includes(current.detail.status)) return true;
+    // Parent rendering precedes draft.refresh; its old stale flag is not a new revision.
+    return saved ? current.detail.data?.revision === current.mutation.data.revision
+      : current.detail.data?.revision === existing.revision;
   }
   function canLeave() {return currentGuard() && !draft.getSnapshot().busy && controller.getSnapshot().mutation.refreshing !== true && !['loading', 'uncertain'].includes(controller.getSnapshot().mutation.status);}
   if (inline) {
@@ -457,7 +466,7 @@ function mountEditor(host, runtime, options, inline, close) {
   function renderPass() {
     if (disposed) return; value = draft.getSnapshot(); access = draftAccess(state, value, existing);
     const saved = inline && acknowledgedSave(state);
-    if (inline && (access.stale && !saved || value.denied)) {releaseOwner?.(); releaseOwner = null; guardReady = false;}
+    if (inline && (state.detail.status === 'ready' && state.detail.data?.revision !== existing.revision && !saved || editorRetired(state, value))) {releaseOwner?.(); releaseOwner = null; guardReady = false;}
     const observed = value, renderState = state;
     const passCurrent = () => !disposed && (!scoped || draft.getSnapshot() === observed && state === renderState);
     const yieldPass = () => {if (passCurrent()) return false; if (!disposed) queuedScoped = true; return true;};
@@ -513,7 +522,7 @@ function mountEditor(host, runtime, options, inline, close) {
     notice.update({controller, value: state.mutation}); if (yieldPass()) return; options.onAccess?.(access); if (yieldPass()) return;
     if (inline && guardReady && !focused) {focused = true; inputs[0].input.focus({preventScroll: true});}
     if (inline) {
-      if (value.denied || state.scopeKey !== value.scopeKey || state.selectedTopRef !== existing.top_ref) {options.onClose(); return;}
+      if (editorRetired(state, value)) {options.onClose(); return;}
       if (saved && !state.mutation.refreshing) options.onClose({restoreFocus: true});
     } else if (scoped) {
       const acknowledged = acknowledgedCreate();

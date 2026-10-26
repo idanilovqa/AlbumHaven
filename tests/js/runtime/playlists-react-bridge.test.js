@@ -271,7 +271,26 @@ test('native Playlist rows render read-only through the actual AlbumTrackTable o
   const markup = JSON.stringify(value);
   assert.equal(value.key, '3'); assert.deepEqual(plain(value.dataAttributes), {});
   assert.match(markup, /album-track-table__title/); assert.match(markup, /&lt;Guest&gt;/); assert.match(markup, /0:00/);
-  assert.doesNotMatch(markup, /test-only|data-src|data-track-|play-track-button|track-problem-link|row--current|row--playing|row--animated/);
+  const assertReadOnly = row => {
+    const love = h.document.createElement('div'); love.innerHTML = row.cells.love.content;
+    const marker = love.querySelector('[data-track-love-cell]');
+    assert.ok(marker); assert.equal(marker.getAttribute('data-track-love-cell'), '1');
+    assert.equal(love.querySelectorAll('[data-track-love-cell]').length, 1);
+    assert.equal(marker.querySelector('button, [data-track-love], [data-track-path], [data-inventory-track-ref]'), null);
+    assert.equal(row.cells.love.content, '<span data-track-love-cell="1"><span role="img" aria-label="Love unavailable">–</span></span>');
+    // Exempt only the independently verified, fixed inert paint slot. Every
+    // other native identity, playback hook and player class remains forbidden.
+    const remaining = {...row, cells: {...row.cells, love: {...row.cells.love,
+      content: row.cells.love.content.replace(' data-track-love-cell="1"', '')}}};
+    assert.doesNotMatch(JSON.stringify(remaining), /test-only|data-src|data-track-|play-track-button|track-problem-link|row--current|row--playing|row--animated/);
+  };
+  assertReadOnly(value);
+  for (const content of [value.cells.love.content.replace('data-track-love-cell="1"', 'data-track-love-cell="private:identity"'),
+    value.cells.love.content.replace('–', '<button data-track-love="1">Love</button>'),
+    value.cells.love.content.replace('–', '<span data-track-path="private-path">–</span>')]) {
+    assert.throws(() => assertReadOnly({...value, cells: {...value.cells, love: {content}}}), {name: 'AssertionError'});
+  }
+  assert.throws(() => assertReadOnly({...value, cells: {...value.cells, title: {content: '<span data-track-title="private">Song</span>'}}}), {name: 'AssertionError'});
   assert.deepEqual(h.forbiddenCalls, []);
 });
 
@@ -640,27 +659,48 @@ test('session stamp rotation retires same-account private Playlist projections',
   assert.equal(h.bridge.canTrackIntent('play', {playlist_item_id: 'item:one'}, {playlist_id: 'playlist:one'}), false);
 });
 
-test('inventory Album selection resolves native identity privately before native mounting', async () => {
+test('inventory Album selection resolves native identity privately before native mounting', async t => {
   const row = {playlist_item_id: 'one', album_ref: 'inventory-album:1:9', title: 'Song',
     allowed_actions: {can_read: true, can_view_details: true}};
-  const h = setup(payload('playlist:one', {revision: '3', track_rows: [row]})), mounts = [], statuses = [];
-  const modal = h.document.createElement('div'); modal.id = 'track-modal'; modal.hidden = true; h.document.body.appendChild(modal);
-  const host = h.document.createElement('div'); h.document.body.appendChild(host);
+  const h = setup(payload('playlist:one', {revision: '3', track_rows: [row]})), statuses = [], errors = [];
+  const {context: c, document: d} = h;
+  // Supply browser/renderer seams while retaining the real modal lease owner,
+  // as in resource-selection-lifetime.test.js. A fake release-only lease cannot
+  // prove current ownership, album identity or connected dialog containment.
+  c.Node.prototype.before = function(node) {this.parentNode?.insertBefore(node, this);};
+  c.Node.prototype.replaceWith = function(node) {if (this.parentNode) {this.before(node); this.remove();}};
+  d.createComment = () => new c.Node(8);
+  const modal = d.createElement('div'); modal.id = 'track-modal'; modal.hidden = true;
+  modal.innerHTML = '<div class="track-modal-dialog" role="dialog" aria-modal="true"><div class="track-modal-header"><h3 class="album-details-header__primary">Album</h3></div><div class="track-modal-body"><div id="track-modal-list"></div><button class="play-track-button">Play</button></div></div>';
+  d.body.appendChild(modal);
+  const dialog = modal.firstElementChild, host = d.createElement('div'); d.body.appendChild(host);
+  c.getTrackModalElements = () => ({overlay: modal});
+  c.renderTrackModalRelease = () => {};
+  vm.runInContext(fs.readFileSync(path.join(runtimePath, 'track-modal-lightbox-helpers.js'), 'utf8'), c);
+  t.after(() => {c.releaseTrackModalSelection('test-cleanup'); host.remove(); modal.remove();});
   h.context.fetch = async url => {
     assert.match(url, /items\/one\/native-target\?intent=details$/);
     return response({status: 'ready', data: {playlist_id: 'playlist:one', playlist_item_id: 'one', revision: '3', intent: 'details',
       native_target: {album_ref: 'native-album-key'}}});
   };
   h.context.fetchTrackModalAlbumDetails = async key => {assert.equal(key, 'native-album-key'); return {key, name: 'Album', tracks: []};};
-  h.context.acquireTrackModalSelection = (target, album, options) => {mounts.push({target, album, options}); return {release() {}};};
   const snapshot = h.bridge.snapshot(), selection = snapshot.payload.playlist_detail.track_rows[0].album_target;
   assert.equal(selection.ref, 'inventory-album:1:9');
   const lease = h.bridge.mountResourceSelection(host, {selection, scopeKey: snapshot.scopeKey, origin: selection.origin,
-    onState: value => statuses.push(value), onError: error => {throw error;}});
+    onState: value => statuses.push(value), onError: error => errors.push(error)});
+  t.after(() => lease.dispose());
   await new Promise(setImmediate);
-  assert.equal(mounts.length, 1); assert.equal(mounts[0].options.canPlay(), false);
+  assert.deepEqual(errors, []);
+  const nativeLease = c.getTrackModalSelectionLease();
+  assert.ok(nativeLease); assert.equal(nativeLease.album.key, 'native-album-key');
+  assert.equal(nativeLease.dialog, dialog); assert.equal(host.firstElementChild, dialog);
+  assert.equal(nativeLease.canPlay(), false); assert.equal(dialog.querySelector('.play-track-button').disabled, true);
   assert.ok(statuses.includes('ready')); assert.doesNotMatch(JSON.stringify(h.bridge.snapshot()), /native-album-key/);
   lease.dispose();
+  assert.equal(c.getTrackModalSelectionLease(), null); assert.equal(modal.firstElementChild, dialog);
+  assert.equal(dialog.getAttribute('role'), 'dialog'); assert.equal(host.childNodes.length, 0);
+  assert.deepEqual(plain(h.state.player.playbackQueue), {owner: 'native'});
+  assert.deepEqual(h.forbiddenCalls, []);
 });
 
 test('large Playlist start uses one bounded queue request and current-track toggle uses one target read', async () => {

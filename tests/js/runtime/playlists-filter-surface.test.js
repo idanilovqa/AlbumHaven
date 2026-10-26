@@ -115,11 +115,16 @@ test('inline dismissal never focuses an unavailable trigger', () => {
 });
 
 test('compact filter CSS changes layout only and keeps the native Choice and Search surfaces', () => {
-  const css = fs.readFileSync(path.join(repo, 'music_app/static/css/runtime/playlists-react.css'), 'utf8');
-  const section = css.slice(css.indexOf('/* Compact desktop fields'));
+  const css = fs.readFileSync(path.join(repo, 'music_app/static/css/runtime/collection-surfaces.css'), 'utf8');
+  const template = fs.readFileSync(path.join(repo, 'music_app/templates/index.html'), 'utf8');
+  assert.match(template, /css\/runtime\/collection-surfaces\.css/);
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selector]) => selector.includes('.collection-filter-surface'));
+  assert.ok(rules.length > 0, 'the served shared compact filter rules must exist');
+  const section = rules.map(([rule]) => rule).join('\n');
   assert.match(section, /--inline \.ui-choice__label \{ display: none;/);
-  assert.match(section, /--form \.playlists__filters \{ display: grid;/);
-  assert.match(section, /--search-field-height: 28px/);
+  assert.match(section, /--form :is\(\.collection-filter-fields, \.playlists__filters\) \{ display: grid;/);
+  assert.match(section, /--inline :is\(\.collection-filter-search, \.playlists-filter__search\) \{ --search-field-height: 28px;/);
   assert.doesNotMatch(section, /background|color:|border|outline|box-shadow|#[0-9a-f]/i);
 });
 

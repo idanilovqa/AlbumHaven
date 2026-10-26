@@ -3,21 +3,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
 
 for (const [kind, source, attach, getter, close] of [
   ['utility', 'track-modal-and-gallery.js', 'attachUtilityModalEvents', 'getUtilityModalElements', 'closeUtilityModal'],
   ['track', 'track-modal-lightbox-helpers.js', 'attachModalEvents', 'getTrackModalElements', 'closeTrackModal'],
 ]) {
   test(`${kind} modal close gestures reach the dismissal owner exactly once`, () => {
-    const node = () => ({ dataset: {}, listeners: new Map(), addEventListener(name, callback) {
-      const listeners = this.listeners.get(name) || [];
-      listeners.push(callback);
-      this.listeners.set(name, listeners);
-    } });
-    const overlay = node(), button = node();
+    // Use the existing bounded DOM's tree, classList, closest and bubbling;
+    // dismissal itself remains the observed request boundary in this owner test.
+    const env = createNativeHomeRuntime(), {document, context} = env;
+    const overlay = document.createElement('div'), button = document.createElement('button');
+    const content = document.createElement('div');
+    button.setAttribute(`data-close-${kind}-modal`, '1');
+    overlay.append(button, content); document.body.append(overlay);
     let traversals = 0;
-    const context = vm.createContext({
-      document: { addEventListener() {} },
+    Object.assign(context, {
       [getter]: () => ({ overlay, close: button }),
       bindOverlayPointerOrigin() {},
       overlayClickStartedOnOverlay: (owner, event) => event.target === owner,
@@ -26,14 +27,19 @@ for (const [kind, source, attach, getter, close] of [
     context[close] = () => { traversals++; };
     context[attach]();
     context[attach]();
-    const event = { target: { closest: selector => selector === `[data-close-${kind}-modal="1"]` ? button : null } };
     // Native button handlers run before the same click bubbles to the overlay.
-    for (const listener of button.listeners.get('click') || []) listener(event);
-    for (const listener of overlay.listeners.get('click') || []) listener(event);
+    env.click(button);
     assert.equal(traversals, 1, 'one Close must not queue two asynchronous history traversals');
-    for (const listener of overlay.listeners.get('click') || []) listener({ target: overlay });
+    env.click(overlay);
     assert.equal(traversals, 2, 'a later real backdrop still dismisses once');
-    for (const listener of overlay.listeners.get('click') || []) listener({ target: { closest: () => null } });
+    env.click(content);
     assert.equal(traversals, 2, 'ordinary dialog content does not dismiss');
+    if (kind === 'track') {
+      overlay.classList.add('is-artist-discography-sheet');
+      env.click(overlay);
+      assert.equal(traversals, 2, 'Artist sheet backdrop belongs to its sheet dismissal owner');
+      env.click(button);
+      assert.equal(traversals, 3, 'Artist sheet explicit Close still reaches the owner once');
+    }
   });
 }

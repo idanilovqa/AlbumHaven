@@ -86,7 +86,8 @@ test('staged activation gate remains false and enable owns exactly four fixed bu
 
 test('initial positive packet admits immediately with source coordinates and identity-free evidence', async () => {
   const f = fixture(); await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   assert.equal(f.requests.length, 1);
   const body = JSON.parse(f.requests[0].body);
   assert.equal(body.initial_path, '/fixture/track.flac');
@@ -103,7 +104,8 @@ test('timeout retains the original unsettled attempt and retries identical bytes
   const first = deferred(); let attempts = 0;
   const f = fixture(body => ++attempts === 1 ? first.promise : receipt(body));
   await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   f.advance(10000); await settle();
   assert.equal(f.requests[0].options.signal.aborted, true);
   f.advance(30000); await settle();
@@ -118,12 +120,14 @@ test('terminal request cannot mutate an in-flight positive batch and follows it 
   const first = deferred(); let calls = 0;
   const f = fixture(body => ++calls === 1 ? first.promise : receipt(body, 128));
   await f.owner.enable(); const { parent, binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   const original = f.requests[0].body;
   f.owner.requestClose(parent, 'ended'); f.owner.unlinkStream(binding);
   f.owner.acceptPacket(packet(f, binding, { packetOrdinal: 2, bufferId: 2, runs: false, ack: true, ordinal: 128 }));
   assert.equal(f.requests.length, 1);
-  first.resolve(await receipt(original)); await settle();
+  first.resolve(await receipt(original));
+  await waitForCondition(() => f.requests.length >= 2, 'terminal checkpoint POST'); await settle();
   assert.equal(f.requests[0].body, original);
   const terminal = JSON.parse(f.requests[1].body);
   assert.equal(terminal.sequence, 2);
@@ -136,7 +140,8 @@ test('terminal request cannot mutate an in-flight positive batch and follows it 
 test('scope loss discards pending data without replaying under a fresh owner', async () => {
   const pending = deferred(); const f = fixture(() => pending.promise);
   await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   f.owner.onScopeLost(); f.advance(120000); await settle();
   assert.equal(f.requests.length, 1);
   assert.equal(f.requests[0].options.signal.aborted, true);
@@ -160,7 +165,7 @@ test('eight track parents and eight stream bindings are separate hard caps', asy
 test('mixed-epoch losses carry exact positive count with null epoch and unknown source distribution', async () => {
   const f = fixture(); await f.owner.enable(); const { binding } = f.bind();
   f.owner.acceptPacket(packet(f, binding, { ordinal: 500, gap: { epoch: 0, start: 0, end: 500, frames: 250 } }));
-  await settle();
+  await waitForCondition(() => f.requests.length >= 1, 'mixed-epoch checkpoint POST');
   const gap = JSON.parse(f.requests[0].body).evidence.gaps[0];
   assert.equal(gap.epoch, null); assert.equal(gap.positive_frames, 250);
   assert.equal(gap.ordinal_end, 500); assert.equal(gap.source_start48, undefined);
@@ -171,7 +176,8 @@ test('clock jump or delayed anchor retains source evidence but never fabricates 
   f.owner.onContextState('running');
   const probe = f.sent.find(item => item.command.type === 'capture-probe').command;
   f.advance(300, 5000);
-  f.owner.acceptPacket(packet(f, binding, { probe, epoch: 2 })); await settle();
+  f.owner.acceptPacket(packet(f, binding, { probe, epoch: 2 }));
+  await waitForCondition(() => f.requests.length >= 1, 'clock-jump checkpoint POST');
   const evidence = JSON.parse(f.requests[0].body).evidence;
   assert.equal(evidence.runs[0].quality, 'unknown');
   assert.equal(evidence.anchors[0].quality, 'unknown');
@@ -191,7 +197,8 @@ test('bad packet identity stops capture instead of returning a forged credit', a
 test('retry lifetime ends capture without allocating a new parent identity', async () => {
   const pending = deferred(); const f = fixture(() => pending.promise);
   await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   f.advance(120000); await settle();
   assert.equal(f.requests.length, 1);
   assert.ok(f.diagnostics.includes('transport_abandoned'));
@@ -203,7 +210,8 @@ test('queue saturation withholds the same physical packet credit until frozen by
   const first = deferred(); let calls = 0;
   const f = fixture(body => ++calls === 1 ? first.promise : receipt(body, 128));
   await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   const crowded = packet(f, binding, { packetOrdinal: 2, bufferId: 2, ordinal: 128 });
   const data = new Float64Array(crowded); data[4] = 256;
   for (let index = 0; index < 256; index++) data.set([binding.bindingSerial, 1, 1000 + index,
@@ -218,7 +226,8 @@ test('queue saturation withholds the same physical packet credit until frozen by
 test('pagehide does not create a second request beside an unsettled attempt', async () => {
   const pending = deferred(); const f = fixture(() => pending.promise);
   await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   f.owner.pagehide(); await settle();
   assert.equal(f.requests.length, 1);
   f.owner.onScopeLost(); pending.reject(new Error('retired')); await settle();
@@ -226,7 +235,8 @@ test('pagehide does not create a second request beside an unsettled attempt', as
 
 test('a replayed packet ordinal is rejected instead of double-counting consumption', async () => {
   const f = fixture(); await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   f.owner.acceptPacket(packet(f, binding, { bufferId: 2 })); await settle();
   assert.equal(f.requests.length, 1);
   assert.ok(f.diagnostics.includes('invalid_capture_packet'));
@@ -235,7 +245,10 @@ test('a replayed packet ordinal is rejected instead of double-counting consumpti
 test('middleware authentication failure ends owner even without a capture error body', async () => {
   const f = fixture(async () => ({ status: 403, data: { detail: 'Forbidden' } }));
   await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle(); f.advance(30000); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
+  await waitForCondition(() => f.diagnostics.includes('capture_scope_lost'), 'authentication failure retirement');
+  f.advance(30000); await settle();
   assert.equal(f.requests.length, 1); assert.ok(f.diagnostics.includes('capture_scope_lost'));
 });
 
@@ -252,7 +265,8 @@ test('duplicate unbind acknowledgements fail capture validation without throwing
 test('closed context disposes credits but successor waits for the original unsettled transport', async () => {
   const pending = deferred(); const f = fixture(() => pending.promise);
   await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   const original = f.requests[0].body;
   f.owner.close('owner_closed'); f.owner.onContextState('closed');
   const next = f.newOwner(); let enabled = false;
@@ -289,7 +303,8 @@ test('lost terminal acknowledgement replays the exact terminal sequence and byte
     return response;
   });
   await f.owner.enable(); const { parent, binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   f.owner.requestClose(parent, 'ended'); f.owner.unlinkStream(binding);
   f.owner.acceptPacket(packet(f, binding, { packetOrdinal: 2, bufferId: 2, runs: false, ack: true, ordinal: 128 }));
   await waitForCondition(() => f.requests.length >= 2, 'first terminal POST');
@@ -317,7 +332,8 @@ test('acknowledged frozen bytes release bounded backpressure and return one with
     const result = await receipt(body, accepted); accepted = result.data.accepted_known_frames; return result;
   });
   await f.owner.enable(); const { binding } = f.bind();
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   const crowded = packet(f, binding, { packetOrdinal: 2, bufferId: 2, ordinal: 128 });
   const data = new Float64Array(crowded); data[4] = 256;
   for (let index = 0; index < 256; index++) data.set([binding.bindingSerial, 1, 1000 + index,
@@ -325,8 +341,10 @@ test('acknowledged frozen bytes release bounded backpressure and return one with
   f.owner.acceptPacket(crowded); await settle();
   assert.equal(f.sent.filter(item => item.command.type === 'capture-credit' && item.command.bufferId === 2).length, 0);
   pending.resolve(await receipt(f.requests[0].body));
-  for (let index = 0; index < 8; index++) await settle();
+  await waitForCondition(() => f.sent.some(item => item.command.type === 'capture-credit'
+    && item.command.bufferId === 2), 'acknowledged held-buffer credit');
   assert.equal(f.sent.filter(item => item.command.type === 'capture-credit' && item.command.bufferId === 2).length, 1);
+  assert.deepEqual(f.diagnostics, []);
   assert.ok(f.requests.every(request => Buffer.byteLength(request.body) <= 32768));
   assert.equal(new Set(f.requests.map(request => JSON.parse(request.body).capture_uuid)).size, 1);
 });
@@ -335,10 +353,11 @@ test('actual suspension requests an immediate nonterminal flush including a late
   const f = fixture(body => receipt(body, JSON.parse(body).sequence === 1 ? 0 : 128));
   await f.owner.enable(); const { binding } = f.bind();
   f.owner.onContextState('running');
-  f.owner.acceptPacket(packet(f, binding)); await settle();
+  f.owner.acceptPacket(packet(f, binding));
+  await waitForCondition(() => f.requests.length >= 1, 'initial checkpoint POST'); await settle();
   f.owner.onContextState('suspended');
   f.owner.acceptPacket(packet(f, binding, { packetOrdinal: 2, bufferId: 2, ordinal: 128, epoch: 2 }));
-  await settle();
+  await waitForCondition(() => f.requests.length >= 2, 'suspension checkpoint POST');
   assert.equal(f.requests.length, 2);
   const value = JSON.parse(f.requests[1].body);
   assert.equal(value.evidence.terminal, false); assert.equal(value.evidence.runs[0].frames, 128);

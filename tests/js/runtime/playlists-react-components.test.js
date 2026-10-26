@@ -114,7 +114,7 @@ test('persisted tracks inherit native missing paint only for confirmed missing r
   for (const availability of ['missing', 'unresolved', 'local']) {
     const row = host.querySelector(`[data-playlist-row-key="item:${availability}"]`);
     assert.equal(row.classList.contains('album-track-table__row--missing'), availability === 'missing');
-    assert.equal(row.querySelector('[data-playlists-play]').hasAttribute('hidden'), availability === 'missing');
+    assert.equal(row.querySelector('[data-playlists-play]').hasAttribute('hidden'), availability !== 'local');
   }
   assert.match(host.querySelector('[data-playlist-row-key="item:unresolved"]').textContent, /Needs review/);
 });

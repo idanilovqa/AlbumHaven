@@ -456,6 +456,7 @@ test('Cover Lookup loading markup does not invent empty artwork cards and keeps 
   const context = {
     URLSearchParams,
     window: {},
+    ButtonComponent: { renderButton: () => '<button>Extract images</button>' },
     escapeHtml: (value) => String(value || ''),
     state: {
       coverLookup: {
@@ -486,6 +487,13 @@ test('Cover Lookup loading markup does not invent empty artwork cards and keeps 
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="other-art"/);
   assert.match(markup, />MANUAL SEARCH</);
   assert.match(markup, /id="cover-lookup-pasted-urls"/);
+
+  const draftUrl = 'https://images.example/manual-cover.jpg';
+  elements['cover-lookup-pasted-urls'] = { value: draftUrl };
+  context.renderCoverLookupModal();
+
+  assert.equal(context.state.coverLookup.modal.manualUrlText, draftUrl);
+  assert.match(body.innerHTML, /https:\/\/images\.example\/manual-cover\.jpg/);
 });
 
 test('Cover Lookup loading markup renders the exact persisted remote candidate count', () => {

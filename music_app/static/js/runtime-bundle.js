@@ -30671,6 +30671,9 @@ function renderCoverLookupModal() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || !els.body) return;
   const modalState = state.coverLookup.modal;
+  if (els.pastedUrls && typeof els.pastedUrls.value === 'string') {
+    modalState.manualUrlText = els.pastedUrls.value;
+  }
   const scrollAnchor = modalState.loading
     ? null
     : captureCoverLookupModalScrollAnchor(els.body);

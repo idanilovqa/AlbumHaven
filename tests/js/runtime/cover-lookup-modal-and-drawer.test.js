@@ -4415,7 +4415,7 @@ require('node:test')('only the first service cover preview receives eager browse
   assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
 });
 
-require('node:test')('loading Cover Lookup renders gallery card placeholders', () => {
+require('node:test')('loading Cover Lookup renders only known gallery card placeholders', () => {
   const bodyElement = { innerHTML: '', scrollTop: 0 };
   const context = loadHelper({ escapeHtml: (value) => String(value ?? '') });
   context.getCoverLookupModalElements = () => ({
@@ -4439,9 +4439,10 @@ require('node:test')('loading Cover Lookup renders gallery card placeholders', (
 
   assert.match(bodyElement.innerHTML, /cover-lookup-gallery-loading/);
   assert.match(bodyElement.innerHTML, /cover-lookup-task-loading-line/);
-  assert.match(bodyElement.innerHTML, />LOCAL</);
-  assert.match(bodyElement.innerHTML, />OTHER ART</);
-  assert.match(bodyElement.innerHTML, />REMOTE 4 images</);
+  assert.doesNotMatch(bodyElement.innerHTML, />LOCAL</);
+  assert.doesNotMatch(bodyElement.innerHTML, />OTHER ART</);
+  assert.match(bodyElement.innerHTML, />REMOTE · 4 images</);
+  assert.match(bodyElement.innerHTML, />MANUAL SEARCH</);
   assert.equal(
     (bodyElement.innerHTML.match(/data-cover-lookup-loading-section="remote"/g) || []).length,
     4,

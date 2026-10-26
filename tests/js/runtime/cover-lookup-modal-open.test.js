@@ -426,6 +426,72 @@ test('opening a persisted notification renders usable cached art and loads unres
   await idOnlyOpenPromise;
 });
 
+test('Cover Lookup loading markup does not invent empty artwork cards and keeps manual search usable', () => {
+  const body = { innerHTML: '', scrollTop: 0 };
+  const elements = {
+    'cover-lookup-modal': {},
+    'cover-lookup-modal-body': body,
+    'cover-lookup-modal-subtitle': { textContent: '' },
+    'cover-lookup-modal-status': { textContent: '', innerHTML: '' },
+  };
+  const context = {
+    URLSearchParams,
+    window: {},
+    escapeHtml: (value) => String(value || ''),
+    state: {
+      coverLookup: {
+        tasks: [],
+        modal: {
+          album: { album_artist: 'Eden', name: 'Eden', year: 2008 },
+          loading: true,
+          localCovers: [],
+          pastedImages: [],
+          manualImageAttachments: [],
+          otherArt: [],
+          possibleMatches: [],
+          currentReleases: [],
+          manualUrlText: '',
+        },
+      },
+    },
+    document: { getElementById: (id) => elements[id] || null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.scheduleDeferredCoverLookupPreviews = () => {};
+
+  context.renderCoverLookupModal();
+  const markup = body.innerHTML;
+
+  assert.equal((markup.match(/cover-lookup-art-card-shell is-loading/g) || []).length, 0);
+  assert.doesNotMatch(markup, /data-cover-lookup-loading-section="other-art"/);
+  assert.match(markup, />MANUAL SEARCH</);
+  assert.match(markup, /id="cover-lookup-pasted-urls"/);
+});
+
+test('Cover Lookup loading markup renders the exact persisted remote candidate count', () => {
+  const context = {
+    URLSearchParams,
+    window: {},
+    escapeHtml: (value) => String(value || ''),
+    document: { getElementById: () => null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+
+  const markup = context.buildCoverLookupGalleryLoadingMarkup({
+    album: { album_artist: 'Artist', name: 'Album' },
+    expectedRemoteCount: 4,
+    possibleMatches: [{ id: 'unresolved-candidate' }],
+    manualImageAttachments: [],
+    manualUrlText: '',
+  });
+
+  assert.equal((markup.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 4);
+  assert.doesNotMatch(markup, /data-cover-lookup-loading-section="local"/);
+  assert.doesNotMatch(markup, /data-cover-lookup-loading-section="other-art"/);
+});
+
 test('starting lookup publishes visible feedback before the start request settles', async () => {
   const album = {
     album_artist: 'Neal Morse',

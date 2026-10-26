@@ -1952,7 +1952,7 @@ function formatCoverLookupImageCount(count) {
 }
 
 function buildCoverLookupGalleryLoadingCards(section, count) {
-  return Array.from({ length: Math.max(1, Number(count || 0) || 0) }, () => `
+  return Array.from({ length: Math.max(0, Number(count || 0) || 0) }, () => `
     <div class="cover-lookup-art-card-shell is-loading" data-cover-lookup-loading-section="${section}" aria-hidden="true">
       <div class="cover-lookup-art-card">
         <span class="cover-lookup-art-preview"></span>
@@ -1964,22 +1964,25 @@ function buildCoverLookupGalleryLoadingCards(section, count) {
 }
 
 function buildCoverLookupGalleryLoadingMarkup(modalState) {
+  const album = modalState?.album || {};
+  const localCount = String(album.cover_path || '').trim()
+    && !String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
+  const savedRemoteCount = String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
   const remoteCount = Math.max(
     Number(modalState?.expectedRemoteCount || 0) || 0,
     Array.isArray(modalState?.possibleMatches) ? modalState.possibleMatches.length : 0,
-  );
-  const section = (title, key, count, countKnown = false) => `
+  ) + savedRemoteCount;
+  const section = (title, key, count) => count > 0 ? `
     <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">${title}${countKnown ? ` ${formatCoverLookupImageCount(count)}` : ''}</h4>
+      <h4 class="cover-lookup-section-title">${title} · ${formatCoverLookupImageCount(count)}</h4>
       <div class="cover-lookup-gallery cover-lookup-gallery-loading">
         ${buildCoverLookupGalleryLoadingCards(key, count)}
       </div>
     </section>
-  `;
+  ` : '';
   return `<div role="status" aria-label="Loading cover art">
-    ${section('LOCAL', 'local', 1)}
-    ${section('OTHER ART', 'other-art', 1)}
-    ${section('REMOTE', 'remote', remoteCount, remoteCount > 0)}
+    ${section('LOCAL', 'local', localCount)}
+    ${section('REMOTE', 'remote', remoteCount)}
   </div>`;
 }
 
@@ -2096,15 +2099,9 @@ function renderCoverLookupModal() {
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
     : '';
-  if (modalState.loading) {
-    els.body.innerHTML = buildCoverLookupGalleryLoadingMarkup(modalState);
-    els.body.scrollTop = 0;
-    if (els.saveRemote) {
-      els.saveRemote.hidden = false;
-      els.saveRemote.disabled = true;
-    }
-    return;
-  }
+  const galleryLoadingMarkup = modalState.loading
+    ? buildCoverLookupGalleryLoadingMarkup(modalState)
+    : '';
   const currentReleases = Array.isArray(modalState.currentReleases)
     ? modalState.currentReleases : [];
   if (currentReleases.length) {
@@ -2129,6 +2126,7 @@ function renderCoverLookupModal() {
     return;
   }
   els.body.innerHTML = `
+    ${galleryLoadingMarkup || `
     <section class="cover-lookup-section">
       <h4 class="cover-lookup-section-title">LOCAL · ${formatCoverLookupImageCount(localCovers.length)}</h4>
       <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
@@ -2138,7 +2136,7 @@ function renderCoverLookupModal() {
     ${remoteCover ? `<section class="cover-lookup-section">
       <h4 class="cover-lookup-section-title">REMOTE · ${formatCoverLookupImageCount(1)}</h4>
       <div class="cover-lookup-gallery">${buildCoverLookupCard(remoteCover, 'saved-remote')}</div>
-    </section>` : ''}
+    </section>` : ''}`}
     <section class="cover-lookup-section cover-lookup-results" data-search-started="${Boolean(task || modalState.candidateGeneration || possibleMatches.length)}">
       <div class="cover-lookup-section-heading">
         <h4 class="cover-lookup-section-title">${possibleMatches.length || taskRunning || showCaaEmptyNotice ? `POSSIBLE MATCHES · ${formatCoverLookupImageCount(possibleMatches.length)}` : 'ADD COVER ART'}</h4>

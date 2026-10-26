@@ -57,6 +57,66 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
         isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_targeted_invalidation_publishes_new_album_to_gallery(
+    watcher_repair_inventory,
+    monkeypatch,
+):
+    from music_app.services import state
+    from music_app.services.gallery_projection_postgres import (
+        ensure_gallery_projection_ready,
+    )
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Existing/Existing Album/01.flac"))
+    ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+
+    added = fixture.entry(
+        "I'm with Her/Watcher Album/01.flac",
+        artist="I'm with Her",
+        album="Watcher Album",
+    )
+    result = TargetedLibraryReconciler(
+        fixture.config,
+        repository=fixture.adapter,
+        root_definitions=fixture.roots,
+        metadata_reader=lambda path: {**added, "path": str(path)},
+        wait=lambda _seconds: None,
+    ).reconcile(
+        SimpleNamespace(
+            root_id="repair-main",
+            paths=(Path(added["path"]),),
+            deleted_paths=(),
+            deleted_subtrees=(),
+            moves=(),
+        )
+    )
+
+    scheduled = []
+    original_schedule = state.schedule_gallery_projection_refresh
+    monkeypatch.setattr(
+        state,
+        "schedule_gallery_projection_refresh",
+        lambda config: scheduled.append(
+            original_schedule(config, connect=isolatedPostgres._connect)
+        ),
+    )
+    state.invalidate_targeted_library_projections(
+        {},
+        fixture.config,
+        revision=result.revision,
+        affected_album_keys=result.affected_album_keys,
+    )
+    scheduled[0].result(timeout=30)
+
+    sidebar = PostgresLibraryBrowseRepository(
+        fixture.config,
+        connect=isolatedPostgres._connect,
+    ).build_root_sidebar_payload()
+    assert any(item["artist"] == "I'm with Her" for item in sidebar["artists_sidebar"])
+
+
 def test_live_featured_artist_rebuild_preserves_guests_and_suppresses_owner_variants(
     watcher_repair_inventory,
     monkeypatch,

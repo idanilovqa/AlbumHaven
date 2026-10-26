@@ -33,6 +33,9 @@ from music_app.services.library_hydration import (
 )
 from music_app.services.library_indexing import ScanCancelled, scan_library_file_cache
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.gallery_projection_postgres import (
+    schedule_gallery_projection_refresh,
+)
 from music_app.services.library_browse_postgres import (
     invalidate_postgres_utility_projection_cache,
 )
@@ -101,6 +104,8 @@ def invalidate_targeted_library_projections(
             int(library_state.get("inventory_mutation_revision") or 0),
         )
         library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
+    if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
+        schedule_gallery_projection_refresh(config)
     invalidate_problematic_albums_payload_cache(library_state)
     invalidate_utility_rules_payload_cache(library_state)
     invalidate_postgres_utility_projection_cache(

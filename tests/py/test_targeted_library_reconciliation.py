@@ -840,6 +840,12 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     invalidated: list[str] = []
     monkeypatch.setattr(
         state,
+        "schedule_gallery_projection_refresh",
+        lambda config: invalidated.append("gallery"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        state,
         "invalidate_problematic_albums_payload_cache",
         lambda library_state: invalidated.append("problems"),
         raising=False,
@@ -871,7 +877,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     assert library_state["_view_payload_root_browse_cache"] == {}
     assert library_state["inventory_mutation_revision"] == 4
     assert library_state["targeted_inventory_album_keys"] == ("artist::album",)
-    assert invalidated == ["problems", "rules", "postgres"]
+    assert invalidated == ["gallery", "problems", "rules", "postgres"]
 
 
 def test_committed_inventory_callbacks_publish_monotonic_revisions(monkeypatch):

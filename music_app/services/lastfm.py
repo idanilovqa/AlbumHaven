@@ -66,6 +66,7 @@ class LastfmSubmissionOutcome:
     message: str = ""
     attempted: bool | None = None
     reauthentication_required: bool = False
+    receipt_identity: dict[str, object] | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -365,14 +366,128 @@ def update_now_playing(config: dict[str, Any], payload: dict[str, Any], *, sessi
     return LastfmSubmissionOutcome(sent=True, accepted=1, outcome="accepted")
 
 
+def scrobble_request_identity(payload: dict[str, Any]) -> dict[str, object]:
+    """Exact semantic identity sent by our existing single-scrobble adapter."""
+    return {
+        "artist": str(payload.get("artist") or "").strip(),
+        "track": str(payload.get("track") or "").strip(),
+        "timestamp": int(payload.get("timestamp") or 0),
+        "album": str(payload.get("album") or "").strip(),
+        "album_artist": str(payload.get("album_artist") or "").strip(),
+        "track_number": str(payload.get("track_number") or "").strip(),
+    }
+
+
+def _bounded_identity_text(value, *, required=False):
+    return (type(value) is str and len(value) <= 1024
+            and (bool(value) or not required)
+            and all(ord(character) >= 32 for character in value))
+
+
+def build_scrobble_submission_identity(*, session, payload, account_id, library_id,
+                                      occurrence_id, attempt):
+    """Bind one actual attempt; missing old lineage stays unbound, not guessed.
+
+    This is private correlation evidence, not authorization or a provider event
+    identifier. No session key or other credential is read, hashed or stored.
+    """
+    if (not isinstance(session, LastfmSession)
+            or any(type(value) is not int or value <= 0 for value in (account_id, library_id))
+            or type(attempt) is not int or not 1 <= attempt <= 5
+            or type(occurrence_id) is not str or len(occurrence_id) != 64
+            or any(character not in "0123456789abcdef" for character in occurrence_id)
+            or not _bounded_identity_text(session.username, required=True)
+            or session.username != session.username.strip()):
+        return None
+    try:
+        from datetime import datetime, timezone
+        connected = datetime.fromisoformat(session.connected_at.replace("Z", "+00:00"))
+        if connected.tzinfo is None or connected.utcoffset() is None:
+            return None
+        connection_started_at = connected.astimezone(timezone.utc).isoformat()
+        request = scrobble_request_identity(payload)
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        return None
+    if (request["timestamp"] <= 0 or any(not _bounded_identity_text(request[key],
+            required=key in {"artist", "track"})
+            for key in ("artist", "track", "album", "album_artist", "track_number"))):
+        return None
+    return {"version": 1, "provider": "lastfm", "account_id": account_id,
+        "library_id": library_id, "occurrence_id": occurrence_id, "attempt": attempt,
+        "provider_username": session.username, "connection_started_at": connection_started_at,
+        "request": request, "reply": None}
+
+
+def validate_scrobble_reply_identity(value, *, request):
+    """Close the internal result boundary too; never trust arbitrary callback data."""
+    fields = {"artist", "track", "album", "album_artist"}
+    if (type(value) is not dict or set(value) != fields | {"timestamp", "corrected"}
+            or type(value["timestamp"]) is not int or value["timestamp"] != request["timestamp"]
+            or type(value["corrected"]) is not dict or set(value["corrected"]) != fields):
+        return None
+    for field in fields:
+        if (type(value["corrected"][field]) is not bool
+                or not _bounded_identity_text(value[field], required=field in {"artist", "track"})
+                or (not value["corrected"][field] and value[field] != request[field])):
+            return None
+    return {**{field: value[field] for field in fields}, "timestamp": value["timestamp"],
+            "corrected": dict(value["corrected"])}
+
+
+def _flat_scrobble_leaf(element):
+    return len(element) == 0 and not (element.tail or "").strip()
+
+
+def _scrobble_reply_identity(root, *, request):
+    """Retain only an unambiguous single accepted echo, never an invented ID."""
+    # Delivery reporting historically coerces outcome counts; correlation must
+    # validate the raw envelope rather than accepting those normalized values.
+    envelopes = root.findall("scrobbles")
+    if (root.tag != "lfm" or root.get("status") != "ok" or len(envelopes) != 1
+            or len(root) != 1 or (root.text or "").strip()):
+        return None
+    scrobbles = envelopes[0]
+    if (scrobbles.get("accepted") != "1" or scrobbles.get("ignored") != "0"
+            or (scrobbles.text or "").strip() or (scrobbles.tail or "").strip()):
+        return None
+    nodes = scrobbles.findall("scrobble")
+    if len(nodes) != 1 or len(scrobbles) != 1:
+        return None
+    node = nodes[0]
+    if (node.text or "").strip() or (node.tail or "").strip():
+        return None
+    messages = node.findall("ignoredMessage") + node.findall("ignoredmessage")
+    timestamps = node.findall("timestamp")
+    if (len(node) != 6 or len(messages) != 1 or messages[0].get("code") != "0"
+            or not _flat_scrobble_leaf(messages[0]) or len(timestamps) != 1
+            or not _flat_scrobble_leaf(timestamps[0])
+            or timestamps[0].text != str(request["timestamp"])):
+        return None
+    reply = {"timestamp": request["timestamp"], "corrected": {}}
+    for field, wire_field in (("artist", "artist"), ("track", "track"),
+                              ("album", "album"), ("album_artist", "albumArtist")):
+        elements = node.findall(wire_field)
+        if (len(elements) != 1 or not _flat_scrobble_leaf(elements[0])
+                or elements[0].get("corrected") not in {"0", "1"}):
+            return None
+        value = elements[0].text or ""
+        if not _bounded_identity_text(value, required=field in {"artist", "track"}):
+            return None
+        corrected = elements[0].get("corrected") == "1"
+        if not corrected and value != request[field]:
+            return None
+        reply[field] = value
+        reply["corrected"][field] = corrected
+    return validate_scrobble_reply_identity(reply, request=request)
+
+
 def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_UNSET_SESSION) -> LastfmSubmissionOutcome:
     if session is _UNSET_SESSION:
         session = get_saved_lastfm_session(config)
     if session is None:
         return LastfmSubmissionOutcome(sent=False, outcome="not_connected", message="Last.fm account is not connected.")
-    artist = str(payload.get("artist") or "").strip()
-    track = str(payload.get("track") or "").strip()
-    timestamp = int(payload.get("timestamp") or 0)
+    request_identity = scrobble_request_identity(payload)
+    artist, track, timestamp = (request_identity[key] for key in ("artist", "track", "timestamp"))
     if not artist or not track or timestamp <= 0:
         return LastfmSubmissionOutcome(sent=False, outcome="invalid_payload", message="Artist, track, and timestamp are required.")
     root = _post_lastfm(
@@ -383,10 +498,10 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
             "artist": artist,
             "track": track,
             "timestamp": timestamp,
-            "album": str(payload.get("album") or "").strip(),
-            "albumArtist": str(payload.get("album_artist") or "").strip(),
+            "album": request_identity["album"],
+            "albumArtist": request_identity["album_artist"],
             "duration": int(payload.get("duration") or 0) or None,
-            "trackNumber": str(payload.get("track_number") or "").strip() or None,
+            "trackNumber": request_identity["track_number"] or None,
             "chosenByUser": 1,
         },
     )
@@ -431,6 +546,7 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
         outcome="accepted",
         ignored_code=ignored_code,
         message=message,
+        receipt_identity=_scrobble_reply_identity(root, request=request_identity),
     )
 
 
@@ -454,3 +570,4 @@ def get_lastfm_total_scrobbles(
             error_kind="malformed_response",
         )
     return playcount
+

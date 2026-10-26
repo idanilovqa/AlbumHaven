@@ -98,6 +98,175 @@ def read_mp3_gapless_info(path: Path) -> Mp3GaplessInfo | None:
 
 
 _probe_cache: OrderedDict[tuple, Mp3GaplessInfo | None] = OrderedDict()
+_PROBE_LAUNCH_SECONDS = 5.0
+_PROBE_READ_SECONDS = 5.0
+_PROBE_EOF_SECONDS = 3.0
+_PROBE_TERMINATE_SECONDS = 1.0
+_PROBE_KILL_SECONDS = 1.0
+_PROBE_DRAIN_SECONDS = 1.0
+_PROBE_CLOSE_SECONDS = 4.0
+
+
+class Mp3GaplessProbe:
+    """One caller-owned compatibility probe, including unresolved cleanup.
+
+    Retain this object before calling ignored_mp3_gapless_info. A bounded
+    failure/cancellation is not settlement: keep capacity until wait_closed
+    succeeds or cleanup_complete becomes true. No retry launches another child.
+    """
+
+    def __init__(self) -> None:
+        self._process: asyncio.subprocess.Process | None = None
+        self._launch_task: asyncio.Task[None] | None = None
+        self._read_task: asyncio.Task[bytes] | None = None
+        self._wait_task: asyncio.Task[int] | None = None
+        self._drain_task: asyncio.Task[None] | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
+        self._cancelled = False
+        self._stdout_eof = False
+
+    @staticmethod
+    def _observe(task: asyncio.Task) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    def check_cancelled(self, cancel_event: asyncio.Event | None = None) -> None:
+        if self._cancelled or (cancel_event is not None and cancel_event.is_set()):
+            raise asyncio.CancelledError
+
+    async def _launch(self, path: Path, executable: str) -> None:
+        self._process = await asyncio.create_subprocess_exec(
+            executable, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path),
+            "-map", "0:a:0", "-c:a", "copy", "-frames:a", "1", "-f", "framecrc", "pipe:1",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.DEVNULL, creationflags=hidden_subprocess_creation_flags(),
+        )
+        self._wait_task = asyncio.create_task(self._process.wait())
+        self._wait_task.add_done_callback(self._observe)
+        self._read_task = asyncio.create_task(self._read_output())
+        self._read_task.add_done_callback(self._observe)
+
+    async def _read_output(self) -> bytes:
+        if self._process.stdout is None:
+            raise RuntimeError("MP3 boundary probe stdout is unavailable")
+        try:
+            return await self._process.stdout.readexactly(8193)
+        except asyncio.IncompleteReadError as error:
+            self._stdout_eof = True
+            return error.partial
+
+    async def _join(self, task: asyncio.Task, timeout: float,
+                    cancellation: asyncio.Task | None):
+        tasks = {task, cancellation} if cancellation is not None else {task}
+        completed, _ = await asyncio.wait(tasks, timeout=timeout,
+                                          return_when=asyncio.FIRST_COMPLETED)
+        if self._cancelled or (cancellation is not None and cancellation in completed):
+            raise asyncio.CancelledError
+        if task not in completed:
+            raise TimeoutError("MP3 boundary probe timed out")
+        return task.result()
+
+    async def collect(self, path: Path, executable: str,
+                      cancel_event: asyncio.Event | None) -> bytes:
+        self.check_cancelled(cancel_event)
+        if self._launch_task is not None:
+            raise RuntimeError("MP3 boundary probe is single-use")
+        self._launch_task = asyncio.create_task(self._launch(path, executable))
+        self._launch_task.add_done_callback(self._observe)
+        cancellation = (asyncio.create_task(cancel_event.wait())
+                        if cancel_event is not None else None)
+        try:
+            await self._join(self._launch_task, _PROBE_LAUNCH_SECONDS, cancellation)
+            output = await self._join(self._read_task, _PROBE_READ_SECONDS, cancellation)
+            if len(output) > 8192:
+                raise RuntimeError("MP3 boundary probe exceeded its output limit")
+            return_code = await self._join(self._wait_task, _PROBE_EOF_SECONDS, cancellation)
+            self.check_cancelled(cancel_event)
+            if return_code != 0 or b"#codec_id 0: mp3" not in output:
+                raise RuntimeError("MP3 boundary probe failed")
+            return output
+        except BaseException:
+            self.request_cancel()
+            # Repeated caller cancellation may interrupt this join, never the
+            # retained attempt or its child-owning launch/read/wait tasks.
+            await asyncio.wait({self._cleanup_task}, timeout=_PROBE_CLOSE_SECONDS)
+            raise
+        finally:
+            if cancellation is not None:
+                cancellation.cancel()
+                cancellation.add_done_callback(self._observe)
+
+    def request_cancel(self) -> None:
+        self._cancelled = True
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._cleanup())
+            self._cleanup_task.add_done_callback(self._observe)
+
+    async def cancel(self) -> None:
+        self.request_cancel()
+        await asyncio.wait({self._cleanup_task}, timeout=_PROBE_CLOSE_SECONDS)
+        if not self.cleanup_complete:
+            raise RuntimeError("MP3 probe cleanup unresolved; capacity remains unavailable")
+
+    async def _discard_stdout(self) -> None:
+        # Never race the retained bounded reader, including during cancellation.
+        # A read failure is not healed into settlement by a later empty read.
+        await asyncio.shield(self._read_task)
+        while await self._process.stdout.read(64 * 1024):
+            pass
+        self._stdout_eof = True
+
+    async def _cleanup(self) -> None:
+        if self._launch_task is None:
+            return
+        try:
+            await asyncio.shield(self._launch_task)
+        except (Exception, asyncio.CancelledError):
+            pass
+        if self._process is None:
+            raise RuntimeError("MP3 probe launch unresolved; capacity remains unavailable")
+        if self._drain_task is None:
+            self._drain_task = asyncio.create_task(self._discard_stdout())
+            self._drain_task.add_done_callback(self._observe)
+        if self._process.returncode is None:
+            try:
+                self._process.terminate()
+            except (ProcessLookupError, OSError):
+                pass
+        await asyncio.wait({self._wait_task}, timeout=_PROBE_TERMINATE_SECONDS)
+        if self._process.returncode is None:
+            try:
+                self._process.kill()
+            except (ProcessLookupError, OSError):
+                pass
+        await asyncio.wait({self._wait_task}, timeout=_PROBE_KILL_SECONDS)
+        await asyncio.wait({self._drain_task}, timeout=_PROBE_DRAIN_SECONDS)
+        if not self.cleanup_complete:
+            raise RuntimeError("MP3 probe cleanup unresolved; capacity remains unavailable")
+
+    @property
+    def cleanup_complete(self) -> bool:
+        if self._launch_task is None:
+            return True
+        tasks = (self._launch_task, self._read_task, self._wait_task)
+        if self._drain_task is not None:
+            tasks += (self._drain_task,)
+        return (self._process is not None and self._process.returncode is not None
+                and self._stdout_eof
+                and all(task is not None and task.done() and not task.cancelled()
+                        and task.exception() is None for task in tasks))
+
+    async def wait_closed(self) -> None:
+        """Retained late observation, not a public deadline or another attempt."""
+        if self.cleanup_complete:
+            return
+        self.request_cancel()
+        await asyncio.gather(asyncio.shield(self._cleanup_task), return_exceptions=True)
+        tasks = (self._wait_task, self._drain_task)
+        await asyncio.gather(*(asyncio.shield(task) for task in tasks if task is not None),
+                             return_exceptions=True)
+        if not self.cleanup_complete:
+            raise RuntimeError("MP3 probe cleanup failed; capacity remains unavailable")
 
 
 def _probe_identity(path: Path, executable: str) -> tuple | None:
@@ -117,62 +286,25 @@ def _probe_identity(path: Path, executable: str) -> tuple | None:
 
 
 async def ignored_mp3_gapless_info(
-    path: Path, executable: str, *, cancel_event: asyncio.Event | None = None,
+    path: Path, executable: str, *, probe: Mp3GaplessProbe,
+    cancel_event: asyncio.Event | None = None,
 ) -> Mp3GaplessInfo | None:
-    if cancel_event is not None and cancel_event.is_set():
-        raise asyncio.CancelledError
+    probe.check_cancelled(cancel_event)
     if path.suffix.lower() != ".mp3":
         return None
     identity = await asyncio.to_thread(_probe_identity, path, executable)
-    if cancel_event is not None and cancel_event.is_set():
-        raise asyncio.CancelledError
+    probe.check_cancelled(cancel_event)
     if identity is not None and identity in _probe_cache:
         _probe_cache.move_to_end(identity)
         return _probe_cache[identity]
     info = await asyncio.to_thread(read_mp3_gapless_info, path)
+    probe.check_cancelled(cancel_event)
     if info is None:
         return None
-    process = await asyncio.create_subprocess_exec(
-        executable, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path),
-        "-map", "0:a:0", "-c:a", "copy", "-frames:a", "1", "-f", "framecrc", "pipe:1",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        stdin=asyncio.subprocess.DEVNULL, creationflags=hidden_subprocess_creation_flags(),
-    )
-    async def collect():
-        try:
-            await process.stdout.readexactly(8193)
-        except asyncio.IncompleteReadError as error:
-            output = error.partial
-        else:
-            raise RuntimeError("MP3 boundary probe exceeded its output limit")
-        if await process.wait() != 0 or b"#codec_id 0: mp3" not in output:
-            raise RuntimeError("MP3 boundary probe failed")
-        return output
-    collector = asyncio.create_task(collect())
-    cancellation = asyncio.create_task(cancel_event.wait()) if cancel_event is not None else None
-    tasks = {collector, cancellation} if cancellation is not None else {collector}
-    try:
-        completed, _ = await asyncio.wait(tasks, timeout=5, return_when=asyncio.FIRST_COMPLETED)
-        if cancellation is not None and cancellation in completed:
-            raise asyncio.CancelledError
-        if collector not in completed:
-            raise TimeoutError("MP3 boundary probe timed out")
-        output = await collector
-    finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        if process.returncode is None:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            await process.wait()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    output = await probe.collect(path, executable, cancel_event)
     result = None if b"Skip Samples" in output else info
     current_identity = await asyncio.to_thread(_probe_identity, path, executable) if identity is not None else None
-    if cancel_event is not None and cancel_event.is_set():
-        raise asyncio.CancelledError
+    probe.check_cancelled(cancel_event)
     if identity is not None and identity == current_identity:
         _probe_cache[identity] = result
         _probe_cache.move_to_end(identity)

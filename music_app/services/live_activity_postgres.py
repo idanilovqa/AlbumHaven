@@ -156,7 +156,7 @@ class LiveActivityPostgres:
                 if not all(allows(scoped,action,ResourceScope(kind,str(identity)),constraints) for kind,identity in identities if identity):return None
                 ref='playing_'+str(row['occurrence_ref'])
                 origin={'audience':'friend' if friend else 'own','subject_ref':subject_ref}
-                taste=project_subject_taste(con,live,origin,{ref:{'kind':'track','id':row['track_id']}},constraints=constraints).get(ref,{})
+                taste=project_subject_taste(con,live,origin,{ref:{'kind':'track','id':row['track_id']}},constraints=constraints,expected_subject_id=subject).get(ref,{})
                 projected={'id':ref,'kind':'track','title':track['title'],'artist':track['artist'],'album_title':track['album_title'],
                     'duration_seconds':track['duration_seconds'],'availability':'local','source_readable':True,'source_label':'Now playing',
                     'listen_count':None,'last_listened_at':None,'artwork_url':album_artwork_url(live,resources['album_id'],constraints=constraints),

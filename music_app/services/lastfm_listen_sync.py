@@ -187,3 +187,104 @@ def record_retry_summary(config: dict[str, object], summary: dict[str, int]) -> 
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
     save_lastfm_sync_state(config, sync_state)
+
+
+def build_recent_scrobble_delivery(
+    entry: dict[str, object],
+    *,
+    source_family: str,
+    measurement_version: str | None,
+    connection_state: str,
+) -> dict[str, object]:
+    """Project stored delivery facts, never authorize or perform a submission.
+
+    The caller must authorize the occurrence and supply provenance from its
+    trusted ledger row, not from source_payload. Keep the original occurrence
+    envelope: this closed DTO deliberately contains no ID, path or provider text.
+    Disconnected suppresses delivery chrome, not the underlying app listen.
+
+    ``retry_check`` is only a hint to the existing scoped retry owner. That owner
+    must refresh the receipt under its provider guard and check session/API,
+    payload, original timestamp, retry budget, reauthentication and backoff.
+    Missing legacy submission facts cannot prove that a play was never sent.
+    """
+    if not isinstance(entry, dict):
+        raise ValueError("Stored listen facts must be a dictionary")
+    if type(connection_state) is not str or connection_state not in (
+        "connected", "disconnected", "unavailable", "unknown",
+    ):
+        raise ValueError("Explicit Last.fm connection state is required")
+
+    native = (
+        source_family == "rendered_local_listen_session"
+        and measurement_version == "rendered-pcm-v1"
+    )
+    legacy = (
+        source_family in ("runtime_listen_history_adapter", "phase_6_json_file_backfill")
+        and measurement_version is None
+    )
+    provenance = entry.get("source_provenance")
+    if "source_provenance" in entry and (
+        not isinstance(provenance, dict)
+        or provenance.get("kind") != "local_playback"
+        or provenance.get("provider") != "album_haven"
+    ):
+        native = legacy = False
+    if not (native or legacy):
+        return {"state": "not_eligible", "next_step": "none", "show_status": False}
+
+    submission = entry.get("scrobble_submission_state")
+    # Positive acceptance and possible delivery dominate contradictory retry,
+    # eligibility or problem flags. The bridge's 'sent' is not proof of success.
+    if entry.get("scrobbled") is True or submission == "accepted":
+        state = "accepted"
+    elif submission in ("attempting", "sent", "uncertain"):
+        state = "delivery_unconfirmed"
+    elif entry.get("scrobble_eligible") is False:
+        state = "not_eligible"
+    elif (
+        entry.get("scrobble_eligible") is not True
+        or entry.get("scrobbled") is not False
+        or submission != "not_sent"
+    ):
+        state = "unknown"
+    elif entry.get("scrobble_reauthentication_required") is True:
+        state = "reauthentication_required"
+    elif entry.get("scrobble_retry_exhausted") is True or (
+        type(entry.get("scrobble_retry_count")) is int
+        and entry["scrobble_retry_count"] >= 5
+    ):
+        # Existing process_pending_scrobble_attempt caps attempts at five.
+        state = "retry_exhausted"
+    elif entry.get("scrobble_retryable") is False:
+        state = "rejected"
+    else:
+        state = "not_sent"
+
+    next_step = "none"
+    if connection_state == "connected":
+        if state == "delivery_unconfirmed":
+            next_step = "check_delivery"
+        elif state == "reauthentication_required":
+            next_step = "reauthenticate"
+        elif state in ("rejected", "retry_exhausted"):
+            next_step = "review_failure"
+        elif state == "not_sent":
+            count = entry.get("scrobble_retry_count", 0)
+            if (
+                entry.get("scrobble_retryable") is True
+                and entry.get("scrobble_retry_exhausted", False) is False
+                and entry.get("scrobble_reauthentication_required", False) is False
+                and type(count) is int and 0 <= count < 5
+            ):
+                next_step = "retry_check"
+    elif connection_state in ("unavailable", "unknown") and state in (
+        "delivery_unconfirmed", "reauthentication_required", "rejected",
+        "retry_exhausted", "not_sent",
+    ):
+        next_step = "check_connection"
+    return {
+        "state": state,
+        "next_step": next_step,
+        "show_status": connection_state != "disconnected",
+    }

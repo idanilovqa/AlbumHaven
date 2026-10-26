@@ -9,6 +9,15 @@ import uuid
 VERSION = "rendered-pcm-v1"
 SOURCE = "rendered_local_listen_session"
 
+# Written by the existing Last.fm completion/retry owner, not by playback
+# progress. Keep eligibility and measured coverage out: those must advance.
+_PROVIDER_RECEIPT_FIELDS = frozenset((
+    "scrobbled", "scrobble_error", "scrobble_retryable", "sync_problem",
+    "scrobble_submission_state", "scrobble_reauthentication_required",
+    "scrobble_retry_exhausted", "scrobble_retry_count",
+    "last_scrobble_attempt_at", "scrobbled_at", "scrobble_submission_identity",
+))
+
 
 class MeasuredListenError(ValueError):
     def __init__(self, message, status_code=400):
@@ -79,9 +88,11 @@ def append_measured(adapter, entry, *, account_id, library_id):
     from psycopg.types.json import Jsonb
     from music_app.services.admin_authority import lock_admin_accounts
     item = normalize_measurement(entry, account_id=account_id, library_id=library_id)
+    # Only the guarded provider claim/outcome owner may create correlation evidence.
+    item.pop("scrobble_submission_identity", None)
     identity = measured_identity(account_id, library_id, item['device_id'], item['session_id'])
     item["id"] = hashlib.sha256(identity.encode()).hexdigest()
-    server_fields = {"id", "recorded_at", "scrobbled", "scrobble_error", "scrobble_retryable", "sync_problem"}
+    server_fields = {"id", "recorded_at"} | _PROVIDER_RECEIPT_FIELDS
     def submitted_fields(value):
         return {key: item for key, item in value.items() if key not in server_fields and not key.startswith("scrobble_")}
     with adapter._connect_to_database() as connection:
@@ -116,7 +127,7 @@ def append_measured(adapter, entry, *, account_id, library_id):
                     or (current["finalized"] and not item["finalized"])):
                 raise MeasuredListenError("Listen counters cannot regress", 409)
             # Provider state belongs to the server's exact-row update path.
-            for key in ("scrobbled", "scrobble_error", "scrobble_retryable", "sync_problem", "scrobble_submission_state"):
+            for key in _PROVIDER_RECEIPT_FIELDS:
                 if key in previous:
                     item[key] = previous[key]
         item.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())

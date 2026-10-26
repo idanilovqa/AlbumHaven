@@ -34,7 +34,7 @@ from music_app.services.remote_album_provider import fetch_release_group_evidenc
 from music_app.services.remote_album_search import (
     SEARCH_LIMIT, normalize_album_search, search_release_group_candidates,
 )
-from music_app.services.remote_album_evidence import canonical_release_group_id, RemoteAlbumEvidenceError, ReleaseGroupEvidence
+from music_app.services.remote_album_evidence import canonical_release_group_id, RemoteAlbumEvidenceError, ReleaseGroupEvidence, validate_release_group_evidence
 from music_app.services.social_cursors import encode_social_cursor, decode_social_cursor
 
 READ = 'account.self.goals.read'
@@ -351,8 +351,20 @@ class PostgresListeningGoalsService:
             facts = self._provider(ref, user_agent=self._user_agent, should_cancel=should_cancel)
         except RemoteAlbumEvidenceError as error:
             raise GoalsError(error.code, 503) from None
-        if not isinstance(facts, ReleaseGroupEvidence) or facts.release_group_id != ref:
+        try:
+            validate_release_group_evidence(facts)
+        except RemoteAlbumEvidenceError:
+            raise GoalsError('invalid_provider_metadata', 503) from None
+        if facts.release_group_id != ref:
             raise GoalsError('invalid_provider_metadata', 503)
+        # Goals retains the v1 scalar projection, not credited artist identities.
+        # Validate the complete provider evidence first, then bind the receipt to
+        # exactly the facts that this repository stores and revalidates on add.
+        evidence_version = _facts_version({
+            'external_id': facts.release_group_id, 'title': facts.title,
+            'artist_display': facts.artist_display,
+            'first_release_date': facts.first_release_date, 'primary_type': facts.primary_type,
+        })
         if should_cancel is not None and should_cancel():
             raise GoalsError('provider_cancelled', 503)
         with self._authorized(context, WRITE, constraints, should_cancel=should_cancel) as (connection, live, now):
@@ -368,12 +380,12 @@ class PostgresListeningGoalsService:
                 (ref,account_id,original_session_id,provider,entity_kind,external_id,evidence_version,
                  title,artist_display,first_release_date,primary_type,created_at,expires_at)
                 values(%s,%s,%s,'musicbrainz','release-group',%s,%s,%s,%s,%s,%s,%s,%s)''',
-                (evidence_ref, account, live.actor.session_id, facts.release_group_id, facts.digest,
+                (evidence_ref, account, live.actor.session_id, facts.release_group_id, evidence_version,
                  facts.title, facts.artist_display, facts.first_release_date, facts.primary_type,
                  now, now + EVIDENCE_LIFETIME))
             if should_cancel is not None and should_cancel():
                 raise GoalsError('provider_cancelled', 503)
-            return {'evidence_ref': evidence_ref, 'evidence_version': facts.digest,
+            return {'evidence_ref': evidence_ref, 'evidence_version': evidence_version,
                     'expires_at': _iso(now + EVIDENCE_LIFETIME), 'album': {
                         'title': facts.title, 'artist_display': facts.artist_display,
                         'first_release_date': facts.first_release_date, 'primary_type': facts.primary_type}}

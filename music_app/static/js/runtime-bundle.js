@@ -5426,6 +5426,7 @@ const state = {
   },
   coverLookup: {
     drawerOpen: false,
+    drawerScrollTop: 0,
     tasks: [],
     tasksHydrated: false,
     tasksLoadFailed: false,
@@ -28846,8 +28847,19 @@ function buildCoverLookupAlbumSubtitle(album) {
 function openCoverLookupAlbumDetails() {
   const album = state.coverLookup.modal.album;
   if (!album) return;
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    state.coverLookup.drawerScrollTop = Number(
+      document.getElementById('cover-lookup-drawer-body')?.scrollTop || 0,
+    );
+    state.coverLookup.drawerOpen = false;
+    renderCoverLookupDrawer();
+  }
   closeCoverLookupModal();
-  openTrackModal(album);
+  openTrackModal(
+    Array.isArray(album.tracks) && album.tracks.length
+      ? album
+      : { ...album, preview_only: true },
+  );
 }
 
 function buildCoverLookupCurrentReleaseLabel(release) {
@@ -30019,7 +30031,10 @@ function getCoverLookupTaskRenderWindow(tasks, body) {
     Number(state.coverLookup.taskEstimatedHeight || COVER_LOOKUP_TASK_ESTIMATED_HEIGHT),
   );
   const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
-  const visibleStart = Math.floor(Math.max(0, Number(body.scrollTop || 0)) / rowHeight);
+  const scrollTop = body.innerHTML
+    ? Number(body.scrollTop || 0)
+    : Number(state.coverLookup.drawerScrollTop || 0);
+  const visibleStart = Math.floor(Math.max(0, scrollTop) / rowHeight);
   const start = Math.min(maximumStart, Math.max(0, visibleStart - COVER_LOOKUP_TASK_OVERSCAN));
   const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
   return { start, end, rowHeight };
@@ -30097,6 +30112,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     clearButton.setAttribute?.('aria-disabled', String(loadedActionedCount <= 0));
   }
   if (!state.coverLookup.drawerOpen) {
+    if (body.innerHTML) {
+      state.coverLookup.drawerScrollTop = Math.max(0, Number(body.scrollTop || 0));
+    }
     body.innerHTML = '';
     state.coverLookup.taskRenderWindowStart = 0;
     syncCoverLookupElapsedTimer();
@@ -30134,6 +30152,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     syncCoverLookupElapsedTimer();
     return;
   }
+  const restoreScrollTop = body.innerHTML ? null : Number(state.coverLookup.drawerScrollTop || 0);
   const renderWindow = getCoverLookupTaskRenderWindow(tasks, body);
   state.coverLookup.taskRenderWindowStart = renderWindow.start;
   const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
@@ -30272,6 +30291,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ${taskMarkup}
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
     `);
+    if (restoreScrollTop !== null) body.scrollTop = Math.max(0, restoreScrollTop);
     const measuredCard = body.querySelector?.('.cover-lookup-task-card');
     const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
     const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;
@@ -41495,7 +41515,7 @@ async function handleUtilityBootstrapClick(event) {
     renderProblemFilterControls(getUtilityModalElements());
   }
   if (
-    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox')
+    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal')
     && state.coverLookup.drawerOpen
   ) {
     state.coverLookup.drawerOpen = false;

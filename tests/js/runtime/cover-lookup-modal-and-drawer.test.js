@@ -41,18 +41,46 @@ function loadHelper(overrides = {}) {
   return context;
 }
 
-require('node:test')('Cover Lookup album link opens the current resolved album details', () => {
-  const album = { album_artist: 'Current Artist', name: 'Current Album', year: 2026 };
+require('node:test')('desktop Cover Lookup album link keeps Notifications open and hydrates partial album details', () => {
+  const album = { key: 'current::album', album_artist: 'Current Artist', name: 'Current Album', year: 2026 };
   const calls = [];
   const context = loadHelper({
     openTrackModal: (value) => calls.push(['open', value]),
+    usesMobilePageLayout: () => false,
   });
+  context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.modal.album = album;
   context.closeCoverLookupModal = () => calls.push(['close']);
 
   context.openCoverLookupAlbumDetails();
 
-  assert.deepEqual(calls, [['close'], ['open', album]]);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
+  assert.equal(calls[0][0], 'close');
+  assert.equal(calls[1][0], 'open');
+  assert.equal(calls[1][1].key, album.key);
+  assert.equal(calls[1][1].preview_only, true);
+});
+
+require('node:test')('mobile Cover Lookup album link closes Notifications and remembers its position', () => {
+  const album = { key: 'current::album', album_artist: 'Current Artist', name: 'Current Album', tracks: [{ path: '01.flac' }] };
+  const calls = [];
+  const drawerBody = { scrollTop: 384 };
+  const context = loadHelper({
+    document: { getElementById: (id) => id === 'cover-lookup-drawer-body' ? drawerBody : null },
+    openTrackModal: (value) => calls.push(['open', value]),
+    renderCoverLookupDrawer: () => calls.push(['render']),
+    usesMobilePageLayout: () => true,
+  });
+  context.state.coverLookup.drawerOpen = true;
+  context.state.coverLookup.modal.album = album;
+  context.renderCoverLookupDrawer = () => calls.push(['render']);
+  context.closeCoverLookupModal = () => calls.push(['close']);
+
+  context.openCoverLookupAlbumDetails();
+
+  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerScrollTop, 384);
+  assert.deepEqual(calls, [['render'], ['close'], ['open', album]]);
 });
 
 for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', 'Cover Art Archive'], ['spotify', 'SPOTIFY']]) {
@@ -348,6 +376,7 @@ require('node:test')('closed drawer releases cards and renders terminal task sta
   assert.match(bodyElement.innerHTML, />Searching</);
 
   context.state.coverLookup.drawerOpen = false;
+  bodyElement.scrollTop = 222;
   context.hasActiveCoverLookupDrawerAction = () => true;
   task.status = 'completed';
   task.result_kind = 'cover-updated';
@@ -355,8 +384,10 @@ require('node:test')('closed drawer releases cards and renders terminal task sta
   context.renderCoverLookupDrawer();
 
   assert.equal(bodyElement.innerHTML, '');
+  assert.equal(context.state.coverLookup.drawerScrollTop, 222);
   context.state.coverLookup.drawerOpen = true;
   context.renderCoverLookupDrawer();
+  assert.equal(bodyElement.scrollTop, 222);
   assert.match(bodyElement.innerHTML, />Art chosen</);
 });
 

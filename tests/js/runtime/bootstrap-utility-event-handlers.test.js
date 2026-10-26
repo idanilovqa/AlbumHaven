@@ -1084,7 +1084,7 @@ test('opening a cover lookup task keeps the drawer open behind the task modal', 
     'data-open-cover-lookup-task': 'cover-task-12',
   });
   const { event, wasPrevented } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   }, { detail: 1 });
 
@@ -1095,6 +1095,22 @@ test('opening a cover lookup task keeps the drawer open behind the task modal', 
   assert.deepEqual(transitions, [
       'open:true:Metallica:Kill Em All:cover-task-12:true',
   ]);
+});
+
+test('Album Details interactions do not close Notifications behind it', async () => {
+  const { context } = createContext();
+  context.state.coverLookup.drawerOpen = true;
+  let renders = 0;
+  context.renderCoverLookupDrawer = () => { renders += 1; };
+  const trackModal = createElement();
+  const { event } = createEvent({
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': trackModal,
+  });
+
+  await context.handleUtilityBootstrapClick(event);
+
+  assert.equal(context.state.coverLookup.drawerOpen, true);
+  assert.equal(renders, 0);
 });
 
 test('keyboard activation opens a selectable cover lookup task trigger', () => {
@@ -1177,7 +1193,7 @@ test('drag-selecting cover lookup task text suppresses only its immediate click 
   });
   taskButton.contains = (node) => node === selectedTextNode;
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1244,7 +1260,7 @@ test('an ordinary click opens a cover lookup task when its preexisting text sele
   });
   taskButton.contains = (node) => node === anchorNode || node === focusNode;
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1297,7 +1313,7 @@ test('a moved notification-title drag suppresses its immediate card click when m
     'data-open-cover-lookup-task': 'cover-task-drag',
   });
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1347,7 +1363,7 @@ test('keyboard activation opens a cover lookup task while unrelated page text re
     'data-open-cover-lookup-task': 'cover-task-12',
   });
   const { event, wasPrevented } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   }, { detail: 0 });
 

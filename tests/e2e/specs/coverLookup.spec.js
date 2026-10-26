@@ -177,6 +177,8 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
   const mobileLayout = new MobileLayoutPage(page);
   const pickerName = 'album-haven-cloud-vinyl.png';
   const pickerPath = path.resolve('music_app', 'static', 'images', pickerName);
+  const expectedCover = findFixtureCoverBySubtitle(Object.values(MANUAL_PROVIDER_COVER).join(' - '));
+  expect(expectedCover).not.toBeNull();
   let savedCoverPath = '';
   let savedCoverRevision = '';
   let savedPreviewHash = '';
@@ -189,6 +191,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
+    await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover));
     await coverLookupActions.startSearch();
     await coverLookupActions.closeModal();
     await trackModalActions.close();
@@ -798,10 +801,14 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
       ].filter(Boolean).join(' - '));
       if (index === 1) {
         await coverLookupActions.coverLookup.modalSubtitle.click();
+        await coverLookupActions.waitForDrawerClosed();
         const details = await trackModalActions.waitForLoadedSummary();
         expect(details.title).toContain(identity.album);
         expect(details.subtitle).toContain(identity.artist);
+        expect(details.trackRows).toBeGreaterThan(0);
         await trackModalActions.close();
+        await coverLookupActions.coverLookup.waitForDrawerState(false);
+        await coverLookupActions.openDrawer();
       } else if (swipeFirst && index === 0) {
         await coverLookupActions.swipeNotificationMobileSheetDown();
       } else {
@@ -813,6 +820,16 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   };
 
   await verifyCardDestinations({ swipeFirst: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await coverLookupActions.openTaskById(notifications[0].taskId);
+  await coverLookupActions.waitForModalReady();
+  await coverLookupActions.coverLookup.modalSubtitle.click();
+  const desktopDetails = await trackModalActions.waitForLoadedSummary();
+  expect(desktopDetails.trackRows).toBeGreaterThan(0);
+  await coverLookupActions.waitForDrawerOpen();
+  await trackModalActions.close();
+  await coverLookupActions.waitForDrawerOpen();
+  await page.setViewportSize({ width: 390, height: 844 });
   const selected = notifications.at(-1);
   await coverLookupActions.openTaskById(selected.taskId);
   await coverLookupActions.waitForModalReady();

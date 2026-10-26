@@ -348,6 +348,7 @@ const state = {
   },
   coverLookup: {
     drawerOpen: false,
+    drawerScrollTop: 0,
     tasks: [],
     tasksHydrated: false,
     tasksLoadFailed: false,

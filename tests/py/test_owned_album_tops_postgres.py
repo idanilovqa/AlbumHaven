@@ -32,6 +32,7 @@ OWNER_ACTIONS = {
     "can_read": True, "can_edit": True, "can_rename": True, "can_add": True,
     "can_remove": True, "can_reorder": True, "can_delete": True, "can_share": True,
     "can_view_sharing": True, "can_request_edit": False, "can_copy": True,
+    "can_set_activity": True, "can_manage_own_progress": True,
 }
 
 
@@ -190,7 +191,18 @@ def test_create_read_and_exact_replay_preserve_authored_order_and_one_receipt(db
     assert [row["catalog_ref"] for row in detail["items"]] == list(reversed(db.album_refs))
     assert [row["original_position"] for row in detail["items"]] == [1, 2, 3]
     assert [row["curator_position"] for row in detail["items"]] == [1, 2, 3]
-    assert set(detail) == {"top_ref", "title", "description", "revision", "visibility", "allowed_actions", "items"}
+    assert set(detail) == {"top_ref", "title", "description", "revision", "visibility",
+                           "allowed_actions", "items", "top_viewer_overlay", "edit_draft"}
+    assert detail["top_viewer_overlay"] == {
+        "activity": {"active": True, "activity_revision": "0"},
+        "item_progress": {ref: {"progress_revision": "0", "manual_completed_at": None}
+                          for ref in db.album_refs},
+    }
+    assert detail["edit_draft"] == {
+        "items": [{"item_ref": row["ref"], "album_ref": row["catalog_ref"]}
+                  for row in detail["items"]],
+        "publication_preview_required": False,
+    }
     for item in detail["items"]:
         assert set(item) == {"ref", "catalog_ref", "original_position", "curator_position",
                              "title", "artist_display", "release_year", "native_album"}
@@ -530,7 +542,8 @@ def test_index_paginates_without_duplicates_and_excludes_deleted_and_foreign_top
     assert [top["top_ref"] for top in second["tops"]] == [receipts[3]["top_ref"]]
     assert second["next_cursor"] is None
     for top in first["tops"] + second["tops"]:
-        assert set(top) == {"top_ref", "title", "description", "revision", "visibility", "allowed_actions"}
+        assert set(top) == {"top_ref", "title", "description", "revision", "visibility", "allowed_actions", "top_viewer_overlay"}
+        assert top["top_viewer_overlay"] == {"activity": {"active": True, "activity_revision": "0"}}
         assert top["top_ref"] != foreign["top_ref"]
         assert top["allowed_actions"] == OWNER_ACTIONS
 

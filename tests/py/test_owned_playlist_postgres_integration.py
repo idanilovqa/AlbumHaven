@@ -76,7 +76,7 @@ class Database:
     def source(self):
         ctx = self.context()
         source = self.service.begin_source(ctx)["data"]["source"]
-        page = self.service.read_source_page(ctx,source_ref=source["ref"],source_revision=source["revision"])["data"]
+        page = self.service.read_source_page(ctx,source_ref=source["ref"],source_revision=source["revision"],query="Track")["data"]
         return source, page
 
     def create(self, *, source=None, refs=None, key=None, service=None):
@@ -123,6 +123,16 @@ def db(urls):
         yield db
     finally:
         db.close()
+
+
+def test_blank_source_search_is_empty_until_explicit_query(db):
+    source, searched = db.source()
+    blank = db.service.read_source_page(db.context(), source_ref=source["ref"],
+        source_revision=source["revision"], query="  ")["data"]
+    assert blank["entries"] == []
+    assert blank["entries_complete"] is False
+    assert blank["has_more"] is False and blank["next_cursor"] is None
+    assert [row["title"] for row in searched["entries"]] == ["Track 0", "Track 1", "Track 2"]
 
 
 def test_create_persists_authored_order_and_idempotent_receipt(db):

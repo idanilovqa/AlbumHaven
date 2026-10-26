@@ -224,7 +224,7 @@ def test_track_constraints_filter_sources_reject_writes_and_redact_current_links
             context.resource is not None and context.resource.resource_kind=="track"
             and context.resource.resource_ref==str(db.tracks[0])))
     source,page=db.source()
-    filtered=db.service.read_source_page(db.context(),source_ref=source["ref"],source_revision=source["revision"],constraints=deny_track)["data"]
+    filtered=db.service.read_source_page(db.context(),source_ref=source["ref"],source_revision=source["revision"],query="Track",constraints=deny_track)["data"]
     assert len(filtered["entries"])==2
     refs=[row["entry_ref"] for row in page["entries"]]
     create=normalize_playlist_command("create",{"mode":"ordinary","source_protocol":"library_selection_v1", "source":source,"title":"Denied","entry_refs":refs,"request_key":str(uuid4())})
@@ -274,17 +274,17 @@ def test_opaque_cursor_hides_denied_sort_facts_and_advances_to_readable_rows(sha
         return PolicyEvaluationConstraints(deployment_allowed=not (
             context.resource is not None and context.resource.resource_kind=="track"
             and context.resource.resource_ref==str(db.tracks[0])))
-    page=db.service.read_source_page(db.context(),source_ref=source["ref"],source_revision=source["revision"],limit=1,constraints=deny_first)["data"]
+    page=db.service.read_source_page(db.context(),source_ref=source["ref"],source_revision=source["revision"],query="Track",limit=1,constraints=deny_first)["data"]
     from uuid import UUID
     assert page["entries"]==[] and page["has_more"] is True
     assert str(UUID(page["next_cursor"]))==page["next_cursor"]
-    next_page=db.service.read_source_page(db.context(),source_ref=source["ref"],source_revision=source["revision"],limit=1,
+    next_page=db.service.read_source_page(db.context(),source_ref=source["ref"],source_revision=source["revision"],query="Track",limit=1,
         cursor=page["next_cursor"],constraints=deny_first)["data"]
     assert next_page["entries"][0]["title"]=="Track 1"
     assert next_page["search_revision"]==page["search_revision"]
     another,_=db.source()
     with pytest.raises(PlaylistError,match="invalid_cursor"):
-        db.service.read_source_page(db.context(),source_ref=another["ref"],source_revision=another["revision"],cursor=page["next_cursor"])
+        db.service.read_source_page(db.context(),source_ref=another["ref"],source_revision=another["revision"],query="Track",cursor=page["next_cursor"])
     with pytest.raises(PlaylistError,match="invalid_cursor"):
         db.service.read_source_page(db.context(),source_ref=source["ref"],source_revision=source["revision"],query="different",cursor=page["next_cursor"])
     with db.connect() as con:

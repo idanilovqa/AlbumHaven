@@ -298,14 +298,26 @@ def test_shared_viewer_sources_use_own_activity_not_owner_and_need_no_edit_grant
     db.top_service.execute(db.context(other),normalize_top_command('set_activity',{
         'request_key':str(uuid4()),'active':False,'activity_revision':'0'},top_ref=top))
     db.settings(enabled=True,album_mode='next')
+    with db.connect() as connection:
+        activity_before = {table: connection.execute('select * from app.'+table+
+            ' where top_ref=%s order by account_id, to_jsonb('+table+')::text',(top,)).fetchall()
+            for table in ('album_list_activity','album_list_activity_transitions')}
+    assert {row['account_id']: (row['active'], row['activity_revision'])
+            for row in activity_before['album_list_activity']} == {
+        db.owner.account_id: (True, 0), other.account_id: (False, 1)}
+    assert {(row['account_id'], row['revision'])
+            for row in activity_before['album_list_activity_transitions']} == {
+        (db.owner.account_id, 0), (other.account_id, 0), (other.account_id, 1)}
     result = db.draw()
     assert result['catalog_ref']==refs[0]
     assert all(grant.capability_key==BROWSE for grant in db.owner.capability_grants)
     with db.connect() as connection:
         assert connection.execute('''select count(*) as n from app.album_list_item_progress
             where account_id=%s''',(db.owner.account_id,)).fetchone()['n']==0
-        assert connection.execute('''select count(*) as n from app.album_list_activity
-            where account_id=%s''',(db.owner.account_id,)).fetchone()['n']==0
+        activity_after = {table: connection.execute('select * from app.'+table+
+            ' where top_ref=%s order by account_id, to_jsonb('+table+')::text',(top,)).fetchall()
+            for table in ('album_list_activity','album_list_activity_transitions')}
+        assert activity_after == activity_before
 
 
 @pytest.mark.parametrize('failure',['disabled','session','capability','inactive','deleted'])
@@ -313,6 +325,10 @@ def test_current_authority_and_source_status_are_not_replaced_by_saved_settings(
     db = bonus_db
     top, _ = db.source()
     db.settings(enabled=True,source_mode='selected',selected_top_refs=[top])
+    if failure=='inactive':
+        paused = db.top_service.execute(db.context(),normalize_top_command('set_activity',{
+            'request_key':str(uuid4()),'active':False,'activity_revision':'0'},top_ref=top))
+        assert paused['active'] is False and paused['activity_revision']=='1'
     with db.connect() as connection:
         if failure=='disabled':
             connection.execute('update app.accounts set is_active=false,disabled_at=%s where id=%s',(db.now,db.owner.account_id))
@@ -322,10 +338,6 @@ def test_current_authority_and_source_status_are_not_replaced_by_saved_settings(
             connection.execute('update app.capabilities set revoked_at=%s where account_id=%s',(db.now,db.owner.account_id))
         elif failure=='deleted':
             connection.execute('update app.album_lists set deleted_at=%s where ref=%s',(db.now,top))
-        else:
-            connection.execute('''insert into app.album_list_activity
-                (account_id,library_id,top_ref,activity_revision,active,started_at)
-                values(%s,%s,%s,0,false,%s)''',(db.owner.account_id,db.library,top,db.now))
     # Build syntactically known revision inputs without a preparatory denied read.
     command = normalize_bonus_draw({'request_key':str(uuid4()),'revision':'1','settings_revision':'2',
                                    'expected_cycle_id':None,'timezone_name':'UTC'})

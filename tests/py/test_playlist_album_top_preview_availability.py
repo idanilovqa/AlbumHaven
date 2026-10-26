@@ -22,16 +22,19 @@ def test_only_populated_bounded_persisted_sources_offer_conversion(count, expect
     assert result['allowed_actions']['can_create_sample'] is False
 
 
-@pytest.mark.parametrize('actions', [(), (BROWSE,), (CREATE,), (BROWSE, 'library.playlists.create')])
-def test_playlist_creation_or_partial_authority_cannot_authorize_top_creation(actions):
-    assert card(_context(*actions))['allowed_actions']['can_create_album_top'] is False
+@pytest.mark.parametrize('actions,expected', [
+    ((), False), ((BROWSE,), True), ((CREATE,), False),
+    ((BROWSE, 'library.playlists.create'), True),
+], ids=['actions0', 'actions1', 'actions2', 'actions3'])
+def test_personal_top_creation_requires_browse_not_a_separate_create_grant(actions, expected):
+    assert card(_context(*actions))['allowed_actions']['can_create_album_top'] is expected
 
 
 def test_other_owner_requires_readable_source_but_never_supplies_target_authority():
     permitted = _context(BROWSE, CREATE)
     assert card(permitted, owner=99)['allowed_actions']['can_create_album_top'] is False
     assert card(permitted, owner=99, visibility='server_shared')['allowed_actions']['can_create_album_top'] is True
-    assert card(_context(BROWSE), owner=99, visibility='server_shared')['allowed_actions']['can_create_album_top'] is False
+    assert card(_context(BROWSE), owner=99, visibility='server_shared')['allowed_actions']['can_create_album_top'] is True
 
 
 @pytest.mark.parametrize('denied', ['source', 'destination'])

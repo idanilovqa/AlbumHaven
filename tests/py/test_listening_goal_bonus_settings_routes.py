@@ -45,7 +45,7 @@ def test_private_fences_and_no_store_prevent_settings_write(bonus_db, failure):
 
 
 @pytest.mark.parametrize('field,value', [('account_id', 123), ('library_id', 123),
-    ('catalog_ref', str(uuid4())), ('preferred_top_weight', 20), ('enabled', 1)])
+    pytest.param('catalog_ref', str(uuid4()), id='catalog-ref'), ('preferred_top_weight', 20), ('enabled', 1)])
 def test_settings_route_rejects_authority_fields_and_invalid_types(bonus_db, field, value):
     db = bonus_db
     app = application(db)

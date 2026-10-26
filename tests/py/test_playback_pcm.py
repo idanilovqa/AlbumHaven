@@ -393,7 +393,19 @@ def test_decoder_restores_reserved_credit_once_when_stdout_read_fails():
         with pytest.raises(OSError, match="stdout read failed"):
             await decoder.read_credited_frames(max_frames=2)
         assert decoder.outstanding_credit_frames == 5
-        await decoder.cancel()
+        with pytest.raises(RuntimeError, match="cleanup unresolved"):
+            await decoder.cancel()
+        cleanup_task = decoder._cleanup_task
+        failed_reader = decoder._stdout_discard_task
+        assert cleanup_task is not None and failed_reader is not None
+        assert decoder.cleanup_complete is False
+        assert isinstance(failed_reader.exception(), OSError)
+        with pytest.raises(RuntimeError, match="cleanup unresolved"):
+            await decoder.cancel()
+        assert decoder._cleanup_task is cleanup_task
+        assert decoder._stdout_discard_task is failed_reader
+        assert process.terminate_calls == 1 and process.wait_calls == 1
+        assert decoder.outstanding_credit_frames == 5
 
     asyncio.run(scenario())
 
@@ -452,7 +464,7 @@ def test_cancel_terminates_and_waits_for_the_exact_started_process():
     asyncio.run(scenario())
 
 
-def test_cancel_retries_the_exact_failed_wait_instead_of_reporting_false_success():
+def test_cancel_retains_the_exact_failed_wait_and_reports_unresolved_cleanup():
     class FailingWaitProcess(FakeProcess):
         async def wait(self) -> int:
             self.wait_calls += 1
@@ -467,15 +479,20 @@ def test_cancel_retries_the_exact_failed_wait_instead_of_reporting_false_success
             process_factory=factory_for(process, calls),
         )
 
-        with pytest.raises(RuntimeError, match="process wait failed"):
+        with pytest.raises(RuntimeError, match="cleanup unresolved"):
             await decoder.cancel()
         failed_wait_task = decoder._wait_task
         assert failed_wait_task is not None
+        cleanup_task = decoder._cleanup_task
+        assert decoder.cleanup_complete is False
+        assert str(failed_wait_task.exception()) == "process wait failed"
 
-        with pytest.raises(RuntimeError, match="process wait failed"):
+        with pytest.raises(RuntimeError, match="cleanup unresolved"):
             await decoder.cancel()
 
         assert decoder._wait_task is failed_wait_task
+        assert decoder._cleanup_task is cleanup_task
+        assert decoder.cleanup_complete is False
         assert process.terminate_calls == 1
         assert process.wait_calls == 1
         await decoder._stderr_task

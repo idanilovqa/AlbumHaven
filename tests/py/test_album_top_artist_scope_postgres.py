@@ -229,7 +229,8 @@ def test_scoped_empty_search_filters_before_response_and_saved_scope_cannot_be_o
         'albums': [], 'next_cursor': None}
     result = search(database, query='')
     assert [row['local_album_id'] for row in result['albums']] == database.album_ids[:1]
-    assert set(result['albums'][0]) == {'local_album_id', 'album_ref', 'title', 'artist', 'year', 'creation_metadata'}
+    assert set(result['albums'][0]) == {'local_album_id', 'inventory_album_ref', 'album_ref', 'title', 'artist', 'year', 'creation_metadata'}
+    assert result['albums'][0]['inventory_album_ref'] == f"inventory-album:{database.library}:{database.album_ids[0]}"
     family = search(database, scope=descriptor(database, 'family'), query='')
     assert {row['local_album_id'] for row in family['albums']} == set(database.album_ids[:2])
     receipt, _ = create(database)

@@ -5,7 +5,7 @@ from uuid import UUID
 import pytest
 
 from music_app.services.current_actor import CapabilityGrant
-from music_app.services.owned_playlists import ACCESS, PlaylistError
+from music_app.services.owned_playlists import ACCESS, BROWSE, PlaylistError
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
 from tests.py.test_playlist_access_candidates import SECRET
 from tests.py.test_playlist_collaboration_postgres import db, urls, sharing, member, write
@@ -90,9 +90,15 @@ def test_current_owner_access_and_resource_constraints_cannot_be_replayed(sharin
     with pytest.raises(PlaylistError, match="forbidden"):
         candidates(db, granted, constraints=lambda ctx: PolicyEvaluationConstraints(
             client_surface_allowed=not (ctx.action == ACCESS and ctx.resource is not None)))
+    before = candidates(db, granted)
     with db.connect() as con:
         con.execute("update app.capabilities set revoked_at=now() where account_id=%s and capability_key=%s",
                     (db.owner.account_id,ACCESS))
+    # Browse remains a durable alternative grant for personal-collection access.
+    assert candidates(db, granted) == before
+    with db.connect() as con:
+        con.execute("update app.capabilities set revoked_at=now() where account_id=%s and capability_key=%s",
+                    (db.owner.account_id,BROWSE))
     with pytest.raises(PlaylistError, match="forbidden"):
         candidates(db, granted)
 

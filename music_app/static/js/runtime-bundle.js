@@ -31849,10 +31849,8 @@ async function savePastedCoverFromLookup(imageId) {
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
-    if (taskId) {
-      markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
-      renderCoverLookupDrawer();
-    }
+    markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
+    renderCoverLookupDrawer();
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);

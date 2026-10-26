@@ -659,6 +659,54 @@ require('node:test')('pasted cover updates its notification before the save resp
   assert.deepEqual(lifecycleCalls, ['render', 'close', 'render']);
 });
 
+require('node:test')('pasted cover marks its completed notification when opened from album details', async () => {
+  const album = {
+    key: 'various artists::aladdin',
+    album_artist: 'Various Artists',
+    name: 'Aladdin',
+    tracks: [{ path: 'C:/Music/Aladdin/01.mp3' }],
+  };
+  const markCalls = [];
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    getAlbumPathSignature: (value) => (value?.tracks || []).map((track) => track.path).join('::'),
+    showToast: () => {},
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, updated_album: album }),
+    }),
+  });
+  Object.assign(context.state.coverLookup, {
+    optimisticAlbumCovers: {},
+    tasks: [{ id: 'aladdin-task', status: 'completed', notification_action_taken: false }],
+  });
+  context.state.coverLookup.modal = {
+    album,
+    taskId: '',
+    pastedImages: [{
+      id: 'new-cover',
+      data_url: 'data:image/jpeg;base64,new-cover',
+      mime_type: 'image/jpeg',
+      filename: 'new-cover.jpg',
+    }],
+  };
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.closeCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum) => {
+    markCalls.push({ taskId, selectedAlbum });
+  };
+
+  await context.savePastedCoverFromLookup('new-cover');
+
+  assert.equal(markCalls.length, 1);
+  assert.equal(markCalls[0].taskId, '');
+  assert.equal(markCalls[0].selectedAlbum.name, 'Aladdin');
+});
+
 require('node:test')('notification startup loads authoritative counts without loading history', async () => {
   const requestedUrls = [];
   const { context, badgeElement } = createDrawerHarness({

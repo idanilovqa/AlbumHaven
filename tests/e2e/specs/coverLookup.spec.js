@@ -200,10 +200,16 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/utilities/cover-lookup/pasted-image-save'
     ));
+    const markActionResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith('/mark-action-taken')
+    ));
     await lookup.saveRemoteButton.click();
     const saveResponse = await saveResponsePromise;
+    const markActionResponse = await markActionResponsePromise;
     const payload = await saveResponse.json();
     expect(saveResponse.status()).toBe(200);
+    expect(markActionResponse.status()).toBe(200);
     expect(payload.ok).toBe(true);
     savedCoverPath = String(payload.selected_cover_path || '').trim();
     savedCoverRevision = String(payload.cover_revision || '').trim();

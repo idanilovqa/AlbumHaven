@@ -163,6 +163,13 @@ function loadHelper(overrides = {}) {
         tracks: [{ path: 'Other/Album/song.mp3' }],
       },
     },
+    {
+      id: 'running-task',
+      status: 'running',
+      album_payload: {
+        tracks: [{ path: 'Artist/Album/song.mp3' }],
+      },
+    },
   ];
 
   context.markCoverLookupTaskActionTaken('', {
@@ -175,6 +182,7 @@ function loadHelper(overrides = {}) {
   assert.equal(tasks[0].notification_action_taken, true);
   assert.equal(tasks[0].current_user_cover_preview_url, selectedCoverUrl);
   assert.equal(Boolean(tasks[1].notification_action_taken), false);
+  assert.equal(Boolean(tasks[2].notification_action_taken), false);
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/task/failed-task/mark-action-taken');
 })().catch((error) => {

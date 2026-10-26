@@ -181,6 +181,8 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
+  page,
+  searchToolbarActions,
   startupRelationProjectionReadiness,
   stepLogger,
 }) => {
@@ -281,6 +283,23 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
       const visibleAlbums = await galleryActions.readAlbumNamesByHeading(familyArtist);
       expect(visibleAlbums.length, `${familyArtist} must own an album in the selected family payload`).toBeGreaterThan(0);
     }
+  });
+
+  await stepLogger.step('Keep an album-title search visible under its selected featured performer', async () => {
+    await searchToolbarActions.search(CONTROL_SHARED_ALBUM, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(CONTROL_SHARED_ALBUM);
+    await navigationPanelActions.selectSidebarArtistByName(CONTROL_PARTNER);
+    await navigationPanelActions.waitForSidebarSelection(CONTROL_PARTNER);
+    await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_PARTNER, CONTROL_SHARED_ALBUM);
+
+    const subsectionTitle = await page.locator('.album-title-button', { hasText: CONTROL_SHARED_ALBUM }).evaluate((button) => {
+      const row = button.closest('.album-row');
+      let sibling = row?.previousElementSibling || null;
+      while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
+      return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
+    });
+    expect(subsectionTitle).toBe('Featured On');
+    expect(await galleryActions.readAlbumNamesByHeading(CONTROL_PARTNER)).toEqual([CONTROL_SHARED_ALBUM]);
   });
 });
 

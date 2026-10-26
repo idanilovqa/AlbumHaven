@@ -123,3 +123,4 @@ def _optional_positive_integer(value: object | None, field: str) -> int | None:
     if parsed < 1:
         raise ValueError(f"Policy context {field} scope is invalid.")
     return parsed
+

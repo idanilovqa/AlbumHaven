@@ -144,3 +144,4 @@ def _scope_matches(grant: CapabilityGrant, context: PolicyContext) -> bool:
     if grant.scope_kind == "account":
         return grant.scope_id is not None and grant.scope_id == context.target_account_id
     return False
+

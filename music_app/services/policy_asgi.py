@@ -174,3 +174,4 @@ def _request_origin(request: Request) -> RequestOrigin:
         hashlib.sha256,
     ).hexdigest()
     return RequestOrigin("network", f"hmac:v{int(version or 1)}:{digest}")
+

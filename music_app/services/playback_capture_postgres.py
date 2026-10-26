@@ -5,8 +5,8 @@ import hmac
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
 from music_app.services.current_library_selector import canonical_library_selector_sql
 from music_app.services.playback_capture import (
-    CaptureError, MAX_INTEGER, PROTOCOL, canonical_json, capture_digest,
-    normalize_capture_envelope,
+    CaptureError, MAX_INTEGER, PROTOCOL, POSITION_PROTOCOL, canonical_json, capture_digest,
+    normalize_capture_envelope, _validate_position_lineage,
 )
 from music_app.services.policy import ResourceScope
 from music_app.services.private_library_authority import (
@@ -145,6 +145,10 @@ def record_capture_checkpoint(database_url, context, envelope, *, expected_scope
                               constraints=None, connect=None, clock=None):
     """Commit one immutable batch, or return its original authorized receipt."""
     envelope = normalize_capture_envelope(envelope)
+    # Pure v2 validation is staged independently of v2 storage. Never digest or
+    # persist v2 with the legacy schema/charges merely because parsing succeeds.
+    if envelope['protocol'] != PROTOCOL:
+        raise CaptureError('unsupported_capture_version')
     clock = clock or (lambda: datetime.now(timezone.utc))
     evidence = envelope['evidence']
     sequence = envelope['sequence']
@@ -162,6 +166,8 @@ def record_capture_checkpoint(database_url, context, envelope, *, expected_scope
         source = None
         duplicate = None
         if parent is not None:
+            if parent['evidence_version'] != PROTOCOL:
+                raise CaptureError('capture_conflict', 409)
             if parent['library_id'] != live.library_id or not hmac.compare_digest(parent['auth_session_guard'], expected_scope):
                 raise CaptureError('capture_scope_changed', 409)
             require_private_action(live, 'library.media.read',
@@ -259,4 +265,258 @@ def record_capture_checkpoint(database_url, context, envelope, *, expected_scope
              now if evidence['terminal'] else None, evidence['terminal_reason'], bool(evidence['gaps']),
              any(r['quality']=='unknown' for r in evidence['runs']) or bool(evidence['gaps']), len(additions), parent['id']))
         _final_authority(connection, live, constraints, clock, parent['original_track_id'])
+        return dict(ok=True, capture_uuid=str(parent['capture_uuid']), **receipt)
+
+
+
+def _position_edge(before, after):
+    """Necessary ordered-lineage laws only, never proof of uninterrupted audio."""
+    if (before['ordinal_start'] + before['frames'] > after['ordinal_start']
+            or before['output_start'] + before['frames'] > after['output_start']):
+        raise CaptureError('capture_conflict', 409)
+    try:
+        _validate_position_lineage((before, after))
+    except CaptureError:
+        raise CaptureError('capture_conflict', 409) from None
+
+
+def _position_witnesses(connection, owner, parent, runs):
+    """Three indexed witnesses/run, at most768 rows, not a fixed I/O/time bound.
+
+    The enclosing real authority transaction holds the account UPDATE lock.
+    Do not replace ordinal neighbors with receipt-order owner high-water marks.
+    Driver timeout/cancellation/error propagates and aborts the transaction;
+    never reinterpret incomplete probes as absent evidence.
+    """
+    if owner is None:
+        return
+    parent_id = parent['id'] if parent else None
+    for run in runs:
+        witness = connection.execute('''select r.*,c.session_id as parent_id
+            from integration.playback_capture_run r
+            join integration.playback_capture_checkpoint c on c.id=r.checkpoint_id
+            where r.owner_id=%s and r.binding_serial=%s limit 1''',
+            (owner['id'], run['binding_serial'])).fetchone()
+        if witness is not None and (
+                witness['parent_id'] != parent_id
+                or any(witness[key] != run[key] for key in
+                       ('generation', 'stream_id', 'source_base48'))):
+            raise CaptureError('capture_conflict', 409)
+        before = connection.execute('''select * from integration.playback_capture_run
+            where owner_id=%s and ordinal_start<%s
+            order by ordinal_start desc limit 1''',
+            (owner['id'], run['ordinal_start'])).fetchone()
+        after = connection.execute('''select * from integration.playback_capture_run
+            where owner_id=%s and ordinal_start>=%s
+            order by ordinal_start asc limit 1''',
+            (owner['id'], run['ordinal_start'])).fetchone()
+        if before is not None:
+            _position_edge(before, run)
+        if after is not None:
+            _position_edge(run, after)
+    # normalize_capture_envelope already checked adjacent new runs and every
+    # new same-binding group. Combined with both stored neighbors this preserves
+    # the induction without loading/merging unbounded retained owner history.
+
+def _record_position_checkpoint(database_url, context, envelope, *, expected_scope,
+                              constraints=None, connect=None, clock=None, require_position_storage_ready=False, position_enabled=None):
+    """Private v2 writer, called only by the opt-in companion transport.
+
+    Public v1 intake never dispatches here. Companion requests require fresh
+    structural storage readiness inside this transaction before any admission.
+    All database failures abort; post-commit acknowledgement can be uncertain.
+    """
+    from music_app.services.playback_edition_selection import (
+        normalize_selected_position_envelope, admit_capture_selection,
+        insert_capture_selection, selection_schema_ready, ASSOCIATION_BYTES,
+    )
+    def require_current_gate():
+        if require_position_storage_ready and (not callable(position_enabled) or position_enabled() is not True):
+            raise CaptureError('capture_unavailable',503)
+    require_current_gate()
+    envelope = normalize_selected_position_envelope(envelope)
+    if envelope['protocol'] != POSITION_PROTOCOL:
+        raise CaptureError('unsupported_capture_version')
+    if (type(expected_scope) is not str or not expected_scope or not expected_scope.isascii()
+            or len(expected_scope.encode('utf-8')) > 256):
+        raise CaptureError('capture_scope_changed', 409)
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    evidence = envelope['evidence']
+    sequence = envelope['sequence']
+    digest = capture_digest(sequence, evidence, protocol=POSITION_PROTOCOL)
+    with current_library_transaction(database_url, context, constraints=constraints,
+                                     connect=connect, clock=clock,
+                                     inventory_publication_first=True) as (connection, live, now):
+        _selector(connection, live)
+        require_private_action(live, 'library.media.read', constraints=constraints)
+        require_current_gate()
+        if require_position_storage_ready is True:
+            from music_app.services.playback_position_transport import require_position_storage
+            require_position_storage(connection)
+        # Nonlocking owner resolution under the authority account UPDATE lock.
+        # Owner insertion/FK locks come only after account/global budgets.
+        owner = connection.execute('''select * from integration.playback_capture_owner
+            where account_id=%s and library_id=%s and device_uuid=%s
+              and auth_session_guard=%s and owner_uuid=%s''',
+            (live.actor.account_id, live.library_id, envelope['device_uuid'],
+             expected_scope, evidence['owner_uuid'])).fetchone()
+        owner_key = f"playback-capture:{live.actor.account_id}:{envelope['device_uuid']}:{envelope['capture_uuid']}"
+        connection.execute('select pg_advisory_xact_lock(hashtextextended(%s,0))', (owner_key,))
+        parent = connection.execute('''select * from integration.playback_capture_session
+            where account_id=%s and device_uuid=%s and capture_uuid=%s for update''',
+            (live.actor.account_id, envelope['device_uuid'], envelope['capture_uuid'])).fetchone()
+        source = None
+        duplicate = None
+        if parent is not None:
+            # Bind protocol and original owner BEFORE retry/receipt lookup.
+            if (parent['evidence_version'] != POSITION_PROTOCOL or owner is None
+                    or parent['owner_id'] != owner['id']
+                    or str(parent['owner_uuid']) != evidence['owner_uuid']):
+                raise CaptureError('capture_conflict', 409)
+            if parent['library_id'] != live.library_id or not hmac.compare_digest(parent['auth_session_guard'], expected_scope):
+                raise CaptureError('capture_scope_changed', 409)
+            require_private_action(live, 'library.media.read',
+                resource=ResourceScope('track', str(parent['original_track_id'])), constraints=constraints)
+            duplicate = connection.execute('''select digest,receipt_body from integration.playback_capture_checkpoint
+                where session_id=%s and sequence=%s''', (parent['id'], sequence)).fetchone()
+            if duplicate is not None and duplicate['digest'] != digest:
+                raise CaptureError('capture_conflict', 409)
+            if duplicate is None:
+                if parent['terminal_at'] is not None:
+                    raise CaptureError('capture_terminal', 409)
+                if sequence != parent['last_sequence'] + 1:
+                    raise CaptureError('capture_sequence', 409)
+                if now > parent['admitted_at'] + timedelta(hours=24) and not (
+                        evidence['terminal'] and not evidence['runs'] and not evidence['gaps'] and not evidence['anchors']):
+                    raise CaptureError('capture_limit', 409)
+        else:
+            if sequence != 1:
+                raise CaptureError('capture_sequence', 409)
+            if not evidence['runs']:
+                raise CaptureError()
+            source = _source(connection, live, envelope.get('initial_path'), constraints)
+            count = connection.execute('''select count(*) as n from integration.playback_capture_session
+                where account_id=%s and terminal_at is null and last_activity_at>%s''',
+                (live.actor.account_id, now-timedelta(seconds=120))).fetchone()['n']
+            if count >= 32:
+                raise CaptureError('capture_limit', 409)
+        # Reuse only within this one transaction, never as cross-request authority.
+        selection_ready = selection_schema_ready(connection)
+        selected = admit_capture_selection(connection, live, envelope, parent, source,
+            constraints=constraints, schema_ready=selection_ready)
+        if duplicate is None:
+            _position_witnesses(connection, owner, parent, evidence['runs'])
+        account, global_budget = _budgets(connection, live.actor.account_id, now)
+        if owner is not None and owner['account_budget_id'] != account['id']:
+            raise CaptureError('capture_conflict', 409)
+        if duplicate is not None:
+            from music_app.services.playback_decoder_observation import validate_known_observations
+            validate_known_observations(connection,live,parent,evidence,expected_scope)
+            _final_authority(connection, live, constraints, clock, parent['original_track_id'])
+            require_current_gate()
+            return dict(ok=True, capture_uuid=str(parent['capture_uuid']), **duplicate['receipt_body'])
+        if parent is not None and evidence['runs']:
+            first = evidence['runs'][0]
+            if ((parent['last_known_ordinal_end'] is not None and first['ordinal_start'] < parent['last_known_ordinal_end'])
+                    or (parent['last_known_output_end'] is not None and first['output_start'] < parent['last_known_output_end'])):
+                raise CaptureError('capture_conflict', 409)
+        additions = _anchors(connection, parent, evidence)
+        if not evidence['runs'] and not evidence['gaps'] and not evidence['terminal'] and not additions:
+            raise CaptureError()
+        known = sum(run['frames'] for run in evidence['runs'])
+        lost = sum(gap['positive_frames'] for gap in evidence['gaps'])
+        total_known = (parent['accepted_known_frames'] if parent else 0) + known
+        total_lost = (parent['accepted_lost_frames'] if parent else 0) + lost
+        if total_known + total_lost > MAX_INTEGER:
+            raise CaptureError('capture_limit', 409)
+        receipt = dict(sequence=sequence, digest=digest, accepted_known_frames=total_known,
+                       accepted_lost_frames=total_lost, terminal=evidence['terminal'])
+        body = canonical_json(evidence)
+        receipt_json = canonical_json(receipt)
+        checkpoint_charge = 192 + len(body.encode('utf-8')) + len(receipt_json.encode('utf-8'))
+        from music_app.services.playback_capture_history_revision import (
+            _prepare_history_revision, _insert_reserved_history_revision,
+            _append_history_checkpoint,
+        )
+        history_revision, history_charge = _prepare_history_revision(connection, account)
+        amount = ((1024 if owner is None else 0) + (384 if parent is None else 0)
+                  + checkpoint_charge + len(evidence['runs'])*320
+                  + len(additions)*128 + len(evidence['gaps'])*384 + history_charge
+                  + (ASSOCIATION_BYTES if selected is not None and selected['is_new'] else 0))
+        # Exactly one debit against the locked pre-reservation budget snapshots.
+        # Future co-created sidecars must join this amount, never reserve again.
+        _reserve(connection, account, global_budget, amount)
+        if history_revision is None:
+            _insert_reserved_history_revision(connection, account)
+        if owner is None:
+            # A new owner is reserved and inserted only with this new parent in
+            # the same transaction; no owner-only success path is reachable.
+            owner = connection.execute('''insert into integration.playback_capture_owner
+                (account_id,library_id,device_uuid,auth_session_guard,owner_uuid,
+                 account_budget_id,reservation_bytes) values(%s,%s,%s,%s,%s,%s,1024) returning *''',
+                (live.actor.account_id, live.library_id, envelope['device_uuid'],
+                 expected_scope, evidence['owner_uuid'], account['id'])).fetchone()
+        if parent is None:
+            parent = connection.execute('''insert into integration.playback_capture_session
+                (account_id,library_id,auth_session_guard,device_uuid,capture_uuid,v1_session_uuid,evidence_version,
+                 original_track_id,original_file_id,original_root_id,original_album_id,live_track_id,live_album_id,
+                 disc_number,track_number,admitted_at,last_activity_at,reservation_bytes,account_budget_id,owner_id,owner_uuid)
+                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,384,%s,%s,%s) returning *''',
+                (live.actor.account_id, live.library_id, expected_scope, envelope['device_uuid'], envelope['capture_uuid'],
+                 envelope.get('v1_session_uuid'), POSITION_PROTOCOL, source['track_id'], source['file_id'], source['root_id'],
+                 source['album_id'], source['track_id'], source['album_id'], source['disc_number'], source['track_number'],
+                 now, now, account['id'], owner['id'], evidence['owner_uuid'])).fetchone()
+        from music_app.services.playback_decoder_observation import validate_known_observations
+        validate_known_observations(connection,live,parent,evidence,expected_scope)
+        insert_capture_selection(connection, live, parent, selected, account)
+        checkpoint = connection.execute('''insert into integration.playback_capture_checkpoint
+            (session_id,sequence,digest,evidence,accepted_at,known_frames,lost_frames,terminal,terminal_reason,
+             receipt_status,receipt_body,reservation_bytes,account_budget_id)
+            values(%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,200,%s::jsonb,%s,%s) returning id''',
+            (parent['id'], sequence, digest, body, now, known, lost, evidence['terminal'], evidence['terminal_reason'],
+             receipt_json, checkpoint_charge, account['id'])).fetchone()
+        for anchor in additions:
+            connection.execute('''insert into integration.playback_capture_anchor
+                (session_id,epoch,probe_id,output_frame,utc_lower_ms,utc_upper_ms,monotonic_probe_span_ms,
+                 max_quantum_frames,quality,reservation_bytes,account_budget_id)
+                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,128,%s)''',
+                (parent['id'], *(anchor[key] for key in ANCHOR_COLUMNS), account['id']))
+        for index, run in enumerate(evidence['runs']):
+            connection.execute('''insert into integration.playback_capture_run
+                (checkpoint_id,run_index,source_start48,frames,output_start,ordinal_start,epoch,
+                 anchor_before,anchor_after,quality,reservation_bytes,account_budget_id,
+                 owner_id,binding_serial,generation,stream_id,source_base48,continuity_serial)
+                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,320,%s,%s,%s,%s,%s,%s,%s)''',
+                (checkpoint['id'], index, run['source_start48'], run['frames'], run['output_start'],
+                 run['ordinal_start'], run['epoch'], run['anchor_before'][1] if run['anchor_before'] else None,
+                 run['anchor_after'][1] if run['anchor_after'] else None, run['quality'], account['id'],
+                 owner['id'], run['binding_serial'], run['generation'], run['stream_id'],
+                 run['source_base48'], run['continuity_serial']))
+        for index, gap in enumerate(evidence['gaps']):
+            connection.execute('''insert into integration.playback_capture_loss
+                (checkpoint_id,gap_index,owner_id,ordinal_start,ordinal_end,output_start,
+                 output_end,account_budget_id,reservation_bytes)
+                values(%s,%s,%s,%s,%s,%s,%s,%s,384)''',
+                (checkpoint['id'], index, owner['id'], gap['ordinal_start'], gap['ordinal_end'],
+                 gap['output_start'], gap['output_end'], account['id']))
+        starts = [r['ordinal_start'] for r in evidence['runs']] + [g['ordinal_start'] for g in evidence['gaps']]
+        ends = [r['ordinal_start']+r['frames'] for r in evidence['runs']] + [g['ordinal_end'] for g in evidence['gaps']]
+        connection.execute('''update integration.playback_capture_session set last_sequence=%s,
+            accepted_known_frames=%s,accepted_lost_frames=%s,last_activity_at=%s,
+            ordinal_start=least(ordinal_start,%s),ordinal_end=greatest(ordinal_end,%s),
+            last_known_ordinal_end=coalesce(%s,last_known_ordinal_end),
+            last_known_output_end=coalesce(%s,last_known_output_end),
+            terminal_at=%s,terminal_reason=%s,has_gaps=has_gaps or %s,
+            timing_unknown=timing_unknown or %s,anchor_count=anchor_count+%s where id=%s''',
+            (sequence, total_known, total_lost, now, min(starts) if starts else None, max(ends) if ends else None,
+             evidence['runs'][-1]['ordinal_start']+evidence['runs'][-1]['frames'] if evidence['runs'] else None,
+             evidence['runs'][-1]['output_start']+evidence['runs'][-1]['frames'] if evidence['runs'] else None,
+             now if evidence['terminal'] else None, evidence['terminal_reason'], bool(evidence['gaps']),
+             any(r['quality']=='unknown' for r in evidence['runs']) or bool(evidence['gaps']), len(additions), parent['id']))
+        _append_history_checkpoint(connection, live.actor.account_id, checkpoint['id'],
+                                   has_loss=bool(evidence['gaps']))
+        admit_capture_selection(connection, live, envelope, parent, None, constraints=constraints,
+            verify_current=selected is not None and selected['is_new'], schema_ready=selection_ready)
+        _final_authority(connection, live, constraints, clock, parent['original_track_id'])
+        require_current_gate()
         return dict(ok=True, capture_uuid=str(parent['capture_uuid']), **receipt)

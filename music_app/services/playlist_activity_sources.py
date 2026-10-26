@@ -53,6 +53,11 @@ def _export(connection,context,origin,row_refs,*,config,constraints,source_order
                 raise RuntimeError("Playlist source policy constraints are invalid.")
             decision=PolicyEvaluator().evaluate(target,constraints=effective).decision.allowed
             return AllowedActions((scope.read_action,) if decision else ())
+        def lastfm_history_read():
+            from music_app.services.lastfm_home_snapshot import account_read_allowed
+            return account_read_allowed(context, constraints,
+                account_id=scope.account_id, session_id=scope.session_id)
+        allowed.lastfm_history_read = lastfm_history_read
         allowed.scope_wide=not callable(constraints)
         repository=HomeActivityPostgresRepository(config)
         read=repository.read_missing_selection if source_order else repository.read_selection
@@ -84,6 +89,13 @@ def _rows(connection,context,exported,*,config,constraints,preserve_occurrences=
         track_id=identity["id"] if identity is not None else None
         inventory=current.get(track_id,{})
         facts=entry["facts"]
+        if str(entry.get('lineage',{}).get('row_key','')).startswith('listen:lastfm:'):
+            # Strict missing captures export the full source before filtering.
+            # Remote metadata is never confirmed-missing inventory, so it must
+            # not abort otherwise valid native missing-track capture.
+            if preserve_occurrences:
+                continue
+            raise PlaylistError("source_unavailable",403)
         row={"original_local_track_id":track_id,"title":facts.get("title"),"artist":facts.get("artist"),
             "album_title":facts.get("album_title"),"duration_seconds":facts.get("duration_seconds"),
             "original_album_id":inventory.get("original_album_id"),"release_year":inventory.get("release_year"),

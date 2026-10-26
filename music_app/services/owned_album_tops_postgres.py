@@ -611,6 +611,8 @@ class PostgresOwnedAlbumTopsService:
                         'album_refs': conversion_albums})
                 receipt = self._mutate(connection, live, mutation, top, now, constraints,
                                        locked_target=lock_target)
+            if command.action in {'create', 'copy'}:
+                activity.ensure_participant_baseline(connection, live, receipt['top_ref'])
             self._insert_operation(connection, live, command, receipt, required_actions)
             if command.action == 'create' and 'playlist_preview_ref' in command.data:
                 # Preserve the exact source/report with the saved Top. Expired

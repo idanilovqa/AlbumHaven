@@ -1,4 +1,4 @@
-"""Bounded, identity-free application-reported playback evidence.
+"""Bounded application-reported rendered-position evidence.
 
 These assertions are neither decoder attestation nor proof of human listening.
 This module performs no I/O and deliberately imports no application config.
@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from uuid import UUID
 
 PROTOCOL = 'app-rendered-position-v1'
+POSITION_PROTOCOL = 'app-rendered-position-v2'
+SUPPORTED_PROTOCOLS = (PROTOCOL, POSITION_PROTOCOL)
 MAX_INTEGER = 9_007_199_254_740_991
 BODY_LIMIT = 32_768
 MAX_TRACK_PATH_CHARACTERS = 32_768
@@ -72,10 +74,11 @@ def _anchor_ref(value, epoch):
     return [epoch, _integer(value[1], 1)]
 
 
-def _run(value):
+def _run(value, *, protocol=PROTOCOL):
     keys = ('source_start48', 'frames', 'output_start', 'ordinal_start', 'epoch',
             'anchor_before', 'anchor_after', 'quality')
-    _object(value, keys)
+    provenance = ('binding_serial', 'generation', 'stream_id', 'source_base48', 'continuity_serial') if protocol == POSITION_PROTOCOL else ()
+    _object(value, keys + provenance)
     result = {key: _integer(value[key], 1 if key in ('frames', 'epoch') else 0)
               for key in keys[:5]}
     for key in ('source_start48', 'output_start', 'ordinal_start'):
@@ -85,6 +88,11 @@ def _run(value):
     result['quality'] = _quality(value['quality'])
     if result['quality'] == 'bounded' and (result['anchor_before'] is None or result['anchor_after'] is None):
         raise CaptureError()
+    if provenance:
+        result.update({key: _integer(value[key], 0 if key == 'source_base48' else 1)
+                       for key in provenance})
+        if result['source_start48'] < result['source_base48']:
+            raise CaptureError()
     return result
 
 
@@ -121,14 +129,60 @@ def _gap(value):
     return result
 
 
-def normalize_capture_envelope(value):
+def _validate_position_lineage(runs):
+    """Reject contradictions visible within one bounded v2 envelope.
+
+    This is not cross-parent/session validation and does not certify continuity.
+    Missing intervals can contain another track parent's evidence. Aggregate loss
+    envelopes are not exact missing ranges and must not be expanded or filled.
+    """
+    bindings = {}
+    before = None
+    for run in runs:
+        lineage = (run['generation'], run['stream_id'], run['source_base48'])
+        serial = run['binding_serial']
+        # Serial starts at one and advances at most once per captured positive
+        # frame, never for uncaptured frames or barriers alone.
+        if run['continuity_serial'] > run['ordinal_start'] + 1:
+            raise CaptureError()
+        if serial in bindings and bindings[serial] != lineage:
+            raise CaptureError()
+        bindings[serial] = lineage
+        if before is not None:
+            if (run['epoch'] < before['epoch']
+                    or run['generation'] < before['generation']
+                    or run['continuity_serial'] < before['continuity_serial']):
+                raise CaptureError()
+            if run['generation'] != before['generation'] and run['epoch'] <= before['epoch']:
+                raise CaptureError()
+            omitted_positive = run['ordinal_start'] - before['ordinal_start'] - before['frames']
+            if run['continuity_serial'] - before['continuity_serial'] > omitted_positive + 1:
+                raise CaptureError()
+            if run['continuity_serial'] == before['continuity_serial']:
+                # A producer reset breaks continuity. Equal output/ordinal gaps
+                # are necessary, not sufficient, for a shared continuity serial.
+                output_gap = run['output_start'] - before['output_start'] - before['frames']
+                ordinal_gap = run['ordinal_start'] - before['ordinal_start'] - before['frames']
+                if run['generation'] != before['generation'] or output_gap != ordinal_gap:
+                    raise CaptureError()
+        before = run
+
+
+def _normalize_capture_envelope(value):
     """Validate the complete schema and return a fresh bounded canonical value."""
     _object(value, ('protocol', 'device_uuid', 'capture_uuid', 'sequence', 'evidence'),
             ('v1_session_uuid', 'initial_path'))
-    if value['protocol'] != PROTOCOL:
+    protocol = value['protocol']
+    if type(protocol) is not str or protocol not in SUPPORTED_PROTOCOLS:
         raise CaptureError('unsupported_capture_version')
-    evidence = _object(value['evidence'], ('runs', 'anchors', 'gaps', 'terminal', 'terminal_reason'))
-    runs = [_run(row) for row in _array(evidence['runs'], 256)]
+    extra = ('owner_uuid',) if protocol == POSITION_PROTOCOL else ()
+    evidence = _object(value['evidence'], ('runs', 'anchors', 'gaps', 'terminal', 'terminal_reason') + extra)
+    owner_uuid = None
+    if extra:
+        owner_uuid = _uuid(evidence['owner_uuid'])
+        if UUID(owner_uuid).int == 0:
+            raise CaptureError()
+    runs = [_run(row, protocol=protocol) for row in _array(evidence['runs'], 256)]
     anchors = [_anchor(row) for row in _array(evidence['anchors'], 8)]
     gaps = [_gap(row) for row in _array(evidence['gaps'], 8)]
     if type(evidence['terminal']) is not bool:
@@ -144,16 +198,20 @@ def normalize_capture_envelope(value):
     for before, after in zip(runs, runs[1:]):
         if before['ordinal_start'] + before['frames'] > after['ordinal_start'] or before['output_start'] + before['frames'] > after['output_start']:
             raise CaptureError()
+    if protocol == POSITION_PROTOCOL:
+        _validate_position_lineage(runs)
     # Loss envelopes are not continuous missing ranges. They can overlap runs
     # and earlier summaries; exact positive counts are app assertions, applied
     # once under immutable parent/sequence identity.
     if len({(a['epoch'], a['probe_id']) for a in anchors}) != len(anchors):
         raise CaptureError()
     _integer(sum(r['frames'] for r in runs) + sum(g['positive_frames'] for g in gaps))
-    normalized = dict(protocol=PROTOCOL, device_uuid=_uuid(value['device_uuid']),
+    normalized = dict(protocol=protocol, device_uuid=_uuid(value['device_uuid']),
                       capture_uuid=_uuid(value['capture_uuid']), sequence=_integer(value['sequence'], 1),
                       evidence=dict(runs=runs, anchors=anchors, gaps=gaps,
                                     terminal=evidence['terminal'], terminal_reason=reason))
+    if owner_uuid is not None:
+        normalized['evidence']['owner_uuid'] = owner_uuid
     if 'v1_session_uuid' in value:
         normalized['v1_session_uuid'] = _uuid(value['v1_session_uuid'])
     if 'initial_path' in value:
@@ -170,12 +228,23 @@ def normalize_capture_envelope(value):
     return normalized
 
 
+def normalize_capture_envelope(value):
+    """Validate public v1 intake before considering staged evidence fields."""
+    _object(value, ('protocol', 'device_uuid', 'capture_uuid', 'sequence', 'evidence'),
+            ('v1_session_uuid', 'initial_path'))
+    if value['protocol'] != PROTOCOL:
+        raise CaptureError('unsupported_capture_version')
+    return _normalize_capture_envelope(dict(value, protocol=PROTOCOL))
+
+
 def canonical_json(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False)
 
 
-def capture_digest(sequence, evidence):
-    return hashlib.sha256(f'{PROTOCOL}\n{sequence}\n{canonical_json(evidence)}'.encode('utf-8')).hexdigest()
+def capture_digest(sequence, evidence, *, protocol=PROTOCOL):
+    if type(protocol) is not str or protocol not in SUPPORTED_PROTOCOLS:
+        raise CaptureError('unsupported_capture_version')
+    return hashlib.sha256(f'{protocol}\n{sequence}\n{canonical_json(evidence)}'.encode('utf-8')).hexdigest()
 
 
 def parse_capture_body(raw):

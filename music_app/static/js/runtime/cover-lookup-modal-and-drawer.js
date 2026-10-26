@@ -2177,7 +2177,13 @@ function renderCoverLookupModal() {
   const manualInputDisabledAttr = manualInputDisabled ? 'disabled' : '';
   const manualSearchDisabled = searchControlsDisabled
     || (!String(modalState.manualUrlText || '').trim() && !manualImageAttachments.length);
-  const manualSearchDisabledAttr = manualSearchDisabled ? 'disabled' : '';
+  const extractImagesButton = ButtonComponent.renderButton({
+    label: 'Extract images',
+    variant: 'secondary',
+    className: 'cover-lookup-manual-submit',
+    disabled: manualSearchDisabled,
+    attributes: { 'data-add-cover-lookup-remote': '1' },
+  });
   const googleSearchUrl = buildCoverLookupImageSearchUrl('google', album);
   const yandexSearchUrl = buildCoverLookupImageSearchUrl('yandex', album);
   const progressMarkup = taskRunning
@@ -2268,7 +2274,7 @@ function renderCoverLookupModal() {
           <button class="cover-lookup-manual-open" type="button" data-choose-cover-lookup-files="1" aria-label="Add image" ${manualInputDisabledAttr}><span aria-hidden="true">+</span><span>Add image</span></button>
         </div>
         <div class="cover-lookup-manual-actions">
-          <button class="button ui-button ui-button--medium cover-lookup-manual-submit" type="button" data-add-cover-lookup-remote="1" ${manualSearchDisabledAttr}>Extract images</button>
+          ${extractImagesButton}
           ${manualStatusText ? `<span class="cover-lookup-manual-status is-${escapeHtml(modalState.manualStatusTone || 'neutral')}" role="${String(modalState.manualStatusTone || '') === 'error' ? 'alert' : 'status'}">${escapeHtml(manualStatusText)}</span>` : ''}
         </div>
         </div>

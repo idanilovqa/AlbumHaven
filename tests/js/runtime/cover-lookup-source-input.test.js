@@ -88,7 +88,7 @@ test('manual search keeps opened images in the composer until extraction', () =>
   assert.doesNotMatch(source, />Choose images</);
   assert.match(
     source,
-    /class="button ui-button ui-button--medium cover-lookup-manual-submit"[^>]*>Extract images<\/button>/,
+    /ButtonComponent\.renderButton\(\{\s*label:\s*'Extract images',\s*variant:\s*'secondary',\s*className:\s*'cover-lookup-manual-submit'/,
   );
   const submit = cssRule('.cover-lookup-manual-submit');
   assert.doesNotMatch(submit, /min-(?:width|height):/);

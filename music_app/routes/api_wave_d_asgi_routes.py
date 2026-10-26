@@ -75,9 +75,7 @@ from music_app.services.cover_workflow import (
 )
 from music_app.services.covers import image_dimensions, score_image
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-from music_app.services.repair_previews import (
-    find_problematic_album_by_track_paths as find_problematic_album_by_track_paths_in_state,
-)
+from music_app.services.repair_previews import build_problematic_album_detail_payload
 from music_app.services.save_tasks import (
     acquire_structural_tag_edit_reservation_async,
     latest_structural_tag_edit_destination,
@@ -1686,11 +1684,16 @@ async def utilities_fetch_cover(request: Request) -> JSONResponse:
         library_state.get("albums", []) if isinstance(library_state, dict) else [],
         requested_track_paths or set(),
     )
-    updated_problematic_album = find_problematic_album_by_track_paths_in_state(
-        requested_track_paths or set(),
-        config=config,
-        library_state=library_state,
-        logger=logger,
+    album_key = str(updated_albums[0].get("key") or "") if updated_albums else ""
+    updated_problematic_album = (
+        build_problematic_album_detail_payload(
+            album_key,
+            config=config,
+            library_state=library_state,
+            logger=logger,
+        )
+        if album_key
+        else None
     )
     job_results = result.get("job_results") if isinstance(result, dict) else []
     return JSONResponse(

@@ -4054,6 +4054,26 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
 
     monkeypatch.setattr(asgi_routes, "start_manual_cover_refresh_request", fake_start_manual_cover_refresh_request)
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        asgi_routes,
+        "find_problematic_album_by_track_paths_in_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Cover refresh must not build the global Problematic Files payload")
+        ),
+        raising=False,
+    )
+    detail_calls: list[str] = []
+
+    def fake_build_problematic_album_detail_payload(album_key, **_kwargs):
+        detail_calls.append(album_key)
+        return {"key": album_key}
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "build_problematic_album_detail_payload",
+        fake_build_problematic_album_detail_payload,
+        raising=False,
+    )
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.flask_app = _FatalFlaskBridge("manual cover-refresh routes must use ASGI state")
 
@@ -4082,6 +4102,8 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
     assert single_payload["processed_count"] == 1
     assert single_payload["job_result"] == {"path": str(track_path), "status": "downloaded"}
     assert single_payload["updated_album"]["key"] == "album-1"
+    assert single_payload["updated_problematic_album"] == {"key": "album-1"}
+    assert detail_calls == ["album-1"]
     assert single_refresh_calls == [
         {
             "library_state": asgi_app.state.library_state,

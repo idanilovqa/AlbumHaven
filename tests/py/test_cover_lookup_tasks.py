@@ -1441,6 +1441,53 @@ def test_cover_lookup_tasks_mark_action_taken_uses_postgres_selection_without_to
     }
 
 
+def test_mark_action_taken_for_track_paths_waits_for_matching_active_task(monkeypatch, tmp_path):
+    matching_path = tmp_path / "Artist" / "Album" / "song.mp3"
+    other_path = tmp_path / "Other" / "Album" / "song.mp3"
+    tasks = [
+        {
+            "id": "completed-match",
+            "status": "completed",
+            "album_payload": {"tracks": [{"path": str(matching_path)}]},
+        },
+        {
+            "id": "running-match",
+            "status": "running",
+            "track_paths": [str(matching_path)],
+        },
+        {
+            "id": "completed-other",
+            "status": "completed",
+            "track_paths": [str(other_path)],
+        },
+    ]
+    marked_ids = []
+    monkeypatch.setattr(task_service, "load_cover_lookup_notifications", lambda _config: tasks)
+    monkeypatch.setattr(
+        task_service,
+        "mark_cover_lookup_task_notification_action_taken",
+        lambda task_id, *, config: marked_ids.append(task_id) or {"id": task_id},
+    )
+    reset_cover_lookup_runtime_state()
+
+    marked = task_service.mark_cover_lookup_notifications_action_taken_for_track_paths(
+        {str(matching_path)},
+        config={"PERSISTENCE_BACKENDS": {"cover_lookup_tasks": "postgres"}},
+    )
+
+    assert marked_ids == []
+    assert marked == []
+
+    tasks[:] = [task for task in tasks if task["id"] != "running-match"]
+    marked = task_service.mark_cover_lookup_notifications_action_taken_for_track_paths(
+        {str(matching_path)},
+        config={"PERSISTENCE_BACKENDS": {"cover_lookup_tasks": "postgres"}},
+    )
+
+    assert marked_ids == ["completed-match"]
+    assert marked == [{"id": "completed-match"}]
+
+
 def test_cover_lookup_tasks_clear_completed_keeps_early_provider_choice():
     task_id, _ = create_cover_lookup_task(
         {"album_artist": "Artist", "name": "Album"},

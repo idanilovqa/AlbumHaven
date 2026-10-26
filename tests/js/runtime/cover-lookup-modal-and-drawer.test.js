@@ -659,10 +659,8 @@ require('node:test')('pasted cover updates its notification before the save resp
   assert.deepEqual(lifecycleCalls, ['render', 'close', 'render']);
 });
 
-require('node:test')('pasted cover marks its completed notification when opened from album details', async () => {
+require('node:test')('pasted cover applies server-actioned notification when opened from album details', async () => {
   const album = {
-    key: 'various artists::aladdin',
-    album_artist: 'Various Artists',
     name: 'Aladdin',
     tracks: [{ path: 'C:/Music/Aladdin/01.mp3' }],
   };
@@ -673,13 +671,14 @@ require('node:test')('pasted cover marks its completed notification when opened 
     showToast: () => {},
     fetch: async () => ({
       ok: true,
-      json: async () => ({ ok: true, updated_album: album }),
+      json: async () => ({
+        ok: true,
+        updated_album: album,
+        notification_action_taken_task_ids: ['aladdin-task'],
+      }),
     }),
   });
-  Object.assign(context.state.coverLookup, {
-    optimisticAlbumCovers: {},
-    tasks: [{ id: 'aladdin-task', status: 'completed', notification_action_taken: false }],
-  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.modal = {
     album,
     taskId: '',
@@ -696,15 +695,16 @@ require('node:test')('pasted cover marks its completed notification when opened 
   context.clearOptimisticAlbumCovers = () => {};
   context.closeCoverLookupModal = () => {};
   context.renderCoverLookupDrawer = () => {};
-  context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum) => {
-    markCalls.push({ taskId, selectedAlbum });
+  context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum, options) => {
+    markCalls.push({ taskId, selectedAlbum, options });
   };
 
   await context.savePastedCoverFromLookup('new-cover');
 
   assert.equal(markCalls.length, 1);
-  assert.equal(markCalls[0].taskId, '');
+  assert.equal(markCalls[0].taskId, 'aladdin-task');
   assert.equal(markCalls[0].selectedAlbum.name, 'Aladdin');
+  assert.equal(markCalls[0].options.persist, false);
 });
 
 require('node:test')('notification startup loads authoritative counts without loading history', async () => {

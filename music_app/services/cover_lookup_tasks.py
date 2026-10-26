@@ -973,6 +973,62 @@ def clear_completed_cover_lookup_tasks(
     return len(cleared_task_ids)
 
 
+def _cover_lookup_task_track_path_keys(task: Mapping[str, object]) -> set[str]:
+    paths = task.get("track_paths") or []
+    album_payload = task.get("album_payload")
+    if not paths and isinstance(album_payload, Mapping):
+        paths = [
+            track.get("path")
+            for track in album_payload.get("tracks", [])
+            if isinstance(track, Mapping)
+        ]
+    return {
+        os.path.normcase(str(Path(text).resolve(strict=False)))
+        for value in paths
+        if (text := str(value or "").strip())
+    }
+
+
+def mark_cover_lookup_notifications_action_taken_for_track_paths(
+    track_paths: set[str],
+    *,
+    config: Mapping[str, object],
+) -> list[dict[str, object]]:
+    requested_paths = _cover_lookup_task_track_path_keys({"track_paths": track_paths})
+    if not requested_paths:
+        return []
+    tasks_by_id = {
+        str(task.get("id") or "").strip(): task
+        for task in load_cover_lookup_notifications(config)
+        if str(task.get("id") or "").strip()
+    }
+    with _COVER_LOOKUP_TASKS_LOCK:
+        tasks_by_id.update(
+            {
+                str(task.get("id") or "").strip(): dict(task)
+                for task in _COVER_LOOKUP_TASKS.values()
+                if str(task.get("id") or "").strip()
+            }
+        )
+    matching_tasks = [
+        task
+        for task in tasks_by_id.values()
+        if not bool(task.get("internal"))
+        and _cover_lookup_task_track_path_keys(task) == requested_paths
+    ]
+    if any(not is_terminal_cover_lookup_task(task) for task in matching_tasks):
+        return []
+    marked = []
+    for task in matching_tasks:
+        updated = mark_cover_lookup_task_notification_action_taken(
+            str(task.get("id") or ""),
+            config=config,
+        )
+        if updated is not None:
+            marked.append(updated)
+    return marked
+
+
 def mark_cover_lookup_task_notification_action_taken(
     task_id: str,
     *,

@@ -17,6 +17,7 @@ from music_app.routes.api_cover_helpers import (
     apply_cover_path_for_tracks,
     clear_completed_cover_lookup_tasks,
     list_cover_lookup_task_summaries,
+    mark_cover_lookup_notifications_action_taken_for_track_paths,
     mark_cover_lookup_task_notification_action_taken,
     persist_cover_selection_for_tracks,
 )
@@ -1406,6 +1407,34 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
         library_state=library_state,
         cover_revision=cover_revision,
     )
+    task_id = str(payload.get("task_id") or "").strip()
+    try:
+        if task_id:
+            task_payload = cover_lookup_result(task_id) or await run_in_threadpool(
+                load_cover_lookup_notification,
+                dict(config),
+                task_id,
+            )
+            actioned_task = (
+                await run_in_threadpool(
+                    mark_cover_lookup_task_notification_action_taken,
+                    task_id,
+                    config=config,
+                )
+                if _cover_lookup_task_track_paths(task_payload or {})
+                == album_context.track_paths
+                else None
+            )
+            actioned_tasks = [actioned_task] if actioned_task is not None else []
+        else:
+            actioned_tasks = await run_in_threadpool(
+                mark_cover_lookup_notifications_action_taken_for_track_paths,
+                album_context.track_paths,
+                config=config,
+            )
+    except Exception:
+        logger.exception("Failed to reconcile pasted cover with lookup notifications")
+        actioned_tasks = []
     return JSONResponse(
         {
             "ok": True,
@@ -1414,6 +1443,9 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,
+            "notification_action_taken_task_ids": [
+                str(task.get("id") or "") for task in actioned_tasks
+            ],
             "gallery": await _serialize_cover_gallery_from_asgi(
                 request,
                 album_context.album_root,

@@ -2513,6 +2513,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.flask_app = _FatalFlaskBridge()
     apply_calls: list[dict[str, object]] = []
+    actioned_track_paths: list[set[str]] = []
 
     def fake_apply_cover_path_for_tracks(track_paths, cover_path, **kwargs):
         apply_calls.append(
@@ -2531,6 +2532,11 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
         asgi_routes,
         "persist_cover_selection_for_tracks",
         lambda *_args, **_kwargs: {"album_rows_updated": 1, "track_file_rows_updated": 1},
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "mark_cover_lookup_notifications_action_taken_for_track_paths",
+        lambda track_paths, **_kwargs: actioned_track_paths.append(set(track_paths)) or [],
     )
 
     select_success_status, _select_success_headers, select_success_body = _run_asgi_request(
@@ -2604,6 +2610,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     assert pasted_success_payload["ok"] is True
     assert pasted_success_payload["selected_cover_path"] == str(track_path.parent / "cover.jpg")
     assert pasted_success_payload["gallery"]["album_root"] == str(track_path.parent)
+    assert actioned_track_paths == [{str(track_path)}]
     assert apply_calls == [
         {
             "track_paths": {str(track_path)},

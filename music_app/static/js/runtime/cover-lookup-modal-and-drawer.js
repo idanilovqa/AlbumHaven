@@ -3258,6 +3258,7 @@ async function savePastedCoverFromLookup(imageId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         album,
+        task_id: taskId,
         image_id: String(pastedItem.id || ''),
         data_url: String(pastedItem.data_url || ''),
         mime_type: String(pastedItem.mime_type || ''),
@@ -3273,7 +3274,9 @@ async function savePastedCoverFromLookup(imageId) {
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
-    markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
+    (data.notification_action_taken_task_ids || []).forEach((actionedTaskId) => {
+      markCoverLookupTaskActionTaken(actionedTaskId, updatedAlbums[0] || album, { persist: false });
+    });
     renderCoverLookupDrawer();
   } catch (error) {
     if (previousAlbum) {

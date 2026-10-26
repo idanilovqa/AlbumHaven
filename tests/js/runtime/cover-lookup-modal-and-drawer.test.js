@@ -4342,6 +4342,32 @@ require('node:test')('only the first service cover preview receives eager browse
   assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
 });
 
+require('node:test')('loading Cover Lookup renders gallery card placeholders', () => {
+  const bodyElement = { innerHTML: '', scrollTop: 0 };
+  const context = loadHelper({ escapeHtml: (value) => String(value ?? '') });
+  context.getCoverLookupModalElements = () => ({
+    overlay: {},
+    body: bodyElement,
+    subtitle: { textContent: '' },
+    status: null,
+    saveRemote: null,
+  });
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Album' },
+    loading: true,
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: [],
+  };
+
+  context.renderCoverLookupModal();
+
+  assert.match(bodyElement.innerHTML, /cover-lookup-gallery-loading/);
+  assert.match(bodyElement.innerHTML, /cover-lookup-task-loading-line/);
+  assert.doesNotMatch(bodyElement.innerHTML, /No images in album folder/);
+});
+
 require('node:test')('notification polling rerenders when the selected user cover preview changes', async () => {
   let previewUrl = '/cover?album=temple&v=before';
   let renderCount = 0;

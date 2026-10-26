@@ -211,7 +211,7 @@ test('mobile sheet swipe dismisses only after a downward threshold', () => {
   assert.equal(properties.has('--cover-lookup-sheet-drag-y'), false);
 });
 
-test('opening a persisted notification renders its candidates while gallery refresh is pending', async () => {
+test('opening a persisted notification renders usable cached art and loads unresolved candidates', async () => {
   class TestButton {
     constructor() {
       this.hidden = false;
@@ -234,6 +234,12 @@ test('opening a persisted notification renders its candidates while gallery refr
     album_payload: album,
     possible_matches: [candidate],
     best_candidate_id: candidate.id,
+  };
+  const idOnlyTask = {
+    ...task,
+    id: 'id-only-generation',
+    possible_matches: [{ id: 'candidate-without-preview' }],
+    best_candidate_id: 'candidate-without-preview',
   };
   let resolveGallery;
   const galleryResponse = new Promise((resolve) => { resolveGallery = resolve; });
@@ -289,8 +295,14 @@ test('opening a persisted notification renders its candidates while gallery refr
     && snapshot.candidates.some((item) => item.id === candidate.id)
   )));
 
+  context.state.coverLookup.tasks = [idOnlyTask];
+  const idOnlyOpenPromise = context.openCoverLookupModal(album, { taskId: idOnlyTask.id });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(renderSnapshots.at(-1).loading, true);
+
   resolveGallery({ ok: true, json: async () => ({ ok: true }) });
   await openPromise;
+  await idOnlyOpenPromise;
 });
 
 test('starting lookup publishes visible feedback before the start request settles', async () => {

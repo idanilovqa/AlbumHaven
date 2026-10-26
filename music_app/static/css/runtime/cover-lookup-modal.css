@@ -383,6 +383,19 @@
   grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
   gap: 12px;
 }
+.cover-lookup-gallery-loading .cover-lookup-art-card-shell {
+  pointer-events: none;
+}
+.cover-lookup-gallery-loading .cover-lookup-art-preview {
+  background: var(--appearance-control, var(--panel-2));
+}
+.cover-lookup-gallery-loading .cover-lookup-task-loading-line {
+  margin: 10px 4px 0;
+}
+.cover-lookup-gallery-loading .cover-lookup-task-loading-line:last-child {
+  width: 48%;
+  margin-bottom: 4px;
+}
 .cover-lookup-art-card-shell {
   position: relative;
 }

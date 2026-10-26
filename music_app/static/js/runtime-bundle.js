@@ -30423,6 +30423,19 @@ function formatCoverLookupImageCount(count) {
   return `${safeCount} ${safeCount === 1 ? 'image' : 'images'}`;
 }
 
+function buildCoverLookupGalleryLoadingMarkup() {
+  const cards = Array.from({ length: 3 }, () => `
+    <div class="cover-lookup-art-card-shell is-loading" aria-hidden="true">
+      <div class="cover-lookup-art-card">
+        <span class="cover-lookup-art-preview"></span>
+        <span class="cover-lookup-task-loading-line is-title"></span>
+        <span class="cover-lookup-task-loading-line"></span>
+      </div>
+    </div>
+  `).join('');
+  return `<div class="cover-lookup-gallery cover-lookup-gallery-loading" role="status" aria-label="Loading cover art">${cards}</div>`;
+}
+
 function renderCoverLookupModal() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || !els.body) return;
@@ -30537,7 +30550,7 @@ function renderCoverLookupModal() {
       `
     : '';
   if (modalState.loading) {
-    els.body.innerHTML = '<div class="cover-lookup-empty">Loading cover art gallery...</div>';
+    els.body.innerHTML = buildCoverLookupGalleryLoadingMarkup();
     els.body.scrollTop = 0;
     if (els.saveRemote) {
       els.saveRemote.hidden = false;
@@ -30994,6 +31007,9 @@ async function openCoverLookupModal(album, options = {}) {
       : buildTrackPathSignature(task?.album_payload) === buildTrackPathSignature(album)
   ));
   const cachedCandidates = sanitizeCoverLookupPossibleMatches(matchingTask?.possible_matches);
+  const hasCachedPreview = cachedCandidates.some((candidate) => (
+    String(candidate?.thumbnail_url || candidate?.url || '').trim()
+  ));
   state.coverLookup.modal.album = album;
   state.coverLookup.modal.taskId = String(requestedTaskId || matchingTask?.id || '');
   state.coverLookup.modal.remoteCover = null;
@@ -31020,7 +31036,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.failureNotice = '';
   state.coverLookup.modal.manualUrlText = '';
   state.coverLookup.modal.manualBusy = false;
-  state.coverLookup.modal.loading = !cachedCandidates.length;
+  state.coverLookup.modal.loading = !hasCachedPreview;
   state.coverLookup.modal.saving = false;
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
@@ -31029,7 +31045,7 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.disabled = true;
   }
   renderCoverLookupModal();
-  await refreshCoverLookupGallery(!cachedCandidates.length);
+  await refreshCoverLookupGallery(!hasCachedPreview);
   if (!els.overlay.hidden) ensureCoverLookupPolling();
 }
 

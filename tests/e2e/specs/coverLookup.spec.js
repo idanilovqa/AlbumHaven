@@ -795,10 +795,10 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
         title: identity.album,
         byline: [identity.artist, identity.year].filter(Boolean).join(' · '),
       });
-      await coverLookupActions.openTaskById(taskId);
+        const taskScrollTop = await coverLookupActions.openTaskById(taskId);
       await coverLookupActions.waitForModalReady();
       await coverLookupActions.expectNotificationMobileSheet();
-      expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
+        expect(await coverLookupActions.readDrawerScrollTop()).toBe(taskScrollTop);
       await expect(coverLookupActions.coverLookup.modalSubtitle).toHaveText([
         identity.artist,
         identity.album,
@@ -819,7 +819,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
         await coverLookupActions.closeModal();
       }
       await coverLookupActions.waitForDrawerOpen();
-      expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
+        expect(await coverLookupActions.readDrawerScrollTop()).toBe(taskScrollTop);
     }
   };
 
@@ -835,12 +835,12 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await coverLookupActions.waitForDrawerOpen();
   await page.setViewportSize({ width: 390, height: 844 });
   const selected = notifications.at(-1);
-  await coverLookupActions.openTaskById(selected.taskId);
+    const selectedTaskScrollTop = await coverLookupActions.openTaskById(selected.taskId);
   await coverLookupActions.waitForModalReady();
   await coverLookupActions.waitForModalResultsReady();
   await coverLookupActions.selectFirstRemoteCoverAndSave();
   await coverLookupActions.waitForDrawerOpen();
-  expect(await coverLookupActions.readDrawerScrollTop()).toBe(drawerScrollTop);
+    expect(await coverLookupActions.readDrawerScrollTop()).toBe(selectedTaskScrollTop);
   await coverLookupActions.waitForTaskStatusById(selected.taskId, 'Art chosen');
   expect(await readTargetOrder()).toEqual(orderBeforeSave);
   for (const { taskId } of notifications) {

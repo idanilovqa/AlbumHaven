@@ -1185,7 +1185,11 @@ export class CoverLookupActions {
   }
 
   async openTaskById(taskId) {
-    await this.coverLookup.taskOpenButtonById(taskId).click();
+    const button = this.coverLookup.taskOpenButtonById(taskId);
+    await button.scrollIntoViewIfNeeded();
+    const drawerScrollTop = await this.readDrawerScrollTop();
+    await button.click();
+    return drawerScrollTop;
   }
 
   async scrollDrawerAwayFromEdges() {

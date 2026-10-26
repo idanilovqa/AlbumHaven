@@ -3439,6 +3439,37 @@ def test_run_cover_lookup_save_remote_task_rejects_cross_root_common_parent_befo
     ]
 
 
+def test_remote_selection_accepts_the_route_selected_root_for_a_distributed_album(config, tmp_path: Path):
+    first_root = (tmp_path / "ConfiguredA").resolve()
+    second_root = (tmp_path / "ConfiguredB").resolve()
+    first_track = (first_root / "Artist" / "Album" / "one.mp3").resolve()
+    second_track = (second_root / "Artist" / "Album" / "two.mp3").resolve()
+    for track_path in (first_track, second_track):
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [
+                {"id": "main-1", "path": str(first_root), "layout_mode": "artist"},
+                {"id": "main-2", "path": str(second_root), "layout_mode": "artist"},
+            ],
+        },
+    )
+    requested_paths = {str(first_track), str(second_track)}
+
+    assert cover_lookup_runtime._validated_remote_selection_album_root(
+        config,
+        first_track.parent,
+        requested_paths,
+    ) == first_track.parent
+    assert cover_lookup_runtime._validated_remote_selection_album_root(
+        config,
+        tmp_path,
+        requested_paths,
+    ) is None
+
+
 def test_run_cover_lookup_save_remote_task_rejects_same_root_mixed_album_folders_before_download(config, logger, library_state,
     monkeypatch,
     tmp_path: Path,

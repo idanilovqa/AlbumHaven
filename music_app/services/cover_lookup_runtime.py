@@ -47,7 +47,7 @@ from music_app.services.cover_workflow import (
     complete_local_image_promotion,
     download_remote_cover_to_folder,
     record_external_cover_write,
-    resolve_album_root_from_track_paths,
+    resolve_album_write_root_from_track_paths,
     rollback_local_image_promotion,
     run_serialized_cover_selection,
 )
@@ -188,7 +188,10 @@ def _validated_remote_selection_album_root(
     album_root,
     requested_track_paths: set[str],
 ) -> Path | None:
-    resolved_album_root = resolve_album_root_from_track_paths(config, requested_track_paths)
+    resolved_album_root = resolve_album_write_root_from_track_paths(
+        config,
+        requested_track_paths,
+    )
     if resolved_album_root is None:
         return None
     if _path_key(resolved_album_root) != _path_key(album_root):

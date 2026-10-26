@@ -3684,7 +3684,7 @@ def test_asgi_cover_lookup_save_remote_validates_task_and_candidate_before_queue
     }
 
 
-def test_asgi_cover_lookup_save_remote_rejects_unsafe_album_roots_before_queueing(
+def test_asgi_cover_lookup_save_remote_rejects_unsafe_roots_and_queues_distributed_albums(
     app,
     monkeypatch,
     tmp_path: Path,
@@ -3741,12 +3741,11 @@ def test_asgi_cover_lookup_save_remote_rejects_unsafe_album_roots_before_queuein
     )
     reset_cover_lookup_runtime_state()
     task_id, _ = cover_lookup_tasks.create_cover_lookup_task(valid_album, {str(lp_one), str(lp_two)})
+    candidate = {"id": "candidate-1", "art_kind": "cover", "url": "https://images.example/cover.jpg"}
     cover_lookup_tasks.update_cover_lookup_task(
         task_id,
         status="completed",
-        possible_matches=[
-            {"id": "candidate-1", "art_kind": "cover", "url": "https://images.example/cover.jpg"}
-        ],
+        possible_matches=[candidate],
     )
 
     monkeypatch.setattr(
@@ -3763,25 +3762,51 @@ def test_asgi_cover_lookup_save_remote_rejects_unsafe_album_roots_before_queuein
         "/utilities/cover-lookup/save-remote",
         json_body={"album": valid_album, "task_id": task_id, "candidate_id": "candidate-1"},
     )
-    invalid_payloads = [traversal_album, mixed_unsafe_album, cross_root_album, mixed_album_folders]
-    invalid_results = [
-        _run_asgi_request(
+    invalid_payloads = [traversal_album, mixed_unsafe_album]
+    for album in invalid_payloads:
+        assert asgi_routes.resolve_album_context(app.config, album) is None
+        invalid_task_id, _ = cover_lookup_tasks.create_cover_lookup_task(
+            album,
+            {str(track["path"]) for track in album["tracks"]},
+        )
+        cover_lookup_tasks.update_cover_lookup_task(
+            invalid_task_id,
+            status="completed",
+            possible_matches=[candidate],
+        )
+        status, _headers, body = _run_asgi_request(
             asgi_app,
             "POST",
             "/utilities/cover-lookup/save-remote",
-            json_body={"album": album, "task_id": task_id, "candidate_id": "candidate-1"},
+            json_body={"album": album, "task_id": invalid_task_id, "candidate_id": "candidate-1"},
         )
-        for album in invalid_payloads
-    ]
+        assert status == 400
+        assert _decode_json(body) == {"ok": False, "error": "Album root could not be resolved"}
+
+    for album in (cross_root_album, mixed_album_folders):
+        distributed_task_id, _ = cover_lookup_tasks.create_cover_lookup_task(
+            album,
+            {str(track["path"]) for track in album["tracks"]},
+        )
+        cover_lookup_tasks.update_cover_lookup_task(
+            distributed_task_id,
+            status="completed",
+            possible_matches=[candidate],
+        )
+        status, _headers, body = _run_asgi_request(
+            asgi_app,
+            "POST",
+            "/utilities/cover-lookup/save-remote",
+            json_body={"album": album, "task_id": distributed_task_id, "candidate_id": "candidate-1"},
+        )
+        assert status == 200, body
 
     assert valid_status == 200
     assert _decode_json(valid_body)["optimistic_cover_path"] == str(album_root / "cover.jpg")
-    assert len(queued_calls) == 1
+    assert len(queued_calls) == 3
     assert queued_calls[0]["args"][1] == album_root
-    for status, _headers, body in invalid_results:
-        assert status == 400
-        assert _decode_json(body) == {"ok": False, "error": "Album root could not be resolved"}
-    assert len(queued_calls) == 1
+    assert queued_calls[1]["args"][1] == lp_one.parent
+    assert queued_calls[2]["args"][1] == lp_one.parent
     assert not (traversal_target.parent / "cover.jpg").exists()
     assert not (library_root / "Artist" / "cover.jpg").exists()
     assert not (tmp_path / "cover.jpg").exists()

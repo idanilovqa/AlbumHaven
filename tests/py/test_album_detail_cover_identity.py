@@ -161,7 +161,6 @@ def test_cover_lookup_refreshes_stale_paths_from_the_persisted_album_identity(
         FakeSnapshotRepository,
     )
     monkeypatch.setattr(cover_routes, "resolve_album_context", fake_resolve_album_context)
-
     album, context = asyncio.run(
         cover_routes._resolve_album_payload_context(
             {},
@@ -211,6 +210,11 @@ def test_cover_lookup_uses_one_safe_root_for_a_distributed_logical_album(
         FakeSnapshotRepository,
     )
     monkeypatch.setattr(cover_routes, "resolve_album_context", fake_resolve_album_context)
+    monkeypatch.setattr(
+        cover_routes,
+        "resolve_album_write_root_from_track_paths",
+        lambda _config, paths: sorted(paths)[0].split("/")[0],
+    )
 
     album, context = asyncio.run(
         cover_routes._resolve_album_payload_context(

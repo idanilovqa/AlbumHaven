@@ -168,6 +168,22 @@ def resolve_album_context(
     return CoverAlbumContext(album_root=album_root, track_paths=track_paths)
 
 
+def resolve_album_write_root_from_track_paths(
+    config: dict[str, object],
+    track_paths: set[str],
+) -> Path | None:
+    album_root = resolve_album_root_from_track_paths(config, track_paths)
+    if album_root is not None or len(track_paths) < 2:
+        return album_root
+    contexts = [
+        resolve_album_context(config, {"tracks": [{"path": path}]})
+        for path in sorted(track_paths)
+    ]
+    if any(context is None for context in contexts):
+        return None
+    return contexts[0].album_root
+
+
 def _is_path_within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)

@@ -68,6 +68,7 @@ from music_app.services.cover_workflow import (
     cover_revision_for_path,
     delete_local_cover_and_choose_next,
     resolve_album_context,
+    resolve_album_write_root_from_track_paths,
     rollback_local_image_promotion,
     save_pasted_image_as_authoritative_cover,
     validate_local_cover_source,
@@ -217,15 +218,12 @@ def _resolve_distributed_album_context(
     track_paths = _album_track_paths(album)
     if len(track_paths) < 2:
         return None
-    contexts = [
-        resolve_album_context(config, {"tracks": [{"path": path}]})
-        for path in sorted(track_paths)
-    ]
-    if any(context is None for context in contexts):
+    album_root = resolve_album_write_root_from_track_paths(config, track_paths)
+    if album_root is None:
         return None
     # One validated physical source owns file writes; the logical album keeps all tracks.
     return CoverAlbumContext(
-        album_root=contexts[0].album_root,
+        album_root=album_root,
         track_paths=track_paths,
     )
 

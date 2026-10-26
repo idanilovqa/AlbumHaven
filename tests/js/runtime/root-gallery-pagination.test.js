@@ -8,7 +8,14 @@ function fixture() {
   const pending = [], renders = [], timers = [];
   const scroll = { scrollTop: 0, clientHeight: 500, scrollHeight: 1000 };
   const state = { ui: {}, busy: false, view: { query: '', selected_artist: '', surface_request: 'albums', artist_count: 6045, album_count: 20000, artists_sidebar: [{ artist: 'A', count: 5 }], artist_groups: [{ artist: 'A', albums: [{ key: 'a1' }] }], gallery_page: { next_cursor: 'page-1', revision: 'r1', has_more: true, page_size: 8 } } };
-  const context = vm.createContext({ state, URL, URLSearchParams, AbortController, console, window: { location: { href: 'https://localhost/', assign() {} } }, document: { getElementById: id => id === 'albums-scroll' ? scroll : null }, buildApiUrl: () => '/view-data?surface=albums', getAlbumCardRenderKey: album => album.key, applyViewPayload: data => { state.view = { ...state.view, ...data }; }, renderArtistGroups: options => renders.push(options), scheduleBrowserAnimationFrame: callback => timers.push(callback), showToast() {}, fetch: (url, options) => new Promise((resolve, reject) => pending.push({ url, options, resolve: data => resolve({ ok: true, status: 200, json: async () => data }), reject })) });
+  const context = vm.createContext({ state, URL, URLSearchParams, AbortController, console, window: { location: { href: 'https://localhost/', assign() {} } }, document: { querySelector: () => null, getElementById: id => id === 'albums-scroll' ? scroll : null }, buildApiUrl: () => '/view-data?surface=albums', getAlbumCardRenderKey: album => album.key, applyViewPayload: data => { state.view = { ...state.view, ...data }; }, renderArtistGroups: options => renders.push(options), scheduleBrowserAnimationFrame: callback => timers.push(callback), showToast() {}, fetch: (url, options) => new Promise((resolve, reject) => pending.push({ url, options, resolve: data => resolve({ ok: true, status: 200, json: async () => data }), reject })) });
+  // Preserve this paging unit's declared URL/final-apply seams while loading
+  // the real preference capture and bootstrap owners in served relative order.
+  const seams = {buildApiUrl: context.buildApiUrl, applyViewPayload: context.applyViewPayload};
+  for (const name of ['bootstrap-state.js', 'response-state-helpers.js']) {
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime', name), 'utf8'), context, {filename: name});
+  }
+  Object.assign(context, seams);
   vm.runInContext(source, context);
   return { context, state, scroll, pending, renders, timers };
 }
@@ -19,7 +26,7 @@ test('root page appends split artist albums without duplicates and preserves aut
   assert.equal(f.pending.length, 1); assert.match(f.pending[0].url, /gallery_cursor=page-1/); assert.match(f.pending[0].url, /gallery_page_size=50/); assert.match(f.pending[0].url, /omit_sidebar=1/);
   f.pending[0].resolve(page([{ artist: 'A', albums: [{ key: 'a1' }, { key: 'a2' }] }, { artist: 'B', albums: [{ key: 'a1' }] }]));
   assert.equal(await promise, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(f.state.view.artist_groups)), [{ artist: 'A', albums: [{ key: 'a1' }, { key: 'a2' }] }, { artist: 'B', albums: [{ key: 'a1' }] }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.state.view.artist_groups)), [{ artist: 'A', albums: [{ key: 'a1' }, { key: 'a2' }], artist_loved_launch: null }, { artist: 'B', albums: [{ key: 'a1' }], artist_loved_launch: null }]);
   assert.equal(f.state.view.artists_sidebar, sidebar); assert.equal(f.state.view.artist_count, 6045); assert.equal(f.state.view.album_count, 20000);
   assert.equal(f.renders[0].preserveScroll, true); assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
 });
@@ -92,4 +99,11 @@ test('continuation uses the loaded source scope rather than retained browser sco
   const result = f.context.loadNextRootGalleryPage();
   assert.match(f.pending[0].url, /gallery_scope=all&category=hoard/);
   f.pending[0].resolve(page([])); await result;
+});
+
+test('missing authenticated preference context never manufactures an Album taste scope', () => {
+  const f = fixture();
+  assert.equal(f.context.captureRuntimeAlbumPreferenceScope(), null);
+  assert.equal(f.context.runtimeAlbumPreferenceScopeIsCurrent(null), false);
+  assert.equal(f.pending.length, 0);
 });

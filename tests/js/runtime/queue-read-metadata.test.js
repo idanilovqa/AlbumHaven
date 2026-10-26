@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
 const deferred = () => {let resolve; const promise = new Promise(done => {resolve = done;}); return {promise, resolve};};
 const preference = (love_tier = 'off') => ({rating: null, love_tier, allowed_actions: {can_set_love_tier: true}});
 const target = (overrides = {}) => ({inventory_track_ref: 'inventory-track:1:11', track_ref: 'track:key-one',
@@ -11,24 +12,28 @@ const target = (overrides = {}) => ({inventory_track_ref: 'inventory-track:1:11'
   duration_seconds: 125, availability: 'local', source_readable: true,
   allowed_actions: {can_read: true, can_play: true}, playback_state: {can_start_here: true}, track_preference: preference(), ...overrides});
 function fixture() {
-  let generation = 1, media = true;
-  const shell = {dataset: {nativeAccountId: 'actor-one', nativeLibraryId: '1'}}, requests = [], starts = [];
-  const state = {player: {current: null, playbackQueue: null, loopActive: false}};
-  const sandbox = {console, AbortController, Promise, Map, Set, WeakMap, Object, JSON, Math, state,
-    document: {getElementById: () => shell}, window: {AlbumHavenCapabilities: {allows: () => media}},
-    PrivateUITransport: {generation: () => generation, subscribe: () => () => {}},
-    activateSharedTrackButton() {}, playerTrackSelectionToken: 1,
-    getPlayerPlaybackSnapshot: () => ({}), streamingEngineState: () => null,
+  let media = true;
+  const h = createNativeHomeRuntime(), sandbox = h.context, context = h.context;
+  const shell = h.document.createElement('div'); shell.id = 'app-shell';
+  Object.assign(shell.dataset, {nativeAccountId: 'actor-one', nativeLibraryId: '1', privateUiContext: 'a'.repeat(64)});
+  h.document.body.appendChild(shell);
+  const requests = [], starts = [];
+  Object.assign(sandbox, {AbortController, AlbumHavenCapabilities: {allows: () => media},
+    activateSharedTrackButton() {throw new Error('Queue fixture must use its explicit playback boundary');}, playerTrackSelectionToken: 1,
     resolveNextPlaybackContextQueue: () => null, peekNextOrdinaryQueuedTrack: () => null,
     playTrackFromPayload: async (value, options) => {
       const started = {value, options, currentAtAdmission: options.isCurrent()}; starts.push(started);
       await Promise.resolve(); started.currentBeforeCompletion = options.isCurrent(); return true;
     },
-    fetch: async (url, options) => {const response = deferred(); requests.push({url, options, response}); return response.promise;}};
-  const context = vm.createContext(sandbox);
-  for (const file of ['track-actions.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js']) {
+    fetch: async (url, options) => {const response = deferred(); requests.push({url, options, response}); return response.promise;}});
+  // Whole initialized owners, in served order. No null engine or fake transport.
+  for (const file of ['bootstrap-state.js', 'core-state-and-helpers.js', 'player-streaming-engine.js',
+    'private-ui-transport.js', 'track-actions.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js']) {
     vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime', file), 'utf8'), context, {filename: file});
   }
+  sandbox.getPlayerPlaybackSnapshot = sandbox.getStreamingPlaybackSnapshot;
+  assert.equal(sandbox.streamingEngineState(), h.owner('state').player.streaming);
+  assert.equal(sandbox.streamingEngineState().roles.current, null);
   const actions = vm.runInContext('TrackActionsRuntime', context), queue = sandbox.window.AlbumHavenExplicitQueue;
   for (const method of ['acceptRead', 'preference', 'setLove', 'readEpoch']) assert.equal(typeof actions[method], 'function', method);
   function capture(initial = target()) {
@@ -44,7 +49,7 @@ function fixture() {
       library_id: shell.dataset.nativeLibraryId, track_ref: body.track_ref, track_preference: preference(tier)})});
   };
   return {queue, actions, capture, requests, starts, acknowledge, shell, context,
-    replaceTransport: () => {generation++;}, setMedia: value => {media = value;}};
+    replaceTransport: () => {shell.dataset.privateUiContext = 'b'.repeat(64);}, setMedia: value => {media = value;}};
 }
 const ui = {scopeKey: 'home:own:test'};
 const abort = error => error?.name === 'AbortError';

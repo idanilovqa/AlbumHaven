@@ -11,7 +11,7 @@ function fixture(kind) {
   const row = {inventory_track_ref: 'inventory-track:1:11', track_ref: 'track:one', canonical_track_ref: 'track:one',
     path: '/private/song.flac', title: 'Song', artist: 'Artist', album_title: 'Album', duration_seconds: 133,
     source_readable: true, availability: 'local', allowed_actions: {can_read: true, can_play: true},
-    playback_state: {can_start_here: true}, track_preference: {rating: null, love_tier: 'loved', allowed_actions: {can_set_love_tier: true}}};
+    playback_state: {can_start_here: true}, track_preference_state: 'available', track_preference: {rating: null, love_tier: 'loved', allowed_actions: {can_set_love_tier: true}}};
   const album = {album_ref: 'album:one', name: 'Album', album_artist: 'Artist', source_readable: true,
     allowed_actions: {can_read: true, can_play_album: true}, tracks: [row], track_rows: [row]};
   let fresh = album, loose = {ok: true, source_readable: true, non_album_tracks: [row]}, pending = null;
@@ -65,5 +65,17 @@ for (const kind of ['album', 'loose']) {
     const f = fixture(kind), deferredRead = f.pause(), controller = new AbortController();
     const read = f.capture.resolveMetadata({signal: controller.signal}); const denied = assert.rejects(read);
     controller.abort(); deferredRead.resolve(kind === 'album' ? f.album : f.loose()); await denied;
+  });
+}
+
+for (const proof of [undefined, 'unavailable']) {
+  test(`loose retained metadata without available preference proof stays unknown (${proof})`, async () => {
+    const f = fixture('loose'), row = {...f.row, track_preference_state: proof};
+    if (proof === undefined) delete row.track_preference_state;
+    f.update(row);
+    const value = await f.capture.resolveMetadata();
+    assert.equal(value.source_readable, true);
+    assert.equal(value.track_preference, null, 'readable media must not invent personal preference authority');
+    assert.equal(value.canonical_track_ref, f.row.canonical_track_ref, 'private source identity alone does not establish a preference');
   });
 }

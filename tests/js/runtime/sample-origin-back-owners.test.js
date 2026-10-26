@@ -66,6 +66,9 @@ test('retained real detached Top form returns once with identical input nodes an
   assert.equal(await lease.back(), false, 'a retained form cannot claim a successful no-op without its history owner');
   h.click(h.named('Back', h.host)); await h.settle();
   discarded(h, observed); history.assertReturned(parent);
+  assert.equal(history.calls.settingsReads.length, 1, 'only the account preference refresh accompanies retained return');
+  assert.deepEqual(history.calls.settingsReads.map(call => [call.url, call.options.method]),
+    [['/account/album-top-listening-settings', 'GET']]);
   assert.equal(h.document.querySelector('form[aria-label="Create Album Top"]'), form);
   assert.equal(form.querySelector('[aria-label="Album Top name"]'), title); assert.equal(title.value, originalTitle);
   assert.equal(form.querySelector('input[type="search"]'), search); assert.equal(search.value, originalSearch);
@@ -179,3 +182,16 @@ for (const change of ['original source', 'provider generation', 'mount owner'])
     assert.deepEqual(history.calls.go, []); assert.deepEqual(history.calls.fetch, []); assert.deepEqual(history.calls.fallback, []);
     noWrites(h, source.svc);
   });
+
+for (const [url, options] of [
+  ['/account/album-top-listening-settings?unexpected=1', {method: 'GET', credentials: 'same-origin', redirect: 'error'}],
+  ['/account/album-top-listening-settings', {method: 'PUT', credentials: 'same-origin', redirect: 'error'}],
+  ['/account/album-top-listening-settings', {method: 'GET', credentials: 'same-origin', redirect: 'error', body: '{}'}],
+  ['/view-data?surface=album_tops', {method: 'GET', credentials: 'same-origin', redirect: 'error'}],
+]) test(`retained history port rejects non-preference request ${options.method} ${url} body:${Object.hasOwn(options, 'body')}`, async () => {
+  const h = {c: {location: new URL('https://fixture.invalid/'), history: {state: {}}}};
+  const port = historyPort(h);
+  await assert.rejects(h.c.fetch(url, options), /must not fetch a reconstructed source/);
+  assert.equal(port.calls.fetch.length, 1);
+  assert.equal(port.calls.settingsReads.length, 0);
+});

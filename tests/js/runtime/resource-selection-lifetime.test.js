@@ -6,6 +6,9 @@ const vm = require('node:vm');
 const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
 const repo = path.resolve(__dirname, '../../..');
 const read = name => fs.readFileSync(path.join(repo, 'music_app/static/js/runtime', name), 'utf8');
+// Use the complete genuine privacy boundary without mounting a Settings app.
+const navigationBoundary = vm.createContext({window: {}, structuredClone});
+vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/settings-navigation.js'), 'utf8'), navigationBoundary);
 const deferred = () => {let resolve; const promise = new Promise(done => {resolve = done;}); return {promise, resolve};};
 const awaitNative = (completion, failure) => Promise.race([completion.promise, failure.promise.then(error => {throw error;})]);
 function environment() {
@@ -24,6 +27,10 @@ function environment() {
     if (this.isConnected && !this.disabled && !this.closest('[hidden], [inert]')) d.activeElement = this;
   };
   c.clearTimeout = clearTimeout;
+  // Match the served owner order; modal rendering uses the real actor-bound
+  // preference readers even when this fixture has no authenticated taste scope.
+  vm.runInContext(read('bootstrap-state.js'), c);
+  vm.runInContext(read('response-state-helpers.js'), c);
   vm.runInContext(read('browser-scheduling-helpers.js'), c);
   c.Node.prototype.before = function(node) {this.parentNode?.insertBefore(node, this);};
   c.Node.prototype.replaceWith = function(node) {if (this.parentNode) {this.before(node); this.remove();}};
@@ -271,6 +278,22 @@ function renderedEnvironment({mobile = false} = {}) {
   return {...env, pages: () => pages, images: () => images};
 }
 
+test('real native modal keeps album preferences unavailable without authenticated taste context', () => {
+  const {c, overlay, queue} = renderedEnvironment();
+  assert.equal(typeof c.captureRuntimeAlbumPreferenceScope, 'function');
+  assert.equal(c.captureRuntimeAlbumPreferenceScope(), null);
+  const album = {key: 'local:one', name: 'Current album', tracks: [], album_id: 1, library_id: 1,
+    album_preference: {album_ref: 'inventory-album:1:1', context_ref: 'a'.repeat(64), rating: 10,
+      is_favorite: true, favorite_override: true, favorite_source: 'personal', taste_state: 'available',
+      preference_revision: 1, can_edit: true, allowed_actions: {can_manage_album_preferences: true}}};
+  assert.equal(c.runtimeAlbumPreferenceForAlbum(album), null);
+  c.openTrackModal(album);
+  assert.match(overlay.textContent, /Your rating and favorite are unavailable/);
+  assert.equal(overlay.querySelector('[data-album-preference-action]'), null);
+  assert.equal(c.getTrackModalAlbumPreferenceLease(), null);
+  assert.equal(c.state.player.playbackQueue, queue);
+});
+
 test('real title/Open cannot enter a denied native phone page, including after viewport changes', async () => {
   const env = renderedEnvironment({mobile: true}), {c, overlay} = env;
   const supplied = target(); supplied.native_actions.allowed_actions.can_open_album_page = false;
@@ -442,9 +465,13 @@ function mobileHistoryEnvironment() {
     pushState(state, title, url) {entries.splice(position + 1); entries.push({state: copy(state), url: String(url)}); position++; c.location.href = String(url);},
     replaceState(state, title, url) {entries[position] = {state: copy(state), url: String(url)}; c.location.href = String(url);},
     go() {throw new Error('Use the explicit fixture browser traversal.');}};
-  c.AlbumHavenSettingsNavigation = {instance: {pushLibraryHistory(url, snapshot) {
-    c.history.pushState({...snapshot, albumHavenNavigationPosition: position + 1}, '', url);
-  }}};
+  c.AlbumHavenSettingsNavigation = {
+    sanitizeHistorySnapshot: navigationBoundary.window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot,
+    instance: {pushLibraryHistory(url, snapshot) {
+      c.history.pushState(c.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(
+        {...snapshot, albumHavenNavigationPosition: position + 1}), '', url);
+    }},
+  };
   vm.runInContext(read('mobile-navigation.js'), c);
   // Geometry/player chrome are unrelated; the page descriptor, history stack,
   // surface transfer, cleanup and actual Album owner remain production functions.
@@ -456,6 +483,21 @@ function mobileHistoryEnvironment() {
     c.location.href = entries[position].url; return c.handleMobilePagePopState();
   }};
 }
+
+test('real mobile history replacement removes private track identity without changing live source data', () => {
+  const {c, entries} = mobileHistoryEnvironment();
+  const row = {title: 'Visible track', canonical_track_ref: 'private:canonical', inventory_track_ref: 'private:inventory',
+    track_preference: {rating: 5}, track_preference_state: {}, can_edit_preferences: true, track_preference_overlay: {}};
+  const input = entries[0].state;
+  input.display = {rows: [row]}; input.playlistDraft = {token: 'draft', scopeKey: 'scope'};
+  const before = structuredClone(input);
+  c.writeMobilePageHistory('replace');
+  assert.deepEqual(JSON.parse(JSON.stringify(c.history.state.display.rows)), [{title: 'Visible track'}]);
+  assert.deepEqual(c.history.state.playlistDraft, input.playlistDraft);
+  assert.deepEqual(input, before);
+  assert.equal(input.display.rows[0], row);
+  assert.doesNotMatch(JSON.stringify(c.history.state), /private:|canonical_track_ref|inventory_track_ref|track_preference|can_edit_preferences/);
+});
 
 function nativePlaybackProbe(c) {
   vm.runInContext(read('player-loop-playback.js'), c);

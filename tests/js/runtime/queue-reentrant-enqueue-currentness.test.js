@@ -9,21 +9,25 @@ const {createNativeHomeRuntime, readRepo} = require('./native-home-harness.cjs')
 function fixture() {
   const h = createNativeHomeRuntime();
   const shell = h.document.createElement('div'); shell.id = 'app-shell';
-  Object.assign(shell.dataset, {nativeAccountId: '41', nativeLibraryId: '73'});
+  Object.assign(shell.dataset, {nativeAccountId: '41', nativeLibraryId: '73', privateUiContext: 'a'.repeat(64)});
   h.document.body.appendChild(shell);
-  let generation = 1, callerCurrent = true, sourceCurrent = true;
+  let callerCurrent = true, sourceCurrent = true;
   const controller = new AbortController();
   Object.assign(h.context, {
-    AbortController, state: {player: {current: null, playbackQueue: null, loopActive: false}},
-    PrivateUITransport: {generation: () => generation, subscribe: () => () => {}},
+    AbortController,
     AlbumHavenCapabilities: {allows: () => true},
-    activateSharedTrackButton() {}, playerTrackSelectionToken: 1,
-    getPlayerPlaybackSnapshot: () => ({}), streamingEngineState: () => null,
+    activateSharedTrackButton() {throw new Error('Metadata admission must not activate playback');}, playerTrackSelectionToken: 1,
     resolveNextPlaybackContextQueue: () => null, peekNextOrdinaryQueuedTrack: () => null,
   });
-  for (const name of ['track-actions.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js']) {
+  // The real initialized engine exists even before any playback attempt. Load
+  // its complete state/accessor owners and the real transport in served order.
+  for (const name of ['bootstrap-state.js', 'core-state-and-helpers.js', 'player-streaming-engine.js',
+    'private-ui-transport.js', 'track-actions.js', 'explicit-queue-planner.js', 'explicit-queue-runtime.js']) {
     vm.runInContext(readRepo(`music_app/static/js/runtime/${name}`), h.context, {filename: name});
   }
+  h.context.getPlayerPlaybackSnapshot = h.context.getStreamingPlaybackSnapshot;
+  assert.equal(h.context.streamingEngineState(), h.owner('state').player.streaming);
+  assert.equal(h.context.streamingEngineState().roles.current, null);
   const queue = h.context.AlbumHavenExplicitQueue;
   const captures = [901, 902].map(id => {
     const target = {inventory_track_ref: `inventory-track:73:${id}`, track_ref: `track:key-${id}`,
@@ -39,7 +43,7 @@ function fixture() {
     if (kind === 'signal') controller.abort();
     else if (kind === 'caller') callerCurrent = false;
     else if (kind === 'actor') shell.dataset.nativeAccountId = '42';
-    else if (kind === 'transport') generation++;
+    else if (kind === 'transport') shell.dataset.privateUiContext = 'b'.repeat(64);
     else if (kind === 'selection') h.context.playerTrackSelectionToken++;
     else if (kind === 'source') sourceCurrent = false;
   };

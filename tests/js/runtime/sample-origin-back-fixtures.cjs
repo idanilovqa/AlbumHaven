@@ -35,7 +35,7 @@ function historyPort(h) {
   // browser-stack port, not an alternative departure owner. Real Settings
   // confirmation, discard and history writes are still invoked unchanged.
   const location = h.c.location, entries = [{url: location.href, state: structuredClone(h.c.history.state)}];
-  const calls = {go: [], fetch: [], fallback: []}; let index = 0;
+  const calls = {go: [], fetch: [], settingsReads: [], fallback: []}; let index = 0;
   h.c.history = {
     get state() {return entries[index].state;},
     pushState(state, _title, url) {location.href = new URL(url, location).href;
@@ -50,7 +50,20 @@ function historyPort(h) {
       queueMicrotask(() => {index = target; location.href = entries[index].url;});
     },
   };
-  h.c.fetch = async (...args) => {calls.fetch.push(args); throw new Error('Back must not fetch a reconstructed source');};
+  h.c.fetch = async (url, options = {}) => {
+    // Returning to the visible Top refreshes its account preference, not its
+    // retained source/form. Admit only the genuine provider's read-only route.
+    if (url === '/account/album-top-listening-settings' && options.method === 'GET'
+      && options.credentials === 'same-origin' && options.redirect === 'error'
+      && !Object.hasOwn(options, 'body')) {
+      calls.settingsReads.push({url, options});
+      return {ok: true, status: 200, json: async () => ({status: 'ready',
+        data: {completed_target: 5, settings_revision: '1', preference_status: 'default'},
+        context_ref: 'a'.repeat(64), context_scope: 'album-top-settings-v1'})};
+    }
+    calls.fetch.push([url, options]);
+    throw new Error('Back must not fetch a reconstructed source');
+  };
   h.c.fetchAndRender = async (...args) => {calls.fallback.push(args); return false;};
   return {calls, entries, index: () => index,
     mark: () => ({index, url: location.href, state: structuredClone(h.c.history.state)}),

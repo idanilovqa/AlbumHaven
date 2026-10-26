@@ -98,7 +98,7 @@ test('draft edits retire its captured owner and cannot mutate the frozen request
 test('actual existing edit-draft copy retains authoritative binding strings without retyping mutation numbers', async () => {
   const {createAlbumTopDraft} = await import('../../../music_app/static/js/album-tops/draft.mjs');
   const state = F.topState(); state.detail.data.type = 'manual'; state.detail.data.source_locked = false;
-  Object.assign(state.detail.data.allowed_actions, {can_edit: true, can_add: true, can_remove: true, can_reorder: true,
+  Object.assign(state.detail.data.allowed_actions, {can_read: true, can_edit: true, can_add: true, can_remove: true, can_reorder: true,
     'library.album_tops.items.manage': true});
   state.detail.data.edit_draft = {item_selections: [{item_ref: F.id(510), album_ref: F.id(520),
     selected_inventory_album_ref: F.albumRefs[0], selected_local_album_id: 9007199254740992, selected_source_ref: F.id(701)}]};

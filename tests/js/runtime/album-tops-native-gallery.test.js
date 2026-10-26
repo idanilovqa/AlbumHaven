@@ -6,14 +6,16 @@ const {TOP, OTHER, A, B, IA, IB, row, detail, state, progress, freeze, environme
 const keys = f => f.cards().map(card => card.getAttribute('data-gallery-card-key'));
 const patchDetail = (f, patch) => f.setState({...f.getState(), detail: {...f.getState().detail, data: {...f.getState().detail.data, ...patch}}});
 const complete = f => intent(f.cards()[0], 'complete');
+const {installGalleryConfirmation, consentToCompletion} = require('./album-tops-native-fixtures/actual-gallery-confirmation.cjs');
 
 test('native Top renders and updates without ResizeObserver or a metadata owner', async t => {
   const f = await mounted(t, {resizeObserver: false}), cards = f.cards();
+  installGalleryConfirmation(t, f);
   assert.equal(cards.length, 2);
   assert.equal(f.owners.filter(owner => owner.kind === 'metadata').length, 0, 'Actual shared metadata factory returns null');
   patchDetail(f, {items: [...f.getState().detail.data.items].reverse()});
   assert.deepEqual(f.cards(), [...cards].reverse());
-  f.click(complete(f));
+  await consentToCompletion(f, complete(f));
   assert.deepEqual(f.calls, [{action: 'set_manual_completion', payload: {album_ref: B, completed: false}}]);
   f.owner.dispose(); f.flush();
   assert.equal(f.galleryRoot(), null);
@@ -70,8 +72,9 @@ test('saved mobile columns and Rows use the real shared device geometry', async 
 
 test('manual completion dispatches current actor progress and never edits canonical membership', async t => {
   const data = freeze(detail()), before = JSON.stringify(data), f = await mounted(t, {data});
-  f.click(complete(f));
-  f.click(intent(f.cards()[1], 'complete'));
+  installGalleryConfirmation(t, f);
+  await consentToCompletion(f, complete(f));
+  await consentToCompletion(f, intent(f.cards()[1], 'complete'));
   assert.deepEqual(f.calls, [{action: 'set_manual_completion', payload: {album_ref: A, completed: true}},
     {action: 'set_manual_completion', payload: {album_ref: B, completed: false}}]);
   assert.equal(JSON.stringify(data), before);
@@ -290,6 +293,7 @@ test('first and repeated no-op Gallery updates retain every unfocused action nod
   f.setState({...f.getState(), mutation: {status: 'idle'}});
   const ready = intent(cards[0], 'complete'); assert.equal(ready.disabled, false);
   f.update(); assert.equal(intent(cards[0], 'complete'), ready, 'updated raw markup becomes the next stable cache');
-  f.click(ready);
+  installGalleryConfirmation(t, f);
+  await consentToCompletion(f, ready);
   assert.deepEqual(f.calls, [{action: 'set_manual_completion', payload: {album_ref: A, completed: true}}]);
 });

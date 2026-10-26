@@ -31,7 +31,7 @@ function installInlineNavigation(env, runtime, host, opens, topRef) {
   context.state.view = {surface: {active: 'album_tops'}, top_ref: topRef};
   context.state.ui = {activeViewRequestId: 10};
   for (const file of ['settings-navigation.js', 'runtime/shell-navigation-drawer.js',
-    'runtime/private-ui-transport.js', 'runtime/loop-range-controls.js',
+    'runtime/private-ui-transport.js', 'runtime/track-actions.js', 'runtime/loop-range-controls.js',
     'runtime/playback-control-cluster.js', 'runtime/album-tops-react-bridge.js']) {
     vm.runInContext(readRepo(`music_app/static/js/${file}`), context, {filename: file});
   }
@@ -40,6 +40,9 @@ function installInlineNavigation(env, runtime, host, opens, topRef) {
   for (const name of ['renderPlaybackControlCluster', 'getPlaybackControlClusterElements', 'mountLoopEditActionControl'])
     assert.equal(typeof env.owner(name), 'function', `actual native playback owner ${name}`);
   assert.ok(context.AlbumHavenSettingsNavigation.instance, 'actual Settings navigation owner mounted');
+  const tracks = env.owner('TrackActionsRuntime');
+  assert.equal(tracks.scope().actor, shell.dataset.nativeAccountId);
+  assert.equal(tracks.scope().library, shell.dataset.nativeLibraryId);
   const bridge = context.AlbumHavenAlbumTopsRuntime;
   Object.assign(runtime, bridge, {openForm(options) {opens.push(options); return bridge.openForm(options);}});
   const snapshot = runtime.snapshot();

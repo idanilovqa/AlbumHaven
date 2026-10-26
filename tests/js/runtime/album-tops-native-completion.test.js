@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {id, TOP, ALBUM, deferred, drain, detail, permissions, service, preparedController,
-  nativeEnvironment, connectedView} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
+  nativeEnvironment, connectedView, nextTask} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
 if (!globalThis.crypto) globalThis.crypto = require('node:crypto').webcrypto;
 const selector = '[data-gallery-card-intent="complete"]';
 function projection(completed = false, patch = {}) {
@@ -17,7 +17,14 @@ for (const completed of [false, true]) test(`actual Tops completion sends ${!com
     const button = env.host.querySelector(selector); assert.ok(button);
     assert.equal(button.getAttribute('aria-pressed'), String(completed));
     assert.equal(button.getAttribute('aria-label'), `${completed ? 'Clear completion' : 'Mark completed'} in this Top: Actual album`);
-    env.click(button);
+    env.click(button); await drain();
+    assert.equal(backend.count('execute'), 0, 'confirmation cannot write before consent');
+    assert.equal(env.document.getElementById('app-confirm-modal').hidden, false);
+    env.click(env.document.getElementById('app-confirm-cancel')); await drain();
+    assert.equal(backend.count('execute'), 0, 'declining completion cannot write');
+    env.click(env.host.querySelector(selector)); await drain();
+    assert.equal(env.document.getElementById('app-confirm-modal').hidden, false);
+    env.click(env.document.getElementById('app-confirm-accept')); await drain();
     assert.equal(backend.count('execute'), 1);
     const call = backend.calls.find(row => row.method === 'execute'), command = call.args[1];
     assert.equal(call.args[0], 'set_manual_completion');
@@ -33,7 +40,7 @@ for (const completed of [false, true]) test(`actual Tops completion sends ${!com
     assert.equal(controller.getSnapshot().mutation.status, 'ready');
     assert.equal(backend.count('read'), 2, 'receipt is followed by an authoritative detail read');
   } finally {owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });
 for (const [label, patch] of [
   ['missing progress', {top_viewer_overlay: {item_progress: {}}}],
@@ -50,7 +57,14 @@ test('scope retirement aborts an actual completion write and late settlement can
   const write = deferred(), backend = service({execute: () => write.promise}), env = nativeEnvironment(); backend.data.detail = projection();
   const controller = await preparedController(backend), owner = await connectedView(env, backend, controller);
   try {
-    env.click(env.host.querySelector(selector)); const call = backend.calls.find(row => row.method === 'execute');
+    env.click(env.host.querySelector(selector)); await drain();
+    assert.equal(backend.count('execute'), 0);
+    assert.equal(env.document.getElementById('app-confirm-modal').hidden, false);
+    env.click(env.document.getElementById('app-confirm-cancel')); await drain();
+    assert.equal(backend.count('execute'), 0);
+    env.click(env.host.querySelector(selector)); await drain();
+    env.click(env.document.getElementById('app-confirm-accept')); await drain();
+    const call = backend.calls.find(row => row.method === 'execute');
     assert.ok(call); controller.setScope(null);
     assert.equal(call.args[2].signal.aborted, true); assert.equal(env.host.querySelector(selector), null);
     write.resolve({action: 'set_manual_completion', request_key: call.args[1].request_key, top_ref: TOP, album_ref: ALBUM, completed: true, progress_revision: '5'});
@@ -58,5 +72,5 @@ test('scope retirement aborts an actual completion write and late settlement can
     assert.equal(controller.getSnapshot().mutation.status, 'idle'); assert.equal(backend.count('read'), 1);
     assert.equal(backend.count('execute'), 1);
   } finally {owner.dispose();}
-  env.assertClean();
+  await nextTask(); env.assertClean();
 });

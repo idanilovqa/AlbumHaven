@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
 const root = path.resolve(__dirname, '../../../music_app/static/js/runtime');
 const row = (id, editable, tier) => ({path: `/synthetic/queue-album/${id}.flac`, track_ref: `track:${id}`,
   canonical_track_ref: `track:${id}`, inventory_track_ref: `inventory-track:9:${id}`,
@@ -14,16 +15,16 @@ const row = (id, editable, tier) => ({path: `/synthetic/queue-album/${id}.flac`,
   track_preference: {rating: null, love_tier: tier, allowed_actions: {can_set_love_tier: editable}}});
 function fixture(initial) {
   let tracks = initial;
-  const requests = [], responses = [], shell = {dataset: {nativeAccountId: '7', nativeLibraryId: '9'}};
-  const state = {player: {current: null, playbackQueue: null, loopActive: false}, ui: {}, status: {inventory_mutation_revision: 1}};
+  const h = createNativeHomeRuntime(), context = h.context;
+  const shell = h.document.createElement('div'); shell.id = 'app-shell';
+  Object.assign(shell.dataset, {nativeAccountId: '7', nativeLibraryId: '9', privateUiContext: 'a'.repeat(64)});
+  h.document.body.appendChild(shell);
+  const requests = [], responses = [];
   const album = () => ({key: 'queue-album', name: 'Album', album_artist: 'Artist',
     tracks: tracks.map(value => ({...value})), track_rows: tracks.map(value => ({...value}))});
-  const context = vm.createContext({state, AbortController,
-    document: {getElementById: () => shell}, window: {AlbumHavenCapabilities: {allows: () => true}},
-    PrivateUITransport: {generation: () => 1, subscribe: () => () => {}},
-    activateSharedTrackButton() {}, playerTrackSelectionToken: 1,
-    getAlbumPlaybackQueueRef: value => value?.key, albumRequiresHydration: () => false,
-    getPlayerPlaybackSnapshot: () => ({}), streamingEngineState: () => null,
+  Object.assign(context, {AbortController, AlbumHavenCapabilities: {allows: () => true},
+    activateSharedTrackButton() {throw new Error('Queue fixture must use its explicit playback boundary');}, playerTrackSelectionToken: 1,
+    getAlbumPlaybackQueueRef: value => value?.key,
     resolveNextPlaybackContextQueue: () => null, peekNextOrdinaryQueuedTrack: () => null,
     playTrackFromPayload: async () => {throw new Error('Metadata read must not start playback');},
     fetch: async (url, options) => {
@@ -32,10 +33,16 @@ function fixture(initial) {
       const value = album(); responses.push(value);
       return {ok: true, status: 200, json: async () => ({ok: true, album: value})};
     }});
-  for (const file of ['track-actions.js', 'track-modal-lightbox-helpers.js', 'explicit-queue-planner.js',
+  // Match complete served state, modal, transport and preference owners.
+  for (const file of ['bootstrap-state.js', 'response-state-helpers.js', 'core-state-and-helpers.js', 'player-streaming-engine.js',
+    'track-modal-lightbox-helpers.js', 'private-ui-transport.js', 'track-actions.js', 'explicit-queue-planner.js',
     'explicit-queue-runtime.js', 'explicit-queue-sources.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, {filename: file});
   }
+  context.getPlayerPlaybackSnapshot = context.getStreamingPlaybackSnapshot;
+  h.owner('state').status = {inventory_mutation_revision: 1};
+  assert.equal(context.streamingEngineState(), h.owner('state').player.streaming);
+  assert.equal(context.streamingEngineState().roles.current, null);
   const queue = context.window.AlbumHavenExplicitQueue;
   return {context, queue, requests, responses, album, replace: values => {tracks = values;},
     captures: () => context.captureNativeAlbumQueueSources(album(), tracks)};

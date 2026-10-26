@@ -29,7 +29,7 @@ function fixture() {
     getIndexedAlbum: key => state.gallery.albumIndex.get(key) || null,
     albumRequiresHydration: value => Boolean(value && !Array.isArray(value.tracks)),
     fetch: (url, options) => {const response = deferred(); requests.push({url, options, response}); return response.promise;}});
-  for (const name of ['track-actions.js', 'track-modal-lightbox-helpers.js']) {
+  for (const name of ['response-state-helpers.js', 'track-actions.js', 'track-modal-lightbox-helpers.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, name), 'utf8'), context, {filename: name});
   }
   const runtime = vm.runInContext('TrackActionsRuntime', context);

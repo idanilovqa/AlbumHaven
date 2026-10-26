@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const {actualChoiceEnvironment, settle} = require('./album-tops-native-fixtures/actual-choice-runtime.cjs');
-const {load} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
+const {load, nextTask} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => {let resolve, reject; const promise = new Promise((yes, no) => {resolve = yes; reject = no;}); return {promise, resolve, reject};};
 let mountAlbumTopsView, mountSharePlaylist, mountAlbumTops;
@@ -48,8 +48,8 @@ function search(root, value) {
   assert.ok(input, 'canonical SearchInput exists'); input.value = value;
   input.dispatchEvent(new input.ownerDocument.defaultView.Event('input'));
 }
-function nativeRuntime(t) {
-  const native = actualChoiceEnvironment(), calls = {owners: [], closes: [], confirms: []};
+function nativeRuntime(t, options = {}) {
+  const native = actualChoiceEnvironment(options), calls = {owners: [], closes: [], confirms: []};
   const open = native.runtime.openForm;
   native.runtime.openForm = options => {
     const owner = open({...options, onMount(host, close) {
@@ -64,10 +64,13 @@ function nativeRuntime(t) {
   native.runtime.confirm = async (...args) => {calls.confirms.push(args); return false;};
   native.runtime.confirmRetryOriginal = async () => false;
   const owners = [];
-  if (t) t.after(() => {
+  if (t) t.after(async () => {
     let failure;
     try {
       for (const owner of owners.reverse()) {try {owner.dispose();} catch (error) {failure ??= error;}}
+      // The persistent modal shell resets pointer origin after the click task.
+      // Let that zero-delay task complete naturally; do not clear timers in the fixture.
+      await nextTask();
       native.assertClean(); if (failure) throw failure;
     } finally {native.host.remove();}
   });

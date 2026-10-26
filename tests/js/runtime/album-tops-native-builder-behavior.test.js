@@ -57,7 +57,16 @@ test('native keyboard reorder changes actual draft order and retains the keyed m
     assert.equal(backend.count('execute'), 0);
     env.controller.observeDenial(env.controller.getSnapshot().scopeKey, Object.assign(new Error('Denied'), {status: 403}));
     move.dispatchEvent(new env.context.Event('keydown', {key: 'Home'}));
-    assert.deepEqual(env.draft.getSnapshot().items.map(row => row.album_ref), [id(12), id(11)]);
+    assert.equal(env.draft.isRetired(), true);
+    for (const key of ['title', 'description', 'query']) assert.equal(env.draft.getSnapshot()[key], '');
+    assert.deepEqual(env.draft.getSnapshot().items, []);
+    assert.equal(backend.count('execute'), 0);
+    await env.controller.load(); await env.controller.open(TOP);
+    move.dispatchEvent(new env.context.Event('keydown', {key: 'Home'}));
+    assert.equal(env.draft.isRetired(), true);
+    assert.deepEqual(env.draft.getSnapshot().items, []);
+    for (const key of ['title', 'description', 'query']) assert.equal(env.draft.getSnapshot()[key], '');
+    assert.equal(await env.draft.submit(), false); assert.equal(backend.count('execute'), 0);
   } finally {env.dispose();}
   env.assertClean();
 });

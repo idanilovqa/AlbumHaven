@@ -59,7 +59,7 @@ test('same-revision item grant revocation during publication preview blocks the 
 
 function wireDetail(patch={}){
   return {top_ref:F.TOP,revision:'7',title:'Top',description:'',visibility:'private',
-    allowed_actions:{[F.BROWSE]:true,[F.MANAGE]:true,[F.ITEMS]:true,can_edit:true,can_add:true,can_remove:true,can_reorder:true},
+    allowed_actions:{[F.BROWSE]:true,[F.MANAGE]:true,[F.ITEMS]:true,can_read:true,can_edit:true,can_add:true,can_remove:true,can_reorder:true},
     items:[{ref:F.IA,catalog_ref:F.A,title:'Album',artist_display:'Artist',release_year:2001,original_position:1,curator_position:1}],
     edit_draft:{items:[{item_ref:F.IA,album_ref:F.A}],publication_preview_required:false},...patch};
 }

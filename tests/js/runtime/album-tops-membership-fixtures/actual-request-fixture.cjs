@@ -28,7 +28,7 @@ function fixture(testContext) {
     AlbumHavenHomeRuntime: {}, activeAppConfirmDialog: null, activeAppFormDialog: null,
     closeArtistsDrawer() {events.push('drawer');},
     startupMetrics: {markOnce() {}, schedulePaintMark() {}, completeInitialRefresh() {}, completeVisibleInitialRefresh() {}},
-    appBootstrap: {}, getTrackModalElements: () => ({overlay: null}),
+    getTrackModalElements: () => ({overlay: null}),
     getAlbumRequestKey: value => value?.key || '', getAlbumIdentity: value => value?.key || '',
     getIndexedAlbum: key => c.state.gallery.albumIndex.get(key) || null,
     buildApiUrl: () => '/view-data?surface=albums&gallery_page_size=50', parseUrlStateFromUrl: () => ({}),
@@ -48,6 +48,13 @@ function fixture(testContext) {
     },
   });
   const load = file => vm.runInContext(fs.readFileSync(path.join(F.ROOT, 'music_app/static/js', file), 'utf8'), c, {filename: file});
+  const suppliedState = c.state;
+  for (const file of ['runtime/bootstrap-state.js', 'runtime/response-state-helpers.js', 'runtime/core-state-and-helpers.js']) load(file);
+  // Retain this fixture's navigation/view inputs in the actual core-owned state.
+  // Its real sidebar renderer naturally returns when no sidebar DOM is mounted.
+  c.state = Object.assign(vm.runInContext('state', c), suppliedState);
+  assert.equal(c.state, vm.runInContext('state', c));
+  assert.equal(typeof c.renderSidebar, 'function');
   for (const file of ['runtime/private-ui-transport.js', 'runtime/browser-navigation-helpers.js', 'runtime/track-actions.js',
     'runtime/track-modal-lightbox-helpers.js', 'runtime/gallery-refresh-and-status.js']) load(file);
   // Preserve the genuine response admission and ownership decisions. Isolate

@@ -5,8 +5,9 @@ const {load, id, ALBUM, ACTIONS: EXISTING_ACTIONS, labels, fixture, measure, nav
 
 // Add is independently authorized and precedes the retained management actions.
 const ACTIONS = ['Add albums', ...EXISTING_ACTIONS];
-const EMPTY_READ_ACTIONS = ['Filter'];
-const POPULATED_READ_ACTIONS = ['Filter', 'Rows', 'Cards', 'No info'];
+const SAMPLE_ACTION = 'Create sample playlist';
+const EMPTY_READ_ACTIONS = ['Filter', SAMPLE_ACTION];
+const POPULATED_READ_ACTIONS = ['Filter', 'Rows', 'Cards', 'No info', SAMPLE_ACTION];
 
 test('directory delegates its one Create action to the shared Tools capsule', async t => {
   const h = await fixture(t, {selected: false}), header = h.header();
@@ -25,6 +26,10 @@ test('detail delegates current ordered actions once and Back remains leading', a
   assert.deepEqual(labels(h.host), ['Back', ...EMPTY_READ_ACTIONS, ...ACTIONS]);
   assert.equal(h.button(capsule, 'Filter').disabled, true, 'true-empty Top retains a disabled Filter');
   for (const label of ACTIONS) {assert.equal(h.host.querySelectorAll('button').filter(node => node.getAttribute('aria-label') === label).length, 1); assert.ok(h.button(capsule, label));}
+  const sample = h.button(capsule, SAMPLE_ACTION);
+  assert.equal(sample.textContent.trim(), '', 'sample action content is icon-only');
+  assert.ok(sample.querySelector('svg')); assert.equal(sample.getAttribute('aria-label'), SAMPLE_ACTION);
+  assert.equal(sample.disabled, true, 'absent current sample authority cannot enable the action');
   assert.equal(capsule.querySelector('[aria-label="Back"]'), null); assert.match(h.host.innerHTML, /Top &lt;safe&gt;/);
 });
 
@@ -36,9 +41,11 @@ test('shared capsule retains strict current action projections and busy state', 
     const h = await fixture(t); h.replace({...h.state(), mutation});
     const actions = h.header().querySelector('.home-header__primary-actions').querySelectorAll('button');
     assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), [...EMPTY_READ_ACTIONS, ...ACTIONS]);
-    assert.equal(actions.length, ACTIONS.length + 2, 'Filter and hidden Reset join the unchanged management controls');
+    assert.equal(actions.length, ACTIONS.length + 4, 'Filter, sample, hidden Reset and hidden Update listening join unchanged management controls');
     for (const action of actions) assert.equal(action.disabled, true);
     assert.ok(h.header().querySelector('[aria-label="Reset filters"]').closest('[hidden]'));
+    const updateListening = actions.find(node => node.textContent.trim() === 'Update listening');
+    assert.ok(updateListening); assert.ok(updateListening.closest('[hidden]'));
   }
   const h = await fixture(t); h.replace({...h.state(), detail: {status: 'denied', data: null}});
   assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), []);
@@ -82,7 +89,7 @@ test('inline draft header reuses shared header with exact field/action nodes and
   const header = h.header(), form = h.host.querySelector('form'), fields = form.querySelector('.album-top-builder__identity'), actions = form.querySelector('.playlists__actions');
   assert.ok(form); assert.equal(header.querySelector('.gallery-bar__title').firstChild, fields);
   assert.equal(actions.parentNode, header.querySelector('.home-header__primary-actions'));
-  assert.deepEqual(labels(header), ['Back', 'Save', 'Cancel']);
+  assert.deepEqual(labels(header), ['Back', 'Save', 'Cancel', SAMPLE_ACTION]);
   const input = fields.querySelector('[name="top-name"]'), save = h.button(actions, 'Save'), cancel = h.button(actions, 'Cancel');
   h.input(input, 'Draft'); h.render();
   assert.equal(h.header(), header); assert.equal(form.querySelector('.album-top-builder__identity'), fields); assert.equal(form.querySelector('.playlists__actions'), actions);
@@ -146,7 +153,7 @@ test('ordinary saved Top Edit uses actual inline navigation and returns focus af
   const form = h.host.querySelector('form.album-top-inline-edit'); assert.ok(form);
   assert.equal(original.isConnected, false); assert.equal(opener.isConnected, false);
   assert.equal(h.modal().hidden, true); assert.equal(h.opens.length, 0);
-  assert.deepEqual(labels(h.header()), ['Back', 'Save', 'Cancel']);
+  assert.deepEqual(labels(h.header()), ['Back', 'Save', 'Cancel', SAMPLE_ACTION]);
   const input = form.querySelector('[name="top-name"]'); h.input(input, 'Unsaved title');
   h.click(h.button(form, 'Cancel')); await drain();
   assert.equal(h.document.getElementById('app-confirm-modal').hidden, false);
@@ -274,4 +281,19 @@ test('admitted Cancel callback is inert when disposed before its first dispatch'
     retiredCallback(); await drain();
     assert.equal(h.document.activeElement, external); assert.equal(h.host.querySelector('[data-shared-header]'), null);
   } finally {external?.remove();}
+});
+
+test('sample action accessible name is distinct from the actual visible editor title', async () => {
+  const {actualChoiceEnvironment} = require('./album-tops-native-fixtures/actual-choice-runtime.cjs');
+  const {controllerFixture, parent} = require('./sample-native-fixtures.cjs');
+  const env = actualChoiceEnvironment(), sample = await controllerFixture();
+  const {mountSamplePlaylistPage} = await load('playlists/native-sample-playlist.mjs');
+  const editor = mountSamplePlaylistPage(env.host, env.runtime, {controller: sample.controller, parent: parent()});
+  try {
+    const page = env.host.querySelector('main[aria-label="Temporary Sample Playlist"]'); assert.ok(page);
+    assert.equal(page.querySelector('h2').textContent, 'Sample Playlist');
+    assert.notEqual(page.querySelector('h2').textContent, SAMPLE_ACTION);
+    assert.equal(sample.calls.capture.length, 0); assert.equal(sample.calls.save.length, 0);
+  } finally {editor.dispose(); sample.controller.dispose();}
+  await nextTask(); env.assertClean();
 });

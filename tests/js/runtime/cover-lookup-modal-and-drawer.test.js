@@ -208,6 +208,94 @@ require('node:test')('notification rerenders retain only each task\'s own unchan
   assert.equal(replacementFailed.replacedWith, undefined);
 });
 
+require('node:test')('notification URL transition keeps its decoded task image until the replacement loads', () => {
+  const listeners = {};
+  const retained = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const replacement = {
+    complete: false,
+    naturalWidth: 0,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=2' : '',
+    addEventListener(type, handler) { listeners[type] = handler; },
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  let rendered = false;
+  const taskNode = (image) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'angels-task' : '',
+    querySelector: () => image,
+  });
+  const body = {
+    querySelectorAll: () => [taskNode(rendered ? replacement : retained)],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated card</div>');
+
+  assert.strictEqual(replacement.replacedWith, retained);
+  assert.equal(retained.replacedWith, undefined);
+  replacement.complete = true;
+  replacement.naturalWidth = 320;
+  listeners.load();
+  assert.strictEqual(retained.replacedWith, replacement);
+});
+
+require('node:test')('notification URL transition rejects an older replacement after a newer URL wins', () => {
+  const retained = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const replacement = (src) => {
+    const listeners = {};
+    return {
+      complete: false,
+      naturalWidth: 0,
+      listeners,
+      getAttribute: (name) => name === 'src' ? src : '',
+      addEventListener(type, handler) { listeners[type] = handler; },
+      replaceWith(image) { this.replacedWith = image; },
+    };
+  };
+  const first = replacement('/cover?album=angels&v=2');
+  const second = replacement('/cover?album=angels&v=3');
+  const render = (nextImage) => {
+    let rendered = false;
+    const taskNode = (image) => ({
+      getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'angels-task' : '',
+      querySelector: () => image,
+    });
+    const body = {
+      querySelectorAll: () => [taskNode(rendered ? nextImage : retained)],
+    };
+    Object.defineProperty(body, 'innerHTML', {
+      get() { return ''; },
+      set() { rendered = true; },
+    });
+    return body;
+  };
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(render(first), '<div>v2 card</div>');
+  context.replaceCoverLookupDrawerMarkup(render(second), '<div>v3 card</div>');
+  first.complete = true;
+  first.naturalWidth = 320;
+  first.listeners.load();
+  assert.equal(retained.replacedWith, undefined);
+  second.complete = true;
+  second.naturalWidth = 320;
+  second.listeners.load();
+  assert.strictEqual(retained.replacedWith, second);
+});
+
 require('node:test')('notification thumbnails prefer the current user cover over stale lookup artwork', () => {
   const { context, bodyElement } = createDrawerHarness({
     buildAlbumDisplayCoverUrl: () => '/images/stale-lookup-cover.jpg',

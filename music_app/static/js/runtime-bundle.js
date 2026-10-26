@@ -30066,9 +30066,34 @@ function replaceCoverLookupDrawerMarkup(body, markup) {
     const taskId = String(taskElement.getAttribute?.('data-open-cover-lookup-task') || '');
     const retained = retainedImages.get(taskId);
     const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
-    if (retained && image && retained.src === String(image.getAttribute?.('src') || '')) {
+    if (!retained || !image) return;
+    const desiredSrc = String(image.getAttribute?.('src') || '');
+    if (retained.src === desiredSrc) {
+      delete retained.image.__coverLookupReplacementSrc;
       image.replaceWith(retained.image);
+      return;
     }
+    if (!desiredSrc || retained.image.complete !== true || Number(retained.image.naturalWidth || 0) <= 0) return;
+
+    retained.image.__coverLookupReplacementSrc = desiredSrc;
+    image.loading = 'eager';
+    image.replaceWith(retained.image);
+    const promoteReplacement = () => {
+      if (
+        retained.image.__coverLookupReplacementSrc !== desiredSrc
+        || image.complete !== true
+        || Number(image.naturalWidth || 0) <= 0
+      ) return;
+      delete retained.image.__coverLookupReplacementSrc;
+      retained.image.replaceWith(image);
+    };
+    image.addEventListener?.('load', promoteReplacement, { once: true });
+    image.addEventListener?.('error', () => {
+      if (retained.image.__coverLookupReplacementSrc === desiredSrc) {
+        delete retained.image.__coverLookupReplacementSrc;
+      }
+    }, { once: true });
+    if (image.complete === true) promoteReplacement();
   });
 }
 

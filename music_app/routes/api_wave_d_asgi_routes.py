@@ -52,7 +52,10 @@ from music_app.services.cover_lookup_tasks import (
 from music_app.services.cover_lookup_notifications import load_cover_lookup_notification
 from music_app.services.cover_manual_links import add_manual_cover_candidates_from_urls
 from music_app.services.client_surfaces import client_surface_from_request
-from music_app.services.cover_provider_candidates import is_provider_lookup_match
+from music_app.services.cover_provider_candidates import (
+    is_provider_lookup_match,
+    is_remote_cover_candidate_selectable,
+)
 from music_app.services.cover_refresh_runtime import (
     cancel_cover_refresh_status,
     start_manual_cover_refresh_request,
@@ -1412,7 +1415,10 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         return _json_response(_task_not_found_response("Lookup task"))
     if not selected_match:
         return _json_response(({"ok": False, "error": "Selected remote candidate was not found"}, 404))
-    if str(selected_match.get("art_kind") or "cover") != "cover":
+    if not is_remote_cover_candidate_selectable(
+        source=selected_match.get("source"),
+        art_kind=selected_match.get("art_kind"),
+    ):
         return _json_response(
             (
                 {
@@ -1422,6 +1428,8 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
                 400,
             )
         )
+    if str(selected_match.get("art_kind") or "cover") != "cover":
+        selected_match = {**selected_match, "display_only": False}
     update_cover_lookup_task(
         task_id,
         config=config,

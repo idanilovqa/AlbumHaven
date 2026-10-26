@@ -3303,6 +3303,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
         lookup_group: 'services',
         art_kind: 'other',
         art_label: 'Booklet image 2',
+        display_only: true,
         url: 'https://images.example/discogs-booklet.jpg',
       },
       {
@@ -3335,7 +3336,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   const discogsHeading = bodyElement.innerHTML.indexOf('>Discogs<');
   const discogsFront = bodyElement.innerHTML.indexOf('data-select-remote-cover="discogs-front"');
-  const discogsBooklet = bodyElement.innerHTML.indexOf('data-cover-lookup-other-remote-art="1"', discogsFront);
+  const discogsBooklet = bodyElement.innerHTML.indexOf('data-select-remote-cover="discogs-booklet"');
   const caaHeading = bodyElement.innerHTML.indexOf('>Cover Art Archive<');
   const caaFront = bodyElement.innerHTML.indexOf('data-select-remote-cover="caa-front"');
   const caaBookletUrl = bodyElement.innerHTML.indexOf('caa-booklet.jpg');
@@ -3344,6 +3345,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   assert.ok(caaHeading < caaFront && caaFront < caaBookletUrl);
   assert.match(bodyElement.innerHTML, /data-cover-lookup-provider-group="discogs"/);
   assert.match(bodyElement.innerHTML, /data-cover-lookup-provider-group="cover_art_archive"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /is-preview-only[^>]*data-select-remote-cover="discogs-booklet"/);
+  assert.match(bodyElement.innerHTML, /data-cover-lookup-other-remote-art="1" data-cover-lookup-item-key="remote:caa-booklet"/);
   assert.equal(
     (bodyElement.innerHTML.match(/class="cover-lookup-art-preview-image"[^>]*loading="lazy"/g) || []).length,
     4,

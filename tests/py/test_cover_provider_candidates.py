@@ -444,6 +444,29 @@ def test_cover_candidate_to_lookup_match_marks_only_spotify_display_only(
     assert match["display_only"] is expected_display_only
 
 
+@pytest.mark.parametrize(
+    ("source", "expected_display_only"),
+    [
+        ("discogs", False),
+        ("cover_art_archive", True),
+    ],
+)
+def test_cover_candidate_to_lookup_match_allows_only_discogs_secondary_art_selection(
+    source: str,
+    expected_display_only: bool,
+):
+    match = cover_candidate_to_lookup_match(
+        CoverCandidate(
+            source=source,
+            url=f"https://{source}.example/booklet.jpg",
+            debug_payload={"art_kind": "other", "art_label": "Booklet"},
+        ),
+        lookup_group="services",
+    )
+
+    assert match["display_only"] is expected_display_only
+
+
 def test_dedupe_cover_candidates_sorts_by_score_area_and_casefolded_url():
     candidates = [
         CoverCandidate(source="deezer", url="https://images.example/b.jpg", score=0.80, width=1000, height=1000),

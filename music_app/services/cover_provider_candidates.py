@@ -118,6 +118,18 @@ DISPLAY_ONLY_REMOTE_SOURCES = {
     "spotify",
 }
 
+
+def is_remote_cover_candidate_selectable(
+    *,
+    source: object,
+    art_kind: object,
+) -> bool:
+    normalized_art_kind = str(art_kind or "cover").strip() or "cover"
+    return normalized_art_kind == "cover" or (
+        str(source or "").strip().casefold() == "discogs"
+        and normalized_art_kind == "other"
+    )
+
 CURRENT_USE_CANDIDATE_DEBUG_FIELDS = frozenset({
     "album_url",
     "art_kind",
@@ -410,6 +422,7 @@ def cover_candidate_to_lookup_match(candidate: CoverCandidate, *, lookup_group: 
     variant = str(debug_payload.get("variant") or "")
     art_kind = str(debug_payload.get("art_kind") or "cover").strip() or "cover"
     art_label = str(debug_payload.get("art_label") or "").strip()
+    source_display_only = candidate.source in DISPLAY_ONLY_REMOTE_SOURCES
     normalized_url = normalize_remote_image_url(candidate.url)
     thumbnail_url = normalize_remote_image_url(str(debug_payload.get("thumbnail_url") or candidate.url or "").strip())
     candidate_key = "|".join([
@@ -438,7 +451,10 @@ def cover_candidate_to_lookup_match(candidate: CoverCandidate, *, lookup_group: 
         "album_url": album_url,
         "query_mode": query_mode,
         "variant": variant,
-        "display_only": candidate.source in DISPLAY_ONLY_REMOTE_SOURCES or art_kind != "cover",
+        "display_only": source_display_only or not is_remote_cover_candidate_selectable(
+            source=candidate.source,
+            art_kind=art_kind,
+        ),
         "art_kind": art_kind,
         "art_label": art_label,
     }

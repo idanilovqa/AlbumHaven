@@ -29792,6 +29792,14 @@ function normalizeCoverLookupCandidateUrl(value) {
   return normalized;
 }
 
+function isSelectableRemoteCoverCandidate(candidate) {
+  const artKind = String(candidate?.art_kind || 'cover');
+  return artKind === 'cover' || (
+    String(candidate?.source || '').toLowerCase() === 'discogs'
+    && artKind === 'other'
+  );
+}
+
 function sanitizeCoverLookupPossibleMatches(value) {
   if (!Array.isArray(value)) return [];
   const seenIds = new Set();
@@ -30280,6 +30288,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
+  const isSelectableOtherRemoteArt = isOtherRemoteArt && isSelectableRemoteCoverCandidate(item);
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
@@ -30316,7 +30325,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
         && !String(state.coverLookup.modal.pendingPastedImageId || '')
         && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
       )
-      : (!isOtherRemoteArt && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
+      : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
+        && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
   const itemIdentity = kind === 'local'
     ? String(item?.path || '')
     : kind === 'pasted'
@@ -30325,7 +30335,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const itemKeyAttr = itemIdentity
     ? `data-cover-lookup-item-key="${escapeHtml(`${kind}:${itemIdentity}`)}"`
     : '';
-  const selectAttr = isOtherRemoteArt
+  const selectAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'data-cover-lookup-other-remote-art="1"'
     : kind === 'pasted'
     ? `data-select-pasted-cover="${escapeHtml(item.id || '')}"`
@@ -30353,7 +30363,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const actionLabel = kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
-  const roleAttr = isOtherRemoteArt ? 'role="group"' : 'role="button" tabindex="0"';
+  const roleAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
+    ? 'role="group"'
+    : 'role="button" tabindex="0"';
   const fallbackPreviewHtml = `
     <span class="cover-lookup-art-preview-fallback">
       <img src="${previewFallbackImageUrl}" alt="Remote preview unavailable" loading="eager" decoding="async">
@@ -30361,7 +30373,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
   return `
     <div class="cover-lookup-art-card-shell">
-      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
+      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
         ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
@@ -30378,7 +30390,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
           ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
-          ${isOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
+          ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
     </div>
@@ -31438,6 +31450,7 @@ function selectRemoteCoverFromLookup(candidateId) {
   const selectedCandidate = (state.coverLookup.modal.possibleMatches || []).find((candidate) => (
     String(candidate?.id || '') === String(candidateId || '')
   ));
+  if (!isSelectableRemoteCoverCandidate(selectedCandidate)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
@@ -31496,6 +31509,7 @@ async function saveRemoteCoverFromLookup() {
   if (!album || (!taskId && !snapshotGeneration) || !candidateId || state.coverLookup.modal.saving) return;
   const previousAlbum = deepCloneJson(album);
   const selectedMatch = (state.coverLookup.modal.possibleMatches || []).find((item) => String(item?.id || '') === String(candidateId || ''));
+  if (!isSelectableRemoteCoverCandidate(selectedMatch)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
   state.coverLookup.modal.saving = true;
   syncCoverLookupSaveButton();

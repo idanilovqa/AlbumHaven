@@ -2932,6 +2932,64 @@ def test_asgi_cover_lookup_save_remote_honors_serialized_provider_storage_policy
     assert queued_image["display_only"] is expected_display_only
 
 
+def test_asgi_cover_lookup_save_remote_allows_explicit_discogs_secondary_art_selection(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
+    candidate = cover_candidate_to_lookup_match(
+        CoverCandidate(
+            source="discogs",
+            url="https://images.example/discogs-booklet.jpg",
+            debug_payload={"art_kind": "other", "art_label": "Booklet"},
+        ),
+        lookup_group="services",
+    )
+    candidate["display_only"] = True  # Existing snapshots used the old preview-only policy.
+    task_id, _ = cover_lookup_tasks.create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+    )
+    cover_lookup_tasks.update_cover_lookup_task(
+        task_id,
+        status="completed",
+        possible_matches=[candidate],
+    )
+    queued_calls = []
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *args, **kwargs: queued_calls.append({"args": args, "kwargs": kwargs}),
+    )
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": _album_payload(track_path),
+            "task_id": task_id,
+            "candidate_id": candidate["id"],
+        },
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["queued"] is True
+    assert payload["optimistic_cover_path"] == str(track_path.parent / "cover.jpg")
+    assert len(queued_calls) == 1
+    assert queued_calls[0]["args"][4]["art_kind"] == "other"
+    assert queued_calls[0]["args"][4]["display_only"] is False
+
+
 def test_asgi_cover_lookup_save_remote_rejects_obsolete_snapshot_generation_before_queueing(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 

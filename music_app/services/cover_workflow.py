@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import tempfile
+from contextlib import contextmanager
 from threading import Lock
 from typing import Callable
 
@@ -672,13 +673,19 @@ def _release_local_cover_selection_lock(lock_key: str, selection_lock: Lock) -> 
             )
 
 
-def run_serialized_cover_selection(album_root: Path, action: Callable[[], object]) -> object:
-    """Run a short cover write/persist/apply transaction under the album lock."""
+@contextmanager
+def local_cover_selection_lock(album_root: Path):
     lock_key, selection_lock = _acquire_local_cover_selection_lock(album_root)
     try:
-        return action()
+        yield
     finally:
         _release_local_cover_selection_lock(lock_key, selection_lock)
+
+
+def run_serialized_cover_selection(album_root: Path, action: Callable[[], object]) -> object:
+    """Run a short cover write/persist/apply transaction under the album lock."""
+    with local_cover_selection_lock(album_root):
+        return action()
 
 
 def cover_revision_for_path(cover_path: Path) -> str:

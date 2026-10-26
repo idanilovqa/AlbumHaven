@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import atexit
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from threading import Lock
 from time import perf_counter
 
@@ -132,6 +132,37 @@ def _lease_connection(
                 elapsed_ms=(perf_counter() - acquired_at) * 1000,
                 pool=pool,
             )
+
+
+@contextmanager
+def cover_lock_connection(database_url: str):
+    """Lease an autocommit session reserved for cover advisory locks."""
+    if not isinstance(database_url, str) or not database_url.strip():
+        raise RuntimeError("Postgres configuration required.")
+    if ConnectionPool is None:
+        raise RuntimeError("psycopg pool support required; install requirements.")
+    pool_key = ("dedicated", database_url, "cover-lock")
+    with _lock:
+        pool = _pools.get(pool_key)
+        if pool is None:
+            pool = ConnectionPool(
+                conninfo=database_url,
+                min_size=0,
+                max_size=4,
+                max_waiting=32,
+                timeout=30,
+                max_idle=120,
+                max_lifetime=600,
+                kwargs={"autocommit": True},
+                open=True,
+            )
+            _pools[pool_key] = pool
+    with ExitStack() as stack:
+        try:
+            connection = stack.enter_context(pool.connection())
+        except PoolTimeout as exc:
+            raise RuntimeError("Postgres connection pool exhausted.") from exc
+        yield connection
 
 
 def prewarm_connection_pool(database_url: str) -> None:

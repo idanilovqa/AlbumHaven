@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 from copy import deepcopy
 import io
 from pathlib import Path
@@ -226,6 +227,86 @@ def test_serialized_same_album_cover_promotions_run_in_order_and_release_lock(
     assert canonical_cover.read_bytes() == second_bytes
     with cover_workflow._LOCAL_COVER_SELECTION_LOCKS_GUARD:
         assert lock_key not in cover_workflow._LOCAL_COVER_SELECTION_LOCKS
+
+
+def test_local_cover_selection_lock_releases_after_body_exception(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    album_root = tmp_path / "Artist" / "Album"
+    selection_lock = object()
+    events: list[object] = []
+    body_error = RuntimeError("body failed")
+
+    def acquire(_album_root):
+        events.append("acquire")
+        return "lock-key", selection_lock
+
+    def release(lock_key, lock):
+        events.append(("release", lock_key, lock))
+
+    monkeypatch.setattr(
+        cover_workflow,
+        "_acquire_local_cover_selection_lock",
+        acquire,
+    )
+    monkeypatch.setattr(
+        cover_workflow,
+        "_release_local_cover_selection_lock",
+        release,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        with cover_workflow.local_cover_selection_lock(album_root):
+            events.append("body")
+            raise body_error
+
+    assert exc_info.value is body_error
+    assert events == [
+        "acquire",
+        "body",
+        ("release", "lock-key", selection_lock),
+    ]
+
+
+def test_run_serialized_cover_selection_uses_public_lock_lifecycle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    album_root = tmp_path / "Artist" / "Album"
+    events = []
+
+    @contextmanager
+    def public_lock(actual_album_root):
+        assert actual_album_root == album_root
+        events.append("acquire")
+        try:
+            yield
+        finally:
+            events.append("release")
+
+    def reject_private_lifecycle(*_args):
+        raise AssertionError("private lock lifecycle must stay owned by the public context")
+
+    monkeypatch.setattr(cover_workflow, "local_cover_selection_lock", public_lock)
+    monkeypatch.setattr(
+        cover_workflow,
+        "_acquire_local_cover_selection_lock",
+        reject_private_lifecycle,
+    )
+    monkeypatch.setattr(
+        cover_workflow,
+        "_release_local_cover_selection_lock",
+        reject_private_lifecycle,
+    )
+
+    result = cover_workflow.run_serialized_cover_selection(
+        album_root,
+        lambda: events.append("body") or "result",
+    )
+
+    assert result == "result"
+    assert events == ["acquire", "body", "release"]
 
 
 def test_local_cover_promotion_atomically_replaces_canonical_for_concurrent_readers(

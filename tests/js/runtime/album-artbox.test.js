@@ -114,7 +114,7 @@ test('AlbumArtbox CSS makes every state square', () => {
   assert.match(css, /\.album-artbox\s*\{[^}]*aspect-ratio:\s*1\s*\/\s*1/s);
 });
 
-test('AlbumArtbox shows complete artwork consistently across cards and album details', () => {
+test('album artwork stretches into every fixed display box without cropping or bars', () => {
   const componentCss = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-artbox-and-gallery-card.css'),
     'utf8',
@@ -131,11 +131,30 @@ test('AlbumArtbox shows complete artwork consistently across cards and album det
     path.join(repoRoot, 'music_app', 'static', 'css', 'mobile-layout.css'),
     'utf8',
   );
+  const lookupCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'cover-lookup-modal.css'),
+    'utf8',
+  );
+  const drawerCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'cover-lookup-drawer-and-related.css'),
+    'utf8',
+  );
+  const utilitiesCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
+    'utf8',
+  );
 
-  assert.match(componentCss, /\.album-artbox img\s*\{[^}]*object-fit:\s*contain/s);
+  assert.match(componentCss, /:root\s*\{[^}]*--album-art-fit:\s*fill/s);
+  assert.match(componentCss, /\.album-artbox img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(mobileCss, /\.mobile-page-cover\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(lookupCss, /\.cover-lookup-manual-attachment img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(lookupCss, /\.cover-lookup-art-preview-image\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(lookupCss, /\.version-picker-option-cover img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(drawerCss, /\.cover-lookup-task-cover\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(utilitiesCss, /\.utility-detail-cover-image\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
+  assert.match(utilitiesCss, /\.tag-editor-artwork img,[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.doesNotMatch(galleryCss, /\.cover img\s*\{[^}]*object-fit:/s);
   assert.doesNotMatch(albumDetailsCss, /\.track-modal-cover(?:-button)? img\s*\{[^}]*object-fit:/s);
-  assert.doesNotMatch(mobileCss, /\.track-modal-cover :is\(img, \.album-artbox\)\s*\{[^}]*object-fit:/s);
 });
 
 test('AlbumArtbox action rail preserves expansion room without making the artbox a hover target', () => {

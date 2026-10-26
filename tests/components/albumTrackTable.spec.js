@@ -410,7 +410,7 @@ test('Editorial table aligns left while its final 1px outline fades into the ori
 
 
 test('decoded Album Details artwork stays square and visible while only tracks scroll at short desktop heights', async ({ page }) => {
-  const art = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><rect width="480" height="480" fill="teal"/></svg>');
+  const art = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360"><rect width="480" height="360" fill="teal"/></svg>');
   for (const { height, trackCount } of [{ height: 960, trackCount: 5 }, { height: 400, trackCount: 30 }]) {
     await page.setViewportSize({ width: 1440, height });
     await page.route('http://album-track-table-component.test/artwork', route => route.fulfill({
@@ -441,11 +441,14 @@ test('decoded Album Details artwork stays square and visible while only tracks s
       const rect = img.getBoundingClientRect(), cover = img.closest('.track-modal-cover').getBoundingClientRect();
       const list = document.querySelector('.track-modal-list'), dialog = document.querySelector('.track-modal-dialog');
       return { width: rect.width, height: rect.height, coverHeight: cover.height, complete: img.complete, naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight, objectFit: getComputedStyle(img).objectFit,
         listScroll: list.scrollHeight > list.clientHeight, listOverflow: getComputedStyle(list).overflowY,
         dialogOverflow: getComputedStyle(dialog).overflowY, dialogBottom: dialog.getBoundingClientRect().bottom };
     });
     expect(geometry.complete).toBe(true);
     expect(geometry.naturalWidth).toBe(480);
+    expect(geometry.naturalHeight).toBe(360);
+    expect(geometry.objectFit).toBe('fill');
     expect(geometry.width).toBeGreaterThan(0);
     expect(geometry.width).toBeCloseTo(geometry.height, 0);
     expect(geometry.height).toBeLessThanOrEqual(geometry.coverHeight);

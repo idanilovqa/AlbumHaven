@@ -118,8 +118,11 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
       await searchToolbarActions.search(MULTI_DISC_ALBUM, { submitWithEnter: true });
       await searchToolbarActions.waitForQuery(MULTI_DISC_ALBUM);
       await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
+      await expect(galleryActions.galleryPage.albumCard.coverImageByAlbumName(MULTI_DISC_ALBUM))
+        .toHaveCSS('object-fit', 'fill');
       await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);
       await trackModalActions.waitForReady();
+      await expect(trackModalActions.trackModal.coverImage).toHaveCSS('object-fit', 'fill');
       await expect(trackModalActions.trackModal.header).toHaveAttribute('data-album-details-layout', layout);
       await expect(trackModalActions.trackModal.headerActions).toHaveCount(3);
       for (const action of await trackModalActions.trackModal.headerActions.all()) {

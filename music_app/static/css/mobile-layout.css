@@ -24,7 +24,7 @@
 .player-track-meta { display: contents; }
 .player-empty-message { display: none; }
 .mobile-page-header h1, .mobile-page-header p { margin: 0; }
-.mobile-page-cover { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 6px; object-fit: cover; }
+.mobile-page-cover { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 6px; object-fit: var(--album-art-fit); }
 .mobile-page-outlet { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
 .shell-main-surface.has-mobile-page > :not(.mobile-page-header):not(.mobile-page-outlet) { display: none !important; }
 .mobile-page-outlet > .is-mobile-page {

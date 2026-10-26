@@ -922,7 +922,7 @@
 .utility-detail-cover-image {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: var(--album-art-fit);
   display: block;
 }
 .utility-detail-cover-placeholder {
@@ -1685,7 +1685,7 @@
   height: 52px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  object-fit: cover;
+  object-fit: var(--album-art-fit);
   background: rgba(255,255,255,0.04);
 }
 .tag-editor-artwork-placeholder {

@@ -4355,6 +4355,7 @@ require('node:test')('loading Cover Lookup renders gallery card placeholders', (
   context.state.coverLookup.modal = {
     album: { album_artist: 'Artist', name: 'Album' },
     loading: true,
+    expectedRemoteCount: 4,
     localCovers: [],
     pastedImages: [],
     otherArt: [],
@@ -4365,6 +4366,13 @@ require('node:test')('loading Cover Lookup renders gallery card placeholders', (
 
   assert.match(bodyElement.innerHTML, /cover-lookup-gallery-loading/);
   assert.match(bodyElement.innerHTML, /cover-lookup-task-loading-line/);
+  assert.match(bodyElement.innerHTML, />LOCAL</);
+  assert.match(bodyElement.innerHTML, />OTHER ART</);
+  assert.match(bodyElement.innerHTML, />REMOTE 4 images</);
+  assert.equal(
+    (bodyElement.innerHTML.match(/data-cover-lookup-loading-section="remote"/g) || []).length,
+    4,
+  );
   assert.doesNotMatch(bodyElement.innerHTML, /No images in album folder/);
 });
 

@@ -238,6 +238,7 @@ test('opening a persisted notification renders usable cached art and loads unres
   const idOnlyTask = {
     ...task,
     id: 'id-only-generation',
+    possible_match_count: 4,
     possible_matches: [{ id: 'candidate-without-preview' }],
     best_candidate_id: 'candidate-without-preview',
   };
@@ -278,6 +279,7 @@ test('opening a persisted notification renders usable cached art and loads unres
     renderSnapshots.push({
       loading: context.state.coverLookup.modal.loading,
       candidates: [...context.state.coverLookup.modal.possibleMatches],
+      expectedRemoteCount: context.state.coverLookup.modal.expectedRemoteCount,
     });
   };
   context.renderCoverLookupDrawer = () => {};
@@ -299,6 +301,7 @@ test('opening a persisted notification renders usable cached art and loads unres
   const idOnlyOpenPromise = context.openCoverLookupModal(album, { taskId: idOnlyTask.id });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(renderSnapshots.at(-1).loading, true);
+  assert.equal(renderSnapshots.at(-1).expectedRemoteCount, 4);
 
   resolveGallery({ ok: true, json: async () => ({ ok: true }) });
   await openPromise;

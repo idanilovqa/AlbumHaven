@@ -1931,9 +1931,9 @@ function formatCoverLookupImageCount(count) {
   return `${safeCount} ${safeCount === 1 ? 'image' : 'images'}`;
 }
 
-function buildCoverLookupGalleryLoadingMarkup() {
-  const cards = Array.from({ length: 3 }, () => `
-    <div class="cover-lookup-art-card-shell is-loading" aria-hidden="true">
+function buildCoverLookupGalleryLoadingCards(section, count) {
+  return Array.from({ length: Math.max(1, Number(count || 0) || 0) }, () => `
+    <div class="cover-lookup-art-card-shell is-loading" data-cover-lookup-loading-section="${section}" aria-hidden="true">
       <div class="cover-lookup-art-card">
         <span class="cover-lookup-art-preview"></span>
         <span class="cover-lookup-task-loading-line is-title"></span>
@@ -1941,7 +1941,26 @@ function buildCoverLookupGalleryLoadingMarkup() {
       </div>
     </div>
   `).join('');
-  return `<div class="cover-lookup-gallery cover-lookup-gallery-loading" role="status" aria-label="Loading cover art">${cards}</div>`;
+}
+
+function buildCoverLookupGalleryLoadingMarkup(modalState) {
+  const remoteCount = Math.max(
+    Number(modalState?.expectedRemoteCount || 0) || 0,
+    Array.isArray(modalState?.possibleMatches) ? modalState.possibleMatches.length : 0,
+  );
+  const section = (title, key, count, countKnown = false) => `
+    <section class="cover-lookup-section">
+      <h4 class="cover-lookup-section-title">${title}${countKnown ? ` ${formatCoverLookupImageCount(count)}` : ''}</h4>
+      <div class="cover-lookup-gallery cover-lookup-gallery-loading">
+        ${buildCoverLookupGalleryLoadingCards(key, count)}
+      </div>
+    </section>
+  `;
+  return `<div role="status" aria-label="Loading cover art">
+    ${section('LOCAL', 'local', 1)}
+    ${section('OTHER ART', 'other-art', 1)}
+    ${section('REMOTE', 'remote', remoteCount, remoteCount > 0)}
+  </div>`;
 }
 
 function renderCoverLookupModal() {
@@ -2058,7 +2077,7 @@ function renderCoverLookupModal() {
       `
     : '';
   if (modalState.loading) {
-    els.body.innerHTML = buildCoverLookupGalleryLoadingMarkup();
+    els.body.innerHTML = buildCoverLookupGalleryLoadingMarkup(modalState);
     els.body.scrollTop = 0;
     if (els.saveRemote) {
       els.saveRemote.hidden = false;
@@ -2515,6 +2534,10 @@ async function openCoverLookupModal(album, options = {}) {
       : buildTrackPathSignature(task?.album_payload) === buildTrackPathSignature(album)
   ));
   const cachedCandidates = sanitizeCoverLookupPossibleMatches(matchingTask?.possible_matches);
+  const expectedRemoteCount = Math.max(
+    Number(matchingTask?.possible_match_count || 0) || 0,
+    cachedCandidates.length,
+  );
   const hasCachedPreview = cachedCandidates.some((candidate) => (
     String(candidate?.thumbnail_url || candidate?.url || '').trim()
   ));
@@ -2534,6 +2557,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.candidateGeneration = cachedCandidates.length
     ? String(matchingTask?.id || '')
     : '';
+  state.coverLookup.modal.expectedRemoteCount = expectedRemoteCount;
   state.coverLookup.modal.activeLocalSelectionPath = '';
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
@@ -2584,6 +2608,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.possibleMatches = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = '';
+  state.coverLookup.modal.expectedRemoteCount = 0;
   state.coverLookup.modal.statusText = '';
   state.coverLookup.modal.statusTone = 'neutral';
   state.coverLookup.modal.failureNotice = '';

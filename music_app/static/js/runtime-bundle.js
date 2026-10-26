@@ -5427,6 +5427,7 @@ const state = {
   coverLookup: {
     drawerOpen: false,
     drawerScrollTop: 0,
+    returnToDrawerAfterAlbumDetails: false,
     tasks: [],
     tasksHydrated: false,
     tasksLoadFailed: false,
@@ -28851,6 +28852,7 @@ function openCoverLookupAlbumDetails() {
     state.coverLookup.drawerScrollTop = Number(
       document.getElementById('cover-lookup-drawer-body')?.scrollTop || 0,
     );
+    state.coverLookup.returnToDrawerAfterAlbumDetails = true;
     state.coverLookup.drawerOpen = false;
     renderCoverLookupDrawer();
   }
@@ -45885,6 +45887,11 @@ function cleanupMobilePage(descriptor) {
     setMobilePagePresentation(descriptor.kind, false);
     original.placeholder.replaceWith(element);
     mobilePageState.originals.delete(descriptor.kind);
+  }
+  if (descriptor.kind === 'album' && state.coverLookup?.returnToDrawerAfterAlbumDetails) {
+    state.coverLookup.returnToDrawerAfterAlbumDetails = false;
+    state.coverLookup.drawerOpen = true;
+    renderCoverLookupDrawer();
   }
   return original?.returnFocus;
 }

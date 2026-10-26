@@ -766,7 +766,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
 
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 390, height: 420 });
   const drawerScrollTop = await coverLookupActions.scrollDrawerToEnd();
   expect(drawerScrollTop).toBeGreaterThan(0);
   const readCards = async () => Object.fromEntries(await Promise.all(
@@ -810,8 +810,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
         expect(details.subtitle).toContain(identity.artist);
         expect(details.trackRows).toBeGreaterThan(0);
         await trackModalActions.close();
-        await coverLookupActions.coverLookup.waitForDrawerState(false);
-        await coverLookupActions.openDrawer();
+        await coverLookupActions.waitForDrawerOpen();
       } else if (swipeFirst && index === 0) {
         await coverLookupActions.swipeNotificationMobileSheetDown();
       } else {

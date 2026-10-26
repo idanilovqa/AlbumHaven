@@ -80,6 +80,7 @@ require('node:test')('mobile Cover Lookup album link closes Notifications and re
 
   assert.equal(context.state.coverLookup.drawerOpen, false);
   assert.equal(context.state.coverLookup.drawerScrollTop, 384);
+  assert.equal(context.state.coverLookup.returnToDrawerAfterAlbumDetails, true);
   assert.deepEqual(calls, [['render'], ['close'], ['open', album]]);
 });
 

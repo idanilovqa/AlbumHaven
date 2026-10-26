@@ -274,6 +274,7 @@ function openCoverLookupAlbumDetails() {
     state.coverLookup.drawerScrollTop = Number(
       document.getElementById('cover-lookup-drawer-body')?.scrollTop || 0,
     );
+    state.coverLookup.returnToDrawerAfterAlbumDetails = true;
     state.coverLookup.drawerOpen = false;
     renderCoverLookupDrawer();
   }

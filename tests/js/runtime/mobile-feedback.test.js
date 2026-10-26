@@ -6,7 +6,12 @@ const test = require('node:test');
 const runtime = path.join(__dirname, '../../../music_app/static/js/runtime');
 const preferences = require('../../../music_app/static/js/client-device-preferences.js');
 function load(name, globals = {}) {
-  const context = vm.createContext({ window: { innerWidth: 390 }, console, ...globals });
+  const context = vm.createContext({
+    window: { innerWidth: 390 },
+    console,
+    state: { coverLookup: {} },
+    ...globals,
+  });
   vm.runInContext(fs.readFileSync(path.join(runtime, name), 'utf8'), context);
   return context;
 }
@@ -685,6 +690,30 @@ test('both history Back and direct Back restore the root page viewport, not a hi
     assert.equal(calls[0],position);
   }
 });
+
+test('closing mobile Album Details opened from Notifications restores the drawer', () => {
+  let renders = 0;
+  const context = load('mobile-navigation.js', {
+    document: { getElementById: () => null },
+    state: {
+      coverLookup: {
+        drawerOpen: false,
+        drawerScrollTop: 384,
+        returnToDrawerAfterAlbumDetails: true,
+      },
+    },
+    closeTrackModal() {},
+    renderCoverLookupDrawer() { renders += 1; },
+  });
+
+  context.cleanupMobilePage({ kind: 'album' });
+
+  assert.equal(context.state.coverLookup.drawerOpen, true);
+  assert.equal(context.state.coverLookup.drawerScrollTop, 384);
+  assert.equal(context.state.coverLookup.returnToDrawerAfterAlbumDetails, false);
+  assert.equal(renders, 1);
+});
+
 test('mobile page presentation round-trips the same surfaces and parent stack without closing or rewriting history', () => {
   function node(attributes = {}) {
     const classes = new Set();

@@ -354,6 +354,11 @@ function cleanupMobilePage(descriptor) {
     original.placeholder.replaceWith(element);
     mobilePageState.originals.delete(descriptor.kind);
   }
+  if (descriptor.kind === 'album' && state.coverLookup?.returnToDrawerAfterAlbumDetails) {
+    state.coverLookup.returnToDrawerAfterAlbumDetails = false;
+    state.coverLookup.drawerOpen = true;
+    renderCoverLookupDrawer();
+  }
   return original?.returnFocus;
 }
 function dismissMobilePage(kind) {

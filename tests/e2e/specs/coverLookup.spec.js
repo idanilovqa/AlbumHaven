@@ -719,21 +719,23 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     PARTIAL_COVER_LOOKUP_TARGET,
     COVER_LOOKUP_TARGET,
   ];
-  const expectedCover = findFixtureCoverBySubtitle(
-    Object.values(MANUAL_PROVIDER_COVER).join(' - '),
-  );
-  expect(expectedCover).not.toBeNull();
+  const expectedCovers = [
+    MANUAL_PROVIDER_COVER,
+    { artist: 'Synthetic Cover Artist', album: 'Secondary Cover Fixture', year: 2026 },
+    { artist: 'Synthetic Cover Artist 03', album: 'Portrait Fixture 03', year: 2026 },
+  ].map((identity) => findFixtureCoverBySubtitle(Object.values(identity).join(' - ')));
+  expect(expectedCovers.every(Boolean)).toBe(true);
 
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   const notifications = [];
-  for (const identity of targets) {
+  for (const [index, identity] of targets.entries()) {
     expect(await galleryActions.selectAlbumDetailsByIdentity(identity)).toEqual(identity);
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     await coverLookupActions.setProviderFixtureMode('normal');
-    await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover).slice(1));
+    await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCovers[index]).slice(1));
     const start = await coverLookupActions.startSearch();
     const taskId = String(start.task?.id || '').trim();
     expect(taskId).not.toBe('');
@@ -753,7 +755,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await trackModalActions.openCoverLookup();
   await coverLookupActions.waitForModalReady();
   await coverLookupActions.setProviderFixtureMode('normal');
-  await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover).slice(1));
+  await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCovers[0]).slice(1));
   const repeatedStart = await coverLookupActions.startSearch();
   expect(String(repeatedStart.task?.id || '').trim()).toBe(repeated.taskId);
   await coverLookupActions.closeModal();

@@ -251,6 +251,7 @@ function setCurrentPlayerTrack(track, options = {}) {
     const resolvedCoverPath = String(resolveAlbumForPlayerTrack(track)?.cover_path || '').trim();
     if (resolvedCoverPath) {
       const decorated = { ...track, coverPath: resolvedCoverPath };
+      if (track.albumListeningIntent && typeof bindAlbumListeningIntent === 'function') bindAlbumListeningIntent(decorated, track.albumListeningIntent);
       if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasBinding(track)
         && !TopPlaybackRuntime.alias(track, decorated)) return;
       track = decorated;
@@ -1252,10 +1253,14 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     return;
   }
   const selectedAlbum = typeof getTrackModalSelectionAlbumFor === 'function' ? getTrackModalSelectionAlbumFor(btn) : null;
-  const currentAlbum = selectedAlbum || (!document.getElementById('track-modal')?.hidden
+  // Detached native-action buttons do not belong to an unrelated open album.
+  // Preserve the actual bound modal selection first; fallback is modal-owned.
+  const trackModal = document.getElementById('track-modal');
+  const currentAlbum = selectedAlbum || (trackModal && !trackModal.hidden && trackModal.contains(btn)
     ? state.modalReleases[state.modalReleaseIndex] || null
     : null);
-  const playbackStart = playTrackFromPayload({
+  const listeningIntent = currentAlbum && typeof createAlbumListeningIntent === 'function' ? createAlbumListeningIntent(currentAlbum) : null;
+  const selectedTrack = {
     src,
     path: trackPath, inventory_track_ref: btn.getAttribute('data-inventory-track-ref') || null,
     title: btn.getAttribute('data-track-title') || 'Track',
@@ -1264,12 +1269,11 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     album: btn.getAttribute('data-track-album') || '',
     coverPath: btn.getAttribute('data-track-cover') || '',
     durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
-  });
-  if (currentAlbum) {
-    setAlbumPlaybackQueue(currentAlbum, trackPath);
-  } else {
-    state.player.playbackQueue = null;
-  }
+  };
+  if (listeningIntent && typeof bindAlbumListeningIntent === 'function') bindAlbumListeningIntent(selectedTrack, listeningIntent);
+  const playbackStart = playTrackFromPayload(selectedTrack);
+  if (currentAlbum) setAlbumPlaybackQueue(currentAlbum, trackPath, listeningIntent || undefined);
+  else state.player.playbackQueue = null;
   if (typeof observeStreamingFacadeCallback === 'function') {
     void Promise.resolve(playbackStart).catch(error => console.warn('[AlbumHaven][Playback] Selection failed.', error));
   } else {

@@ -26,23 +26,39 @@ function streamingCaptureSafely(callback) {
 function streamingCaptureBridge(node = streamingEngineState().node) {
   return node ? streamingCaptureOwners.get(node) || null : null;
 }
+function streamingCaptureTransport() {
+  const position = typeof document !== 'undefined'
+    && document.getElementById('app-shell')?.dataset.positionCaptureEnabled === 'true';
+  return Object.freeze({position,
+    contextPath: position ? '/playback/capture/position/context' : '/playback/capture/context',
+    checkpointPath: position ? '/playback/capture/position/checkpoint' : '/playback/capture/checkpoint'});
+}
+function canStartOrdinaryAlbumListening() {
+  const bridge = streamingCaptureBridge();
+  return Boolean(bridge?.positionReady && bridge?.selectionReady && bridge.guard());
+}
 function beginStreamingCaptureContext() {
   if (typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || !PLAYBACK_CAPTURE_ENABLED) return null;
   const scope = typeof capturePlaybackOwnershipScope === 'function' ? capturePlaybackOwnershipScope() : null;
   if (!scope) return null;
   const controller = new AbortController();
-  const current = () => typeof isPlaybackOwnershipScopeCurrent === 'function' && isPlaybackOwnershipScopeCurrent(scope);
+  const transport = streamingCaptureTransport();
+  const current = () => typeof isPlaybackOwnershipScopeCurrent === 'function' && isPlaybackOwnershipScopeCurrent(scope)
+    && PLAYBACK_CAPTURE_ENABLED === true && streamingCaptureTransport().position === transport.position;
   // Start alongside worklet loading. This request never gates audio preparation.
   const promise = Promise.resolve().then(async () => {
     if (!current()) return null;
-    const response = await fetch('/playback/capture/context', {
+    const response = await fetch(transport.contextPath, {
       credentials: 'same-origin', redirect: 'error', cache: 'no-store', signal: controller.signal,
     });
     if (!response.ok || !current()) return null;
     const value = await response.json();
+    if (transport.position && !(Array.isArray(value?.supported_protocols)
+        && value.supported_protocols.includes('app-rendered-position-v2'))) return null;
+    if (!transport.position && value?.supported_protocols?.includes('app-rendered-position-v2')) return null;
     return current() ? value : null;
   }).catch(() => null);
-  return { scope, promise, discard: () => controller.abort() };
+  return { scope, promise, transport, discard: () => controller.abort() };
 }
 function prepareStreamingCapture(engine, context, node, preparedContext = null) {
   if (typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || !PLAYBACK_CAPTURE_ENABLED
@@ -53,11 +69,19 @@ function prepareStreamingCapture(engine, context, node, preparedContext = null) 
   const prepared = preparedContext || beginStreamingCaptureContext();
   const scope = prepared?.scope;
   if (!scope) return;
-  const bridge = { owner: null, generation: engine.generation, retired: false };
+  const transport = prepared.transport || streamingCaptureTransport();
+  const bridge = { owner: null, generation: engine.generation, retired: false, positionReady: false, selectionReady: false };
   const currentScope = () => typeof isPlaybackOwnershipScopeCurrent === 'function'
-    && isPlaybackOwnershipScopeCurrent(scope);
+    && isPlaybackOwnershipScopeCurrent(scope) && PLAYBACK_CAPTURE_ENABLED === true
+    && streamingCaptureTransport().position === transport.position;
   const guard = () => {
     if (currentScope()) return true;
+    // An old owner must not invalidate observations on a successor node.
+    if (engine.node === node) {
+      for (const role of [engine.roles.current, engine.roles.continuity]) {
+        if (role) { role.captureSource = null; role.capturePendingPositions = null; role.captureMappedBinding = null; }
+      }
+    }
     bridge.owner?.onScopeLost();
     return false;
   };
@@ -66,17 +90,24 @@ function prepareStreamingCapture(engine, context, node, preparedContext = null) 
       if (!guard()) throw new Error('Capture scope retired');
       const value = await prepared.promise;
       if (!guard()) throw new Error('Capture context unavailable');
+      const advertisesPosition = Array.isArray(value?.supported_protocols) && value.supported_protocols.includes('app-rendered-position-v2');
+      if (advertisesPosition !== transport.position) throw new Error('Capture transport mismatch');
+      bridge.selectionReady = transport.position && value?.listening_selections_available === true;
+      bridge.observationReady = transport.position && value?.decoded_observations_available === true;
       return value;
     },
     postCheckpoint: async (body, scopeHeader, { signal, keepalive }) => {
       if (!guard()) throw new Error('Capture scope retired');
-      const response = await fetch('/playback/capture/checkpoint', {
+      const response = await fetch(transport.checkpointPath, {
         method: 'POST', credentials: 'same-origin', redirect: 'error', cache: 'no-store',
         headers: { 'Content-Type': 'application/json', 'X-Playback-Capture-Scope': scopeHeader },
         body, signal, keepalive,
       });
+      if (!guard()) throw new Error('Capture scope retired');
       if (response.status === 401 || response.status === 403) return { status: response.status, data: null };
-      return { status: response.status, data: await response.json().catch(() => null) };
+      const data = await response.json().catch(() => null);
+      if (!guard()) throw new Error('Capture scope retired');
+      return { status: response.status, data };
     },
     clock: { now: () => performance.now(), utc: () => Date.now(),
       setTimeout: (fn, ms) => window.setTimeout(() => { if (guard()) fn(); }, ms),
@@ -84,6 +115,7 @@ function prepareStreamingCapture(engine, context, node, preparedContext = null) 
     crypto: window.crypto,
     generation: () => engine.node === node ? engine.generation : bridge.generation,
     sendCommand: (message, transfer) => {
+      if (message.type === 'capture-disable') { bridge.positionReady = false; bridge.selectionReady = false; bridge.observationReady = false; }
       if (message.type === 'capture-disable' || guard()) node.port.postMessage(message, transfer);
     },
     diagnostic: reason => { bridge.diagnostic = reason; },
@@ -99,7 +131,19 @@ function prepareStreamingCapture(engine, context, node, preparedContext = null) 
     context.removeEventListener('statechange', stateChanged);
     window.removeEventListener('pagehide', pagehide);
   };
-  void owner.enable().then(accepted => { if (accepted) stateChanged(); }).catch(() => owner.onScopeLost());
+  void owner.enable().then(accepted => {
+    if (!accepted || !guard()) return;
+    bridge.positionReady = transport.position;
+    stateChanged();
+    // Reuse the genuine in-flight preparation/attempt, never probe separately.
+    // Optional selection remains parallel to audio and can settle before seal.
+    const attempt = engine.playbackAttempt;
+    const track = streamingAttemptRecords.get(attempt)?.incomingTrack || engine.roles.current?.track;
+    if (bridge.positionReady && bridge.selectionReady && track?.albumListeningIntent
+        && typeof beginOrdinaryAlbumListening === 'function') {
+      beginOrdinaryAlbumListening(track, () => guard() && isStreamingPlaybackAttemptCurrent(attempt));
+    }
+  }).catch(() => owner.onScopeLost());
 }
 function bindStreamingCapture(role, metadata) {
   const engine = streamingEngineState(), bridge = streamingCaptureBridge();
@@ -108,26 +152,138 @@ function bindStreamingCapture(role, metadata) {
   if (metadata.sampleRate !== 48000 || engine.context?.sampleRate !== 48000) {
     role.captureSkipped = true; bridge.diagnostic = 'unsupported_capture_rate'; return;
   }
+  const source = metadata.captureSource;
+  const local = source?.coordinateBasis === 'decoded-output-local';
+  if (role.metadataAccepted || role.nextSequence !== 0
+      || metadata.generation !== role.generation || metadata.streamId !== role.streamId
+      || role.generation !== engine.generation || streamingRoleForId(role.streamId) !== role
+      || !Number.isSafeInteger(metadata.requestedStartFrame) || metadata.requestedStartFrame < 0
+      || metadata.timelineStartFrame !== metadata.requestedStartFrame
+      || metadata.requestedStartFrame !== role.startFrame
+      || (local ? (metadata.requestedStartFrame === 0 || bridge.observationReady !== true
+          || source.requestedStart48 !== metadata.requestedStartFrame) : metadata.requestedStartFrame !== 0)
+      || !source || source.version !== 'decoded-pcm-observation-v1'
+      || (!local && source.coordinateBasis !== 'decoded-output-zero') || source.sourceBase48 !== 0
+      || source.extentFrames48 !== null || typeof source.observationId !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(source.observationId)) {
+    // Local decoder zero counts rendered time, never proves the requested seek offset.
+    role.captureSkipped = true; bridge.diagnostic = 'unsupported_capture_source'; return;
+  }
+  // Use a settled proof now, or resolve it once at first body seal. A reply
+  // after that seal can never relabel the historical association.
+  const selected = role.track?.listeningSelection
+    || (typeof settledOrdinaryAlbumListeningSelection === 'function' ? settledOrdinaryAlbumListeningSelection(role.track) : null);
+  const editionSelectionRef = selected?.selection_ref ?? null;
   const continuation = ['seek', 'short-loop', 'long-loop', 'whole-track-repeat'].includes(role.continuityOptions?.kind)
     && !(engine.pendingSeek?.kind === 'replacement' && engine.pendingSeek.streamId === role.streamId)
-    && role.track?.path === engine.roles.current?.track?.path;
+    && role.track?.path === engine.roles.current?.track?.path
+    && (role.track?.albumListeningIntent
+      ? role.track.albumListeningIntent === engine.roles.current?.track?.albumListeningIntent
+      : editionSelectionRef === (typeof bridge.owner.selectionRefFor === 'function'
+        ? bridge.owner.selectionRefFor(engine.roles.current?.captureParent)
+        : engine.roles.current?.captureEditionSelectionRef ?? null));
   const parent = continuation ? engine.roles.current?.captureParent : bridge.owner.bindTrack({
     trackPath: role.track?.path,
     deviceId: typeof getMeasuredPlaybackDeviceId === 'function' ? getMeasuredPlaybackDeviceId().toLowerCase() : '',
     v1SessionId: null,
+    editionSelectionRef,
+    editionSelectionResolver: role.track?.albumListeningIntent && typeof settledOrdinaryAlbumListeningSelection === 'function'
+      ? () => bridge.guard() ? settledOrdinaryAlbumListeningSelection(role.track)?.selection_ref ?? null : null : null,
   });
   if (!parent) { role.captureSkipped = true; bridge.diagnostic = 'capture_binding_unavailable_before_pcm'; return; }
   role.captureParent = parent;
+  role.captureEditionSelectionRef = continuation
+    ? (typeof bridge.owner.selectionRefFor === 'function' ? bridge.owner.selectionRefFor(parent) : engine.roles.current?.captureEditionSelectionRef ?? null)
+    : editionSelectionRef;
   role.captureBinding = bridge.owner.linkStream(parent, {
-    generation: role.generation, streamId: role.streamId, sourceBase48: metadata.timelineStartFrame,
+    generation: role.generation, streamId: role.streamId, sourceBase48: source.sourceBase48,
     sourceRate: metadata.sampleRate, outputRate: engine.context.sampleRate,
+    ...(bridge.observationReady ? {sourceObservationRef:source.observationId} : {}),
   });
   if (!role.captureBinding) {
     role.captureSkipped = true;
     if (!continuation) bridge.owner.requestClose(parent, 'capture_limit');
+  } else {
+    role.captureSource = Object.freeze({ ...source });
+    role.captureReceivedFrames = 0;
   }
 }
+// Optional sideband is paired with exactly one future binary frame. Invalid or
+// repeated controls discard mapping, never PCM or the ordinary local binding.
+function stageStreamingCapturePositions(role, message) {
+  const bridge = streamingCaptureBridge(), engine = streamingEngineState();
+  if (role.capturePositionSequence === message.sequence) {
+    role.capturePendingPositions = null;
+    return;
+  }
+  role.capturePendingPositions = null;
+  if (!bridge || !bridge.guard() || !bridge.observationReady || !role.captureBinding
+      || role.captureBinding.mapped || !role.captureParent || !role.metadataAccepted
+      || role.captureSource?.coordinateBasis !== 'decoded-output-local'
+      || role.eosReceived || role.generation !== engine.generation
+      || message.generation !== role.generation || message.streamId !== role.streamId
+      || message.sequence !== role.nextSequence || !Number.isSafeInteger(message.sequence)
+      || !Number.isSafeInteger(message.frameCount) || message.frameCount < 1
+      || message.frameCount > streamingRoleCapacityFrames(role)
+      || typeof message.observationId !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(message.observationId)
+      || message.observationId === role.captureSource.observationId
+      || !Array.isArray(message.ranges) || !message.ranges.length || message.ranges.length > 32) return;
+  role.capturePositionSequence = message.sequence;
+  let end = 0;
+  const ranges = [];
+  for (const range of message.ranges) {
+    if (!Array.isArray(range) || range.length !== 3 || range.some(value => !Number.isSafeInteger(value) || Object.is(value, -0))
+        || range[0] < end || range[1] < 0 || range[2] < 1
+        || range[0] > message.frameCount - range[2] || range[1] > Number.MAX_SAFE_INTEGER - range[2]) return;
+    end = range[0] + range[2];
+    ranges.push([range[0], range[1], range[2]]);
+  }
+  if (!role.captureMappedBinding) {
+    role.captureMappedBinding = bridge.owner.linkStream(role.captureParent, {
+      mapped: true, baseBindingSerial: role.captureBinding.bindingSerial,
+      generation: role.generation, streamId: role.streamId, sourceBase48: 0,
+      sourceRate: 48000, outputRate: engine.context?.sampleRate,
+      sourceObservationRef: message.observationId,
+    });
+    if (!role.captureMappedBinding) return;
+    role.captureMappedObservation = message.observationId;
+  }
+  if (role.captureMappedObservation !== message.observationId) return;
+  role.capturePendingPositions = {sequence: message.sequence, frameCount: message.frameCount,
+    bindingSerial: role.captureMappedBinding.bindingSerial, ranges};
+}
+function consumeStreamingCapturePositions(role, sequence, frameCount) {
+  const value = role.capturePendingPositions;
+  role.capturePendingPositions = null;
+  const bridge = streamingCaptureBridge();
+  return bridge?.guard() && value?.sequence === sequence && value.frameCount === frameCount
+    ? {bindingSerial: value.bindingSerial, ranges: value.ranges} : null;
+}
+function completeStreamingCaptureSource(role, message) {
+  const bridge = streamingCaptureBridge();
+  if (!bridge || !bridge.guard()) { role.captureSource = null; return; }
+  if (!role.captureSource) return;
+  const source = message.captureSource;
+  if (!source || source.version !== role.captureSource.version
+      || source.observationId !== role.captureSource.observationId
+      || source.coordinateBasis !== role.captureSource.coordinateBasis || source.sourceBase48 !== 0
+      || source.requestedStart48 !== role.captureSource.requestedStart48
+      || !Number.isSafeInteger(source.extentFrames48) || source.extentFrames48 < 0
+      || source.extentFrames48 !== message.emittedFrames
+      || !Number.isSafeInteger(message.authoritativeTotalFrames)
+      || source.extentFrames48 + role.startFrame !== message.authoritativeTotalFrames
+      || source.extentFrames48 !== role.captureReceivedFrames) {
+    role.captureSource = null;
+    bridge.diagnostic = 'capture_extent_unavailable';
+    return;
+  }
+  // EOF is decoded extent only. The unchanged worklet still owns rendered spans.
+  // This local association is not persisted by the existing checkpoint schema.
+  role.captureSource = Object.freeze({ ...source });
+}
 function retireStreamingCapture(role, successor = null, reason = 'track_change', node = streamingEngineState().node) {
+  if (role) { role.captureSource = null; role.capturePendingPositions = null; role.captureMappedBinding = null; }
   const bridge = streamingCaptureBridge(node);
   if (!bridge || !bridge.guard() || !role) return;
   if (role.captureBinding) bridge.owner.unlinkStream(role.captureBinding);
@@ -545,7 +701,7 @@ function normalizeStreamingContinuityOptions(options = {}) {
     .includes(options.kind) ? options.kind : 'queued-next';
   const startSeconds = Math.max(0, Number(options.startSeconds) || 0);
   const endSeconds = Math.max(startSeconds, Number(options.endSeconds) || 0);
-  return { kind, startSeconds, endSeconds };
+  return { kind, startSeconds, endSeconds, ...(typeof options.isCurrent === 'function' ? {isCurrent: options.isCurrent} : {}) };
 }
 
 function streamingContinuityIdentity(track, options) {
@@ -855,6 +1011,10 @@ function handleStreamingControl(message) {
     engine.diagnostics.staleMessages += 1;
     return;
   }
+  if (message.type === 'capture-positions') {
+    streamingCaptureSafely(() => stageStreamingCapturePositions(roleState, message));
+    return;
+  }
   if (message.type === 'metadata') {
     if (!validateStreamingMetadata(message, roleState)) {
       failStreamingEngine(
@@ -918,6 +1078,7 @@ function handleStreamingControl(message) {
       return;
     }
     if (roleState.eosReceived) return;
+    streamingCaptureSafely(() => completeStreamingCaptureSource(roleState, message));
     roleState.eosReceived = true;
     roleState.closed = true;
     engine.diagnostics.inFlightFrames[roleState.role] = 0;
@@ -1054,8 +1215,15 @@ function handleStreamingPcm(buffer) {
     for (let index = 0; index < pcm.length; index += 1) {
       pcm[index] = view.getFloat32(24 + (index * 4), true);
     }
+    let capturePositions = null;
+    streamingCaptureSafely(() => { capturePositions = consumeStreamingCapturePositions(roleState, sequence, frameCount); });
     recordStreamingPcmEvidence(roleState, frameCount, pcm);
     roleState.nextSequence += 1;
+    if (roleState.captureSource) {
+      const received = roleState.captureReceivedFrames + frameCount;
+      if (Number.isSafeInteger(received)) roleState.captureReceivedFrames = received;
+      else roleState.captureSource = null;
+    }
     engine.diagnostics.inFlightFrames[role] -= frameCount;
     engine.diagnostics.bufferedFrames[role] += frameCount;
     if (role === 'current') {
@@ -1065,6 +1233,7 @@ function handleStreamingPcm(buffer) {
     }
     engine.node.port.postMessage({
       type: 'enqueue', generation, streamId, role, sequence, frameCount, pcm,
+      ...(capturePositions ? {capturePositions} : {}),
     }, [pcm.buffer]);
     if (!roleState.eosReceived) {
       const targetFrames = Number(roleState.targetBufferFrames) || capacityFrames;
@@ -1740,6 +1909,10 @@ async function startStreamingTrack(track, {
     throw error;
   }
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
+  if (autoplay && track?.albumListeningIntent && typeof beginOrdinaryAlbumListening === 'function') {
+    beginOrdinaryAlbumListening(track, () => isStreamingPlaybackAttemptCurrent(attempt));
+    if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
+  }
   const activeStop = engine.stopPromise;
   if (activeStop) {
     try { await activeStop; }
@@ -2027,6 +2200,11 @@ async function resumeStreamingPlayback(
   const attempt = expectedAttempt || captureStreamingPlaybackAttempt();
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
   expectedCurrentRole ||= engine.roles.current;
+  if (expectedCurrentRole.track?.albumListeningIntent && typeof beginOrdinaryAlbumListening === 'function') {
+    beginOrdinaryAlbumListening(expectedCurrentRole.track, () => isStreamingPlaybackAttemptCurrent(attempt)
+      && engine.roles.current === expectedCurrentRole && (typeof isCurrent !== 'function' || isCurrent() === true));
+    if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
+  }
   if (!engine.context || !engine.node) return false;
   const context = engine.context;
   const node = engine.node;
@@ -2162,7 +2340,9 @@ async function scheduleStreamingContinuity(track, options = {}) {
   if (engine.stopPromise) return null;
   if (!engine.roles.current) return null;
   const current=engine.roles.current,request=engine.startRequestId,lifecycle=engine.lifecycleEpoch;
-  const owns=()=>!engine.stopPromise&&engine.roles.current===current&&engine.startRequestId===request&&engine.lifecycleEpoch===lifecycle;
+  const intentCurrent=()=>{try{return typeof options.isCurrent!=='function'||options.isCurrent()===true;}catch{return false;}};
+  const owns=()=>!engine.stopPromise&&engine.roles.current===current&&engine.startRequestId===request&&engine.lifecycleEpoch===lifecycle&&intentCurrent();
+  if (!owns()) return null;
   const normalized = normalizeStreamingContinuityOptions(options);
   const identity = streamingContinuityIdentity(track, normalized);
   if (engine.roles.continuity?.continuityIdentity === identity) {
@@ -2195,6 +2375,12 @@ async function scheduleStreamingContinuity(track, options = {}) {
     return null;
   }
   if (!owns()) return null;
+  if (track?.albumListeningIntent && typeof beginOrdinaryAlbumListening === 'function') {
+    const queue = typeof state !== 'undefined' ? state.player?.playbackQueue : null;
+    const sourceCurrent = () => owns() && (typeof state === 'undefined' || state.player?.playbackQueue === queue);
+    beginOrdinaryAlbumListening(track, sourceCurrent);
+    if (!sourceCurrent()) return null;
+  }
   const startFrame = Math.round(normalized.startSeconds * STREAMING_SAMPLE_RATE);
   const continuity = openStreamingRole('continuity', track, startFrame, normalized);
   if (!continuity || !owns()) return null;
@@ -2260,6 +2446,7 @@ function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
 // Cleanup owns a detached snapshot. No callback below may target current slots.
 async function cleanupStreamingResources(record) {
   const {reason, roles, node, socket, context, generation, preparation, options} = record;
+  for (const role of roles) role.captureSource = null;
   const capture = streamingCaptureBridge(node);
   if (capture) {
     capture.generation = generation;

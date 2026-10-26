@@ -80,7 +80,8 @@ const PlaybackCaptureTelemetry = (() => {
       command('capture-epoch');
     }
     function findParent(handle) { return parents.find(parent => parent?.handle === handle) || null; }
-    function parentFor(serialId) { return slots.find(slot => slot?.bindingSerial === serialId)?.parent || null; }
+    function findSlot(serialId) { return slots.find(slot => slot && (slot.bindingSerial === serialId || slot.mappedSerial === serialId)) || null; }
+    function parentFor(serialId) { return findSlot(serialId)?.parent || null; }
     function releaseParent(parent) {
       if (slots.some(slot => slot?.parent === parent) || frozen?.parent === parent) return;
       if (!parent.failed && parent.status !== 'terminal-acknowledged') return;
@@ -131,32 +132,49 @@ const PlaybackCaptureTelemetry = (() => {
         return !dead;
       } catch (_) { abandon('capture_context_unavailable'); return false; }
     }
-    function bindTrack({ trackPath, deviceId, v1SessionId = null }) {
+    function bindTrack({ trackPath, deviceId, v1SessionId = null, editionSelectionRef = null, editionSelectionResolver = null }) {
       if (!enabled || closing || typeof trackPath !== 'string' || !trackPath
           || trackPath.length > 32768 || !UUID.test(deviceId || '')
-          || v1SessionId !== null && !UUID.test(v1SessionId)) return null;
-      const index = parents.indexOf(null), charge = 2048 + trackPath.length * 2;
+          || v1SessionId !== null && !UUID.test(v1SessionId)
+          || editionSelectionResolver !== null && typeof editionSelectionResolver !== 'function'
+          || editionSelectionRef !== null && (typeof editionSelectionRef !== 'string' || !UUID.test(editionSelectionRef)
+            || editionSelectionRef === '00000000-0000-0000-0000-000000000000')) return null;
+      const index = parents.indexOf(null), charge = 2048 + trackPath.length * 2
+        + (packetVersion === 2 && (editionSelectionRef || editionSelectionResolver) ? 128 : 0);
       if (index < 0 || bytes + charge + runCharge > LIMIT) { diagnostic('capture_binding_capacity'); return null; }
       const captureId = cryptoApi.randomUUID();
       if (!UUID.test(captureId)) return null;
       const parent = { handle: Object.freeze({}), path: trackPath, deviceId, captureId,
-        v1SessionId, sequence: 1, status: 'unadmitted', terminal: null, failed: false,
+        v1SessionId, editionSelectionRef: packetVersion === 2 ? editionSelectionRef : null,
+        editionSelectionResolver: packetVersion === 2 ? editionSelectionResolver : null, selectionSealed: false, sequence: 1, status: 'unadmitted', terminal: null, failed: false,
         runs: [], anchors: [], gaps: [], firstPending: null, firstPositive: true,
         charge, anchorsAccepted: 0, anchorsPlanned: 0, known: 0, lost: 0 };
       parents[index] = parent; bytes += charge;
       return parent.handle;
     }
     function linkStream(handle, binding) {
-      const parent = findParent(handle), index = slots.indexOf(null);
+      const parent = findParent(handle);
+      const mapped = binding.mapped === true;
+      const base = mapped ? slots.find(slot => slot?.bindingSerial === binding.baseBindingSerial) : null;
+      const index = mapped ? slots.indexOf(base) : slots.indexOf(null);
       if (!enabled || closing || !parent || parent.failed || parent.terminal || index < 0
           || binding.sourceRate !== 48000 || binding.outputRate !== 48000
           || !integer(binding.generation, 1) || !integer(binding.streamId, 1)
           || !integer(binding.sourceBase48) || !integer(bindingSerial + 1, 1)) {
         diagnostic(index < 0 ? 'capture_binding_capacity' : 'unsupported_capture_rate'); return null;
       }
+      const sourceObservationRef = binding.sourceObservationRef;
+      if (sourceObservationRef !== undefined && (packetVersion !== 2 || typeof sourceObservationRef !== 'string'
+          || !UUID.test(sourceObservationRef) || sourceObservationRef === '00000000-0000-0000-0000-000000000000')) return null;
+      if (mapped && (!base || base.parent !== parent || base.unbinding || base.ackPacket || base.mappedSerial
+          || packetVersion !== 2 || !base.sourceObservationRef || !sourceObservationRef || sourceObservationRef === base.sourceObservationRef
+          || base.generation !== binding.generation || base.streamId !== binding.streamId
+          || base.sourceBase48 !== 0 || binding.sourceBase48 !== 0)) return null;
       const descriptor = Object.freeze({ slot: index + 1, bindingSerial: ++bindingSerial,
-        generation: binding.generation, streamId: binding.streamId, sourceBase48: binding.sourceBase48 });
-      slots[index] = { ...descriptor, parent, unbinding: false };
+        generation: binding.generation, streamId: binding.streamId, sourceBase48: binding.sourceBase48,
+        ...(mapped ? {mapped: true, baseBindingSerial: base.bindingSerial} : {}) });
+      if (mapped) { base.mappedSerial = descriptor.bindingSerial; base.mappedObservationRef = sourceObservationRef; }
+      else slots[index] = { ...descriptor, parent, sourceObservationRef, unbinding: false };
       command('capture-bind', descriptor);
       return descriptor;
     }
@@ -182,7 +200,7 @@ const PlaybackCaptureTelemetry = (() => {
       for (let i = 256 + data[4] * 7; i < 2048; i++) if (data[i]) return null;
       for (let i = 0; i < data[4]; i++) {
         const p = 256 + i * 7;
-        const slot = slots.find(item => item?.bindingSerial === data[p]);
+        const slot = findSlot(data[p]);
         if (!slot || slot.ackPacket || data[p + 1] < 1
             || (packetVersion === 1 ? data[p + 6] !== 0
               : !integer(data[p + 6], 1) || data[p + 2] < slot.sourceBase48)
@@ -191,7 +209,7 @@ const PlaybackCaptureTelemetry = (() => {
       }
       for (let i = 0; i < data[8]; i++) {
         const p = 32 + i * 8;
-        const slot = slots.find(item => item?.bindingSerial === data[p]);
+        const slot = findSlot(data[p]);
         if (!slot || slot.ackPacket || !range(data[p + 2], data[p + 4])
             || data[p + 3] < data[p + 2] + data[p + 4]
             || data[p + 6] < data[p + 5] || data[p + 7] < 1 || data[p + 7] > 63) return null;
@@ -206,11 +224,11 @@ const PlaybackCaptureTelemetry = (() => {
         let finalOrdinal = slot.lastSeenOrdinal || 0;
         for (let j = 0; j < data[4]; j++) {
           const r = 256 + j * 7;
-          if (data[r] === data[p]) finalOrdinal = Math.max(finalOrdinal, data[r + 5] + data[r + 3]);
+          if (data[r] === data[p] || data[r] === slot.mappedSerial) finalOrdinal = Math.max(finalOrdinal, data[r + 5] + data[r + 3]);
         }
         for (let j = 0; j < data[8]; j++) {
           const r = 32 + j * 8;
-          if (data[r] === data[p]) finalOrdinal = Math.max(finalOrdinal, data[r + 3]);
+          if (data[r] === data[p] || data[r] === slot.mappedSerial) finalOrdinal = Math.max(finalOrdinal, data[r + 3]);
         }
         if (data[p + 2] !== finalOrdinal) return null;
       }
@@ -270,15 +288,17 @@ const PlaybackCaptureTelemetry = (() => {
         }
         while (packet.index < data[4]) {
           const p = 256 + packet.index * 7;
-          const slot = slots.find(item => item?.bindingSerial === data[p]), parent = slot.parent;
+          const slot = findSlot(data[p]), parent = slot.parent;
           if (parent.failed) { packet.index++; continue; }
           if (bytes + runCharge > LIMIT || parent.runs.length === 256) return;
           if (data[p + 5] < (parent.lastOrdinalEnd || 0)) { abandon('invalid_capture_order'); return; }
           parent.runs.push({ source_start48: data[p + 2], frames: data[p + 3], output_start: data[p + 4],
             ordinal_start: data[p + 5], epoch: data[p + 1], anchor_before: null,
             anchor_after: null, quality: 'unknown',
-            ...(packetVersion === 2 ? { binding_serial: slot.bindingSerial, generation: slot.generation,
-              stream_id: slot.streamId, source_base48: slot.sourceBase48, continuity_serial: data[p + 6] } : {}) });
+            ...(packetVersion === 2 ? { binding_serial: data[p], generation: slot.generation,
+              stream_id: slot.streamId, source_base48: slot.sourceBase48, continuity_serial: data[p + 6],
+              ...((data[p] === slot.mappedSerial ? slot.mappedObservationRef : slot.sourceObservationRef)
+                ? {source_observation_ref:data[p] === slot.mappedSerial ? slot.mappedObservationRef : slot.sourceObservationRef} : {}) } : {}) });
           bytes += runCharge; packet.index++;
           parent.lastOrdinalEnd = data[p + 5] + data[p + 3];
           if (contextState !== 'running') parent.flushRequested = true;
@@ -302,11 +322,11 @@ const PlaybackCaptureTelemetry = (() => {
       if (!data || held.length >= 4) { abandon('invalid_capture_packet'); return { returnBuffer: false }; }
       lastPacket = data[3]; epoch = data[7]; bufferAtMain[data[12] - 1] = true;
       for (let i = 0; i < data[4]; i++) {
-        const p = 256 + i * 7, slot = slots.find(item => item?.bindingSerial === data[p]);
+        const p = 256 + i * 7, slot = findSlot(data[p]);
         slot.lastSeenOrdinal = Math.max(slot.lastSeenOrdinal || 0, data[p + 5] + data[p + 3]);
       }
       for (let i = 0; i < data[8]; i++) {
-        const p = 32 + i * 8, slot = slots.find(item => item?.bindingSerial === data[p]);
+        const p = 32 + i * 8, slot = findSlot(data[p]);
         slot.lastSeenOrdinal = Math.max(slot.lastSeenOrdinal || 0, data[p + 3]);
       }
       for (let i = 0; i < data[9]; i++) slots.find(slot => slot?.bindingSerial === data[96 + i * 4]).ackPacket = data[3];
@@ -326,6 +346,9 @@ const PlaybackCaptureTelemetry = (() => {
       const envelope = { protocol, device_uuid: parent.deviceId,
         capture_uuid: parent.captureId, sequence: parent.sequence, evidence };
       if (parent.v1SessionId) envelope.v1_session_uuid = parent.v1SessionId;
+      // Repeat the immutable optional binding on every v2 batch/retry. It is a
+      // server lookup key, never a client-supplied membership or playback grant.
+      if (packetVersion === 2 && parent.editionSelectionRef) envelope.edition_selection_ref = parent.editionSelectionRef;
       if (parent.firstPositive) envelope.initial_path = parent.path;
       return { evidence, body: JSON.stringify(envelope) };
     }
@@ -345,6 +368,20 @@ const PlaybackCaptureTelemetry = (() => {
       let prepared = null, gaps = null, batch = null;
       let input = null, encoded = null, digest = null, evidenceCharge = 0;
       try {
+        // Optional qualification may settle during genuine audio preparation.
+        // Read it once before the FIRST body is sealed; never await it and never
+        // relabel sealed bytes, digest work, retries or admitted history.
+        if (!parent.selectionSealed) {
+          parent.selectionSealed = true;
+          const resolveSelection = parent.editionSelectionResolver;
+          parent.editionSelectionResolver = null;
+          if (!parent.editionSelectionRef && resolveSelection) {
+            let ref = null;
+            try {ref = resolveSelection();} catch { /* Qualification unavailable. */ }
+            if (dead || !parents.includes(parent)) return;
+            if (typeof ref === 'string' && UUID.test(ref) && ref !== '00000000-0000-0000-0000-000000000000') parent.editionSelectionRef = ref;
+          }
+        }
         let count = Math.min(256, parent.runs.length), anchorCount = Math.min(8, parent.anchors.length);
         gaps = parent.gaps.map(item => item.value);
         while (true) {
@@ -518,7 +555,10 @@ const PlaybackCaptureTelemetry = (() => {
     function pagehide() {
       if (frozen && !frozen.pending && !networkAttempt && !freezing) void attempt(frozen, true);
     }
-    const api = { enable, bindTrack, linkStream, unlinkStream, acceptPacket, requestClose,
+    // Read the actual immutable association chosen by this owner, not a later
+    // network result. This does not resolve, seal or upgrade the parent.
+    function selectionRefFor(handle) { return findParent(handle)?.editionSelectionRef ?? null; }
+    const api = { enable, bindTrack, selectionRefFor, linkStream, unlinkStream, acceptPacket, requestClose,
       onContextState, onScopeLost: () => abandon('capture_scope_lost'), close, tick, pagehide };
     return api;
   }

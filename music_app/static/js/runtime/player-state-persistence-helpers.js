@@ -299,7 +299,21 @@ function restorePlayerState() {
       && typeof setAlbumPlaybackQueue === 'function') {
       const album = resolveAlbumForPlayerTrack(track);
       if (!currentPlayerRestoreAttempt(attempt)) return;
-      if (album) setAlbumPlaybackQueue(album, track.path);
+      if (album) setAlbumPlaybackQueue(album, track.path, null);
+    }
+
+    // A restored display snapshot supplies only an album lookup key. Never
+    // reuse persisted selection refs; the explicit resumed play issues a fresh
+    // server membership selection, independently of these saved track rows.
+    if (currentPlayerRestoreAttempt(attempt) && restoredQueueHasAlbumSnapshot
+        && typeof createAlbumListeningIntent === 'function' && typeof bindAlbumListeningIntent === 'function') {
+      const queue = state.player.playbackQueue;
+      const intent = queue.tracks.find(queued => queued.albumListeningIntent)?.albumListeningIntent
+        || createAlbumListeningIntent(queue.albumSnapshot);
+      if (intent && currentPlayerRestoreAttempt(attempt)) {
+        for (const queued of queue.tracks) bindAlbumListeningIntent(queued, intent);
+        bindAlbumListeningIntent(track, intent);
+      }
     }
 
     const savedLoop = parsed.loop && typeof parsed.loop === 'object' ? parsed.loop : {};

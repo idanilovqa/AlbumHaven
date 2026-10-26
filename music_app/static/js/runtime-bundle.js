@@ -28843,9 +28843,16 @@ function getCoverLookupDeleteConfirmElements() {
   };
 }
 
-function buildCoverLookupAlbumSubtitle(album) {
+function buildCoverLookupAlbumSubtitleHtml(album) {
   if (!album) return '';
-  return [album.album_artist || '', album.name || '', album.year || ''].filter(Boolean).join(' - ');
+  return [
+    album.album_artist
+      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(album.album_artist)}</span>` : '',
+    album.name
+      ? `<button class="cover-lookup-modal-album-link" type="button" data-open-cover-lookup-album-details="1">${escapeHtml(album.name)}</button>` : '',
+    album.year
+      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(album.year)}</span>` : '',
+  ].filter(Boolean).join('<span class="cover-lookup-modal-subtitle-separator" aria-hidden="true"> · </span>');
 }
 
 function openCoverLookupAlbumDetails() {
@@ -30644,7 +30651,7 @@ function renderCoverLookupModal() {
     : captureCoverLookupModalScrollAnchor(els.body);
   const album = modalState.album;
   if (els.subtitle) {
-    els.subtitle.textContent = buildCoverLookupAlbumSubtitle(album);
+    els.subtitle.innerHTML = buildCoverLookupAlbumSubtitleHtml(album);
   }
   const allLocalCovers = Array.isArray(modalState.localCovers) ? modalState.localCovers : [];
   // Compact pages show one choice per initial artwork; desktop retains each

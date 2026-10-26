@@ -32,26 +32,37 @@
   padding: 16px;
   border-bottom: 1px solid var(--border);
 }
+.cover-lookup-modal-header > div { min-width: 0; }
 .cover-lookup-modal-title {
   margin: 0;
   font-size: 1.08rem;
 }
 .cover-lookup-modal-subtitle {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
   margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+.cover-lookup-modal-album-link {
+  min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 0.86rem;
+  color: inherit;
+  font: inherit;
   text-align: left;
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
-.cover-lookup-modal-subtitle:hover,
-.cover-lookup-modal-subtitle:focus-visible {
+.cover-lookup-modal-album-link:hover,
+.cover-lookup-modal-album-link:focus-visible {
   color: var(--text);
-  text-decoration: underline;
+  text-decoration-color: currentColor;
 }
 .cover-lookup-search-action {
   display: grid;

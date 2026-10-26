@@ -41,6 +41,20 @@ function loadHelper(overrides = {}) {
   return context;
 }
 
+require('node:test')('Cover Lookup subtitle makes only the album name interactive', () => {
+  const context = loadHelper({ escapeHtml: value => String(value || '') });
+  const markup = context.buildCoverLookupAlbumSubtitleHtml({
+    album_artist: 'Artist',
+    name: 'Album',
+    year: 2026,
+  });
+
+  assert.match(markup, /cover-lookup-modal-subtitle-meta[^>]*>Artist<\/span>/);
+  assert.match(markup, /cover-lookup-modal-album-link[^>]*data-open-cover-lookup-album-details="1"[^>]*>Album<\/button>/);
+  assert.match(markup, /cover-lookup-modal-subtitle-meta[^>]*>2026<\/span>/);
+  assert.equal((markup.match(/data-open-cover-lookup-album-details/g) || []).length, 1);
+});
+
 require('node:test')('desktop Cover Lookup album link keeps Notifications open and hydrates partial album details', () => {
   const album = { key: 'current::album', album_artist: 'Current Artist', name: 'Current Album', year: 2026 };
   const calls = [];

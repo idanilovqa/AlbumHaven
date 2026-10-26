@@ -126,9 +126,9 @@
       <div class="cover-lookup-modal-header">
         <div>
           <h3 class="cover-lookup-modal-title" id="cover-lookup-modal-title">Cover Art Look Up Gallery</h3>
-          <button class="cover-lookup-modal-subtitle" id="cover-lookup-modal-subtitle" type="button" data-open-cover-lookup-album-details="1"></button>
+          <div class="cover-lookup-modal-subtitle" id="cover-lookup-modal-subtitle"></div>
         </div>
-        <button class="icon-button" type="button" data-close-cover-lookup-modal="1" aria-label="Close cover art look up gallery">✕</button>
+        {% call action_button('Close cover art look up gallery', class_name='cover-lookup-modal-close', attributes={'data-close-cover-lookup-modal': '1'}) %}<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>{% endcall %}
       </div>
       <div class="cover-lookup-modal-body" id="cover-lookup-modal-body"></div>
       <div class="cover-lookup-modal-actions">

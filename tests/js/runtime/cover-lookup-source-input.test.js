@@ -35,6 +35,27 @@ test('desktop Cover Lookup keeps stable shell geometry while body content change
   assert.match(bodyRule, /min-height\s*:\s*0/);
 });
 
+test('Cover Lookup header uses the shared fixed-size close action', () => {
+  const modal = template.split('<div class="cover-lookup-modal"')[1]
+    .split('<div class="non-album-modal"')[0];
+  assert.match(modal, /{% call action_button\('Close cover art look up gallery'[^]*?data-close-cover-lookup-modal[^]*?{% endcall %}/);
+  assert.doesNotMatch(modal, /<button class="icon-button"[^>]*data-close-cover-lookup-modal/);
+  assert.match(cssRule('.cover-lookup-modal-header > div'), /min-width:\s*0/);
+});
+
+test('Cover Lookup links only the album name while artist and year remain plain', () => {
+  assert.match(source, /function buildCoverLookupAlbumSubtitleHtml/);
+  assert.match(source, /cover-lookup-modal-subtitle-meta/);
+  assert.match(source, /cover-lookup-modal-album-link/);
+  assert.match(source, /data-open-cover-lookup-album-details="1"/);
+  assert.match(source, /els\.subtitle\.innerHTML\s*=\s*buildCoverLookupAlbumSubtitleHtml\(album\)/);
+
+  const link = cssRule('.cover-lookup-modal-album-link');
+  assert.match(link, /background:\s*transparent/);
+  assert.match(link, /text-decoration-line:\s*underline/);
+  assert.match(link, /text-underline-offset:/);
+});
+
 test('cover source entry is compact, supports picker and drop, and omits redundant helper copy', () => {
   assert.match(source, /data-cover-lookup-file-input/);
   assert.match(source, /accept="image\/\*"[^>]*multiple/);

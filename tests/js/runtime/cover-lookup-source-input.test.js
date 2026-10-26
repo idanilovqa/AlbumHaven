@@ -7,6 +7,10 @@ const vm = require('node:vm');
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const sourcePath = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'cover-lookup-modal-and-drawer.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const coreState = fs.readFileSync(
+  path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'core-state-and-helpers.js'),
+  'utf8',
+);
 const template = fs.readFileSync(
   path.join(repoRoot, 'music_app', 'templates', 'partials', 'primary-modals.html'),
   'utf8',
@@ -90,7 +94,8 @@ test('clipboard images stage only when pasted into the manual composer', () => {
 
 test('cover source validation is bounded and removable previews revoke their object URLs', () => {
   assert.match(source, /MAX_COVER_LOOKUP_STAGED_IMAGES\s*=\s*8/);
-  assert.match(source, /MAX_COVER_LOOKUP_IMAGE_BYTES\s*=\s*10 \* 1024 \* 1024/);
+  assert.match(source, /MAX_COVER_LOOKUP_IMAGE_BYTES\s*=\s*32 \* 1024 \* 1024/);
+  assert.match(source, /Images must be 32 MB or smaller\./);
   assert.match(source, /function removePastedImageFromCoverLookup/);
 
   const revoked = [];
@@ -110,6 +115,25 @@ test('cover source validation is bounded and removable previews revoke their obj
   assert.deepEqual(revoked, ['blob:first']);
   assert.deepEqual(context.state.coverLookup.modal.pastedImages.map(item => item.id), ['second']);
   assert.equal(context.state.coverLookup.modal.pendingPastedImageId, '');
+});
+
+test('manual link extraction renders request-owned loading and feedback beside its action', () => {
+  assert.match(coreState, /manualPendingCount:\s*0/);
+  assert.match(coreState, /manualStatusText:\s*''/);
+  assert.match(coreState, /manualStatusTone:\s*'neutral'/);
+  assert.match(source, /buildCoverLookupGalleryLoadingCards\('pasted',\s*manualPendingCount\)/);
+  assert.match(source, /class="cover-lookup-manual-status/);
+  assert.match(source, /manualStatusText/);
+  assert.match(source, /manualPendingCount\s*=\s*urls\.length\s*\?\s*1\s*:\s*0/);
+  assert.match(source, /manualPendingCount\s*=\s*0/);
+  assert.doesNotMatch(source, /showToast\([\s\S]*?Extracted \$\{extractedImageCount\}/);
+
+  const actions = cssRule('.cover-lookup-manual-actions');
+  const status = cssRule('.cover-lookup-manual-status');
+  assert.match(actions, /align-items:\s*center/);
+  assert.match(actions, /flex-wrap:\s*wrap/);
+  assert.match(status, /white-space:\s*normal/);
+  assert.match(status, /overflow-wrap:\s*anywhere/);
 });
 
 test('gallery sections expose live image counts and omit empty remote and match sections', () => {

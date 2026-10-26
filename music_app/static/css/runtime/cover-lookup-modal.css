@@ -341,8 +341,19 @@
 .cover-lookup-external-marker { margin-left: 2px; font-size: .9em; opacity: .78; }
 .cover-lookup-manual-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: flex-start;
 }
+.cover-lookup-manual-status {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.cover-lookup-manual-status.is-error { color: var(--appearance-error, #df8f96); }
 .cover-lookup-manual-divider {
   height: 1px;
   margin-top: 6px;

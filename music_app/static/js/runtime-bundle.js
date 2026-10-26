@@ -5466,6 +5466,9 @@ const state = {
       pendingDeletePath: '',
       manualUrlText: '',
       manualBusy: false,
+      manualPendingCount: 0,
+      manualStatusText: '',
+      manualStatusTone: 'neutral',
     },
   },
   modalReleases: [],
@@ -28606,7 +28609,7 @@ coverLookupDrawerButton?.addEventListener?.('focus', () => {
 });
 
 const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
-const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_COVER_LOOKUP_IMAGE_BYTES = 32 * 1024 * 1024;
 const COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS = 2000;
 const COVER_LOOKUP_SHEET_DISMISS_DISTANCE = 72;
 const COVER_LOOKUP_INTERRUPTION_NOTICE_KEY_PREFIX = 'albumhaven.coverLookup.interruptionNotice.';
@@ -28728,7 +28731,7 @@ async function addPastedImageToCoverLookup(file) {
     throw new Error('Choose an image file.');
   }
   if (Number(file.size || 0) > MAX_COVER_LOOKUP_IMAGE_BYTES) {
-    throw new Error('Images must be 10 MB or smaller.');
+    throw new Error('Images must be 32 MB or smaller.');
   }
   const stagedCount = (Array.isArray(state.coverLookup.modal.pastedImages)
     ? state.coverLookup.modal.pastedImages.length : 0)
@@ -28759,8 +28762,8 @@ async function addPastedImageToCoverLookup(file) {
       ? state.coverLookup.modal.manualImageAttachments : []),
     nextItem,
   ];
-  state.coverLookup.modal.statusText = '';
-  state.coverLookup.modal.statusTone = 'neutral';
+  state.coverLookup.modal.manualStatusText = '';
+  state.coverLookup.modal.manualStatusTone = 'neutral';
   renderCoverLookupModal();
   return true;
 }
@@ -30654,6 +30657,8 @@ function renderCoverLookupModal() {
   const pastedImages = Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [];
   const manualImageAttachments = Array.isArray(modalState.manualImageAttachments)
     ? modalState.manualImageAttachments : [];
+  const manualPendingCount = Math.max(0, Number(modalState.manualPendingCount || 0) || 0);
+  const manualStatusText = String(modalState.manualStatusText || '');
   const otherArt = Array.isArray(modalState.otherArt) ? modalState.otherArt : [];
   const remoteCover = modalState.remoteCover && typeof modalState.remoteCover === 'object' ? modalState.remoteCover : null;
   const possibleMatches = Array.isArray(modalState.possibleMatches) ? modalState.possibleMatches : [];
@@ -30776,7 +30781,7 @@ function renderCoverLookupModal() {
     <section class="cover-lookup-section">
       <h4 class="cover-lookup-section-title">LOCAL · ${formatCoverLookupImageCount(localCovers.length)}</h4>
       <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
-      ${pastedImages.length ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}</div>` : ''}
+      ${pastedImages.length || manualPendingCount ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery${manualPendingCount ? ' cover-lookup-gallery-loading' : ''}">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}${buildCoverLookupGalleryLoadingCards('pasted', manualPendingCount)}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>
     ${remoteCover ? `<section class="cover-lookup-section">
@@ -30813,6 +30818,7 @@ function renderCoverLookupModal() {
         </div>
         <div class="cover-lookup-manual-actions">
           <button class="button ui-button ui-button--medium cover-lookup-manual-submit" type="button" data-add-cover-lookup-remote="1" ${manualSearchDisabledAttr}>Extract images</button>
+          ${manualStatusText ? `<span class="cover-lookup-manual-status is-${escapeHtml(modalState.manualStatusTone || 'neutral')}" role="${String(modalState.manualStatusTone || '') === 'error' ? 'alert' : 'status'}">${escapeHtml(manualStatusText)}</span>` : ''}
         </div>
         </div>
       </section>
@@ -31310,6 +31316,9 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.failureNotice = '';
   state.coverLookup.modal.manualUrlText = '';
   state.coverLookup.modal.manualBusy = false;
+  state.coverLookup.modal.manualPendingCount = 0;
+  state.coverLookup.modal.manualStatusText = '';
+  state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.loading = true;
   state.coverLookup.modal.saving = false;
   els.overlay.hidden = false;
@@ -31343,6 +31352,9 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
+  state.coverLookup.modal.manualPendingCount = 0;
+  state.coverLookup.modal.manualStatusText = '';
+  state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.saving = false;
   state.coverLookup.modal.album = null;
   state.coverLookup.modal.taskId = '';
@@ -31780,13 +31792,16 @@ async function addRemoteCoverLinksFromLookup() {
   if (!album || (!urls.length && !attachmentCount)) return;
   extractCoverLookupPendingAttachments();
   if (!urls.length) {
-    state.coverLookup.modal.statusText = '';
-    state.coverLookup.modal.statusTone = 'neutral';
+    state.coverLookup.modal.manualStatusText = '';
+    state.coverLookup.modal.manualStatusTone = 'neutral';
     renderCoverLookupModal();
     return;
   }
   try {
     state.coverLookup.modal.manualBusy = true;
+    state.coverLookup.modal.manualPendingCount = urls.length ? 1 : 0;
+    state.coverLookup.modal.manualStatusText = '';
+    state.coverLookup.modal.manualStatusTone = 'neutral';
     renderCoverLookupModal();
     const response = await fetch('/utilities/cover-lookup/add-remote', {
       method: 'POST',
@@ -31814,21 +31829,15 @@ async function addRemoteCoverLinksFromLookup() {
       applyCoverLookupTaskModalStatus(data.task);
     }
     await loadCoverLookupTasks({ toast: false });
-    renderCoverLookupModal();
-    showToast(
-      extractedImageCount
-        ? `Extracted ${extractedImageCount} image${extractedImageCount === 1 ? '' : 's'} and added remote links.`
-        : 'Remote cover links added.',
-      'success',
-      2200,
-    );
+    state.coverLookup.modal.manualStatusText = '';
+    state.coverLookup.modal.manualStatusTone = 'neutral';
   } catch (error) {
-    state.coverLookup.modal.statusText = String(error?.message || 'Nothing was found in the pasted links.');
-    state.coverLookup.modal.statusTone = 'error';
+    state.coverLookup.modal.manualStatusText = "Couldn't extract images.";
+    state.coverLookup.modal.manualStatusTone = 'error';
     console.error('[AlbumHaven][CoverLookup] Failed to add remote links.', error);
-    showToast(error.message || 'Failed to add remote cover links.', 'error', 3000);
   } finally {
     state.coverLookup.modal.manualBusy = false;
+    state.coverLookup.modal.manualPendingCount = 0;
     renderCoverLookupModal();
   }
 }
@@ -42603,8 +42612,8 @@ async function handleUtilityBootstrapDrop(event) {
   try {
     await addCoverLookupFiles(event.dataTransfer?.files || []);
   } catch (error) {
-    state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
-    state.coverLookup.modal.statusTone = 'error';
+    state.coverLookup.modal.manualStatusText = String(error?.message || 'Unable to add image.');
+    state.coverLookup.modal.manualStatusTone = 'error';
     renderCoverLookupModal();
   }
   return true;
@@ -42620,8 +42629,8 @@ function stageCoverLookupFiles(coverLookupFiles) {
   if (!coverLookupFiles) return Promise.resolve();
   return addCoverLookupFiles(coverLookupFiles.files || [])
     .catch((error) => {
-      state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
-      state.coverLookup.modal.statusTone = 'error';
+      state.coverLookup.modal.manualStatusText = String(error?.message || 'Unable to add image.');
+      state.coverLookup.modal.manualStatusTone = 'error';
       renderCoverLookupModal();
     })
     .finally(() => { coverLookupFiles.value = ''; });

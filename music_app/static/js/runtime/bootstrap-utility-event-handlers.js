@@ -1144,8 +1144,8 @@ async function handleUtilityBootstrapDrop(event) {
   try {
     await addCoverLookupFiles(event.dataTransfer?.files || []);
   } catch (error) {
-    state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
-    state.coverLookup.modal.statusTone = 'error';
+    state.coverLookup.modal.manualStatusText = String(error?.message || 'Unable to add image.');
+    state.coverLookup.modal.manualStatusTone = 'error';
     renderCoverLookupModal();
   }
   return true;
@@ -1161,8 +1161,8 @@ function stageCoverLookupFiles(coverLookupFiles) {
   if (!coverLookupFiles) return Promise.resolve();
   return addCoverLookupFiles(coverLookupFiles.files || [])
     .catch((error) => {
-      state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
-      state.coverLookup.modal.statusTone = 'error';
+      state.coverLookup.modal.manualStatusText = String(error?.message || 'Unable to add image.');
+      state.coverLookup.modal.manualStatusTone = 'error';
       renderCoverLookupModal();
     })
     .finally(() => { coverLookupFiles.value = ''; });

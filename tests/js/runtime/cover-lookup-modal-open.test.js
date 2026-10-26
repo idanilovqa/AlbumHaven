@@ -87,6 +87,122 @@ test('opening Cover Lookup starts one gallery request without loading notificati
   assert.equal(galleryRequestCount, 1);
 });
 
+test('opening a compact album does not inherit an unrelated compact lookup task', async () => {
+  class TestButton {}
+  const overlay = { hidden: true, classList: { toggle: () => {} } };
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [{ id: 'unrelated-task', album_payload: { album_id: 99, name: 'Other' } }],
+        modal: { pastedImages: [] },
+      },
+    },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    buildTrackPathSignature: () => '',
+    sanitizeCoverLookupPossibleMatches: () => [],
+    document: {
+      body: { classList: { add: () => {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  await context.openCoverLookupModal({ album_id: 41, name: 'Current Release' });
+
+  assert.equal(context.state.coverLookup.modal.taskId, '');
+});
+
+test('split album conflict stays in Cover Lookup and choosing a release refreshes that exact album', async () => {
+  class TestButton {}
+  const oldAlbum = { album_id: 40, name: 'Old Album', album_artist: 'Artist' };
+  const firstRelease = {
+    album_id: 41,
+    key: 'artist::first release',
+    name: 'First Release',
+    album_artist: 'Artist',
+    year: 2001,
+    track_count: 8,
+  };
+  const secondRelease = {
+    album_id: 42,
+    key: 'artist::second release',
+    name: 'Second Release',
+    album_artist: 'Artist',
+    year: 2002,
+    track_count: 6,
+  };
+  const requests = [];
+  const toasts = [];
+  const overlay = {
+    hidden: false,
+    classList: { contains: () => false, toggle: () => {} },
+    querySelector: () => null,
+  };
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [],
+        modal: { album: oldAlbum, taskId: 'stale-task', pastedImages: [] },
+      },
+    },
+    URLSearchParams,
+    HTMLButtonElement: TestButton,
+    console,
+    buildTrackPathSignature: () => '',
+    sanitizeCoverLookupPossibleMatches: () => [],
+    showToast: (...args) => toasts.push(args),
+    fetch: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      if (requests.length === 1) {
+        return {
+          ok: false,
+          json: async () => ({
+            ok: false,
+            error: 'This album was split—choose the current release',
+            resolution_kind: 'album_split',
+            current_releases: [firstRelease, secondRelease],
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+    document: {
+      body: { classList: { add: () => {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.renderCoverLookupModal = () => {};
+  context.applyCoverLookupGalleryPayload = () => {};
+  context.markCoverLookupAutomaticImprovementSeen = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  await context.refreshCoverLookupGallery();
+
+  assert.equal(context.state.coverLookup.modal.loading, false);
+  assert.deepEqual(
+    context.state.coverLookup.modal.currentReleases.map((release) => release.album_id),
+    [41, 42],
+  );
+  assert.deepEqual(toasts, []);
+
+  await context.chooseCoverLookupCurrentRelease('42');
+
+  assert.equal(context.state.coverLookup.modal.album.album_id, 42);
+  assert.equal(context.state.coverLookup.modal.taskId, '');
+  assert.deepEqual(requests[1], { album: secondRelease, task_id: '' });
+});
+
 test('notification Cover Lookup uses a sheet on mobile without presenting a mobile page', async () => {
   class TestButton {}
   const classes = new Set();

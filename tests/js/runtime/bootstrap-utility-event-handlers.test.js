@@ -59,6 +59,13 @@ test('dismissing an interrupted cover lookup notice clears and rerenders it', ()
     /data-dismiss-cover-lookup-notice[\s\S]*?failureNotice = '';[\s\S]*?renderCoverLookupModal\(\);/,
   );
 });
+
+test('split release choices use the shared Cover Lookup rebind action', () => {
+  assert.match(
+    helperSource,
+    /closest\('\[data-cover-lookup-current-release\]'\)[\s\S]*?chooseCoverLookupCurrentRelease\([\s\S]*?getAttribute\('data-cover-lookup-current-release'\)/,
+  );
+});
 const utilityListBuildersSource = fs.readFileSync(utilityListBuildersPath, 'utf8');
 const utilityLoadersSource = fs.readFileSync(utilityLoadersPath, 'utf8');
 const utilityRenderersSource = fs.readFileSync(path.join(

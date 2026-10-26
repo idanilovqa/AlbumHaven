@@ -941,6 +941,14 @@ async function handleUtilityBootstrapClick(event) {
     selectRemoteCoverFromLookup(candidateId);
     return;
   }
+  const currentReleaseButton = event.target.closest('[data-cover-lookup-current-release]');
+  if (currentReleaseButton) {
+    event.preventDefault();
+    void chooseCoverLookupCurrentRelease(
+      currentReleaseButton.getAttribute('data-cover-lookup-current-release') || '',
+    );
+    return;
+  }
 
   const trackProblematicButton = event.target.closest('[data-open-track-problematic="1"]');
   if (trackProblematicButton) {

@@ -5445,6 +5445,7 @@ const state = {
       pendingPastedImageId: '',
       selectedRemoteId: '',
       possibleMatches: [],
+      currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
       activeLocalSelectionPath: '',
@@ -28760,6 +28761,15 @@ function buildCoverLookupAlbumSubtitle(album) {
   return [album.album_artist || '', album.name || '', album.year || ''].filter(Boolean).join(' - ');
 }
 
+function buildCoverLookupCurrentReleaseLabel(release) {
+  return [
+    release?.album_artist || '',
+    release?.name || '',
+    release?.year || '',
+    release?.edition || '',
+  ].filter(Boolean).join(' · ');
+}
+
 function buildTrackPathSignature(album) {
   const tracks = Array.isArray(album?.tracks) ? album.tracks : [];
   return tracks.map((track) => String(track?.path || '')).filter(Boolean).sort().join('::');
@@ -30579,6 +30589,29 @@ function renderCoverLookupModal() {
     }
     return;
   }
+  const currentReleases = Array.isArray(modalState.currentReleases)
+    ? modalState.currentReleases : [];
+  if (currentReleases.length) {
+    els.body.innerHTML = `
+      <section class="cover-lookup-section cover-lookup-current-release-choice" role="group" aria-labelledby="cover-lookup-current-release-title">
+        <h4 class="cover-lookup-section-title" id="cover-lookup-current-release-title">This album was split—choose the current release</h4>
+        <div class="cover-lookup-current-release-list">
+          ${currentReleases.map((release) => `
+            <button class="cover-lookup-current-release" type="button" data-cover-lookup-current-release="${escapeHtml(release.album_id || '')}">
+              <span>${escapeHtml(buildCoverLookupCurrentReleaseLabel(release))}</span>
+              <span class="cover-lookup-current-release-count">${escapeHtml(String(release.track_count || 0))} ${Number(release.track_count) === 1 ? 'track' : 'tracks'}</span>
+            </button>
+          `).join('')}
+        </div>
+      </section>`;
+    els.body.scrollTop = 0;
+    if (els.findBetter) els.findBetter.disabled = true;
+    if (els.saveRemote) {
+      els.saveRemote.hidden = false;
+      els.saveRemote.disabled = true;
+    }
+    return;
+  }
   els.body.innerHTML = `
     <section class="cover-lookup-section">
       <h4 class="cover-lookup-section-title">LOCAL · ${formatCoverLookupImageCount(localCovers.length)}</h4>
@@ -30992,9 +31025,20 @@ async function refreshCoverLookupGallery(showLoading = true) {
     const data = await response.json().catch(() => ({}));
     if (!isCurrent()) return;
     if (!response.ok || !data.ok) {
+      if (
+        data.resolution_kind === 'album_split'
+        && Array.isArray(data.current_releases)
+        && data.current_releases.length > 1
+      ) {
+        state.coverLookup.modal.currentReleases = data.current_releases;
+        state.coverLookup.modal.loading = false;
+        renderCoverLookupModal();
+        return;
+      }
       throw new Error(data.error || 'Failed to load cover art gallery');
     }
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
+    state.coverLookup.modal.currentReleases = [];
     applyCoverLookupGalleryPayload(data);
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
@@ -31006,6 +31050,17 @@ async function refreshCoverLookupGallery(showLoading = true) {
     renderCoverLookupModal();
     showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
   }
+}
+
+async function chooseCoverLookupCurrentRelease(albumId) {
+  const release = (state.coverLookup.modal.currentReleases || []).find((candidate) => (
+    String(candidate?.album_id || '') === String(albumId || '')
+  ));
+  if (!release) return;
+  const overlay = getCoverLookupModalElements().overlay;
+  await openCoverLookupModal(release, {
+    mobileSheet: Boolean(overlay && isCoverLookupMobileSheet(overlay)),
+  });
 }
 
 async function openCoverLookupModal(album, options = {}) {
@@ -31022,10 +31077,12 @@ async function openCoverLookupModal(album, options = {}) {
   if (!mobileSheet && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
   const requestedTaskId = String(options.taskId || '');
+  const albumTrackSignature = buildTrackPathSignature(album);
   const matchingTask = (state.coverLookup.tasks || []).find((task) => (
     requestedTaskId
       ? String(task?.id || '') === requestedTaskId
-      : buildTrackPathSignature(task?.album_payload) === buildTrackPathSignature(album)
+      : albumTrackSignature
+        && buildTrackPathSignature(task?.album_payload) === albumTrackSignature
   ));
   const cachedCandidates = sanitizeCoverLookupPossibleMatches(matchingTask?.possible_matches);
   const expectedRemoteCount = Math.max(
@@ -31047,6 +31104,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
+  state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = cachedCandidates.length
     ? String(matchingTask?.id || '')
@@ -31100,6 +31158,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.localCovers = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.possibleMatches = [];
+  state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = '';
   state.coverLookup.modal.expectedRemoteCount = 0;
@@ -42093,6 +42152,14 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const candidateId = selectRemoteCoverButton.getAttribute('data-select-remote-cover') || '';
     selectRemoteCoverFromLookup(candidateId);
+    return;
+  }
+  const currentReleaseButton = event.target.closest('[data-cover-lookup-current-release]');
+  if (currentReleaseButton) {
+    event.preventDefault();
+    void chooseCoverLookupCurrentRelease(
+      currentReleaseButton.getAttribute('data-cover-lookup-current-release') || '',
+    );
     return;
   }
 

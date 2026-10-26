@@ -150,6 +150,42 @@
   display: grid;
   gap: 12px;
 }
+.cover-lookup-current-release-list {
+  display: grid;
+  gap: 8px;
+}
+.cover-lookup-current-release-choice > .cover-lookup-section-title {
+  letter-spacing: normal;
+  text-transform: none;
+}
+.cover-lookup-current-release {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--appearance-line, var(--border));
+  border-radius: 10px;
+  background: var(--appearance-control, var(--panel));
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.cover-lookup-current-release:hover,
+.cover-lookup-current-release:focus-visible {
+  border-color: var(--appearance-interaction-outline, var(--accent));
+}
+.cover-lookup-current-release > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cover-lookup-current-release-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
 .cover-lookup-section-heading {
   display: flex;
   align-items: center;

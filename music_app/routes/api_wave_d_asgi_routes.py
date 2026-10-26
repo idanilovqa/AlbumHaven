@@ -447,6 +447,63 @@ def _cover_lookup_task_track_paths(
     return task_track_paths
 
 
+async def _cover_lookup_album_split_response(
+    config: Mapping[str, object],
+    task_track_paths: set[str],
+) -> tuple[JsonDict, int] | None:
+    if len(task_track_paths) < 2:
+        return None
+    try:
+        albums = await run_in_threadpool(
+            PostgresLibraryBrowseRepository(config).build_album_payloads_by_track_paths,
+            task_track_paths,
+        )
+    except Exception:
+        return None
+    current_releases: list[dict[str, object]] = []
+    covered_paths: set[str] = set()
+    seen_album_ids: set[int] = set()
+    for album in albums:
+        if not isinstance(album, Mapping):
+            continue
+        album_id = _album_id(album)
+        album_paths = _album_track_paths(album)
+        matching_paths = album_paths & task_track_paths
+        album_name = str(album.get("name") or album.get("album") or "").strip()
+        if (
+            album_id is None
+            or not matching_paths
+            or not album_name
+        ):
+            continue
+        covered_paths.update(matching_paths)
+        if album_id in seen_album_ids:
+            continue
+        seen_album_ids.add(album_id)
+        current_releases.append(
+            {
+                "album_id": album_id,
+                "key": str(album.get("key") or album.get("album_ref") or "").strip(),
+                "album_artist": str(album.get("album_artist") or album.get("artist") or "").strip(),
+                "name": album_name,
+                "year": album.get("year") or "",
+                "edition": str(album.get("edition") or album.get("edition_name") or "").strip(),
+                "track_count": len(album_paths),
+            }
+        )
+    if len(current_releases) < 2 or covered_paths != task_track_paths:
+        return None
+    return (
+        {
+            "ok": False,
+            "error": "This album was split—choose the current release",
+            "resolution_kind": "album_split",
+            "current_releases": current_releases,
+        },
+        409,
+    )
+
+
 def _same_cover_lookup_generation(left: object, right: object) -> bool:
     left_text = str(left or "").strip()
     right_text = str(right or "").strip()
@@ -580,6 +637,9 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         fallback_track_paths=task_track_paths,
     )
     if album_context is None:
+        split_response = await _cover_lookup_album_split_response(config, task_track_paths)
+        if split_response is not None:
+            return _json_response(split_response)
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
     repository, album_id, identity_error = _resolved_snapshot_album_context(
         config,
@@ -587,12 +647,18 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         album_context.track_paths,
     )
     if identity_error is not None:
+        split_response = await _cover_lookup_album_split_response(config, task_track_paths)
+        if split_response is not None:
+            return _json_response(split_response)
         return _json_response(identity_error)
     if task_payload and not _task_matches_album_context(
         task_payload,
         track_paths=album_context.track_paths,
         album_id=album_id,
     ):
+        split_response = await _cover_lookup_album_split_response(config, task_track_paths)
+        if split_response is not None:
+            return _json_response(split_response)
         return _json_response(
             ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)
         )

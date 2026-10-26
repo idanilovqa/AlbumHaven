@@ -719,6 +719,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-039 stale split identity stays open and chooses an exact current release",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally",
               "area": "cover-providers"
             },

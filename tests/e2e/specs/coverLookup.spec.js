@@ -1071,6 +1071,76 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
   });
 });
 
+test('FTC-COVERS-039 stale split identity stays open and chooses an exact current release', { tag: '@area:cover-providers' }, async ({
+  page,
+  galleryActions,
+  trackModalActions,
+  coverLookupActions,
+}) => {
+  const currentReleases = [
+    {
+      album_id: 41001,
+      key: 'e2e::split-release-one',
+      album_artist: 'Split Fixture Artist',
+      name: 'Current Release One',
+      year: 2001,
+      edition: '',
+      track_count: 8,
+    },
+    {
+      album_id: 41002,
+      key: 'e2e::split-release-two',
+      album_artist: 'Split Fixture Artist',
+      name: 'Current Release Two',
+      year: 2002,
+      edition: 'Expanded',
+      track_count: 6,
+    },
+  ];
+  const requests = [];
+  await page.route('**/utilities/cover-lookup/gallery', async (route) => {
+    requests.push(route.request().postDataJSON());
+    if (requests.length === 1) {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: false,
+          error: 'This album was split—choose the current release',
+          resolution_kind: 'album_split',
+          current_releases: currentReleases,
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, local_covers: [], other_art: [] }),
+    });
+  });
+
+  await galleryActions.goto(COVER_LOOKUP_FILTERED_URL);
+  await galleryActions.waitForGalleryReady();
+  expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
+    .toEqual(COVER_LOOKUP_TARGET);
+  await trackModalActions.waitForLoadedSummary();
+  await trackModalActions.openCoverLookup();
+
+  const selector = page.getByRole('group', {
+    name: 'This album was split—choose the current release',
+  });
+  await expect(selector).toBeVisible();
+  await selector.getByRole('button', { name: /Current Release Two/ }).click();
+
+  await expect(coverLookupActions.coverLookup.modal).toBeVisible();
+  await expect(coverLookupActions.coverLookup.modalSubtitle).toHaveText(
+    'Split Fixture Artist - Current Release Two - 2002',
+  );
+  expect(requests[1]).toEqual({ album: currentReleases[1], task_id: '' });
+  await expect(page.getByText('Lookup task does not belong to this album')).toHaveCount(0);
+});
+
 test('FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,

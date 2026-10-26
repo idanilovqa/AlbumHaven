@@ -183,15 +183,10 @@ function buildUtilityIntegrationDetail(item) {
     return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Import Local Playlist</h3><div class="settings-integration-actions">${button({ label: 'Import', disabled: true, attributes: { 'data-local-playlist-import': '1' } })}</div></div>`;
   }
   if (item?.key === 'foobar') {
-    const format = state.utility.foobarFormat || 'Playback Statistics XML';
+    if (window.AlbumHavenCapabilities?.allows('account.self.foobar.write') !== true)
+      return '<div class="utility-empty-state">Foobar import is unavailable.</div>';
     return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Foobar2000</h3>
-      <section class="library-settings-section"><label class="lastfm-inline-field"><span>SQLite database</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
-      <div class="settings-integration-actions">${button({ label: 'Save', variant: 'primary', disabled: true })}</div></section>
-      <section class="library-settings-section"><h4>Import playback history</h4><div class="settings-integration-actions">
-      ${button({ label: format, attributes: { 'data-foobar-format-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
-      ${button({ label: 'Import', disabled: true, attributes: { 'data-foobar-import': '1' } })}</div>
-      <p id="foobar-unavailable">Import is unavailable in this build. Setup instructions and export references are available.</p></section>
-      <div class="settings-integration-actions settings-instructions-action">${button({ label: 'Read setup instructions', attributes: { 'data-foobar-help': '1' } })}</div></div>`;
+      <div data-foobar-import-host><p role="status">Loading import controls…</p></div></div>`;
   }
   if (!item || item.key !== 'lastfm') return '<div class="utility-empty-state">Select an integration.</div>';
   const draft = state.utility.integrationDrafts?.lastfm || {};

@@ -886,6 +886,13 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
 }
 
 async function loadUtilityIntegrations(force = false) {
+  if (window.AlbumHavenCapabilities?.allows('integration.settings.read') !== true) {
+    state.utility.integrations = [];
+    state.utility.integrationsLoaded = false;
+    state.utility.integrationsLoading = false;
+    renderUtilityModalContent();
+    return;
+  }
   if (state.utility.integrationsLoading) return state.utility.integrationsLoadPromise;
   if (state.utility.integrationsLoaded && !force) {
     renderUtilityModalContent();
@@ -899,6 +906,10 @@ async function loadUtilityIntegrations(force = false) {
     try {
       const response = await fetch('/utilities/integrations', { headers: { Accept: 'application/json' } });
       const data = await response.json();
+      if (window.AlbumHavenCapabilities?.allows('integration.settings.read') !== true) {
+        state.utility.integrations = [];
+        return;
+      }
       state.utility.integrations = Array.isArray(data.integrations) ? data.integrations : [];
       state.utility.integrationsLoaded = true;
       const lastfm = state.utility.integrations.find((item) => String(item?.key || '') === 'lastfm');
@@ -1442,6 +1453,7 @@ async function submitPendingLastfmScrobbles() {
 
 function closeUtilityModal(skipAppearanceGuard = false) {
   if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
+  if (typeof disposeUtilityFoobarPreview === 'function') disposeUtilityFoobarPreview();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('utilities')) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);

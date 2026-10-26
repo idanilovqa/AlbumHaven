@@ -729,7 +729,7 @@ test('FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both co
         JOINT_CREDIT_TARGET.displayArtist,
       );
       expect(await galleryActions.readAlbumIdentityCardCount({
-        artist: JOINT_CREDIT_TARGET.displayArtist,
+        artist: member,
         album: JOINT_CREDIT_TARGET.album,
         year: String(JOINT_CREDIT_TARGET.year),
       })).toBe(1);

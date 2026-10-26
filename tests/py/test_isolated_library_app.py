@@ -4391,6 +4391,13 @@ def test_provider_fixture_serves_music_service_musicbrainz_and_cover_archive_sha
         assert response.getheader("Content-Type") == "image/jpeg"
         assert response.read() == b"fixture-image"
 
+        service._server.set_cover_lookup_mode("failed-image")
+        connection.request("GET", urlparse(page_candidates[0]).path)
+        response = connection.getresponse()
+        assert response.status == 404
+        response.read()
+        service._server.set_cover_lookup_mode("normal")
+
         connection.request("GET", urlparse(artist_url).path)
         response = connection.getresponse()
         assert response.status == 200

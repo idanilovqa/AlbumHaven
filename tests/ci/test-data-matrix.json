@@ -1375,6 +1375,32 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-040 failed accepted save restores prior art and keeps its notification",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:failed-save-reconciliation"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:failed-cover-save"
+    ],
+    "expectedContracts": [
+      "failed-save-restores-prior-art",
+      "failed-save-notification-retained"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:failed-cover-save",
+      "filesystemCopy": "media/cases/failed-cover-save"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally",
     "profile": "functional-core",
     "setupScope": "isolated",

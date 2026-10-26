@@ -9,7 +9,7 @@
   },
   "relativeDurationBalanceUnits": {
     "gallery-search-visual": 45,
-    "cover-providers-1": 20,
+    "cover-providers-1": 21,
     "cover-providers-2": 20,
     "metadata-mutations": 26,
     "playback-utilities-1": 18,
@@ -582,6 +582,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-040 failed accepted save restores prior art and keeps its notification",
               "area": "cover-providers"
             },
             {

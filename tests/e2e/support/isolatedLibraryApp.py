@@ -4452,6 +4452,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "normal",
             "no-results",
             "failed",
+            "failed-image",
             "metallica-mismatch",
             "service-deadline",
             "artist-conjunction",
@@ -5019,6 +5020,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         provider: str,
         include_body: bool,
     ) -> None:
+        if self.server.get_cover_lookup_mode() == "failed-image":
+            self.send_error(404)
+            return
         if (
             cover_id == "provider-storage-policy-cover" and provider == "apple"
         ) or cover_id == "selection-concurrency-b":

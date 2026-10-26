@@ -981,6 +981,57 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
   });
 });
 
+test('FTC-COVERS-040 failed accepted save restores prior art and keeps its notification', { tag: '@area:cover-providers' }, async ({
+  appBarActions,
+  coverLookupActions,
+  galleryActions,
+  trackModalActions,
+}, testInfo) => {
+  testInfo.setTimeout(180000);
+
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  expect(await galleryActions.selectAlbumDetailsByIdentity(PARTIAL_COVER_LOOKUP_TARGET))
+    .toEqual(PARTIAL_COVER_LOOKUP_TARGET);
+  await trackModalActions.waitForLoadedSummary();
+  const previousCover = await trackModalActions.trackModal.readDetailedCoverImageCheckpoint();
+  expect(previousCover.complete).toBe(true);
+  expect(previousCover.naturalWidth).toBeGreaterThan(0);
+
+  await trackModalActions.openCoverLookup();
+  await coverLookupActions.waitForModalReady();
+  await coverLookupActions.setProviderFixtureMode('normal');
+  await coverLookupActions.holdLaterProviderFixture();
+  const started = await coverLookupActions.startSearch();
+  const taskId = String(started.task?.id || '').trim();
+  expect(taskId).not.toBe('');
+  await coverLookupActions.waitForLaterProviderFixtureBlocked();
+  await coverLookupActions.waitForPartialRemoteCandidates();
+  const appleCandidate = (await coverLookupActions.readRemoteCandidateSummaries())
+    .find((candidate) => /apple/i.test(candidate.source));
+  expect(appleCandidate?.id).toBeTruthy();
+  await coverLookupActions.selectRemoteCandidateById(appleCandidate.id);
+  await coverLookupActions.setProviderFixtureMode('failed-image');
+
+  const saved = await coverLookupActions.saveSelectedRemoteCandidate({ timeout: 30000 });
+  expect(String(saved.payload?.task?.id || '')).toBe(taskId);
+  await expect(appBarActions.appBar.errorToasts).toHaveCount(1, { timeout: 30000 });
+  await expect(appBarActions.appBar.errorToasts).toContainText(/failed|could not/i);
+  await expect.poll(
+    async () => (await trackModalActions.trackModal.readDetailedCoverImageCheckpoint()).productionSrc,
+    { timeout: 30000 },
+  ).toBe(previousCover.productionSrc);
+
+  await trackModalActions.close();
+  await coverLookupActions.openDrawer();
+  await coverLookupActions.waitForDrawerOpen();
+  await coverLookupActions.waitForTaskStatusById(taskId, 'Lookup failed');
+  const retainedTask = coverLookupActions.coverLookup.taskCardById(taskId);
+  await expect(retainedTask).toHaveCount(1);
+  await expect(retainedTask).not.toContainText('Art chosen');
+  await coverLookupActions.setProviderFixtureMode('normal');
+});
+
 test('FTC-COVERS-035 persisted notification candidates remain visible and save after app restart', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   freshBrowserSession,

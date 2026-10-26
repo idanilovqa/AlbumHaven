@@ -22,6 +22,7 @@ const SOUNDTRACK_LEAD_SOLO = 'Sia Soundtrack Solo';
 
 test('FTC-TAGS-027 loads every disc when expanding an indexed album folder', { tag: '@area:tag-edit' }, async ({
   galleryActions,
+  page,
   searchToolbarActions,
   stepLogger,
   tagEditorActions,
@@ -37,12 +38,17 @@ test('FTC-TAGS-027 loads every disc when expanding an indexed album folder', { t
   });
 
   await stepLogger.step('Resolve the album root and retain files from both discs', async () => {
+    const responsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && response.url().endsWith('/utilities/tag-editor/folder-files')
+    ));
     await tagEditorActions.loadAllFilesFromFolder({ expectedTrackCount: 18 });
+    const payload = await (await responsePromise).json();
 
     const paths = await tagEditorActions.readTrackPaths();
     expect(paths.some((path) => /[\\/]Disc 1[\\/]/u.test(path))).toBe(true);
     expect(paths.some((path) => /[\\/]Disc 2[\\/]/u.test(path))).toBe(true);
-    expect(await tagEditorActions.readFolderPath()).toMatch(
+    expect(payload.folder_path).toMatch(
       /[\\/]Non-Compilation Cross-Credits$/u,
     );
   });

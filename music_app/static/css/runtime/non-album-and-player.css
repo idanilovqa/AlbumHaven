@@ -438,7 +438,7 @@ transition: color 160ms ease, opacity 160ms ease;
 .compact-player-shell[hidden] { display: none; }
 .compact-player-cover {
 flex: 0 0 52px; width: 52px; height: 52px; padding: 0; border: 0;
-border-radius: 14px; background: #07110e center/cover no-repeat; box-shadow: 0 0 22px color-mix(in srgb, var(--appearance-play, #4ade80) 55%, transparent); cursor: grab;
+border-radius: 14px; background: #07110e center/100% 100% no-repeat; box-shadow: 0 0 22px color-mix(in srgb, var(--appearance-play, #4ade80) 55%, transparent); cursor: grab;
 }
 .compact-player-cover:active { cursor: grabbing; }
 .compact-player-transport { display: flex; align-items: center; gap: 5px; }

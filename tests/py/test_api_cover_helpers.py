@@ -91,6 +91,7 @@ def test_apply_cover_path_wrapper_forwards_linked_remote_cover_fields(monkeypatc
         "library_state": library_state,
         "cover_revision": None,
         "schedule_cache_update": True,
+        "include_problematic_album": True,
         "manual_selection": True,
     }
 

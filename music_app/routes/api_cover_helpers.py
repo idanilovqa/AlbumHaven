@@ -37,6 +37,7 @@ def apply_cover_path_for_tracks(
     remote_cover_width: int | None = None,
     remote_cover_height: int | None = None,
     schedule_cache_update: bool = True,
+    include_problematic_album: bool = True,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     return apply_cover_selection_for_tracks(
         track_paths,
@@ -53,6 +54,7 @@ def apply_cover_path_for_tracks(
         remote_cover_width=remote_cover_width,
         remote_cover_height=remote_cover_height,
         schedule_cache_update=schedule_cache_update,
+        include_problematic_album=include_problematic_album,
         manual_selection=True,
     )
 
@@ -120,6 +122,7 @@ def apply_cover_selection_for_tracks(
     cover_revision: str | None = None,
     schedule_cache_update: bool = True,
     manual_selection: bool = False,
+    include_problematic_album: bool = True,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     if config is None or logger is None or library_state is None:
         raise ValueError("apply_cover_selection_for_tracks requires explicit config, logger, and library_state")
@@ -135,6 +138,8 @@ def apply_cover_selection_for_tracks(
         )
 
     def find_problematic_album(updated_track_paths: set[str]) -> dict[str, object] | None:
+        if not include_problematic_album:
+            return None
         updated_albums = find_updated_albums(updated_track_paths)
         album_key = str(updated_albums[0].get("key") or "") if updated_albums else ""
         if not album_key:

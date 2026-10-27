@@ -3042,10 +3042,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       : [data.updated_album].filter(Boolean);
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     markAlbumCoverPathsFresh(updatedAlbums);
-    const preloadResult = updatedAlbums[0]
-      ? await preloadCoverLookupAlbumImageWithTimeout(updatedAlbums[0])
-      : false;
-    if (preloadResult !== null) clearOptimisticAlbumCovers(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     if (taskId) {
@@ -3053,6 +3049,13 @@ async function saveLocalCoverFromLookup(sourcePath) {
       renderCoverLookupDrawer();
     }
     if (ownsModal()) closeCoverLookupModal();
+    const preloadResult = updatedAlbums[0]
+      ? await preloadCoverLookupAlbumImageWithTimeout(updatedAlbums[0])
+      : false;
+    if (preloadResult !== null) {
+      clearOptimisticAlbumCovers(updatedAlbums);
+      refreshCoverLookupAlbumArtwork(album, updatedAlbums);
+    }
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (previousAlbum) {

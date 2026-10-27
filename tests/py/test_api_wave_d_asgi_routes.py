@@ -831,7 +831,7 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     assert select_status == 200
     select_payload = _decode_json(select_body)
     assert select_payload["selected_cover_path"] == selected_cover_path
-    assert select_payload["gallery"]["active_cover_path"] == selected_cover_path
+    assert "gallery" not in select_payload
     assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_path"] == selected_cover_path
 
     delete_status, _delete_headers, delete_body = _run_asgi_request(
@@ -1816,12 +1816,27 @@ def test_asgi_local_cover_selection_response_and_runtime_preserve_explicit_autho
         return {"album_rows_updated": 1, "track_file_rows_updated": 1}
     monkeypatch.setattr(api_cover_helpers, "persist_cover_selection_for_tracks_for_config", persist_selection)
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        api_cover_helpers,
+        "build_problematic_album_detail_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cover selection must not build Problematic Files details")
+        ),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "_serialize_cover_gallery_from_asgi",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cover selection must not rebuild the gallery before acknowledgement")
+        ),
+    )
     status, _headers, body = _run_asgi_request(
         asgi_app, "POST", "/utilities/cover-lookup/local-select",
         json_body={"album": _album_payload(track_path), "source_path": str(selected_image)},
     )
     assert status == 200
-    updated = _decode_json(body)["updated_album"]
+    response_payload = _decode_json(body)
+    updated = response_payload["updated_album"]
     assert updated["cover_selection_origin"] == "user"
     assert updated["cover_selection_provenance"] == "explicit"
     assert (updated["local_cover_width"], updated["local_cover_height"]) == (4000, 4000)
@@ -1833,6 +1848,8 @@ def test_asgi_local_cover_selection_response_and_runtime_preserve_explicit_autho
     assert app.library_state["file_cache"][str(track_path)]["cover_selection_origin"] == "user"
     assert app.library_state["file_cache"][str(track_path)]["cover_selection_provenance"] == "explicit"
     assert app.library_state["file_cache"][str(track_path)]["local_cover_width"] == 4000
+    assert response_payload["updated_problematic_album"] is None
+    assert "gallery" not in response_payload
 
 
 def test_asgi_local_cover_selection_persists_before_success_and_logs_safe_completion(app, monkeypatch):
@@ -1907,7 +1924,11 @@ def test_asgi_local_cover_selection_persists_before_success_and_logs_safe_comple
     assert operations == ["persist", "apply-runtime", "log-success"]
     assert len(logged_events) == 1
     event = logged_events[0]
-    assert event == {
+    assert {key: event[key] for key in (
+        "config", "logger", "message", "history_scope", "level", "history",
+        "artist", "album", "year", "target_filename", "album_rows_updated",
+        "track_file_rows_updated",
+    )} == {
         "config": app.config,
         "logger": asgi_app.state.logger,
         "message": "Local cover selection persisted",
@@ -1921,6 +1942,17 @@ def test_asgi_local_cover_selection_persists_before_success_and_logs_safe_comple
         "album_rows_updated": 1,
         "track_file_rows_updated": 1,
     }
+    assert set(event["timings_ms"]) == {
+        "resolve_and_validate",
+        "promotion",
+        "hash",
+        "persistence",
+        "lock_wait",
+        "database",
+        "runtime_refresh",
+        "total",
+    }
+    assert all(value >= 0 for value in event["timings_ms"].values())
     event_text = repr(event)
     assert str(track_path.parent) not in event_text
     assert str(track_path) not in event_text
@@ -2514,6 +2546,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
                 "config": kwargs.get("config"),
                 "logger": kwargs.get("logger"),
                 "library_state": kwargs.get("library_state"),
+                "include_problematic_album": kwargs.get("include_problematic_album"),
             }
         )
         return [{"tracks": [{"path": str(track_path), "cover_path": str(cover_path) if cover_path else None}]}], None
@@ -2591,7 +2624,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     select_success_payload = _decode_json(select_success_body)
     assert select_success_payload["ok"] is True
     assert select_success_payload["selected_cover_path"] == str(track_path.parent / "cover.jpg")
-    assert select_success_payload["gallery"]["album_root"] == str(track_path.parent)
+    assert "gallery" not in select_success_payload
     assert delete_success_status == 200
     delete_success_payload = _decode_json(delete_success_body)
     assert delete_success_payload["ok"] is True
@@ -2609,6 +2642,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "config": app.config,
             "logger": asgi_app.state.logger,
             "library_state": asgi_app.state.library_state,
+            "include_problematic_album": False,
         },
         {
             "track_paths": {str(track_path)},
@@ -2616,6 +2650,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "config": app.config,
             "logger": asgi_app.state.logger,
             "library_state": asgi_app.state.library_state,
+            "include_problematic_album": None,
         },
         {
             "track_paths": {str(track_path)},
@@ -2623,6 +2658,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "config": app.config,
             "logger": asgi_app.state.logger,
             "library_state": asgi_app.state.library_state,
+            "include_problematic_album": None,
         },
     ]
     assert select_status == 400

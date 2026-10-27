@@ -2234,6 +2234,11 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   const fetchCalls = [];
   const refreshedAlbums = [];
   const preloadedAlbums = [];
+  let signalPreloadStarted;
+  let finishPreload;
+  const preloadStarted = new Promise((resolve) => { signalPreloadStarted = resolve; });
+  const preloadFinished = new Promise((resolve) => { finishPreload = resolve; });
+  let closeCalls = 0;
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
     showToast: () => {},
@@ -2263,7 +2268,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     tasks: [],
     optimisticAlbumCovers: {},
   };
-  context.closeCoverLookupModal = () => {};
+  context.closeCoverLookupModal = () => { closeCalls += 1; };
   context.markAlbumCoverPathsFresh = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums, options = {}) => {
     refreshedAlbums.push({
@@ -2284,6 +2289,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
         context.state.coverLookup.optimisticAlbumCovers,
       )),
     });
+    signalPreloadStarted();
+    await preloadFinished;
     return true;
   };
   context.markCoverLookupTaskActionTaken = () => {};
@@ -2301,7 +2308,11 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     };
   };
 
-  await context.saveLocalCoverFromLookup(sourcePath);
+  const savePromise = context.saveLocalCoverFromLookup(sourcePath);
+  await preloadStarted;
+  assert.equal(closeCalls, 1, 'a saved local cover must close before preview preloading finishes');
+  finishPreload();
+  await savePromise;
 
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/local-select');

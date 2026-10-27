@@ -1077,6 +1077,7 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
 
 @router.post("/utilities/cover-lookup/local-select")
 async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
+    request_started_at = perf_counter()
     if client_surface_from_request(request) == "tv":
         return _json_response(({"ok": False, "error": "Local cover selection is unavailable on TV."}, 403))
     history_scope = await history_scope_for_request(request, required=False)
@@ -1128,22 +1129,29 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
+    resolution_finished_at = perf_counter()
     promotion = begin_local_image_promotion(
         resolved,
         album_context.album_root,
         serialize_selection=True,
     )
     authoritative_cover = promotion.cover_path
+    promotion_finished_at = perf_counter()
     updated_albums: list[dict[str, object]] = []
     updated_problematic_album = None
     runtime_refresh_error: Exception | None = None
     runtime_fallback_error: Exception | None = None
     commit_guard_called = False
     database_commit_completed = False
+    lock_wait_ms = 0.0
+    database_ms = 0.0
+    runtime_refresh_ms = 0.0
 
     def refresh_runtime_state() -> None:
         nonlocal updated_albums, updated_problematic_album
         nonlocal runtime_refresh_error, runtime_fallback_error
+        nonlocal runtime_refresh_ms
+        runtime_started_at = perf_counter()
         try:
             updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
                 authoritative_track_paths,
@@ -1153,6 +1161,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                 library_state=library_state,
                 cover_revision=cover_revision,
                 schedule_cache_update=False,
+                include_problematic_album=False,
             )
         except Exception as exc:
             runtime_refresh_error = exc
@@ -1165,14 +1174,21 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                 )
             except Exception as fallback_exc:
                 runtime_fallback_error = fallback_exc
+        finally:
+            runtime_refresh_ms += (perf_counter() - runtime_started_at) * 1000
 
     def commit_cover_selection(commit_action) -> object:
-        nonlocal commit_guard_called
+        nonlocal commit_guard_called, lock_wait_ms, database_ms
         commit_guard_called = True
+        lock_requested_at = perf_counter()
 
         def commit_and_refresh_runtime_state() -> object:
             nonlocal database_commit_completed
+            nonlocal lock_wait_ms, database_ms
+            lock_wait_ms += (perf_counter() - lock_requested_at) * 1000
+            database_started_at = perf_counter()
             commit_result = commit_action()
+            database_ms += (perf_counter() - database_started_at) * 1000
             database_commit_completed = True
             refresh_runtime_state()
             return commit_result
@@ -1183,7 +1199,10 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
         )
 
     try:
+        hash_started_at = perf_counter()
         cover_revision = cover_revision_for_path(authoritative_cover)
+        hash_ms = (perf_counter() - hash_started_at) * 1000
+        persistence_started_at = perf_counter()
         persistence_result = persist_cover_selection_for_tracks(
             authoritative_track_paths,
             authoritative_cover,
@@ -1194,6 +1213,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
             explicit_selection=True,
             commit_guard=commit_cover_selection,
         )
+        persistence_ms = (perf_counter() - persistence_started_at) * 1000
     except Exception as exc:
         if database_commit_completed:
             complete_local_image_promotion(promotion)
@@ -1333,6 +1353,16 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
         target_filename=authoritative_cover.name,
         album_rows_updated=int(persistence_result.get("album_rows_updated") or 0),
         track_file_rows_updated=int(persistence_result.get("track_file_rows_updated") or 0),
+        timings_ms={
+            "resolve_and_validate": round((resolution_finished_at - request_started_at) * 1000, 2),
+            "promotion": round((promotion_finished_at - resolution_finished_at) * 1000, 2),
+            "hash": round(hash_ms, 2),
+            "persistence": round(persistence_ms, 2),
+            "lock_wait": round(lock_wait_ms, 2),
+            "database": round(database_ms, 2),
+            "runtime_refresh": round(runtime_refresh_ms, 2),
+            "total": round((perf_counter() - request_started_at) * 1000, 2),
+        },
      history_scope=history_scope)
     return JSONResponse(
         {
@@ -1342,11 +1372,6 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,
-            "gallery": await _serialize_cover_gallery_from_asgi(
-                request,
-                album_context.album_root,
-                authoritative_track_paths,
-            ),
         }
     )
 

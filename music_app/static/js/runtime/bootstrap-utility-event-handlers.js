@@ -957,6 +957,14 @@ async function handleUtilityBootstrapClick(event) {
     );
     return;
   }
+    const trackModalCurrentRelease = event.target.closest('[data-track-modal-current-release]');
+    if (trackModalCurrentRelease) {
+      event.preventDefault();
+      selectTrackModalCurrentRelease(
+        trackModalCurrentRelease.getAttribute('data-track-modal-current-release') || '',
+      );
+      return;
+    }
 
   const trackProblematicButton = event.target.closest('[data-open-track-problematic="1"]');
   if (trackProblematicButton) {

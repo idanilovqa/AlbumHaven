@@ -39,8 +39,16 @@ def _repository(rows):
     ), connection
 
 
-def _candidate(album_id, key, *, depth=1, matched_paths=0, requested_paths=0):
-    return {
+def _candidate(
+    album_id,
+    key,
+    *,
+    depth=1,
+    matched_paths=0,
+    requested_paths=0,
+    track_count=None,
+):
+    candidate = {
         "album_id": album_id,
         "album_key": key,
         "title": f"Album {album_id}",
@@ -51,6 +59,9 @@ def _candidate(album_id, key, *, depth=1, matched_paths=0, requested_paths=0):
         "matched_path_count": matched_paths,
         "requested_path_count": requested_paths,
     }
+    if track_count is not None:
+        candidate["track_count"] = track_count
+    return candidate
 
 
 def test_resolve_returns_the_current_album_without_calling_it_a_transition():
@@ -83,7 +94,10 @@ def test_resolve_follows_a_merge_to_one_current_album():
 
 def test_resolve_returns_split_choices_without_guessing():
     repository, _connection = _repository(
-        [_candidate(10, "artist::disc-a"), _candidate(11, "artist::disc-b")]
+        [
+            _candidate(10, "artist::disc-a", track_count=4),
+            _candidate(11, "artist::disc-b", track_count=5),
+        ]
     )
 
     result = repository.resolve(album_id=4, album_key="artist::old")
@@ -91,6 +105,7 @@ def test_resolve_returns_split_choices_without_guessing():
     assert result["status"] == "split"
     assert result["album"] is None
     assert [choice["album_id"] for choice in result["choices"]] == [10, 11]
+    assert [choice["track_count"] for choice in result["choices"]] == [4, 5]
 
 
 def test_resolve_uses_complete_track_path_evidence_to_disambiguate_a_split():

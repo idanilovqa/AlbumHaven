@@ -1230,6 +1230,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
   let splitApplied = false;
   let taskId = '';
   let candidateId = '';
+  let staleAlbum = null;
   try {
     const artistUrl = `/?surface=albums&artist=${encodeURIComponent(SPLIT_FIXTURE.artist)}`;
     const sourceIdentity = {
@@ -1242,6 +1243,9 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     expect(await galleryActions.selectAlbumDetailsByIdentity(sourceIdentity))
       .toEqual(sourceIdentity);
     await trackModalActions.waitForLoadedSummary();
+    staleAlbum = await page.evaluate(() => structuredClone(
+      state.modalReleases?.[state.modalReleaseIndex] || null,
+    ));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
     await coverLookupActions.setProviderFixtureMode('split-identity');
@@ -1270,6 +1274,20 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     await tagEditorActions.setAlbumName(SPLIT_FIXTURE.splitAlbum);
     await tagEditorActions.applyAndWaitForSavedFiles();
     splitApplied = true;
+    await trackModalActions.closeIfOpen();
+
+    await page.evaluate((album) => openTrackModal({
+      ...album,
+      preview_only: true,
+      tracks: [],
+    }), staleAlbum);
+    const albumDetailsSelector = page.getByRole('group', { name: 'Current releases' });
+    await expect(albumDetailsSelector).toBeVisible();
+    await albumDetailsSelector.getByRole('button', {
+      name: new RegExp(SPLIT_FIXTURE.splitAlbum),
+    }).click();
+    await trackModalActions.waitForLoadedSummary();
+    await expect(page.locator('#track-modal-title')).toContainText(SPLIT_FIXTURE.splitAlbum);
     await trackModalActions.closeIfOpen();
 
     await coverLookupActions.openDrawer();

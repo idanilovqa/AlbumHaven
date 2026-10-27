@@ -537,6 +537,51 @@ test('preview hydration completes before full-size artwork preload', async () =>
   );
 });
 
+test('stale album hydration sends its id and renders current split choices', async () => {
+  const choices = [
+    { album_id: 92, key: 'artist::left', name: 'Left Album', track_count: 4 },
+    { album_id: 93, key: 'artist::right', name: 'Right Album', track_count: 5 },
+  ];
+  const { context } = loadHelper({
+    onFetchAlbumDetails: ({ url }) => ({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        ok: false,
+        error: 'This album was split—choose the current release',
+        resolution_kind: 'album_split',
+        current_releases: choices,
+      }),
+    }),
+  });
+
+  context.openTrackModal({
+    album_id: 17,
+    key: 'artist::old',
+    name: 'Old Album',
+    preview_only: true,
+    track_count: 9,
+  });
+  await flushMicrotasks();
+
+  assert.equal(
+    context.fetchCalls[0].url,
+    '/album-details?album_key=artist%3A%3Aold&album_id=17',
+  );
+  assert.match(
+    context.getTrackModalElements().list.innerHTML,
+    /data-track-modal-current-release="92"[\s\S]*Left Album[\s\S]*data-track-modal-current-release="93"[\s\S]*Right Album/,
+  );
+  assert.equal(context.showToastCalls.length, 0);
+
+  assert.equal(context.selectTrackModalCurrentRelease('92'), true);
+  await flushMicrotasks();
+  assert.equal(
+    context.fetchCalls[1].url,
+    '/album-details?album_key=artist%3A%3Aleft&album_id=92',
+  );
+});
+
 test('a superseded Album Details response cannot replace the newer album', async () => {
   const responses = new Map();
   const previews = [

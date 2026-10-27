@@ -426,7 +426,11 @@ function attachGalleryPlaybackContextToAlbum(album) {
 async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return null;
-  const response = await fetch(`/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`, {
+  const albumId = Number(options.albumId || 0);
+  const albumIdQuery = Number.isInteger(albumId) && albumId > 0
+    ? `&album_id=${encodeURIComponent(String(albumId))}`
+    : '';
+  const response = await fetch(`/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}${albumIdQuery}`, {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
@@ -438,9 +442,43 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     payload = null;
   }
   if (!response.ok || !payload?.ok || !payload?.album) {
-    throw new Error(payload?.error || `Album detail request failed: ${response.status}`);
+    const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
+    if (
+      payload?.resolution_kind === 'album_split'
+      && Array.isArray(payload.current_releases)
+    ) error.currentReleases = payload.current_releases;
+    throw error;
   }
   return payload.album;
+}
+
+function renderTrackModalIdentitySplitChoices(releases) {
+  const choices = Array.isArray(releases) ? releases : [];
+  if (choices.length < 2) return false;
+  const els = getTrackModalElements();
+  state.ui.trackModalIdentitySplitChoices = choices;
+  els.subtitle.textContent = 'This album was split—choose the current release';
+  els.list.innerHTML = `<li class="cover-lookup-current-release-list" role="group" aria-label="Current releases">
+    ${choices.map((release) => `<button class="cover-lookup-current-release" type="button" data-track-modal-current-release="${escapeHtml(release.album_id || '')}">
+      <span>${escapeHtml(release.name || release.album_key || 'Album')}</span>
+      <span class="cover-lookup-current-release-count">${escapeHtml(String(release.track_count || 0))} tracks</span>
+    </button>`).join('')}
+  </li>`;
+  return true;
+}
+
+function selectTrackModalCurrentRelease(albumId) {
+  const choice = (state.ui.trackModalIdentitySplitChoices || []).find(
+    (candidate) => String(candidate?.album_id || '') === String(albumId || ''),
+  );
+  if (!choice) return false;
+  openTrackModal({
+    ...choice,
+    key: choice.album_key || choice.key,
+    preview_only: true,
+    tracks: [],
+  });
+  return true;
 }
 
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
@@ -620,7 +658,9 @@ function openTrackModal(album, options = {}) {
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
     openTrackModalShell(albumWithPlaybackContext, options.releaseSet);
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
-    const detailsPromise = loadTrackModalAlbumDetails(albumKey);
+    const detailsPromise = loadTrackModalAlbumDetails(albumKey, {
+      albumId: albumWithPlaybackContext.album_id || albumWithPlaybackContext.id,
+    });
     detailsPromise.then((hydratedAlbum) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       const refreshedAlbum = getIndexedAlbum(albumKey);
@@ -633,6 +673,7 @@ function openTrackModal(album, options = {}) {
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
+      if (renderTrackModalIdentitySplitChoices(error.currentReleases)) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
       showToast('Unable to load album details.', 'error', 3200);
     }).finally(() => {

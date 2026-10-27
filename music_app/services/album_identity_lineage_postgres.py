@@ -24,6 +24,7 @@ _FIELDS = (
     "cycle_detected",
     "matched_path_count",
     "requested_path_count",
+    "track_count",
 )
 
 
@@ -122,13 +123,16 @@ def _row_mapping(row: object) -> dict[str, object]:
 
 
 def _album(candidate: Mapping[str, object]) -> dict[str, object]:
-    return {
+    album = {
         "album_id": int(candidate["album_id"]),
         "album_key": str(candidate.get("album_key") or ""),
         "name": str(candidate.get("title") or ""),
         "album_artist": str(candidate.get("album_artist") or ""),
         "year": candidate.get("release_year"),
     }
+    if candidate.get("track_count") is not None:
+        album["track_count"] = int(candidate["track_count"])
+    return album
 
 
 def _resolution_sql() -> str:
@@ -200,7 +204,8 @@ def _resolution_sql() -> str:
             coalesce(artists.name, '') as album_artist,
             albums.release_year,
             identities.depth,
-            identities.cycle_detected
+            identities.cycle_detected,
+            active_tracks.track_count
           from (
             select * from current_identity
             union all
@@ -211,15 +216,16 @@ def _resolution_sql() -> str:
            and albums.id = identities.album_id
            and albums.album_key = identities.album_key
           left join library.local_artists as artists on artists.id = albums.artist_id
-          where exists (
-            select 1
+          cross join lateral (
+            select count(distinct tracks.id)::integer as track_count
             from library.local_tracks as tracks
             join library.local_track_files as files
               on files.track_id = tracks.id
              and files.scan_cache_stale is false
             where tracks.library_id = albums.library_id
               and tracks.album_id = albums.id
-          )
+          ) as active_tracks
+          where active_tracks.track_count > 0
           order by albums.id, identities.depth desc
         ),
         requested_paths as (
@@ -259,7 +265,8 @@ def _resolution_sql() -> str:
           live_candidates.depth,
           invalid_lineage.invalid as cycle_detected,
           coalesce(path_matches.matched_path_count, 0) as matched_path_count,
-          cardinality(%(track_paths)s::text[]) as requested_path_count
+          cardinality(%(track_paths)s::text[]) as requested_path_count,
+          live_candidates.track_count
         from live_candidates
         cross join invalid_lineage
         left join path_matches on path_matches.album_id = live_candidates.album_id
@@ -267,7 +274,7 @@ def _resolution_sql() -> str:
         union all
 
         select null, null, null, null, null, 16, true, 0,
-               cardinality(%(track_paths)s::text[])
+               cardinality(%(track_paths)s::text[]), null
         from invalid_lineage
         where invalid_lineage.invalid is true;
     """

@@ -26,6 +26,9 @@ from music_app.services.app_logging import log_app_event
 from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
 )
+from music_app.services.album_identity_lineage_postgres import (
+    AlbumIdentityLineageRepository,
+)
 from music_app.services.cover_state import (
     active_cover_path_for_track_paths as active_cover_path_for_track_paths_in_state,
     apply_authoritative_local_cover_fallback,
@@ -338,6 +341,46 @@ async def _resolve_album_payload_context(
                 for path in list(track_context.get("track_paths") or [])
                 if str(path or "").strip()
             ]
+    resolved_context = (
+        resolve_album_context(config, normalized_album)
+        or _resolve_distributed_album_context(config, normalized_album)
+    )
+    if resolved_context is not None:
+        return normalized_album, resolved_context
+
+    album_id = _album_id(normalized_album)
+    if album_id is None and album_key is None:
+        return normalized_album, None
+    try:
+        lineage = await run_in_threadpool(
+            AlbumIdentityLineageRepository(config).resolve,
+            album_id=album_id,
+            album_key=album_key,
+            track_paths=fallback_paths,
+        )
+    except (RuntimeError, OSError):
+        return normalized_album, None
+    if lineage["status"] == "split":
+        normalized_album["_identity_split_choices"] = lineage["choices"]
+        return normalized_album, None
+    current_album = lineage.get("album")
+    if not isinstance(current_album, Mapping):
+        return normalized_album, None
+    track_context = await run_in_threadpool(
+        repository.resolve_album_track_context,
+        album_id=current_album.get("album_id"),
+        album_key=current_album.get("album_key"),
+    )
+    if not isinstance(track_context, Mapping):
+        return normalized_album, None
+    normalized_album["id"] = track_context.get("album_id")
+    normalized_album["album_id"] = track_context.get("album_id")
+    normalized_album["key"] = track_context.get("album_key")
+    normalized_album["tracks"] = [
+        {"path": path}
+        for path in list(track_context.get("track_paths") or [])
+        if str(path or "").strip()
+    ]
     return normalized_album, (
         resolve_album_context(config, normalized_album)
         or _resolve_distributed_album_context(config, normalized_album)
@@ -517,7 +560,28 @@ def _cover_lookup_task_track_paths(
 async def _cover_lookup_album_split_response(
     config: Mapping[str, object],
     task_track_paths: set[str],
+    lineage_choices: object = None,
 ) -> tuple[JsonDict, int] | None:
+    if isinstance(lineage_choices, list) and len(lineage_choices) > 1:
+        current_releases = [
+            {
+                **dict(choice),
+                "identity_resolution": "album_split_choice",
+                "key": str(choice.get("album_key") or choice.get("key") or "").strip(),
+            }
+            for choice in lineage_choices
+            if isinstance(choice, Mapping)
+        ]
+        if len(current_releases) > 1:
+            return (
+                {
+                    "ok": False,
+                    "error": "This album was split—choose the current release",
+                    "resolution_kind": "album_split",
+                    "current_releases": current_releases,
+                },
+                409,
+            )
     if len(task_track_paths) < 2:
         return None
     try:
@@ -736,7 +800,11 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         and album.get("identity_resolution") != "album_split_choice",
     )
     if album_context is None:
-        split_response = await _cover_lookup_album_split_response(config, task_track_paths)
+        split_response = await _cover_lookup_album_split_response(
+            config,
+            task_track_paths,
+            album.get("_identity_split_choices"),
+        )
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
@@ -746,7 +814,11 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         album_context.track_paths,
     )
     if identity_error is not None:
-        split_response = await _cover_lookup_album_split_response(config, task_track_paths)
+        split_response = await _cover_lookup_album_split_response(
+            config,
+            task_track_paths,
+            album.get("_identity_split_choices"),
+        )
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(identity_error)
@@ -758,7 +830,11 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     )
     split_response = None
     if task_payload and task_track_paths and not task_track_paths <= album_context.track_paths:
-        split_response = await _cover_lookup_album_split_response(config, task_track_paths)
+        split_response = await _cover_lookup_album_split_response(
+            config,
+            task_track_paths,
+            album.get("_identity_split_choices"),
+        )
     valid_split_choice = _is_valid_split_choice(album, split_response, album_id)
     if split_response is not None and not valid_split_choice:
         return _json_response(split_response)
@@ -869,6 +945,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             split_response = await _cover_lookup_album_split_response(
                 config,
                 _cover_lookup_task_track_paths(task_payload),
+                (album or {}).get("_identity_split_choices"),
             )
             if split_response is not None:
                 return _json_response(split_response)
@@ -886,6 +963,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             split_response = await _cover_lookup_album_split_response(
                 config,
                 _cover_lookup_task_track_paths(task_payload),
+                (album or {}).get("_identity_split_choices"),
             )
             if not _is_valid_split_choice(
                 queued_album,
@@ -1531,6 +1609,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             split_response = await _cover_lookup_album_split_response(
                 config,
                 _cover_lookup_task_track_paths(task_payload),
+                (album or {}).get("_identity_split_choices"),
             )
             if not _is_valid_split_choice(album or {}, split_response, album_id):
                 return _json_response(

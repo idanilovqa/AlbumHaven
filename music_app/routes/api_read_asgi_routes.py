@@ -39,6 +39,9 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
 )
+from music_app.services.album_identity_lineage_postgres import (
+    AlbumIdentityLineageRepository,
+)
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
@@ -67,7 +70,7 @@ from config import PERSISTENCE_BACKEND_POSTGRES
 router = APIRouter()
 
 _ALBUM_DETAIL_QUERY_PARAMS = frozenset(
-    {"album_key", "client_surface", "client_surface_class"}
+    {"album_id", "album_key", "client_surface", "client_surface_class"}
 )
 
 
@@ -1013,8 +1016,18 @@ async def album_details(request: Request) -> JSONResponse:
             status_code=400,
         )
     album_key = str(request.query_params.get("album_key") or "").strip()
-    if not album_key:
-        return JSONResponse({"ok": False, "error": "Missing album_key"}, status_code=400)
+    album_id_text = str(request.query_params.get("album_id") or "").strip()
+    try:
+        album_id = int(album_id_text) if album_id_text else None
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Invalid album_id"}, status_code=400)
+    if album_id is not None and album_id <= 0:
+        return JSONResponse({"ok": False, "error": "Invalid album_id"}, status_code=400)
+    if not album_key and album_id is None:
+        return JSONResponse(
+            {"ok": False, "error": "Missing album_key"},
+            status_code=400,
+        )
     unsupported_postgres_non_album_response = _unsupported_postgres_non_album_modal_response(
         request,
         album_key,
@@ -1032,11 +1045,39 @@ async def album_details(request: Request) -> JSONResponse:
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
-        payload = await run_in_threadpool(
-            repository.build_album_detail_payload,
-            album_key,
-            client_surface_class=client_surface_class,
-        )
+        payload = None
+        if album_id is None:
+            payload = await run_in_threadpool(
+                repository.build_album_detail_payload,
+                album_key,
+                client_surface_class=client_surface_class,
+            )
+        if payload is None:
+            try:
+                lineage = await run_in_threadpool(
+                    AlbumIdentityLineageRepository(_app_config(request)).resolve,
+                    album_id=album_id,
+                    album_key=album_key or None,
+                )
+            except (RuntimeError, OSError):
+                lineage = {"status": "unresolved", "album": None, "choices": []}
+            if lineage["status"] == "split":
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "This album was split—choose the current release",
+                        "resolution_kind": "album_split",
+                        "current_releases": lineage["choices"],
+                    },
+                    status_code=409,
+                )
+            current_album = lineage.get("album")
+            if isinstance(current_album, Mapping):
+                payload = await run_in_threadpool(
+                    repository.build_album_detail_payload_by_id,
+                    current_album.get("album_id"),
+                    client_surface_class=client_surface_class,
+                )
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
         await run_in_threadpool(
@@ -1076,7 +1117,8 @@ def _should_use_postgres_album_detail_path(
     ):
         return False
     album_key = str(request.query_params.get("album_key") or "").strip()
-    if not album_key or album_key.startswith("non-album::"):
+    album_id = str(request.query_params.get("album_id") or "").strip()
+    if (not album_key and not album_id) or album_key.startswith("non-album::"):
         return False
     resolved_state = (
         browse_state

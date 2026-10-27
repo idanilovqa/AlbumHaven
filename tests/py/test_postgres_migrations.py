@@ -610,6 +610,28 @@ def test_album_raw_artist_search_index_matches_search_preview_expression():
     assert "gin_trgm_ops" in sql
 
 
+def test_album_identity_lineage_migration_is_additive_scoped_and_trigger_owned():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0101_create_local_album_identity_transitions.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "create table library.local_album_identity_transitions" in sql
+    assert "predecessor_album_id bigint not null" in sql
+    assert "successor_album_id bigint not null" in sql
+    assert "predecessor_album_key text not null" in sql
+    assert "successor_album_key text not null" in sql
+    assert (
+        "unique (library_id, predecessor_album_id, predecessor_album_key, "
+        "successor_album_id, successor_album_key)"
+    ) in sql
+    assert "after update of album_id on library.local_tracks" in sql
+    assert "after update of album_key on library.local_albums" in sql
+    assert "old.library_id <> new.library_id" in sql
+    assert "grant select on library.local_album_identity_transitions to album_haven_app" in sql
+
+
 def test_album_raw_artist_search_index_prerequisite_relocates_pg_trgm_without_rewriting_0083():
     migration_path = MIGRATIONS_DIR / "0083_add_album_raw_artist_search_index.sql"
     migration_source = migration_path.read_text(encoding="utf-8")

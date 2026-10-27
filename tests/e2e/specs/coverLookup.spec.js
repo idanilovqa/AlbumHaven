@@ -811,7 +811,7 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
         expect(details.title).toContain(identity.album);
         expect(details.subtitle).toContain(identity.artist);
         expect(details.trackRows).toBeGreaterThan(0);
-        await trackModalActions.close();
+        await trackModalActions.backFromMobilePage();
         await coverLookupActions.waitForDrawerOpen();
       } else if (swipeFirst && index === 0) {
         await coverLookupActions.swipeNotificationMobileSheetDown();

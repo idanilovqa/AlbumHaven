@@ -477,9 +477,13 @@ def test_queued_title_update_preserves_newer_authoritative_cover(tmp_path, monke
 
 
 def test_file_entry_cache_round_trip_preserves_metadata_and_cover_validation_signature(tmp_path):
+    from music_app.services.problem_suggestions import build_problem_suggestions
+
     cover_path = tmp_path / "Artist" / "Album" / "cover.jpg"
     entry = {
         **_cache_entry(tmp_path / "Artist" / "Album" / "01 - Song.mp3"),
+        "album": "Album (Deluxe Edition)",
+        "edition": "",
         "genre": "Progressive Rock",
         "release_date": "2004-07-16",
         "total_discs": 2,
@@ -500,6 +504,15 @@ def test_file_entry_cache_round_trip_preserves_metadata_and_cover_validation_sig
     assert serialized["disc_subtitle"] == "Bonus"
     assert hydrated["total_discs"] == 2
     assert hydrated["disc_subtitle"] == "Bonus"
+    original_proposal = next(
+        item for item in build_problem_suggestions(entry["path"], entry)
+        if item["field"] == "album_edition"
+    )
+    hydrated_proposal = next(
+        item for item in build_problem_suggestions(entry["path"], hydrated)
+        if item["field"] == "album_edition"
+    )
+    assert hydrated_proposal == original_proposal
     assert serialized["cover_validation_path"] == str(cover_path)
     assert serialized["cover_validation_mtime_ns"] == 1_785_057_493_000_000_000
     assert serialized["cover_validation_size"] == 321_987

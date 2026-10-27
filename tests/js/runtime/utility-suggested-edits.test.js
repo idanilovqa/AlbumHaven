@@ -252,6 +252,14 @@ test('P05 labels show exact current and corrected values without replacing sourc
   const proposals = context.state.utility.problematicFiles[0].suggested_edits;
   assert.equal(context.formatProblemSuggestionLabel(proposals[0]), 'Year: missing → 2008');
   assert.equal(context.formatProblemSuggestionLabel(proposals[1]), 'Artist: JosÃ© → José');
+  assert.equal(
+    context.formatProblemSuggestionLabel({
+      field: 'album_edition',
+      original: 'Album (Deluxe Edition)',
+      corrected: 'Album: Album; Edition: Deluxe Edition',
+    }),
+    'Album / edition: Album (Deluxe Edition) → Album: Album; Edition: Deluxe Edition',
+  );
 });
 
 function detailContext() {

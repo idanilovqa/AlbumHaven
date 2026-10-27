@@ -208,8 +208,9 @@ def test_suggested_tag_apply_hydrates_verified_proposal_without_mutating_shared_
             events.append("entries")
             return {track_path: entry, sibling_path: {"path": sibling_path}}
 
-    def read_physical(path, _fields):
+    def read_physical(path, fields):
         assert str(path) == track_path
+        assert "edition" in fields
         events.append("physical")
         return entry
 

@@ -15383,6 +15383,34 @@ def test_structured_encoding_exclusion_suppresses_generated_suggestion(scope):
     assert not any(item['id'] == proposal['id'] for item in detail['suggested_edits'])
 
 
+def test_postgres_problem_detail_exposes_reviewable_edition_title_proposal():
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_detail_payload,
+        _problematic_album_projection_payloads,
+    )
+
+    row = _healthy_problematic_order_rows([1])[0]
+    row["album_title"] = "300 (The Collector's Edition)"
+    row["file_entry"] = {
+        **row["file_entry"],
+        "album": "300 (The Collector's Edition)",
+        "edition": "",
+    }
+    album = _problematic_album_projection_payloads([row])[0]
+
+    detail = _problematic_album_detail_payload(album)
+
+    assert detail is not None
+    proposal = next(
+        item for item in detail["suggested_edits"]
+        if item["field"] == "album_edition"
+    )
+    assert proposal["updates"] == {
+        "album": "300",
+        "edition": "The Collector's Edition",
+    }
+
+
 def test_split_release_album_exclusion_round_trips_unsplit_postgres_album_identity_into_rules():
     from music_app.services.library_browse_postgres import (
         _problematic_album_detail_payload,

@@ -24,6 +24,7 @@ from music_app.routes.api_rules_helpers import (
     year_problem_reason,
 )
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.edition_title_normalization import reviewable_edition_title
 from music_app.services.gallery_display import (
     DEFAULT_GALLERY_DISPLAY_MODE,
     DEFAULT_GALLERY_SCALE_PERCENT,
@@ -5996,6 +5997,8 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
         yield "Mixed album metadata in one folder"
     if entry.get("local_album_membership_problem"):
         yield str(entry["local_album_membership_problem"])
+    if reviewable_edition_title(entry.get("album"), entry.get("edition")):
+        yield "Edition descriptor in album name"
 
 
 def _iter_problematic_track_reasons(

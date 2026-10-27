@@ -1448,6 +1448,35 @@ def test_non_album_candidate_batch_builds_normalized_alias_lookup_once(monkeypat
     assert normalized_lookups[0] == {"alias artist": "Canonical Artist"}
 
 
+def test_non_album_candidate_uses_private_path_when_relative_path_is_missing():
+    from music_app.services import library_browse_postgres as browse_module
+
+    path = (
+        r"N:\Music New\Folk Rock, Flamenco, etc\Начало Века"
+        r"\2009 - Тебя ждала (single)\nv_helavisa_tebyazhdala_full.mp3"
+    )
+    row = _inventory_non_album_candidate(
+        track_id=1,
+        title="Тебя ждала (полная версия)",
+        private_path=path,
+        track_number=1,
+        raw_artist="Начало Века и Хелависа",
+        raw_album_artist="Начало Века и Хелависа",
+        exception_type="",
+    )
+    row.update(relative_path="", raw_file_album="")
+
+    entries = browse_module._non_album_entries_from_inventory_candidates(
+        [row],
+        visible_library_categories=[],
+        alias_to_canonical={},
+        canonical_to_aliases={},
+        visible_artist_names=["Начало Века"],
+    )
+
+    assert [entry["path"] for entry in entries] == [path]
+
+
 def test_inventory_backed_root_sidebar_uses_visible_non_album_candidate_scope(
     monkeypatch,
     committed_inventory_queries_for_legacy_browse_fakes,

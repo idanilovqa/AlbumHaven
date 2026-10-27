@@ -4029,7 +4029,9 @@ def _non_album_entries_from_inventory_candidates(
         entry["exception_type"] = exception_type
         if not entry_visible_in_categories(entry, visible_library_categories):
             continue
-        relative_path = str(payload.get("relative_path") or "").strip()
+        relative_path = str(
+            payload.get("relative_path") or payload.get("private_path") or ""
+        ).strip()
         path_parts = {
             normalize_search_text(part)
             for part in Path(relative_path).parts[:-1]

@@ -1275,7 +1275,7 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
                          where credits.album_id=%s"""
         assert set(connection.execute(credits_sql, (source_id,)).fetchall()) == source_credits
         if not existing_destination:
-            expected_credits = {(solo, "owner"), (solo, "featured_track_artist")}
+            expected_credits = {(solo, "owner")}
             if selected_has_guest:
                 expected_credits.add(("Featured Voice", "featured_track_artist"))
             assert set(connection.execute(credits_sql, (destination[0],)).fetchall()) == expected_credits

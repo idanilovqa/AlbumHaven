@@ -466,6 +466,7 @@ def _task_matches_album_context(
     *,
     track_paths: set[str],
     album_id: int | None = None,
+    album_key: str | None = None,
 ) -> bool:
     task_track_paths = _cover_lookup_task_track_paths(task_payload)
     task_album = task_payload.get("album_payload")
@@ -473,6 +474,19 @@ def _task_matches_album_context(
         album_id is not None
         and isinstance(task_album, Mapping)
         and _album_id(task_album) == album_id
+    ):
+        return True
+    task_album_key = str(
+        task_album.get("_persisted_album_key")
+        or task_album.get("key")
+        or task_album.get("album_ref")
+        or ""
+    ).strip().casefold() if isinstance(task_album, Mapping) else ""
+    if (
+        task_album_key
+        and task_album_key == str(album_key or "").strip().casefold()
+        and track_paths
+        and track_paths <= task_track_paths
     ):
         return True
     if task_track_paths and task_track_paths <= track_paths:
@@ -519,6 +533,8 @@ async def _cover_lookup_album_split_response(
         album_id = _album_id(album)
         album_paths = _album_track_paths(album)
         matching_paths = album_paths & task_track_paths
+        if album_paths - task_track_paths:
+            continue
         if album_id is None and matching_paths:
             try:
                 album_id = await run_in_threadpool(
@@ -734,6 +750,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         task_payload,
         track_paths=album_context.track_paths,
         album_id=album_id,
+        album_key=str(album.get("key") or album.get("album_ref") or ""),
     )
     split_response = None
     if task_payload and task_track_paths and not task_track_paths <= album_context.track_paths:
@@ -858,6 +875,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             task_payload,
             track_paths=album_context.track_paths,
             album_id=_album_id(queued_album),
+            album_key=str(queued_album.get("key") or queued_album.get("album_ref") or ""),
         ):
             split_response = await _cover_lookup_album_split_response(
                 config,
@@ -1500,6 +1518,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             task_payload,
             track_paths=album_context.track_paths,
             album_id=album_id,
+            album_key=str((album or {}).get("key") or (album or {}).get("album_ref") or ""),
         ):
             split_response = await _cover_lookup_album_split_response(
                 config,

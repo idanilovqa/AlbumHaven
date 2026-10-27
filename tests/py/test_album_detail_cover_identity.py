@@ -272,6 +272,69 @@ def test_cover_lookup_task_identity_follows_stable_id_after_tracks_split():
     )
 
 
+def test_cover_lookup_task_identity_follows_same_album_key_out_of_generic_residual_paths():
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+
+    task = {
+        "track_paths": ["tagged/01.flac", "untagged-copy/01.flac"],
+        "album_payload": {
+            "_persisted_album_key": "artist::album",
+        },
+    }
+
+    assert cover_routes._task_matches_album_context(
+        task,
+        track_paths={"tagged/01.flac"},
+        album_key="artist::album",
+    )
+
+
+def test_cover_lookup_split_rejects_an_album_with_unrelated_paths(monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+
+    task_paths = {"tagged/01.flac", "tagged/02.flac", "untagged-copy/01.flac"}
+
+    class BrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return [
+                {
+                    "id": 41,
+                    "key": "artist::album",
+                    "album_artist": "Artist",
+                    "name": "Album",
+                    "tracks": [
+                        {"path": "tagged/01.flac"},
+                        {"path": "tagged/02.flac"},
+                    ],
+                },
+                {
+                    "id": 99,
+                    "key": "unknown artist::",
+                    "album_artist": "Unknown Artist",
+                    "name": "Unknown Album",
+                    "tracks": [
+                        {"path": "untagged-copy/01.flac"},
+                        {"path": "unrelated/01.flac"},
+                    ],
+                },
+            ]
+
+    monkeypatch.setattr(
+        cover_routes,
+        "PostgresLibraryBrowseRepository",
+        BrowseRepository,
+    )
+
+    response = asyncio.run(
+        cover_routes._cover_lookup_album_split_response({}, task_paths)
+    )
+
+    assert response is None
+
+
 def test_cover_lookup_task_identity_accepts_renamed_paths_for_same_album_id():
     from music_app.routes import api_wave_d_asgi_routes as cover_routes
 

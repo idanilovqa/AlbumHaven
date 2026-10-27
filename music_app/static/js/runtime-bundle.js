@@ -30077,14 +30077,33 @@ function replaceCoverLookupDrawerMarkup(body, markup) {
     retained.image.__coverLookupReplacementSrc = desiredSrc;
     image.loading = 'eager';
     image.replaceWith(retained.image);
+    let decodeStarted = false;
     const promoteReplacement = () => {
       if (
-        retained.image.__coverLookupReplacementSrc !== desiredSrc
+        decodeStarted
+        || retained.image.__coverLookupReplacementSrc !== desiredSrc
         || image.complete !== true
         || Number(image.naturalWidth || 0) <= 0
       ) return;
-      delete retained.image.__coverLookupReplacementSrc;
-      retained.image.replaceWith(image);
+      decodeStarted = true;
+      if (typeof image.decode !== 'function') {
+        delete retained.image.__coverLookupReplacementSrc;
+        retained.image.replaceWith(image);
+        return;
+      }
+      Promise.resolve(image.decode()).then(() => {
+        if (
+        retained.image.__coverLookupReplacementSrc !== desiredSrc
+        || image.complete !== true
+        || Number(image.naturalWidth || 0) <= 0
+        ) return;
+        delete retained.image.__coverLookupReplacementSrc;
+        retained.image.replaceWith(image);
+      }).catch(() => {
+        if (retained.image.__coverLookupReplacementSrc === desiredSrc) {
+          delete retained.image.__coverLookupReplacementSrc;
+        }
+      });
     };
     image.addEventListener?.('load', promoteReplacement, { once: true });
     image.addEventListener?.('error', () => {

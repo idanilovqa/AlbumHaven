@@ -247,6 +247,87 @@ require('node:test')('notification URL transition keeps its decoded task image u
   assert.strictEqual(retained.replacedWith, replacement);
 });
 
+require('node:test')('notification URL transition keeps its decoded task image until replacement pixels decode', async () => {
+  let finishDecode;
+  const retained = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const listeners = {};
+  const replacement = {
+    complete: false,
+    naturalWidth: 0,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=2' : '',
+    addEventListener(type, handler) { listeners[type] = handler; },
+    decode() {
+      return new Promise((resolve) => { finishDecode = resolve; });
+    },
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  let rendered = false;
+  const taskNode = (image) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'angels-task' : '',
+    querySelector: () => image,
+  });
+  const body = {
+    querySelectorAll: () => [taskNode(rendered ? replacement : retained)],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated card</div>');
+  replacement.complete = true;
+  replacement.naturalWidth = 320;
+  listeners.load();
+
+  assert.equal(retained.replacedWith, undefined);
+  finishDecode();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(retained.replacedWith, replacement);
+});
+
+require('node:test')('notification URL transition keeps its decoded task image when replacement decoding fails', async () => {
+  const retained = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const listeners = {};
+  const replacement = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=2' : '',
+    addEventListener(type, handler) { listeners[type] = handler; },
+    decode: () => Promise.reject(new Error('decode failed')),
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  let rendered = false;
+  const taskNode = (image) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'angels-task' : '',
+    querySelector: () => image,
+  });
+  const body = {
+    querySelectorAll: () => [taskNode(rendered ? replacement : retained)],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated card</div>');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(retained.replacedWith, undefined);
+  assert.equal(retained.__coverLookupReplacementSrc, undefined);
+});
+
 require('node:test')('notification URL transition rejects an older replacement after a newer URL wins', () => {
   const retained = {
     complete: true,

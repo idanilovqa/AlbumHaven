@@ -1513,9 +1513,9 @@ function replaceCoverLookupDrawerMarkup(body, markup) {
       }
       Promise.resolve(image.decode()).then(() => {
         if (
-        retained.image.__coverLookupReplacementSrc !== desiredSrc
-        || image.complete !== true
-        || Number(image.naturalWidth || 0) <= 0
+          retained.image.__coverLookupReplacementSrc !== desiredSrc
+          || image.complete !== true
+          || Number(image.naturalWidth || 0) <= 0
         ) return;
         delete retained.image.__coverLookupReplacementSrc;
         retained.image.replaceWith(image);

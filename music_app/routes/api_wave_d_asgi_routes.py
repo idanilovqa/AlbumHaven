@@ -476,12 +476,16 @@ def _task_matches_album_context(
         and _album_id(task_album) == album_id
     ):
         return True
-    task_album_key = str(
-        task_album.get("_persisted_album_key")
-        or task_album.get("key")
-        or task_album.get("album_ref")
-        or ""
-    ).strip().casefold() if isinstance(task_album, Mapping) else ""
+    task_album_key = (
+        str(
+            task_album.get("_persisted_album_key")
+            or task_album.get("key")
+            or task_album.get("album_ref")
+            or ""
+        ).strip().casefold()
+        if isinstance(task_album, Mapping)
+        else ""
+    )
     if (
         task_album_key
         and task_album_key == str(album_key or "").strip().casefold()
@@ -875,7 +879,9 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             task_payload,
             track_paths=album_context.track_paths,
             album_id=_album_id(queued_album),
-            album_key=str(queued_album.get("key") or queued_album.get("album_ref") or ""),
+            album_key=str(
+                queued_album.get("key") or queued_album.get("album_ref") or ""
+            ),
         ):
             split_response = await _cover_lookup_album_split_response(
                 config,
@@ -1518,7 +1524,9 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             task_payload,
             track_paths=album_context.track_paths,
             album_id=album_id,
-            album_key=str((album or {}).get("key") or (album or {}).get("album_ref") or ""),
+            album_key=str(
+                (album or {}).get("key") or (album or {}).get("album_ref") or ""
+            ),
         ):
             split_response = await _cover_lookup_album_split_response(
                 config,

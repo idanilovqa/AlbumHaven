@@ -446,13 +446,51 @@ test('opening a persisted notification renders usable cached art and loads unres
 });
 
 test('Cover Lookup loading markup does not invent empty artwork cards and keeps manual search usable', () => {
-  const body = { innerHTML: '', scrollTop: 0 };
+  let bodyMarkup = '';
+  const body = { scrollTop: 0 };
   const elements = {
     'cover-lookup-modal': {},
     'cover-lookup-modal-body': body,
     'cover-lookup-modal-subtitle': { textContent: '' },
     'cover-lookup-modal-status': { textContent: '', innerHTML: '' },
   };
+  const document = {
+    activeElement: null,
+    getElementById: (id) => elements[id] || null,
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => bodyMarkup,
+    set: (markup) => {
+      if (document.activeElement === elements['cover-lookup-pasted-urls']) {
+        document.activeElement = null;
+      }
+      bodyMarkup = markup;
+      if (!markup.includes('id="cover-lookup-pasted-urls"')) {
+        delete elements['cover-lookup-pasted-urls'];
+        return;
+      }
+      const value = markup.match(/id="cover-lookup-pasted-urls"[^>]*>([^<]*)<\/textarea>/)?.[1] || '';
+      const input = {
+        dataset: {},
+        selectionEnd: 0,
+        selectionStart: 0,
+        value,
+        focus() {
+          document.activeElement = input;
+        },
+        replaceWith(replacement) {
+          if (elements['cover-lookup-pasted-urls'] === input) {
+            elements['cover-lookup-pasted-urls'] = replacement;
+          }
+        },
+        setSelectionRange(start, end) {
+          input.selectionStart = start;
+          input.selectionEnd = end;
+        },
+      };
+      elements['cover-lookup-pasted-urls'] = input;
+    },
+  });
   const context = {
     URLSearchParams,
     window: {},
@@ -474,7 +512,7 @@ test('Cover Lookup loading markup does not invent empty artwork cards and keeps 
         },
       },
     },
-    document: { getElementById: (id) => elements[id] || null },
+    document,
   };
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
@@ -489,10 +527,16 @@ test('Cover Lookup loading markup does not invent empty artwork cards and keeps 
   assert.match(markup, /id="cover-lookup-pasted-urls"/);
 
   const draftUrl = 'https://images.example/manual-cover.jpg';
-  elements['cover-lookup-pasted-urls'] = { value: draftUrl };
+  const activeInput = elements['cover-lookup-pasted-urls'];
+  activeInput.value = draftUrl;
+  activeInput.setSelectionRange(8, 15);
+  activeInput.focus();
   context.renderCoverLookupModal();
 
   assert.equal(context.state.coverLookup.modal.manualUrlText, draftUrl);
+  assert.equal(elements['cover-lookup-pasted-urls'], activeInput);
+  assert.equal(document.activeElement, activeInput);
+  assert.deepEqual([activeInput.selectionStart, activeInput.selectionEnd], [8, 15]);
   assert.match(body.innerHTML, /https:\/\/images\.example\/manual-cover\.jpg/);
 });
 

@@ -30671,7 +30671,12 @@ function renderCoverLookupModal() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || !els.body) return;
   const modalState = state.coverLookup.modal;
-  if (els.pastedUrls && typeof els.pastedUrls.value === 'string') {
+  const manualInputSession = String(coverLookupModalSession);
+  const preserveManualInput = els.pastedUrls?.dataset?.coverLookupSession === manualInputSession;
+  const restoreManualInputFocus = preserveManualInput && document.activeElement === els.pastedUrls;
+  const manualSelectionStart = restoreManualInputFocus ? els.pastedUrls.selectionStart : null;
+  const manualSelectionEnd = restoreManualInputFocus ? els.pastedUrls.selectionEnd : null;
+  if (preserveManualInput && typeof els.pastedUrls.value === 'string') {
     modalState.manualUrlText = els.pastedUrls.value;
   }
   const scrollAnchor = modalState.loading
@@ -30864,6 +30869,16 @@ function renderCoverLookupModal() {
         </div>
       </section>
     `;
+  const renderedManualInput = document.getElementById('cover-lookup-pasted-urls');
+  if (preserveManualInput && renderedManualInput && renderedManualInput !== els.pastedUrls) {
+    renderedManualInput.replaceWith(els.pastedUrls);
+  } else if (renderedManualInput) {
+    renderedManualInput.dataset.coverLookupSession = manualInputSession;
+  }
+  if (restoreManualInputFocus) {
+    els.pastedUrls.focus({ preventScroll: true });
+    els.pastedUrls.setSelectionRange(manualSelectionStart, manualSelectionEnd);
+  }
   restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
   scheduleDeferredCoverLookupPreviews(els.body);
   if (els.saveRemote) {

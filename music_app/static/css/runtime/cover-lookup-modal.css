@@ -466,6 +466,17 @@
   width: 48%;
   margin-bottom: 4px;
 }
+.cover-lookup-gallery-resolving {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.cover-lookup-gallery-resolving .cover-lookup-task-loading-line {
+  width: min(180px, 55%);
+  margin: 0;
+}
 .cover-lookup-art-card-shell {
   position: relative;
 }

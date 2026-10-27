@@ -1933,7 +1933,6 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.ensureCoverLookupPolling = () => {};
   context.loadCoverLookupTasks = async () => { taskReloads += 1; };
   context.refreshCoverLookupGallery = async () => { galleryReloads += 1; };
-  context.refreshCoverLookupLocalInventoryCount = async () => {};
   context.applyCoverLookupGalleryPayload = (gallery) => { appliedGallery = gallery; };
 
   await context.openCoverLookupModal(secondAlbum, { taskId: 'flaming-row-lookup' });
@@ -4426,15 +4425,14 @@ require('node:test')('initial cover gallery load finishes before task polling st
     order.push('gallery');
     finishGallery = resolve;
   });
-  context.refreshCoverLookupLocalInventoryCount = async () => { order.push('inventory'); };
   context.ensureCoverLookupPolling = () => order.push('poll');
 
   const opening = context.openCoverLookupModal({ tracks: [{ path: 'C:/music/01.flac' }] });
   await Promise.resolve();
-  assert.deepEqual(order, ['inventory', 'gallery']);
+  assert.deepEqual(order, ['gallery']);
   finishGallery();
   await opening;
-  assert.deepEqual(order, ['inventory', 'gallery', 'poll']);
+  assert.deepEqual(order, ['gallery', 'poll']);
 
   order.length = 0;
   const closedBeforeReady = context.openCoverLookupModal({ tracks: [{ path: 'C:/music/02.flac' }] });
@@ -4442,7 +4440,7 @@ require('node:test')('initial cover gallery load finishes before task polling st
   overlay.hidden = true;
   finishGallery();
   await closedBeforeReady;
-  assert.deepEqual(order, ['inventory', 'gallery']);
+  assert.deepEqual(order, ['gallery']);
 });
 
 require('node:test')('actioned terminal notifications render source-neutral Art chosen status', () => {

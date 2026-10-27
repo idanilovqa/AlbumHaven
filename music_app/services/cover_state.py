@@ -129,10 +129,6 @@ def _iter_local_image_paths(album_root: Path, image_extensions: set[str]) -> lis
     return paths
 
 
-def count_local_cover_images(album_root: Path, *, image_extensions: set[str]) -> int:
-    return len(_iter_local_image_paths(album_root, image_extensions))
-
-
 def iter_local_cover_candidates(
     album_root: Path,
     *,

@@ -5455,7 +5455,6 @@ const state = {
       currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
-      expectedLocalCount: 0,
       activeLocalSelectionPath: '',
       remoteSelectionOverrideGeneration: '',
       seenCandidateImprovementToken: '',
@@ -30630,11 +30629,8 @@ function buildCoverLookupGalleryLoadingCards(section, count) {
 
 function buildCoverLookupGalleryLoadingMarkup(modalState) {
   const album = modalState?.album || {};
-  const localCount = Math.max(
-    Number(modalState?.expectedLocalCount || 0) || 0,
-    String(album.cover_path || '').trim()
-      && !String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0,
-  );
+  const localCount = String(album.cover_path || '').trim()
+    && !String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
   const savedRemoteCount = String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
   const cachedRemoteCandidates = Array.isArray(modalState?.possibleMatches)
     ? modalState.possibleMatches.filter((candidate) => (
@@ -30656,8 +30652,14 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
       </div>
     </section>
   ` : '';
+  const localMarkup = section('LOCAL', 'local', localCount) || `
+    <div class="cover-lookup-gallery-resolving">
+      <span class="cover-lookup-task-loading-line is-title" aria-hidden="true"></span>
+      <span>Resolving available cover art…</span>
+    </div>
+  `;
   return `<div role="status" aria-label="Loading cover art">
-    ${section('LOCAL', 'local', localCount)}
+    ${localMarkup}
     ${section(
       'REMOTE',
       'remote',
@@ -31279,31 +31281,6 @@ async function refreshCoverLookupGallery(showLoading = true) {
   }
 }
 
-async function refreshCoverLookupLocalInventoryCount(album, session) {
-  try {
-    const response = await fetch('/utilities/cover-lookup/gallery', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        album,
-        task_id: state.coverLookup.modal.taskId || '',
-        inventory_only: true,
-      }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (
-      session !== coverLookupModalSession
-      || state.coverLookup.modal.album !== album
-      || !response.ok
-      || !data.ok
-    ) return;
-    state.coverLookup.modal.expectedLocalCount = Math.max(0, Number(data.local_image_count || 0) || 0);
-    if (state.coverLookup.modal.loading) renderCoverLookupModal();
-  } catch (error) {
-    console.warn('[AlbumHaven][CoverLookup] Failed to count local cover art.', error);
-  }
-}
-
 async function chooseCoverLookupCurrentRelease(albumId) {
   const release = (state.coverLookup.modal.currentReleases || []).find((candidate) => (
     String(candidate?.album_id || '') === String(albumId || '')
@@ -31360,7 +31337,6 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.candidateGeneration = cachedCandidates.length
     ? String(matchingTask?.id || '')
     : '';
-  state.coverLookup.modal.expectedLocalCount = 0;
   state.coverLookup.modal.expectedRemoteCount = expectedRemoteCount;
   state.coverLookup.modal.activeLocalSelectionPath = '';
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
@@ -31384,7 +31360,6 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.disabled = true;
   }
   renderCoverLookupModal();
-  void refreshCoverLookupLocalInventoryCount(album, coverLookupModalSession);
   await refreshCoverLookupGallery(false);
   if (!els.overlay.hidden) ensureCoverLookupPolling();
 }
@@ -31420,7 +31395,6 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = '';
-  state.coverLookup.modal.expectedLocalCount = 0;
   state.coverLookup.modal.expectedRemoteCount = 0;
   state.coverLookup.modal.statusText = '';
   state.coverLookup.modal.statusTone = 'neutral';

@@ -701,13 +701,6 @@ def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
         "/utilities/cover-lookup/gallery",
         json_body={"album": _album_payload(track_path)},
     )
-    inventory_status, _inventory_headers, inventory_body = _run_asgi_request(
-        asgi_app,
-        "POST",
-        "/utilities/cover-lookup/gallery",
-        json_body={"album": _album_payload(track_path), "inventory_only": True},
-    )
-
     assert invalid_status == 400
     assert _decode_json(invalid_body) == {"ok": False, "error": "Invalid album payload"}
     assert start_status == 200
@@ -730,8 +723,6 @@ def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
     assert gallery_payload["ok"] is True
     assert gallery_payload["album_root"] == str(track_path.parent)
     assert gallery_payload["task"] is None
-    assert inventory_status == 200
-    assert _decode_json(inventory_body) == {"ok": True, "local_image_count": 1}
     assert queued_calls == [
         {
             "requested_track_paths": {str(track_path)},

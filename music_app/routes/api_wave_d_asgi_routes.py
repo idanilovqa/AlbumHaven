@@ -29,7 +29,6 @@ from music_app.services.album_cover_candidate_snapshots_postgres import (
 from music_app.services.cover_state import (
     active_cover_path_for_track_paths as active_cover_path_for_track_paths_in_state,
     apply_authoritative_local_cover_fallback,
-    count_local_cover_images,
     find_albums_by_track_paths as find_albums_by_track_paths_in_state,
     resolve_authoritative_album_track_paths,
     serialize_cover_candidate_snapshot,
@@ -745,17 +744,6 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     if task_payload and not valid_split_choice and not task_matches:
         return _json_response(
             ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)
-        )
-    if payload.get("inventory_only") is True:
-        return JSONResponse(
-            {
-                "ok": True,
-                "local_image_count": await run_in_threadpool(
-                    count_local_cover_images,
-                    album_context.album_root,
-                    image_extensions=set(config["IMAGE_EXTENSIONS"]),
-                ),
-            }
         )
     candidate_snapshot = None
     if not album.get("_cover_lookup_task_scoped_context"):

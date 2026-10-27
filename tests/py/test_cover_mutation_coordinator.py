@@ -418,6 +418,114 @@ def test_execute_cover_mutation_prepares_before_first_lock(monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize(
+    ("selected_path", "selected_revision", "expected_clear", "expected_origin"),
+    [
+        ("fallback.jpg", "fallback-revision", False, "user"),
+        (None, None, True, None),
+    ],
+)
+def test_execute_cover_mutation_resolves_deferred_delete_selection(
+    monkeypatch,
+    tmp_path,
+    selected_path,
+    selected_revision,
+    expected_clear,
+    expected_origin,
+) -> None:
+    dependencies = _Dependencies(tmp_path)
+    target = tmp_path / "cover.jpg"
+    target.write_bytes(b"deleted-cover")
+
+    def write_deleted_artifact(_prepared, _baseline):
+        prior_bytes = target.read_bytes()
+        target.unlink()
+        return CoverArtifactIdentity(
+            private_path=target,
+            sha256=None,
+            post_write_exists=False,
+            selected_cover_path=selected_path,
+            promoted_cover_revision=selected_revision,
+            prior_cover_existed=True,
+            prior_cover_bytes=prior_bytes,
+        )
+
+    dependencies.write_artifact = write_deleted_artifact
+    monkeypatch.setattr(
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
+        lambda **_kwargs: dependencies.local_lock(tmp_path),
+    )
+
+    execute_cover_mutation(
+        request=_request(tmp_path, clear_selection=False),
+        dependencies=dependencies,
+    )
+
+    assert dependencies.commits[0].clear_selection is expected_clear
+    assert dependencies.commits[0].selected_origin == expected_origin
+
+
+def test_execute_cover_mutation_publishes_committed_runtime_before_unlock(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    dependencies = _Dependencies(tmp_path)
+
+    def publish_committed(outcome, artifact) -> None:
+        assert outcome.status is CoverMutationStatus.COMMITTED
+        assert artifact.promoted_cover_revision == "promoted-revision"
+        dependencies.events.append("runtime-publish")
+
+    dependencies.publish_committed = publish_committed
+    monkeypatch.setattr(
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
+        lambda **_kwargs: dependencies.local_lock(tmp_path),
+    )
+
+    execute_cover_mutation(
+        request=_request(tmp_path),
+        dependencies=dependencies,
+    )
+
+    assert (
+        dependencies.events.index("commit")
+        < dependencies.events.index("runtime-publish")
+        < dependencies.events.index("unlock")
+    )
+
+
+def test_execute_cover_mutation_does_not_compensate_post_commit_publish_failure(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    dependencies = _Dependencies(tmp_path)
+    publish_error = RuntimeError("runtime publication failed")
+
+    def fail_publication(_outcome, _artifact) -> None:
+        dependencies.events.append("runtime-publish")
+        raise publish_error
+
+    dependencies.publish_committed = fail_publication
+    monkeypatch.setattr(
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
+        lambda **_kwargs: dependencies.local_lock(tmp_path),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        execute_cover_mutation(
+            request=_request(tmp_path),
+            dependencies=dependencies,
+        )
+
+    assert exc_info.value is publish_error
+    assert dependencies.compensations == []
+    assert dependencies.cleanup_calls == []
+    assert (tmp_path / "cover.jpg").read_bytes() == b"new-cover"
+
+
+@pytest.mark.parametrize(
     ("unlock_result", "unlock_error"),
     [(False, None), (True, RuntimeError("unlock failed"))],
     ids=("false-result", "query-error"),
@@ -713,11 +821,23 @@ def test_inventory_race_discards_and_reprepares_then_requires_caller_retry(
         ),
         pytest.param(
             dict(
+                private_path=Path("discarded.jpg"),
+                sha256=None,
+                post_write_exists=False,
+                selected_cover_path="fallback.jpg",
+                promoted_cover_revision="fallback-revision",
+                prior_cover_existed=True,
+                prior_cover_bytes=b"discarded",
+            ),
+            id="deletion-with-fallback-selection",
+        ),
+        pytest.param(
+            dict(
                 private_path=None,
-                sha256=_DIGEST,
+                sha256=None,
                 post_write_exists=False,
                 selected_cover_path=None,
-                promoted_cover_revision="revision",
+                promoted_cover_revision=None,
                 prior_cover_existed=False,
                 prior_cover_bytes=None,
             ),
@@ -777,8 +897,8 @@ def test_cover_artifact_identity_accepts_valid_shapes(values) -> None:
         "prior-bytes-without-prior-cover",
         "deletion-without-prior-cover",
         "linked-remote-with-local-prior-cover",
-        "deletion-with-selected-path",
-        "deletion-with-promoted-revision",
+        "deletion-with-unpaired-selected-path",
+        "deletion-with-unpaired-promoted-revision",
     ),
 )
 def test_cover_artifact_identity_rejects_mixed_shapes(updates) -> None:
@@ -873,10 +993,10 @@ def test_execute_cover_mutation_cancels_linked_remote_after_write(
     dependencies.cancel_results = [False, True]
     dependencies.write_artifact = lambda _prepared, _baseline: CoverArtifactIdentity(
         private_path=None,
-        sha256=_DIGEST,
+        sha256=None,
         post_write_exists=False,
         selected_cover_path=None,
-        promoted_cover_revision="revision",
+        promoted_cover_revision=None,
         prior_cover_existed=False,
         prior_cover_bytes=None,
     )
@@ -1146,6 +1266,31 @@ def _compensate(artifact: CoverArtifactIdentity) -> None:
     )
 
 
+def test_compensation_restores_prior_cover_bytes_and_exact_timestamps(tmp_path) -> None:
+    target = tmp_path / "cover.jpg"
+    target.write_bytes(b"new-cover")
+    prior_atime_ns = 1_700_000_000_123_456_700
+    prior_mtime_ns = 1_700_000_100_765_432_100
+    artifact = CoverArtifactIdentity(
+        private_path=target,
+        sha256=hashlib.sha256(b"new-cover").hexdigest(),
+        post_write_exists=True,
+        selected_cover_path="cover.jpg",
+        promoted_cover_revision="promoted-revision",
+        prior_cover_existed=True,
+        prior_cover_bytes=b"prior-cover",
+        prior_cover_atime_ns=prior_atime_ns,
+        prior_cover_mtime_ns=prior_mtime_ns,
+    )
+
+    _compensate(artifact)
+
+    restored_stat = target.stat()
+    assert target.read_bytes() == b"prior-cover"
+    assert restored_stat.st_atime_ns == prior_atime_ns
+    assert restored_stat.st_mtime_ns == prior_mtime_ns
+
+
 @pytest.mark.parametrize("failing_operation", ["resolve_identity", "load_baseline"])
 def test_compensation_converts_repository_failure_to_unknown_outcome(
     tmp_path,
@@ -1375,10 +1520,10 @@ def test_compensation_restores_deleted_cover(tmp_path) -> None:
 def test_compensation_for_linked_remote_has_no_local_artifact(tmp_path) -> None:
     artifact = CoverArtifactIdentity(
         private_path=None,
-        sha256=_DIGEST,
+        sha256=None,
         post_write_exists=False,
         selected_cover_path=None,
-        promoted_cover_revision="revision",
+        promoted_cover_revision=None,
         prior_cover_existed=False,
         prior_cover_bytes=None,
     )

@@ -1,12 +1,26 @@
 from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import Future
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 from music_app.services.json_files import load_json_file
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
+from music_app.services.cover_mutation_coordinator import (
+    CoverMutationOutcome,
+    CoverMutationRecovery,
+    CoverMutationRequest,
+    CoverMutationStatus,
+    compensate_if_still_owned,
+    execute_cover_mutation,
+)
+from music_app.services.cover_mutations_postgres import (
+    PostgresCoverMutationRepository,
+)
+from music_app.services.cover_workflow import local_cover_selection_lock
 
 _CACHE_WRITE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cache")
 _LOGGER = logging.getLogger(__name__)
@@ -32,6 +46,112 @@ _AUTHORITATIVE_COVER_FIELDS = frozenset(
 )
 _MISSING_CACHE_FIELD = object()
 _INTEGER_TAG_FIELDS = frozenset({"year", "track_number", "disc_number", "album_rating"})
+
+
+def execute_cover_mutation_for_config(
+    config: dict[str, object],
+    *,
+    library_id: int | None = None,
+    track_paths: set[str],
+    album_root: Path,
+    selected_origin: str | None,
+    explicit_selection: bool = False,
+    clear_selection: bool,
+    remote_cover: dict[str, object] | None,
+    prepare: Callable[..., object],
+    cleanup_prepared: Callable[[object], None],
+    write_artifact: Callable[..., object],
+    prepare_commit: Callable[[object], int | None] | None = None,
+    commit_selection: Callable[..., CoverMutationOutcome] | None = None,
+    recover_selection: Callable[..., CoverMutationOutcome] | None = None,
+    compensate_artifact: Callable[[object], None] | None = None,
+    publish_committed: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    job_id: int | None = None,
+    attempt: int | None = None,
+    worker_id: str | None = None,
+    lease_token: str | None = None,
+    task_id: int | None = None,
+    checkpoint_revision: int | None = None,
+):
+    """Run one canonical-cover mutation through the shared authority owner."""
+
+    database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    if library_id is None:
+        publication = _select_runtime_scan_cache_adapter(
+            config
+        ).load_inventory_publication()
+        library_id = int(publication.get("library_id") or 0)
+    if library_id < 1:
+        raise RuntimeError("Configured library identity is unavailable.")
+    repository = PostgresCoverMutationRepository(database_url=database_url)
+    normalized_paths = tuple(sorted({str(path).strip() for path in track_paths if str(path).strip()}))
+
+    def recover(commit_request, _artifact):
+        if recover_selection is not None:
+            return recover_selection(commit_request, _artifact)
+        if commit_request.job_id is None:
+            return CoverMutationOutcome(status=CoverMutationStatus.AMBIGUOUS)
+        return repository.recover_ambiguous(
+            request=CoverMutationRecovery(
+                identity=commit_request.identity,
+                expected_inventory_revision=commit_request.expected_inventory_revision,
+                expected_cover_mutation_revision=commit_request.expected_cover_mutation_revision,
+                expected_selected_cover_revision=commit_request.expected_selected_cover_revision,
+                promoted_cover_revision=commit_request.promoted_cover_revision,
+                artifact_sha256=commit_request.artifact_sha256,
+                job_id=commit_request.job_id,
+                attempt=commit_request.attempt,
+                worker_id=commit_request.worker_id,
+                lease_token=commit_request.lease_token,
+                task_id=commit_request.task_id,
+                checkpoint_revision=commit_request.checkpoint_revision,
+                observed_at=datetime.now(timezone.utc),
+            )
+        )
+
+    dependencies = SimpleNamespace(
+        config=config,
+        resolve_identity=repository.resolve_identity,
+        load_baseline=repository.load_baseline,
+        prepare=prepare,
+        cleanup_prepared=cleanup_prepared,
+        local_lock=local_cover_selection_lock,
+        write_artifact=write_artifact,
+        prepare_commit=prepare_commit,
+        commit=(
+            commit_selection
+            if commit_selection is not None
+            else lambda request: repository.commit_selection(request=request)
+        ),
+        compensate=lambda **kwargs: compensate_if_still_owned(
+            repository=repository,
+            restore_artifact=compensate_artifact,
+            **kwargs,
+        ),
+        recover=recover,
+        should_cancel=should_cancel or (lambda: False),
+        clock=lambda: datetime.now(timezone.utc),
+        publish_committed=publish_committed,
+    )
+    return execute_cover_mutation(
+        request=CoverMutationRequest(
+            library_id=library_id,
+            track_paths=normalized_paths,
+            album_root=album_root,
+            selected_origin=selected_origin,
+            explicit_selection=explicit_selection,
+            clear_selection=clear_selection,
+            remote_cover=remote_cover,
+            job_id=job_id,
+            attempt=attempt,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            task_id=task_id,
+            checkpoint_revision=checkpoint_revision,
+        ),
+        dependencies=dependencies,
+    )
 
 
 def _cache_rebase_comparison_value(key: str, value: object) -> object:
@@ -90,7 +210,7 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
 
 def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
     deserialized = {
-        "path": str(entry["path"]), "mtime": float(entry["mtime"]), "size": int(entry["size"]),
+        "path": str(entry["path"]), "mtime": float(entry["mtime"]), "size": None if entry["size"] is None else int(entry["size"]),
         "album": str(entry.get("album") or "") if "album" in entry else "Unknown Album", "album_artist": entry.get("album_artist") or "Unknown Artist",
         "genre": entry.get("genre"),
         "title": entry.get("title") or Path(str(entry["path"])).stem, "track_number": entry.get("track_number"),
@@ -565,6 +685,10 @@ def persist_cover_selection_for_tracks_for_config(
     expected_cover_selection_origin: str | None = None,
     expected_cover_revision: str | None = None,
     expected_cover_state: tuple[str | None, str | None] | None = None,
+    expected_library_id: int | None = None,
+    expected_album_id: int | None = None,
+    expected_inventory_revision: int | None = None,
+    expected_cover_mutation_revision: int | None = None,
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
     logger=None,
 ) -> dict[str, object]:
@@ -599,6 +723,14 @@ def persist_cover_selection_for_tracks_for_config(
         persistence_options["expected_cover_revision"] = expected_cover_revision
     if expected_cover_state is not None:
         persistence_options["expected_cover_state"] = expected_cover_state
+    baseline = {
+        "expected_library_id": expected_library_id,
+        "expected_album_id": expected_album_id,
+        "expected_inventory_revision": expected_inventory_revision,
+        "expected_cover_mutation_revision": expected_cover_mutation_revision,
+    }
+    if any(value is not None for value in baseline.values()):
+        persistence_options.update(baseline)
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
     return adapter.persist_cover_selection(

@@ -95,48 +95,54 @@ def test_health_store_outages_remain_visible_and_cannot_be_dismissed():
         assert warning_token(health) == ""
 
 
-def test_repository_scopes_acknowledgements_to_the_authenticated_account():
+def test_repository_scopes_text_warning_acknowledgements_to_authenticated_account():
     from datetime import datetime, timezone
 
     from music_app.services.library_warning_dismissals import (
         PostgresLibraryWarningDismissals,
     )
 
-    acknowledged = {}
-    calls = []
+    for warning in (
+        "22222222-2222-2222-2222-222222222222",
+        "a" * 64,
+    ):
+        acknowledged = {}
+        calls = []
 
-    class Connection:
-        def __enter__(self): return self
-        def __exit__(self, *_args): pass
-        def execute(self, statement, params):
-            normalized = " ".join(statement.split())
-            calls.append((normalized, params))
-            if "acknowledge_watcher_incident" in normalized:
-                acknowledged[params[1]] = params[2]
-                self.rows = [(True,)]
-            else:
-                token = acknowledged.get(params[1])
-                self.rows = ([{"warning_token": token}] if token else [])
-            return self
-        def fetchall(self): return self.rows
-        def fetchone(self): return self.rows[0] if self.rows else None
-        def commit(self): pass
+        class Connection:
+            def __enter__(self): return self
+            def __exit__(self, *_args): pass
+            def execute(self, statement, params):
+                normalized = " ".join(statement.split())
+                calls.append((normalized, params))
+                if "acknowledge_library_warning" in normalized:
+                    acknowledged[params[1]] = params[2]
+                    self.rows = [(True,)]
+                else:
+                    token = acknowledged.get(params[1])
+                    self.rows = ([{"warning_token": token}] if token else [])
+                return self
+            def fetchall(self): return self.rows
+            def fetchone(self): return self.rows[0] if self.rows else None
+            def commit(self): pass
 
-    repo = PostgresLibraryWarningDismissals({}, connect=lambda _: Connection())
-    repo.library_id = 19
-    repo.now = lambda: datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
-    warning = "22222222-2222-2222-2222-222222222222"
+        repo = PostgresLibraryWarningDismissals({}, connect=lambda _: Connection())
+        repo.library_id = 19
+        repo.now = lambda: datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
 
-    repo.save(7, warning)
+        repo.save(7, warning)
 
-    assert repo.load(7) == warning
-    assert repo.load(8) == ""
-    assert any("acknowledge_watcher_incident" in sql for sql, _ in calls)
-    assert any("acknowledge_watcher_incident" not in sql for sql, _ in calls)
-    assert all("library.libraries.metadata" not in sql for sql, _ in calls)
+        assert repo.load(7) == warning
+        assert repo.load(8) == ""
+        assert any("acknowledge_library_warning" in sql for sql, _ in calls)
+        assert any(
+            "load_library_warning_acknowledgement" in sql for sql, _ in calls
+        )
+        assert all("::uuid" not in sql for sql, _ in calls)
+        assert all("library.libraries.metadata" not in sql for sql, _ in calls)
 
 
-def test_repository_rejects_stale_durable_incident_token_without_committing():
+def test_repository_rejects_stale_warning_token_without_committing():
     from datetime import datetime, timezone
 
     import pytest
@@ -169,14 +175,14 @@ def test_repository_rejects_stale_durable_incident_token_without_committing():
     )
     repository.library_id = 19
     repository.now = lambda: datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
-    token = "22222222-2222-2222-2222-222222222222"
+    token = "a" * 64
 
-    with pytest.raises(ValueError, match="incident is not current"):
+    with pytest.raises(ValueError, match="not current"):
         repository.save(7, token)
 
     assert executed == [
         (
-            "select library.acknowledge_watcher_incident(%s, %s, %s::uuid, %s)",
+            "select library.acknowledge_library_warning(%s, %s, %s, %s)",
             (19, 7, token, repository.now()),
         )
     ]

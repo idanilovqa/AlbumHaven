@@ -616,6 +616,17 @@ def refresh_relation_views_for_state(
 ) -> None:
     if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
         raise RuntimeError("Shared browsing cannot rebuild library relations")
+    postgres_relation_projection = bool(
+        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    )
+    pure_relation_refresh = (
+        postgres_relation_projection
+        and publication_state is None
+        and not seed_missing_album_ratings
+    )
+    if pure_relation_refresh and expected_scan_generation is None:
+        with _CACHE_LOCK:
+            expected_scan_generation = int(library_state.get("scan_generation") or 0)
     guarded_live_repair = (
         expected_scan_generation is not None
         and publication_state is None
@@ -626,24 +637,21 @@ def refresh_relation_views_for_state(
         if guarded_live_repair
         else publication_state if publication_state is not None else library_state
     )
-    postgres_relation_projection = bool(
-        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
-    )
-    snapshot_options: dict[str, object] = {
-        "separate_release_keys": set(
+    snapshot_options: dict[str, object] = {}
+    if not pure_relation_refresh:
+        snapshot_options["separate_release_keys"] = set(
             target_state.get("separate_release_keys") or set()
-        ),
-    }
-    observed_library_root_ids = target_state.get("observed_library_root_ids")
-    if isinstance(observed_library_root_ids, (set, list, tuple)):
-        snapshot_options["observed_library_root_ids"] = {
-            str(root_id).strip()
-            for root_id in observed_library_root_ids
-            if str(root_id).strip()
-        }
-    if postgres_relation_projection:
+        )
+        observed_library_root_ids = target_state.get("observed_library_root_ids")
+        if isinstance(observed_library_root_ids, (set, list, tuple)):
+            snapshot_options["observed_library_root_ids"] = {
+                str(root_id).strip()
+                for root_id in observed_library_root_ids
+                if str(root_id).strip()
+            }
+    if postgres_relation_projection and not pure_relation_refresh:
         snapshot_options["rebuild_relation_projection"] = True
-    else:
+    elif not postgres_relation_projection:
         relation_views = refresh_relation_views_in_state(target_state, config)
         target_state["relation_views"] = relation_views
         snapshot_options["relation_views"] = relation_views
@@ -686,14 +694,19 @@ def refresh_relation_views_for_state(
 
     def save_relation_snapshot() -> None:
         nonlocal repaired_cover_published
-        committed_relation_state = save_cache_to_disk_for_config(
-            config,
-            config["CACHE_PATH"],
-            dict(target_state.get("file_cache") or {}),
-            library_root_cache_identity(config),
-            float(target_state.get("last_scan") or 0.0),
-            **snapshot_options,
-        )
+        if pure_relation_refresh:
+            committed_relation_state = select_scan_cache_adapter(
+                config
+            ).refresh_relation_projection(**snapshot_options)
+        else:
+            committed_relation_state = save_cache_to_disk_for_config(
+                config,
+                config["CACHE_PATH"],
+                dict(target_state.get("file_cache") or {}),
+                library_root_cache_identity(config),
+                float(target_state.get("last_scan") or 0.0),
+                **snapshot_options,
+            )
         repaired_entries = (committed_relation_state or {}).get("repaired_cover_entries")
         if isinstance(repaired_entries, dict) and repaired_entries:
             from music_app.services.library import build_albums_from_file_cache

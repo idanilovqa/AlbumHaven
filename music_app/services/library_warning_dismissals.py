@@ -53,26 +53,24 @@ class PostgresLibraryWarningDismissals:
     def load(self, account_id):
         library_id = _positive_id(self.library_id, "library_id")
         with self.connect(self.url) as conn:
-            rows = conn.execute(
+            row = conn.execute(
                 """
-                select warning_token
-                from library.load_watcher_incident_acknowledgements(%s, %s)
+                select library.load_library_warning_acknowledgement(%s, %s)
+                  as warning_token
                 """,
                 (library_id, _positive_id(account_id, "account_id")),
-            ).fetchall()
-        if not rows:
+            ).fetchone()
+        if not row:
             return ""
-        row = rows[0]
-        return str(
-            row.get("warning_token") if isinstance(row, Mapping) else row[0]
-        )
+        token = row.get("warning_token") if isinstance(row, Mapping) else row[0]
+        return str(token or "")
 
     def save(self, account_id, token, *_legacy_health):
         library_id = _positive_id(self.library_id, "library_id")
         observed_at = self.now()
         with self.connect(self.url) as conn:
             row = conn.execute(
-                "select library.acknowledge_watcher_incident(%s, %s, %s::uuid, %s)",
+                "select library.acknowledge_library_warning(%s, %s, %s, %s)",
                 (
                     library_id,
                     _positive_id(account_id, "account_id"),

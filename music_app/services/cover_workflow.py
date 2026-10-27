@@ -13,7 +13,11 @@ from threading import Lock
 from typing import Callable
 
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
-from music_app.services.covers import Image, reserve_existing_cover_variant
+from music_app.services.covers import (
+    Image,
+    images_are_visually_similar,
+    reserve_existing_cover_variant,
+)
 from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
@@ -31,6 +35,16 @@ _LOCAL_COVER_SELECTION_LOCKS: dict[str, tuple[Lock, int]] = {}
 class CoverAlbumContext:
     album_root: Path
     track_paths: set[str]
+
+
+@dataclass(frozen=True)
+class PreparedCoverReservation:
+    observed_revision: str | None
+    visually_similar: bool
+    observed_file_identity: tuple[int, int] | None = None
+    observed_size: int | None = None
+    observed_atime_ns: int | None = None
+    observed_mtime_ns: int | None = None
 
 
 @dataclass
@@ -206,7 +220,7 @@ def validate_local_cover_source(config: dict[str, object], album_root: Path, sou
     return resolved
 
 
-def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) -> Path:
+def prepare_pasted_image_for_authoritative_write(data_url: str) -> bytes:
     match = re.match(
         r"^data:(image/[a-z0-9.+-]+);base64,(.+)$",
         str(data_url or "").strip(),
@@ -220,20 +234,18 @@ def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) ->
         raw_bytes = base64.b64decode(encoded, validate=True)
     except Exception as exc:
         raise ValueError("Clipboard image data could not be decoded.") from exc
-    target = album_root / "cover.jpg"
-    with suppress_library_watch_events((target,)):
-        if Image is None:
-            if mime_type != "image/jpeg":
-                raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
-            target.write_bytes(raw_bytes)
-            return target
-        try:
-            with Image.open(io.BytesIO(raw_bytes)) as img:
-                converted = img.convert("RGB")
-                converted.save(target, format="JPEG", quality=95)
-        except Exception as exc:
-            raise ValueError("Clipboard image could not be processed.") from exc
-    return target
+    if Image is None:
+        if mime_type != "image/jpeg":
+            raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
+        return raw_bytes
+    try:
+        with Image.open(io.BytesIO(raw_bytes)) as img:
+            converted = img.convert("RGB")
+            encoded = io.BytesIO()
+            converted.save(encoded, format="JPEG", quality=95)
+            return encoded.getvalue()
+    except Exception as exc:
+        raise ValueError("Clipboard image could not be processed.") from exc
 
 
 def decode_image_bytes(raw_bytes: bytes) -> tuple[object, int, int] | None:
@@ -271,11 +283,55 @@ def prepare_remote_cover_bytes_for_authoritative_write(raw_bytes: bytes) -> byte
             pass
 
 
+def prepare_cover_reservation(
+    album_root: Path,
+    prepared_bytes: bytes,
+) -> PreparedCoverReservation:
+    current_cover = album_root / "cover.jpg"
+    if not current_cover.is_file():
+        return PreparedCoverReservation(None, False)
+    try:
+        observed_stat = current_cover.stat()
+        observed_revision = cover_revision_for_path(current_cover)
+        visually_similar = images_are_visually_similar(current_cover, prepared_bytes)
+        current_revision = cover_revision_for_path(current_cover)
+        current_stat = current_cover.stat()
+    except OSError:
+        return PreparedCoverReservation(None, False)
+    observed_identity = (observed_stat.st_dev, observed_stat.st_ino)
+    current_identity = (current_stat.st_dev, current_stat.st_ino)
+    if (
+        current_revision != observed_revision
+        or current_identity != observed_identity
+        or current_stat.st_size != observed_stat.st_size
+        or current_stat.st_mtime_ns != observed_stat.st_mtime_ns
+    ):
+        return PreparedCoverReservation(current_revision, False)
+    return PreparedCoverReservation(
+        observed_revision,
+        visually_similar,
+        observed_file_identity=observed_identity,
+        observed_size=observed_stat.st_size,
+        observed_atime_ns=observed_stat.st_atime_ns,
+        observed_mtime_ns=observed_stat.st_mtime_ns,
+    )
+
+
 def write_prepared_remote_cover_bytes(
     album_root: Path,
     prepared_bytes: bytes,
+    *,
+    reservation: PreparedCoverReservation | None = None,
 ) -> Path | None:
-    promotion = begin_prepared_remote_cover_promotion(album_root, prepared_bytes)
+    prepared_reservation = reservation or prepare_cover_reservation(
+        album_root,
+        prepared_bytes,
+    )
+    promotion = begin_prepared_remote_cover_promotion(
+        album_root,
+        prepared_bytes,
+        reservation=prepared_reservation,
+    )
     if promotion is None:
         return None
     complete_local_image_promotion(promotion)
@@ -360,6 +416,8 @@ def _atomic_replace_file_bytes(
                 os.utime(temp_path, ns=(atime_ns, mtime_ns))
             os.replace(temp_path, target)
             temp_path = None
+            if atime_ns is not None and mtime_ns is not None:
+                os.utime(target, ns=(atime_ns, mtime_ns))
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
@@ -451,22 +509,42 @@ def begin_local_image_promotion(
     return promotion
 
 
+def begin_prepared_pasted_cover_promotion(
+    album_root: Path,
+    prepared_bytes: bytes,
+) -> LocalCoverPromotion:
+    target = album_root / "cover.jpg"
+    prior_cover_existed = target.is_file()
+    prior_cover_stat = target.stat() if prior_cover_existed else None
+    promotion = LocalCoverPromotion(
+        cover_path=target,
+        prior_cover_existed=prior_cover_existed,
+        prior_cover_bytes=target.read_bytes() if prior_cover_existed else None,
+        reserve_artifact=None,
+        promoted_cover_revision=hashlib.sha256(prepared_bytes).hexdigest(),
+        prior_cover_atime_ns=(
+            prior_cover_stat.st_atime_ns if prior_cover_stat is not None else None
+        ),
+        prior_cover_mtime_ns=(
+            prior_cover_stat.st_mtime_ns if prior_cover_stat is not None else None
+        ),
+    )
+    try:
+        _atomic_replace_file_bytes(target, prepared_bytes)
+    except Exception:
+        rollback_local_image_promotion(promotion)
+        raise
+    return promotion
+
+
 def begin_prepared_remote_cover_promotion(
     album_root: Path,
     prepared_bytes: bytes,
     *,
+    reservation: PreparedCoverReservation | None = None,
     serialize_selection: bool = False,
     should_cancel: Callable[[], bool] | None = None,
 ) -> LocalCoverPromotion | None:
-    decoded = decode_image_bytes(prepared_bytes)
-    if decoded is None:
-        return None
-    prepared_image, _width, _height = decoded
-    try:
-        prepared_image.close()
-    except Exception:
-        pass
-
     lock_key, selection_lock = (
         _acquire_local_cover_selection_lock(album_root)
         if serialize_selection
@@ -484,6 +562,40 @@ def begin_prepared_remote_cover_promotion(
         prior_cover_existed = target.is_file()
         prior_cover_stat = target.stat() if prior_cover_existed else None
         prior_cover_bytes = target.read_bytes() if prior_cover_existed else None
+        current_cover_stat = target.stat() if prior_cover_existed else None
+        prior_cover_revision = (
+            hashlib.sha256(prior_cover_bytes).hexdigest()
+            if prior_cover_bytes is not None
+            else None
+        )
+        prior_capture_unchanged = bool(
+            prior_cover_stat is not None
+            and current_cover_stat is not None
+            and (prior_cover_stat.st_dev, prior_cover_stat.st_ino)
+            == (current_cover_stat.st_dev, current_cover_stat.st_ino)
+            and prior_cover_stat.st_size == current_cover_stat.st_size
+            and prior_cover_stat.st_mtime_ns == current_cover_stat.st_mtime_ns
+        )
+        baseline_cover_stat = (
+            prior_cover_stat if prior_capture_unchanged else current_cover_stat
+        )
+        reservation_matches_prior = bool(
+            reservation is not None
+            and prior_capture_unchanged
+            and prior_cover_stat is not None
+            and reservation.observed_revision == prior_cover_revision
+            and reservation.observed_file_identity
+            == (prior_cover_stat.st_dev, prior_cover_stat.st_ino)
+            and reservation.observed_size
+            == prior_cover_stat.st_size
+            and reservation.observed_mtime_ns
+            == prior_cover_stat.st_mtime_ns
+        )
+        visually_similar = bool(
+            reservation is not None
+            and reservation.observed_revision == prior_cover_revision
+            and reservation.visually_similar
+        )
         promotion = LocalCoverPromotion(
             cover_path=target,
             prior_cover_existed=prior_cover_existed,
@@ -493,19 +605,24 @@ def begin_prepared_remote_cover_promotion(
             selection_lock_key=lock_key,
             selection_lock=selection_lock,
             prior_cover_atime_ns=(
-                prior_cover_stat.st_atime_ns
-                if prior_cover_stat is not None
+                reservation.observed_atime_ns
+                if reservation_matches_prior
+                else baseline_cover_stat.st_atime_ns
+                if baseline_cover_stat is not None
                 else None
             ),
             prior_cover_mtime_ns=(
-                prior_cover_stat.st_mtime_ns
-                if prior_cover_stat is not None
+                reservation.observed_mtime_ns
+                if reservation_matches_prior
+                else baseline_cover_stat.st_mtime_ns
+                if baseline_cover_stat is not None
                 else None
             ),
         )
         promotion.reserve_artifact = reserve_existing_cover_variant(
             album_root,
             prepared_bytes,
+            visually_similar=visually_similar,
         )
         if should_cancel is not None and should_cancel():
             canceled_promotion = promotion
@@ -682,12 +799,6 @@ def local_cover_selection_lock(album_root: Path):
         _release_local_cover_selection_lock(lock_key, selection_lock)
 
 
-def run_serialized_cover_selection(album_root: Path, action: Callable[[], object]) -> object:
-    """Run a short cover write/persist/apply transaction under the album lock."""
-    with local_cover_selection_lock(album_root):
-        return action()
-
-
 def cover_revision_for_path(cover_path: Path) -> str:
     """Return the stable revision of the exact bytes served as the local cover."""
     return hashlib.sha256(cover_path.read_bytes()).hexdigest()
@@ -700,11 +811,13 @@ def choose_best_remaining_local_cover(
     image_dimensions,
     is_squareish_cover,
     score_image,
+    excluded_path: Path | None = None,
 ) -> Path | None:
     candidates = [
         path
         for path in album_root.rglob("*")
         if path.is_file()
+        and path != excluded_path
         and path.suffix.lower() in image_extensions
         and not is_managed_preview_path(path)
     ]

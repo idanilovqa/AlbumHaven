@@ -28,7 +28,7 @@ _FUNCTIONS = {
     "identity": "library.resolve_cover_mutation_identity(bigint,text[])",
     "commit": (
         "library.commit_cover_selection(bigint,bigint,text[],bigint,bigint,"
-        "text,text,text,text,boolean,jsonb,text,bigint,integer,text,text,bigint,"
+        "text,text,text,text,boolean,integer,integer,boolean,jsonb,text,bigint,integer,text,text,bigint,"
         "bigint,timestamptz)"
     ),
     "recover": (
@@ -227,6 +227,20 @@ def _repository(database_url: str) -> PostgresCoverMutationRepository:
         database_url=database_url,
         connect_to_database=isolatedPostgres._connect,
     )
+
+
+def _persisted_cover_metadata(scope: _CoverScope) -> tuple[dict, dict]:
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        album_metadata = connection.execute(
+            "select metadata from library.local_albums where id = %s",
+            (scope.album_id,),
+        ).fetchone()["metadata"]
+        file_metadata = connection.execute(
+            "select metadata #> '{scan_cache,file_entry}' as metadata "
+            "from library.local_track_files where id = %s",
+            (scope.file_id,),
+        ).fetchone()["metadata"]
+    return album_metadata, file_metadata
 
 
 def _commit_request(
@@ -512,6 +526,81 @@ def test_live_repository_commit_repairs_stale_files_and_preserves_no_op_revision
             (scope.file_id,),
         ).fetchone()["revision"]
     assert persisted == "selected-v1"
+
+
+def test_live_repository_normalizes_manual_linked_and_cleared_cover_metadata(
+    live_cover_mutation_database,
+) -> None:
+    scope = live_cover_mutation_database
+    repository = _repository(scope.app_url)
+
+    manual = repository.commit_selection(
+        request=replace(
+            _commit_request(scope),
+            explicit_selection=True,
+            local_cover_width=1200,
+            local_cover_height=800,
+        )
+    )
+    assert manual.status is CoverMutationStatus.COMMITTED
+    album_metadata, file_metadata = _persisted_cover_metadata(scope)
+    for metadata in (album_metadata, file_metadata):
+        assert metadata["cover_selection_provenance"] == "explicit"
+        assert metadata["local_cover_width"] == 1200
+        assert metadata["local_cover_height"] == 800
+
+    linked = repository.commit_selection(
+        request=replace(
+            _commit_request(
+                scope,
+                expected_cover_mutation_revision=1,
+                expected_selected_cover_revision="selected-v1",
+            ),
+            selected_cover_path=None,
+            promoted_cover_revision=None,
+            remote_cover={
+                "remote_cover_url": "https://images.invalid/linked.jpg",
+                "remote_cover_source": "spotify",
+            },
+            explicit_selection=True,
+            local_cover_width=None,
+            local_cover_height=None,
+        )
+    )
+    assert linked.status is CoverMutationStatus.COMMITTED
+    album_metadata, file_metadata = _persisted_cover_metadata(scope)
+    for metadata in (album_metadata, file_metadata):
+        assert metadata["cover_selection_provenance"] == "explicit"
+        assert metadata["remote_cover_url"] == "https://images.invalid/linked.jpg"
+        assert metadata["remote_cover_source"] == "spotify"
+        assert "cover_revision" not in metadata
+        assert "local_cover_width" not in metadata
+        assert "local_cover_height" not in metadata
+
+    cleared = repository.commit_selection(
+        request=replace(
+            _commit_request(
+                scope,
+                expected_cover_mutation_revision=2,
+                expected_selected_cover_revision=None,
+            ),
+            selected_cover_path=None,
+            promoted_cover_revision=None,
+            selected_origin=None,
+            clear_selection=True,
+            remote_cover=None,
+            explicit_selection=False,
+            local_cover_width=None,
+            local_cover_height=None,
+        )
+    )
+    assert cleared.status is CoverMutationStatus.COMMITTED
+    album_metadata, file_metadata = _persisted_cover_metadata(scope)
+    for metadata in (album_metadata, file_metadata):
+        assert "cover_selection_provenance" not in metadata
+        assert "local_cover_width" not in metadata
+        assert "local_cover_height" not in metadata
+        assert "remote_cover_url" not in metadata
 
 
 def test_live_repository_maps_durable_commit_and_no_op_checkpoints(
@@ -941,6 +1030,12 @@ def test_live_cover_migration_rerun_preserves_state(live_cover_mutation_database
     migration_sql = (
         Path(__file__).parents[2] / "migrations" / "postgres" / "0122_close_cover_consistency.sql"
     ).read_text(encoding="utf-8")
+    metadata_migration_sql = (
+        Path(__file__).parents[2]
+        / "migrations"
+        / "postgres"
+        / "0125_preserve_cover_selection_metadata.sql"
+    ).read_text(encoding="utf-8")
     with isolatedPostgres._connect(scope.setup_url) as connection:
         before = connection.execute(
             "select cover_mutation_revision, updated_at "
@@ -949,6 +1044,8 @@ def test_live_cover_migration_rerun_preserves_state(live_cover_mutation_database
         ).fetchone()
         connection.execute(migration_sql)
         connection.execute(migration_sql)
+        connection.execute(metadata_migration_sql)
+        connection.execute(metadata_migration_sql)
         after = connection.execute(
             "select cover_mutation_revision, updated_at "
             "from library.cover_mutation_state where library_id = %s",

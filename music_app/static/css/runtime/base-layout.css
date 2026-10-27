@@ -268,8 +268,9 @@ input[type='search'] {
   right: 16px;
   bottom: 12px;
   width: min(360px, calc(100vw - 32px));
-  pointer-events: auto;
+  pointer-events: none;
 }
+.system-warning-notification .ui-button { pointer-events: auto; }
 #toast-layer > .floating-notification-positioned,
 #repair-alert.floating-notification-positioned {
   position: fixed;

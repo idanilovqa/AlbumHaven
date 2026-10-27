@@ -135,6 +135,12 @@ WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION = (
 COVER_CONSISTENCY_MIGRATION = (
     MIGRATIONS_DIR / "0122_close_cover_consistency.sql"
 )
+LIBRARY_WARNING_ACKNOWLEDGEMENT_MIGRATION = (
+    MIGRATIONS_DIR / "0126_acknowledge_mixed_version_library_warnings.sql"
+)
+AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION = (
+    MIGRATIONS_DIR / "0127_restore_authoritative_exception_clear.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -504,20 +510,141 @@ def test_cover_consistency_worker_startup_requires_finalization_functions_and_gr
     assert f"grant execute on function {signature} to album_haven_worker" in sql
 
 
-def test_0110_is_the_exact_ordered_successor_to_0109():
+def test_0127_is_the_exact_ordered_successor_to_0126():
     migration_names = sorted(
         path.name
         for path in MIGRATIONS_DIR.iterdir()
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
 
-    assert migration_names[-5:] == [
-        "0120_create_watcher_runtime_sessions.sql",
+    assert migration_names[-7:] == [
         "0121_preserve_full_scan_progress_on_restart.sql",
         "0122_close_cover_consistency.sql",
         "0123_preserve_newer_watcher_incident_presentation.sql",
         "0124_close_worker_preflight_cover_contract.sql",
+        "0125_preserve_cover_selection_metadata.sql",
+        "0126_acknowledge_mixed_version_library_warnings.sql",
+        "0127_restore_authoritative_exception_clear.sql",
     ]
+
+
+def test_0127_restores_only_explicit_authoritative_exception_clears():
+    assert AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION.is_file(), (
+        "missing additive authoritative exception-clear migration 0127"
+    )
+    sql = _normalized_sql(
+        AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION.read_text(encoding="utf-8")
+    )
+    original_clause = (
+        "(nullif(btrim(files.metadata #>> "
+        "'{scan_cache,file_entry,album}'), '') is not null "
+        "and nullif(btrim(files.metadata #>> "
+        "'{scan_cache,file_entry,exception_type}'), '') is null)"
+    )
+    assert (
+        f"original_clause text := $fragment$ {original_clause} $fragment$;"
+        in sql
+    )
+    assert (
+        "pg_catalog.pg_get_functiondef( "
+        "'library.restore_detached_album_noncover(bigint,text[],bigint,jsonb,jsonb,"
+        "timestamp with time zone)'::regprocedure )"
+        in sql
+    )
+    assert (
+        "if pg_catalog.strpos(function_definition, replacement_clause) > 0 "
+        "then return; end if;"
+        in sql
+    )
+    assert (
+        "if pg_catalog.strpos(function_definition, original_clause) = 0 then "
+        "raise exception '0127 detached album eligibility source changed'; end if;"
+        in sql
+    )
+    assert (
+        "execute pg_catalog.replace( function_definition, original_clause, "
+        "replacement_clause );"
+        in sql
+    )
+
+    replacement_clause = sql.split(
+        "replacement_clause text := $fragment$", 1
+    )[1].split("$fragment$;", 1)[0]
+    assert original_clause in replacement_clause
+    assert "and not (" in replacement_clause
+    assert "incoming.file_entry ? 'exception_type'" in replacement_clause
+    assert (
+        "nullif(btrim(incoming.file_entry ->> 'exception_type'), '') is null"
+        in replacement_clause
+    )
+    assert "from library.exception_overrides as authoritative_override" in replacement_clause
+    assert "authoritative_override.library_id = requested_library_id" in replacement_clause
+    assert "authoritative_override.track_key = files.private_path" in replacement_clause
+    assert "authoritative_override.track_id = tracks.id" in replacement_clause
+    assert (
+        "order by case when authoritative_override.track_key = files.private_path "
+        "then 0 when authoritative_override.track_id = tracks.id then 1 else 2 end, "
+        "authoritative_override.updated_at desc, authoritative_override.id desc limit 1"
+        in replacement_clause
+    )
+    assert (
+        "nullif(btrim(authoritative_override.override_payload ->> "
+        "'exception_type'), '')"
+        in replacement_clause
+    )
+    assert replacement_clause.count("incoming.file_entry ? 'exception_type'") == 1
+
+
+def test_0126_exposes_only_restricted_mixed_version_warning_acknowledgements():
+    assert LIBRARY_WARNING_ACKNOWLEDGEMENT_MIGRATION.is_file(), (
+        "missing additive mixed-version warning acknowledgement migration 0126"
+    )
+    sql = _normalized_sql(
+        LIBRARY_WARNING_ACKNOWLEDGEMENT_MIGRATION.read_text(encoding="utf-8")
+    )
+    compact = sql.replace(", ", ",")
+    signatures = (
+        "library.load_library_warning_acknowledgement(bigint,bigint)",
+        "library.acknowledge_library_warning(bigint,bigint,text,timestamptz)",
+    )
+
+    for signature in signatures:
+        function_name = signature.split("(", 1)[0]
+        marker = f"create or replace function {function_name}("
+        assert marker in sql
+        body = sql.split(marker, 1)[1].split("$$;", 1)[0]
+        assert "security definer" in body
+        assert "set search_path = pg_catalog" in body
+        assert f"revoke all on function {signature} from public" in compact
+        assert (
+            f"revoke all on function {signature} from album_haven_worker" in compact
+        )
+        assert (
+            f"revoke all on function {signature} from album_haven_readonly" in compact
+        )
+        assert f"grant execute on function {signature} to album_haven_app" in compact
+
+    loader = sql.split(
+        "create or replace function library.load_library_warning_acknowledgement(",
+        1,
+    )[1].split("$$;", 1)[0]
+    saver = sql.split(
+        "create or replace function library.acknowledge_library_warning(",
+        1,
+    )[1].split("$$;", 1)[0]
+    watcher_lock = (
+        "perform pg_catalog.pg_advisory_xact_lock( "
+        "pg_catalog.hashtextextended("
+        "'album-haven:watcher:' || p_library_id::text, 0) );"
+    )
+    assert "returns text" in loader
+    assert "returns boolean" in saver
+    assert watcher_lock in saver
+    assert saver.index(watcher_lock) < saver.index("for update")
+    assert 'min(incident.warning_token::text collate "c")' in loader
+    assert 'min(nullif(visible.event_id, \'\') collate "c")' in saver
+    assert "grant update on table library.libraries" not in sql
+    assert "grant all" not in sql
 
 
 def test_cover_consistency_migration_is_additive_and_least_privilege():
@@ -2249,7 +2376,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-85:] == [
+    assert migration_names[-88:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -2335,6 +2462,9 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0122_close_cover_consistency.sql",
         "0123_preserve_newer_watcher_incident_presentation.sql",
         "0124_close_worker_preflight_cover_contract.sql",
+        "0125_preserve_cover_selection_metadata.sql",
+        "0126_acknowledge_mixed_version_library_warnings.sql",
+        "0127_restore_authoritative_exception_clear.sql",
     ]
 
 

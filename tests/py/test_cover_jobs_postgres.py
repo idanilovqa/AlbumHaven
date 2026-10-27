@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+import psycopg
 
 from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
 
@@ -44,6 +45,9 @@ class _Connection:
 
     def transaction(self):
         return nullcontext()
+
+    def commit(self):
+        pass
 
     def execute(self, sql, parameters=None):
         self.executed.append((" ".join(str(sql).casefold().split()), parameters))
@@ -396,6 +400,10 @@ def test_claimed_automatic_cover_selection_forwards_explicit_state_and_dimension
         reject_if_user_controlled=False,
         reject_if_explicit_selection=True,
         expected_cover_state=("user", "legacy-revision"),
+        expected_library_id=19,
+        expected_album_id=23,
+        expected_inventory_revision=5,
+        expected_cover_mutation_revision=7,
         local_cover_width=1200,
         local_cover_height=1200,
     )
@@ -407,8 +415,63 @@ def test_claimed_automatic_cover_selection_forwards_explicit_state_and_dimension
     assert parameters["reject_if_explicit_selection"] is True
     assert parameters["expected_cover_selection_origin"] == "user"
     assert parameters["expected_cover_revision"] == "legacy-revision"
+    assert "%(expected_library_id)s" in sql
+    assert "%(expected_album_id)s" in sql
+    assert "%(expected_inventory_revision)s" in sql
+    assert "%(expected_cover_mutation_revision)s" in sql
+    assert parameters["expected_library_id"] == 19
+    assert parameters["expected_album_id"] == 23
+    assert parameters["expected_inventory_revision"] == 5
+    assert parameters["expected_cover_mutation_revision"] == 7
     assert parameters["local_cover_width"] == 1200
     assert parameters["local_cover_height"] == 1200
+
+
+def test_claimed_remote_cover_selection_forwards_atomic_baseline_and_dimensions():
+    connection = _Connection([{"row_revision": 8}])
+    repository = _repository(connection, _Jobs())
+    result = repository.persist_claimed_remote_cover_selection(
+        library_id=19, job_id=88, attempt=1, worker_id="cover-worker",
+        lease_token="cover-lease", now=NOW,
+        checkpoint_id=73, expected_checkpoint_revision=7,
+        selected_cover_path="C:/Music/Artist/Album/cover.jpg",
+        selected_cover_revision="replacement-revision", linked_remote=False,
+        local_cover_width=1200, local_cover_height=800,
+        expected_library_id=19, expected_album_id=23,
+        expected_inventory_revision=5, expected_cover_mutation_revision=7,
+        track_paths=("C:/Music/Artist/Album/01.flac",),
+    )
+    assert result == 8
+    sql, parameters = connection.executed[0]
+    assert sql.count("%(") == 17
+    for name, value in {
+        "expected_library_id": 19, "expected_album_id": 23,
+        "expected_inventory_revision": 5, "expected_cover_mutation_revision": 7,
+        "track_paths": ["C:/Music/Artist/Album/01.flac"],
+        "local_cover_width": 1200, "local_cover_height": 800,
+    }.items():
+        assert f"%({name})s" in sql
+        assert parameters[name] == value
+
+
+@pytest.mark.parametrize("fences", [
+    {},
+    {"expected_library_id": 20, "expected_album_id": 23,
+     "expected_inventory_revision": 5, "expected_cover_mutation_revision": 7,
+     "track_paths": ("C:/Music/Artist/Album/01.flac",)},
+])
+def test_claimed_remote_cover_selection_rejects_missing_or_cross_library_baseline(fences):
+    connection = _Connection([])
+    repository = _repository(connection, _Jobs())
+    with pytest.raises(psycopg.errors.SerializationFailure):
+        repository.persist_claimed_remote_cover_selection(
+            library_id=19, job_id=88, attempt=1, worker_id="cover-worker",
+            lease_token="cover-lease", now=NOW,
+            checkpoint_id=73, expected_checkpoint_revision=7,
+            selected_cover_path=None, selected_cover_revision=None,
+            linked_remote=True, **fences,
+        )
+    assert connection.executed == []
 
 
 def test_claimed_provider_outcomes_use_worker_function_without_direct_task_dml():

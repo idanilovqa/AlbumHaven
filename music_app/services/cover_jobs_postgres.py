@@ -14,11 +14,14 @@ from uuid import UUID
 
 try:  # pragma: no cover - optional driver import is environment-specific.
     import psycopg
+    from psycopg import InterfaceError, OperationalError
     from psycopg.rows import dict_row
 except ImportError:  # pragma: no cover
     psycopg = None
+    InterfaceError = OperationalError = None
     dict_row = None
 
+from music_app.services.cover_mutation_coordinator import CommitOutcomeUnknown
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
 
 
@@ -29,6 +32,19 @@ _CANDIDATE_LOOKUP_NOTIFICATION_SOURCES = (
 )
 _CANDIDATE_LOOKUP_ACTIVE_STATUSES = ("pending", "running")
 _PROVIDER_OUTCOME_SOURCE_FAMILY = "automatic_cover_provider_outcomes_v1"
+_CONNECTION_ERRORS = tuple(
+    error for error in (OperationalError, InterfaceError) if error is not None
+)
+_UNKNOWN_COMMIT_SQLSTATES = {"57P01", "57P02"}
+
+
+def _commit_connection_lost(error: BaseException) -> bool:
+    sqlstate = getattr(error, "sqlstate", None)
+    return (
+        sqlstate is None
+        or str(sqlstate).startswith("08")
+        or sqlstate in _UNKNOWN_COMMIT_SQLSTATES
+    )
 
 
 @dataclass(frozen=True)
@@ -818,9 +834,25 @@ class PostgresCoverJobRepository:
         expected_cover_revision: str | None = None,
         expected_cover_state: tuple[str | None, str | None] | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
+        expected_library_id: int | None = None,
+        expected_album_id: int | None = None,
+        expected_inventory_revision: int | None = None,
+        expected_cover_mutation_revision: int | None = None,
         **values: object,
     ) -> dict[str, object]:
         parameters = self._refresh_claim_values(**values)
+        fences = {
+            "expected_library_id": expected_library_id,
+            "expected_album_id": expected_album_id,
+            "expected_inventory_revision": expected_inventory_revision,
+            "expected_cover_mutation_revision": expected_cover_mutation_revision,
+        }
+        if any(type(value) is not int or value < (1 if name.endswith("_id") else 0)
+               for name, value in fences.items()):
+            raise psycopg.errors.SerializationFailure("cover mutation requires complete baseline")
+        if expected_library_id != parameters["library_id"]:
+            raise psycopg.errors.SerializationFailure("cover mutation library conflict")
+        parameters.update(fences)
         normalized_paths = sorted(
             {str(path or "").strip() for path in track_paths if str(path or "").strip()}
         )
@@ -881,36 +913,47 @@ class PostgresCoverJobRepository:
                 "expected_cover_revision": expected_revision,
             }
         )
-        with self._connect() as connection:
-            row = _mapping(
-                connection.execute(
-                    "select * from ops.persist_claimed_automatic_cover_selection(%(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(track_paths)s, %(selected_cover_path)s, %(cover_revision)s, %(cover_selection_origin)s, %(reject_if_user_controlled)s, %(reject_if_explicit_selection)s, %(local_cover_width)s, %(local_cover_height)s, %(expected_cover_selection_origin)s, %(expected_cover_revision)s)",
-                    parameters,
-                ).fetchone()
-            )
-            result = {
-                key: value for key, value in row.items()
-            }
-            if bool(
-                result.get("blocked_by_user_selection")
-                or result.get("blocked_by_expected_cover_state")
-            ):
-                connection.commit()
-                return result
-            if (
-                int(result.get("input_path_count") or 0) != len(normalized_paths)
-                or int(result.get("resolved_path_count") or 0) != len(normalized_paths)
-                or int(result.get("selected_album_count") or 0) != 1
-                or int(result.get("album_rows_updated") or 0) != 1
-                or int(result.get("album_track_file_count") or 0)
-                != int(result.get("track_file_rows_updated") or 0)
-            ):
-                raise RuntimeError(
-                    "claimed cover persistence lost its resource or lease fence"
+        connection = self._connect()
+        may_have_committed = False
+        try:
+            with connection:
+                row = _mapping(
+                    connection.execute(
+                        "select * from ops.persist_claimed_automatic_cover_selection(%(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(track_paths)s, %(selected_cover_path)s, %(cover_revision)s, %(cover_selection_origin)s, %(reject_if_user_controlled)s, %(reject_if_explicit_selection)s, %(local_cover_width)s, %(local_cover_height)s, %(expected_cover_selection_origin)s, %(expected_cover_revision)s, %(expected_library_id)s, %(expected_album_id)s, %(expected_inventory_revision)s, %(expected_cover_mutation_revision)s)",
+                        parameters,
+                    ).fetchone()
                 )
-            if commit_guard is not None:
-                commit_guard(connection.commit)
-            return result
+                result = dict(row)
+                if bool(
+                    result.get("blocked_by_user_selection")
+                    or result.get("blocked_by_expected_cover_state")
+                ):
+                    may_have_committed = True
+                    connection.commit()
+                    return result
+                if (
+                    int(result.get("input_path_count") or 0) != len(normalized_paths)
+                    or int(result.get("resolved_path_count") or 0) != len(normalized_paths)
+                    or int(result.get("selected_album_count") or 0) != 1
+                    or int(result.get("album_rows_updated") or 0) != 1
+                    or int(result.get("album_track_file_count") or 0)
+                    != int(result.get("track_file_rows_updated") or 0)
+                ):
+                    raise RuntimeError(
+                        "claimed cover persistence lost its resource or lease fence"
+                    )
+                may_have_committed = True
+                if commit_guard is None:
+                    connection.commit()
+                else:
+                    commit_guard(connection.commit)
+                return result
+        except _CONNECTION_ERRORS as error:
+            if may_have_committed and _commit_connection_lost(error):
+                raise CommitOutcomeUnknown(
+                    "claimed automatic cover commit outcome is unknown"
+                ) from error
+            raise
 
     def persist_claimed_cover_provider_outcomes(
         self,
@@ -1064,6 +1107,7 @@ class PostgresCoverJobRepository:
         expected_row_revision: int,
         next_checkpoint: str,
         artifact_key: UUID | None = None,
+        artifact_sha256: str | None = None,
         cover_revision: str | None = None,
         reason_code: str | None = None,
         **values: object,
@@ -1077,13 +1121,14 @@ class PostgresCoverJobRepository:
                     "next_checkpoint", next_checkpoint, maximum=32
                 ),
                 "artifact_key": artifact_key,
+                "artifact_sha256": str(artifact_sha256 or "").strip() or None,
                 "cover_revision": str(cover_revision or "").strip() or None,
                 "reason_code": str(reason_code or "").strip() or None,
             }
         )
         with self._connect() as connection:
             row = connection.execute(
-                "select ops.checkpoint_claimed_cover_remote_save(%(checkpoint_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_row_revision)s, %(next_checkpoint)s, %(artifact_key)s, %(cover_revision)s, %(reason_code)s) as row_revision",
+                "select ops.checkpoint_claimed_cover_remote_save(%(checkpoint_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_row_revision)s, %(next_checkpoint)s, %(artifact_key)s, %(artifact_sha256)s, %(cover_revision)s, %(reason_code)s) as row_revision",
                 parameters,
             ).fetchone()
         revision = _mapping(row).get("row_revision")
@@ -1135,9 +1180,38 @@ class PostgresCoverJobRepository:
         selected_cover_path: str | None,
         selected_cover_revision: str | None,
         linked_remote: bool,
+        local_cover_width: int | None = None,
+        local_cover_height: int | None = None,
+        expected_library_id: int | None = None,
+        expected_album_id: int | None = None,
+        expected_inventory_revision: int | None = None,
+        expected_cover_mutation_revision: int | None = None,
+        track_paths: tuple[str, ...] | list[str] | set[str] | None = None,
         **values: object,
     ) -> int | None:
+        if ((local_cover_width is None) != (local_cover_height is None)
+            or (local_cover_width is not None and (
+                type(local_cover_width) is not int or type(local_cover_height) is not int
+                or local_cover_width <= 0 or local_cover_height <= 0 or linked_remote))):
+            raise ValueError("local cover dimensions require a local replacement")
         parameters = self._refresh_claim_values(**values)
+        fences = {
+            "expected_library_id": expected_library_id,
+            "expected_album_id": expected_album_id,
+            "expected_inventory_revision": expected_inventory_revision,
+            "expected_cover_mutation_revision": expected_cover_mutation_revision,
+        }
+        if any(type(value) is not int or value < (1 if name.endswith("_id") else 0)
+               for name, value in fences.items()):
+            raise psycopg.errors.SerializationFailure("cover mutation requires complete baseline")
+        if expected_library_id != parameters["library_id"]:
+            raise psycopg.errors.SerializationFailure("cover mutation library conflict")
+        if not isinstance(track_paths, (tuple, list, set)) or not track_paths or any(
+            not isinstance(path, str) or not path.strip() for path in track_paths
+        ):
+            raise psycopg.errors.SerializationFailure("cover mutation requires track identity")
+        parameters.update(fences)
+        parameters["track_paths"] = sorted({path.strip() for path in track_paths})
         parameters.update(
             {
                 "checkpoint_id": _positive("checkpoint_id", checkpoint_id),
@@ -1150,15 +1224,27 @@ class PostgresCoverJobRepository:
                 ).strip()
                 or None,
                 "linked_remote": bool(linked_remote),
+                "local_cover_width": local_cover_width,
+                "local_cover_height": local_cover_height,
             }
         )
-        with self._connect() as connection:
-            row = connection.execute(
-                "select ops.persist_claimed_remote_cover_selection(%(checkpoint_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_checkpoint_revision)s, %(selected_cover_path)s, %(selected_cover_revision)s, %(linked_remote)s) as row_revision",
-                parameters,
-            ).fetchone()
-        revision = _mapping(row).get("row_revision")
-        return int(revision) if revision is not None else None
+        connection = self._connect()
+        may_have_committed = False
+        try:
+            with connection:
+                row = connection.execute(
+                    "select ops.persist_claimed_remote_cover_selection(%(checkpoint_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_checkpoint_revision)s, %(selected_cover_path)s, %(selected_cover_revision)s, %(linked_remote)s, %(local_cover_width)s, %(local_cover_height)s, %(expected_library_id)s, %(expected_album_id)s, %(expected_inventory_revision)s, %(expected_cover_mutation_revision)s, %(track_paths)s::text[]) as row_revision",
+                    parameters,
+                ).fetchone()
+                revision = _mapping(row).get("row_revision")
+                may_have_committed = True
+            return int(revision) if revision is not None else None
+        except _CONNECTION_ERRORS as error:
+            if may_have_committed and _commit_connection_lost(error):
+                raise CommitOutcomeUnknown(
+                    "claimed remote cover commit outcome is unknown"
+                ) from error
+            raise
 
     @staticmethod
     def _task_management_values(

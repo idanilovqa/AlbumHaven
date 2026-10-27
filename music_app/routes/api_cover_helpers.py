@@ -51,6 +51,7 @@ def apply_cover_path_for_tracks(
     remote_cover_width: int | None = None,
     remote_cover_height: int | None = None,
     schedule_cache_update: bool = True,
+    selection_authority: Mapping[str, object] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     return apply_cover_selection_for_tracks(
         track_paths,
@@ -67,7 +68,8 @@ def apply_cover_path_for_tracks(
         remote_cover_width=remote_cover_width,
         remote_cover_height=remote_cover_height,
         schedule_cache_update=schedule_cache_update,
-        manual_selection=True,
+        manual_selection=selection_authority is None,
+        selection_authority=selection_authority,
     )
 
 
@@ -134,6 +136,7 @@ def apply_cover_selection_for_tracks(
     cover_revision: str | None = None,
     schedule_cache_update: bool = True,
     manual_selection: bool = False,
+    selection_authority: Mapping[str, object] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     if config is None or logger is None or library_state is None:
         raise ValueError("apply_cover_selection_for_tracks requires explicit config, logger, and library_state")
@@ -184,4 +187,5 @@ def apply_cover_selection_for_tracks(
         cover_revision=cover_revision,
         persist_cache_update=schedule_cache_update,
         manual_selection=manual_selection,
+        selection_authority=selection_authority,
     )

@@ -298,6 +298,48 @@ class PostgresCoverMutationRepository:
             ),
         )
 
+    def assert_baseline(self, *, request: CoverSelectionCommit) -> CoverMutationOutcome:
+        if not isinstance(request, CoverSelectionCommit):
+            raise TypeError("request must be a cover selection commit")
+        identity = _identity(request.identity)
+        parameters = {
+            "library_id": identity.library_id,
+            "album_id": identity.local_album_id,
+            "track_paths": _track_paths(request.track_paths),
+            "expected_inventory_revision": _nonnegative_int(
+                request.expected_inventory_revision,
+                "expected_inventory_revision",
+            ),
+            "expected_cover_mutation_revision": _nonnegative_int(
+                request.expected_cover_mutation_revision,
+                "expected_cover_mutation_revision",
+            ),
+        }
+        try:
+            with self._connect_to_database(self._database_url) as connection:
+                self._set_timeout(connection)
+                connection.execute(
+                    """
+                    select library.assert_cover_mutation_baseline(
+                      %(library_id)s,
+                      %(album_id)s,
+                      %(track_paths)s::text[],
+                      %(expected_inventory_revision)s,
+                      %(expected_cover_mutation_revision)s
+                    )
+                    """,
+                    parameters,
+                )
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) == "40001":
+                raise CoverMutationConflict("identity_conflict") from exc
+            raise
+        return CoverMutationOutcome(
+            status=CoverMutationStatus.COMMITTED,
+            cover_mutation_revision=parameters["expected_cover_mutation_revision"],
+            selected_cover_revision=request.expected_selected_cover_revision,
+        )
+
     def commit_selection(self, *, request: CoverSelectionCommit) -> CoverMutationOutcome:
         parameters = self._commit_parameters(request)
         connection = self._connect_to_database(self._database_url)
@@ -320,6 +362,9 @@ class PostgresCoverMutationRepository:
                         %(selected_cover_path)s,
                         %(promoted_cover_revision)s,
                         %(selected_origin)s,
+                        %(explicit_selection)s,
+                        %(local_cover_width)s,
+                        %(local_cover_height)s,
                         %(clear_selection)s,
                         %(remote_cover)s::jsonb,
                         %(artifact_sha256)s,
@@ -393,6 +438,23 @@ class PostgresCoverMutationRepository:
             raise ValueError("selected_origin must be user or automatic")
         if not isinstance(request.clear_selection, bool):
             raise TypeError("clear_selection must be a boolean")
+        if not isinstance(request.explicit_selection, bool):
+            raise TypeError("explicit_selection must be a boolean")
+        if request.explicit_selection and (
+            selected_origin != "user" or request.clear_selection
+        ):
+            raise ValueError("explicit selection requires user origin and replacement")
+        width, height = request.local_cover_width, request.local_cover_height
+        if (width is None) != (height is None):
+            raise ValueError("local cover dimensions must be paired positive integers")
+        if width is not None:
+            if any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 1
+                for value in (width, height)
+            ):
+                raise ValueError("local cover dimensions must be paired positive integers")
+            if request.clear_selection or request.remote_cover is not None:
+                raise ValueError("local cover dimensions require a local replacement")
         if request.remote_cover is not None and not isinstance(
             request.remote_cover, Mapping
         ):
@@ -409,8 +471,12 @@ class PostgresCoverMutationRepository:
             ):
                 raise ValueError("clear selection cannot carry replacement state")
         else:
-            if promoted_cover_revision is None or selected_origin is None:
-                raise ValueError("replacement selection requires revision and origin")
+            if selected_origin is None:
+                raise ValueError("replacement selection requires origin")
+            if promoted_cover_revision is None and (
+                request.remote_cover is None or request.job_id is not None
+            ):
+                raise ValueError("local or claimed replacement requires revision")
             if request.remote_cover is None and selected_cover_path is None:
                 raise ValueError("local replacement requires selected cover path")
             if request.remote_cover is not None and selected_cover_path is not None:
@@ -444,6 +510,9 @@ class PostgresCoverMutationRepository:
             "selected_cover_path": selected_cover_path,
             "promoted_cover_revision": promoted_cover_revision,
             "selected_origin": selected_origin,
+            "explicit_selection": request.explicit_selection,
+            "local_cover_width": width,
+            "local_cover_height": height,
             "clear_selection": request.clear_selection,
             "remote_cover": _json_value(request.remote_cover),
             "artifact_sha256": artifact_sha256,

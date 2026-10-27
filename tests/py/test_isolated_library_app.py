@@ -2088,6 +2088,49 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
         assert app.router.lifespan_context is not production_lifespan
 
 
+@pytest.mark.parametrize("profile", ["utility-problematic-files", "functional-core", "synthetic-large-library"])
+@pytest.mark.parametrize("reuse_state", [False, True])
+def test_preloaded_launcher_without_media_requires_only_supported_watcher_state(
+    profile, reuse_state, tmp_path, monkeypatch,
+):
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    events = []
+    monkeypatch.setattr(sys, "argv", ["isolatedLibraryApp.py", "--prepare-only", "--provider-port", "4321"])
+    monkeypatch.setenv("ALBUM_HAVEN_FIXTURE_PROFILE", profile)
+    monkeypatch.setenv("ALBUM_HAVEN_E2E_TEMP_ROOT", str(tmp_path))
+    monkeypatch.setenv("ALBUM_HAVEN_E2E_PRESERVE_ON_SHUTDOWN", "1")
+    monkeypatch.setenv("ALBUM_HAVEN_E2E_REUSE_STATE", "1" if reuse_state else "0")
+    monkeypatch.setattr(isolatedLibraryApp, "resolve_isolated_database_urls", lambda: ("setup", "runtime"))
+    monkeypatch.setattr(isolatedLibraryApp, "IsolatedDatabaseOwnershipLock", lambda **_kwargs: SimpleNamespace(
+        acquire=lambda: events.append("acquire"), release=lambda: events.append("release"),
+    ))
+    monkeypatch.setattr(isolatedLibraryApp, "install_shutdown_handlers", lambda: None)
+    monkeypatch.setattr(isolatedLibraryApp, "configure_isolated_environment", lambda *_args, **_kwargs: media_root)
+    monkeypatch.setattr(isolatedLibraryApp, "load_fixture_config", lambda: {})
+    monkeypatch.setattr(isolatedLibraryApp, "configure_preloaded_fixture", lambda: media_root)
+    monkeypatch.setattr(isolatedLibraryApp, "persist_preloaded_fixture_library_root", lambda *_args: None)
+    monkeypatch.setattr(isolatedLibraryApp, "build_preloaded_synthetic_provider_cover_specs", lambda _root: [])
+    monkeypatch.setenv("MUSIC_COVER_CACHE_PATH", str(tmp_path / "cover-cache"))
+    monkeypatch.setattr(isolatedLibraryApp, "seed_functional_cover_search_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(isolatedLibraryApp, "ensure_provider_storage_policy_cover_spec", lambda _specs: {})
+    monkeypatch.setattr(isolatedLibraryApp, "persist_provider_storage_policy_candidates", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(isolatedLibraryApp, "configure_performance_auth_environment", lambda _port: None)
+    monkeypatch.setattr(isolatedLibraryApp, "provision_performance_auth_owner", lambda *_args, **_kwargs: events.append("owner"))
+    monkeypatch.setattr(isolatedLibraryApp, "provision_watcher_recovery_viewer", lambda *_args, **_kwargs: pytest.fail("No watcher viewer may be synthesized."))
+    monkeypatch.setattr(isolatedLibraryApp, "_connect", lambda *_args, **_kwargs: pytest.fail("No database connection expected."))
+    assert not list(media_root.rglob("*.mp3"))
+    if profile == "utility-problematic-files":
+        isolatedLibraryApp.main()
+        assert not (tmp_path / "cases").exists()
+    else:
+        message = "manifest missing during restart" if reuse_state else "requires one source MP3"
+        with pytest.raises(RuntimeError, match=message):
+            isolatedLibraryApp.main()
+    assert events == ["acquire", "owner", "release"]
+    assert not (tmp_path / "app-data" / "watcher-recovery-fixture.json").exists()
+
+
 @pytest.mark.parametrize("reuse_state", [False, True])
 def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     reuse_state,

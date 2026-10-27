@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
 from copy import deepcopy
 import io
+import os
 from pathlib import Path
 from threading import Event, Thread
 
@@ -16,7 +16,6 @@ from music_app.services.cover_workflow import (
     download_remote_cover_to_folder,
     resolve_album_context,
     resolve_album_root_from_track_paths,
-    save_pasted_image_as_authoritative_cover,
     validate_local_cover_source,
     write_remote_cover_bytes_as_authoritative_cover,
 )
@@ -47,6 +46,52 @@ def test_cover_workflow_tests_do_not_use_flask_fixture_or_app_context():
 
     assert "tests.py." + "flask_fixtures" not in source
     assert "app." + "app_context(" not in source
+
+
+def test_remote_promotion_does_not_restore_stale_reservation_metadata(
+    tmp_path: Path,
+    monkeypatch,
+):
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    cover_path = album_root / "cover.jpg"
+    cover_path.write_bytes(b"prior-cover")
+    os.utime(
+        cover_path,
+        ns=(1_700_000_000_000_000_000, 1_700_000_100_000_000_000),
+    )
+    monkeypatch.setattr(
+        cover_workflow,
+        "images_are_visually_similar",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        cover_workflow,
+        "reserve_existing_cover_variant",
+        lambda *_args, **_kwargs: None,
+    )
+    reservation = cover_workflow.prepare_cover_reservation(
+        album_root,
+        b"replacement-cover",
+    )
+
+    os.utime(
+        cover_path,
+        ns=(1_710_000_000_000_000_000, 1_710_000_100_000_000_000),
+    )
+    changed_stat = cover_path.stat()
+    promotion = cover_workflow.begin_prepared_remote_cover_promotion(
+        album_root,
+        b"replacement-cover",
+        reservation=reservation,
+    )
+
+    assert promotion is not None
+    try:
+        assert promotion.prior_cover_atime_ns == changed_stat.st_atime_ns
+        assert promotion.prior_cover_mtime_ns == changed_stat.st_mtime_ns
+    finally:
+        cover_workflow.rollback_local_image_promotion(promotion)
 
 
 class FakePostgresLibraryRootSettingsStore:
@@ -267,46 +312,6 @@ def test_local_cover_selection_lock_releases_after_body_exception(
         "body",
         ("release", "lock-key", selection_lock),
     ]
-
-
-def test_run_serialized_cover_selection_uses_public_lock_lifecycle(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    album_root = tmp_path / "Artist" / "Album"
-    events = []
-
-    @contextmanager
-    def public_lock(actual_album_root):
-        assert actual_album_root == album_root
-        events.append("acquire")
-        try:
-            yield
-        finally:
-            events.append("release")
-
-    def reject_private_lifecycle(*_args):
-        raise AssertionError("private lock lifecycle must stay owned by the public context")
-
-    monkeypatch.setattr(cover_workflow, "local_cover_selection_lock", public_lock)
-    monkeypatch.setattr(
-        cover_workflow,
-        "_acquire_local_cover_selection_lock",
-        reject_private_lifecycle,
-    )
-    monkeypatch.setattr(
-        cover_workflow,
-        "_release_local_cover_selection_lock",
-        reject_private_lifecycle,
-    )
-
-    result = cover_workflow.run_serialized_cover_selection(
-        album_root,
-        lambda: events.append("body") or "result",
-    )
-
-    assert result == "result"
-    assert events == ["acquire", "body", "release"]
 
 
 def test_local_cover_promotion_atomically_replaces_canonical_for_concurrent_readers(
@@ -1158,16 +1163,18 @@ def test_prepare_remote_cover_bytes_cleanup_failures_do_not_mask_save_failure(mo
     assert source_image.close_calls == 1
 
 
-def test_save_pasted_image_as_authoritative_cover_does_not_reserve_existing_cover(tmp_path: Path):
+def test_prepared_pasted_cover_promotion_does_not_reserve_existing_cover(tmp_path: Path):
     album_root = (tmp_path / "Artist" / "Album").resolve()
     current_cover = album_root / "cover.jpg"
     _write_jpeg(current_cover, (220, 60, 60), size=(16, 16))
     pasted_bytes = _image_bytes((30, 160, 220), image_format="PNG", size=(24, 24))
     data_url = f"data:image/png;base64,{base64.b64encode(pasted_bytes).decode('ascii')}"
 
-    saved = save_pasted_image_as_authoritative_cover(data_url, album_root)
+    prepared = cover_workflow.prepare_pasted_image_for_authoritative_write(data_url)
+    promotion = cover_workflow.begin_prepared_pasted_cover_promotion(album_root, prepared)
+    cover_workflow.complete_local_image_promotion(promotion)
 
-    assert saved == current_cover
+    assert promotion.cover_path == current_cover
     assert image_dimensions(current_cover) == (24, 24)
     assert list(album_root.glob("cover-existing-*.jpg")) == []
 

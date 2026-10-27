@@ -354,6 +354,7 @@ def apply_cover_selection_for_tracks(
     cover_revision: str | None = None,
     persist_cache_update: bool = True,
     manual_selection: bool = False,
+    selection_authority: Mapping[str, object] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     updated_file_cache = dict(library_state.get("file_cache", {}) or {})
     cover_value = str(cover_path) if cover_path else None
@@ -363,13 +364,29 @@ def apply_cover_selection_for_tracks(
     remote_source_value = str(remote_cover_source or "").strip() or None
     remote_source_label_value = str(remote_cover_source_label or "").strip() or None
     remote_album_url_value = str(remote_cover_album_url or "").strip() or None
-    selection_authority = {
-        "cover_selection_origin": "user" if cover_value or remote_url_value else None,
-        "cover_selection_provenance": "explicit" if cover_value or remote_url_value else None,
-    } if manual_selection else {}
+    if selection_authority is not None and manual_selection:
+        raise ValueError("authoritative cover metadata cannot be a manual selection")
+    applied_authority = (
+        {
+            field: selection_authority.get(field)
+            for field in (
+                "cover_selection_origin",
+                "cover_selection_provenance",
+                "local_cover_width",
+                "local_cover_height",
+            )
+        }
+        if selection_authority is not None
+        else {
+            "cover_selection_origin": "user" if cover_value or remote_url_value else None,
+            "cover_selection_provenance": "explicit" if cover_value or remote_url_value else None,
+        }
+        if manual_selection
+        else {}
+    )
     if manual_selection:
         width, height = image_dimensions(cover_path) if cover_path else (None, None)
-        selection_authority.update(local_cover_width=width or None, local_cover_height=height or None)
+        applied_authority.update(local_cover_width=width or None, local_cover_height=height or None)
     changed_paths: set[str] = set()
 
     for track_path in track_paths:
@@ -378,7 +395,7 @@ def apply_cover_selection_for_tracks(
             continue
         if (
             entry.get("cover_path") == cover_value
-            and all(entry.get(key) == value for key, value in selection_authority.items())
+            and all(entry.get(key) == value for key, value in applied_authority.items())
             and (str(entry.get("cover_revision") or "").strip() or None) == revision_value
             and (str(entry.get("remote_cover_url") or "").strip() or None) == remote_url_value
             and (str(entry.get("remote_cover_thumbnail_url") or "").strip() or None) == remote_thumb_value
@@ -390,7 +407,7 @@ def apply_cover_selection_for_tracks(
         ):
             continue
         next_entry = dict(entry)
-        next_entry.update(selection_authority)
+        next_entry.update(applied_authority)
         next_entry["cover_path"] = cover_value
         next_entry["cover_revision"] = revision_value
         next_entry["remote_cover_url"] = remote_url_value
@@ -416,7 +433,7 @@ def apply_cover_selection_for_tracks(
         }
         if not album_paths & changed_paths:
             continue
-        for key, value in selection_authority.items():
+        for key, value in applied_authority.items():
             setattr(album, key, value)
         _set_cover_fields(
             album,
@@ -433,9 +450,8 @@ def apply_cover_selection_for_tracks(
         for track in album_tracks:
             if str(getattr(track, "path", "") or "") not in changed_paths:
                 continue
-            if manual_selection:
-                track.local_cover_width = selection_authority["local_cover_width"]
-                track.local_cover_height = selection_authority["local_cover_height"]
+            for key, value in applied_authority.items():
+                setattr(track, key, value)
             _set_cover_fields(
                 track,
                 cover_value=cover_value,

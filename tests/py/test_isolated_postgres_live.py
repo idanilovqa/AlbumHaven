@@ -19,6 +19,80 @@ from tests.e2e.support import isolatedPostgres
 _NON_ALBUM_ROOT_IO_BLOCK_CEILING = 40_000
 
 
+def test_live_watcher_preparation_preserves_unknown_and_empty_physical_sizes(monkeypatch, tmp_path):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.library_roots import library_root_cache_identity, save_library_root_settings
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    from tests.e2e.support import isolatedLibraryApp
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    media = tmp_path / "media"
+    media.mkdir()
+    monkeypatch.setenv("ALBUM_HAVEN_E2E_TEMP_ROOT", str(tmp_path))
+    source = isolatedLibraryApp.generate_rarity_fixture_audio(
+        media, media / "00-source.mp3", frequency_hz=440,
+    )
+    unknown = media / "Logical" / "Unknown" / "01.mp3"
+    empty = media / "Physical" / "Empty" / "01.mp3"
+    empty.parent.mkdir(parents=True)
+    empty.touch()
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url, "MUSIC_DIR": media}
+    try:
+        save_library_root_settings(config, {
+            "main_library_roots": [{"id": "size-root", "path": str(media), "layout_mode": "artist"}],
+            "hoarding_library_roots": [], "new_arrivals_roots": [], "move_policy": {},
+        })
+        entries = {}
+        for path, album in ((unknown, "Unknown"), (empty, "Empty"), (source, "Source")):
+            entries[str(path)] = {
+                "path": str(path), "mtime": 1.0, "size": path.stat().st_size if path.exists() else 0,
+                "album": album, "album_artist": "Size Owner", "artist": "Size Owner",
+                "title": album, "track_number": 1, "disc_number": 1, "duration_seconds": 1,
+                "year": 2026, "library_root_id": "size-root", "library_root_category": "main_library",
+            }
+        PostgresScanCacheAdapter(config).save_snapshot(
+            Path("unused"), entries, library_root_cache_identity(config), 1.0,
+        )
+        # Official logical-only fixture rows have unknown physical size but a
+        # synthesized cached zero. The real preparation must not promote it.
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "update library.local_track_files set file_size_bytes = null where private_path = %s",
+                (str(unknown),),
+            )
+
+        def sizes():
+            with isolatedPostgres._connect(runtime_url) as connection:
+                return {row["private_path"]: row["file_size_bytes"] for row in connection.execute(
+                    "select private_path, file_size_bytes from library.local_track_files where private_path = any(%s)",
+                    ([str(unknown), str(empty)],),
+                ).fetchall()}
+
+        def empty_problem_albums():
+            repository = PostgresLibraryBrowseRepository({**config, "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url})
+            return {item["name"] for item in repository.build_problematic_files_payload()["items"]
+                    if "Empty audio file" in item["problem_reasons"]}
+
+        assert sizes() == {str(unknown): None, str(empty): 0}
+        assert empty_problem_albums() == {"Empty"}
+        roots = isolatedLibraryApp.persist_watcher_recovery_roots(setup_url, media_root=media)
+        assert roots.failure_root_path.is_dir() and roots.healthy_root_path.is_dir()
+        assert sizes() == {str(unknown): None, str(empty): 0}
+        assert empty_problem_albums() == {"Empty"}
+        assert not unknown.exists() and empty.stat().st_size == 0
+        with isolatedPostgres._connect(runtime_url) as connection:
+            recovery_rows = connection.execute(
+                "select count(*) as count from library.local_track_files where private_path = any(%s)",
+                ([str(path) for root in (roots.failure_root_path, roots.healthy_root_path)
+                  for path in root.rglob("*.mp3")],),
+            ).fetchone()
+        assert recovery_rows["count"] == 2
+    finally:
+        isolatedPostgres.reset_application_tables(setup_url)
+
+
 @pytest.fixture
 def watcher_repair_inventory(monkeypatch, tmp_path):
     """Real migrated inventory used only by the bounded watcher repair cases."""
@@ -854,6 +928,7 @@ def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
             )
             connection.execute(migration_sql)
             connection.execute(migration_sql)
+            connection.execute((migrations_root / "0101_harden_durable_job_boundaries.sql").read_text(encoding="utf-8"))
             for migration_path in sorted(migrations_root.glob("006[45]_*.sql")):
                 connection.execute(migration_path.read_text(encoding="utf-8"))
             index_rows = connection.execute(
@@ -1750,6 +1825,7 @@ def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(
     tmp_path,
 ):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    import psycopg
 
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     cleanup_complete = False
@@ -1777,6 +1853,15 @@ def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(
                   and library.libraries.library_kind = 'local'
                 limit 1
                 """
+            ).fetchone()["id"])
+            library_root_id = int(connection.execute(
+                """
+                insert into library.library_roots (
+                  library_id, root_path, root_kind, is_active, metadata
+                ) values (%s, %s, 'main', true, '{}'::jsonb)
+                returning id
+                """,
+                (library_id, str(tmp_path)),
             ).fetchone()["id"])
             artist_id = int(connection.execute(
                 """
@@ -1812,13 +1897,64 @@ def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(
             ).fetchone()["id"])
             connection.execute(
                 """
-                insert into library.local_track_files (track_id, private_path, metadata)
-                values (%s, %s, '{}'::jsonb)
+                insert into library.local_track_files (
+                  track_id, library_root_id, private_path, metadata
+                ) values (%s, %s, %s, '{}'::jsonb)
                 """,
-                (track_id, str(track_path)),
+                (track_id, library_root_id, str(track_path)),
             )
 
         adapter = PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url})
+        with isolatedPostgres._connect(setup_url) as connection:
+            replacement_album_id = int(connection.execute(
+                "insert into library.local_albums (library_id,artist_id,album_key,title) "
+                "values (%s,%s,'cover-cas-replacement','Replacement Album') returning id",
+                (library_id, artist_id),
+            ).fetchone()["id"])
+            connection.execute(
+                "update library.local_tracks set album_id=%s where id=%s",
+                (replacement_album_id, track_id),
+            )
+        legacy_error = None
+        try:
+            adapter.persist_cover_selection(
+                track_paths={str(track_path)},
+                selected_cover_path=automatic_cover,
+                cover_revision="legacy-stale-album-revision",
+                cover_selection_origin="automatic",
+            )
+        except psycopg.errors.SerializationFailure as exc:
+            legacy_error = exc
+        with isolatedPostgres._connect(setup_url) as connection:
+            assert connection.execute(
+                "select cover_path from library.local_albums where id=%s",
+                (replacement_album_id,),
+            ).fetchone()["cover_path"] is None
+            assert connection.execute(
+                "select library.read_cover_mutation_revision(%s) as revision",
+                (library_id,),
+            ).fetchone()["revision"] == 0
+        assert legacy_error is not None
+        with pytest.raises(psycopg.errors.SerializationFailure):
+            adapter.persist_cover_selection(
+                track_paths={str(track_path)},
+                selected_cover_path=automatic_cover,
+                cover_revision="stale-album-revision",
+                cover_selection_origin="automatic",
+                expected_library_id=library_id,
+                expected_album_id=album_id,
+                expected_inventory_revision=0,
+                expected_cover_mutation_revision=0,
+            )
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "update library.local_tracks set album_id=%s where id=%s",
+                (album_id, track_id),
+            )
+            connection.execute(
+                "delete from library.local_albums where id=%s",
+                (replacement_album_id,),
+            )
         manual_result = adapter.persist_cover_selection(
             track_paths={str(track_path)},
             selected_cover_path=manual_cover,
@@ -5214,8 +5350,8 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
                 insert into library.library_roots (library_id, root_path, root_kind, is_active, metadata)
                 values
                   (%s, %s, 'main_library', true, '{"root_id":"nested-logical"}'::jsonb),
-                  (%s, %s, 'main_library', true, '{"root_id":"ambiguous-logical"}'::jsonb),
-                  (%s, %s, 'main_library', true, '{"root_id":"ambiguous-logical"}'::jsonb),
+                      (%s, %s, 'main_library', true, '{"root_id":"ambiguous-logical-a"}'::jsonb),
+                      (%s, %s, 'main_library', true, '{"root_id":"ambiguous-logical-b"}'::jsonb),
                   (%s, %s, 'main_library', false, '{"root_id":"inactive-logical"}'::jsonb),
                   (%s, %s, 'main_library', true, '{"root_id":"windows-case-logical"}'::jsonb),
                   (%s, %s, 'main_library', true, '{"root_id":"posix-upper-logical"}'::jsonb),
@@ -5226,9 +5362,9 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
                     library_id,
                     str(nested_root),
                     library_id,
-                    str(main_root / "AmbiguousA"),
+                        r"D:\AmbiguousMusic",
                     library_id,
-                    str(main_root / "AmbiguousB"),
+                        "d:/AMBIGUOUSMUSIC",
                     library_id,
                     str(tmp_path / "InactiveMusic"),
                     library_id,
@@ -5240,6 +5376,13 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
                 ),
             ).fetchall()
             root_ids = {str(row["logical_id"]): int(row["id"]) for row in inserted}
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                with connection.transaction():
+                    connection.execute(
+                        "insert into library.library_roots (library_id, root_path, root_kind, is_active, metadata) "
+                        "values (%s, %s, 'main_library', true, '{\"root_id\":\"main-logical\"}'::jsonb)",
+                        (library_id, str(tmp_path / "DuplicateLogicalRoot")),
+                    )
             nested_root_id = root_ids["nested-logical"]
 
             second_account_id = int(
@@ -5344,8 +5487,8 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
             assert all(bool(value) for value in path_keys.values())
 
             ambiguous = resolve(
-                str(main_root / "Unknown" / "ambiguous.flac"),
-                {"library_root_id": "ambiguous-logical"},
+                "D:/AmbiguousMusic/Album/ambiguous.flac",
+                {},
             )
             assert (ambiguous["resolution_status"], ambiguous["candidate_count"]) == ("ambiguous", 2)
             assert resolve(str(tmp_path / "Nowhere" / "unresolved.flac"), {})["resolution_status"] == "unresolved"
@@ -6035,10 +6178,441 @@ def test_live_deletion_only_targeted_mutation_preserves_surviving_album_projecti
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_app_role_pure_relation_refresh_succeeds_with_album_and_file_dml_revoked(
+    monkeypatch,
+    tmp_path,
+):
+    import psycopg
+
+    from music_app.services.library_roots_postgres import (
+        PostgresLibraryRootSettingsStore,
+    )
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    from tests.py.test_watcher_recovery_postgres_live import (
+        _claim_linked_full_scan,
+        _repository,
+        _seed_scanning_repair,
+    )
+
+    setup_url, app_url, worker_url, _readonly_url = (
+        _durable_job_database_urls_or_skip(monkeypatch)
+    )
+    cleanup_complete = False
+    music_dir = (tmp_path / "Music").resolve()
+    track_paths = {
+        "Canonical Artist": (
+            music_dir
+            / "Families"
+            / "Progressive"
+            / "Canonical Artist"
+            / "Canonical Album"
+            / "01.flac"
+        ),
+        "Related Artist": (
+            music_dir
+            / "Families"
+            / "Progressive"
+            / "Related Artist"
+            / "Related Album"
+            / "01.flac"
+        ),
+        "Isolated Artist": (
+            music_dir
+            / "Standalone"
+            / "Isolated Artist"
+            / "Isolated Album"
+            / "01.flac"
+        ),
+    }
+    for artist_name, track_path in track_paths.items():
+        track_path.parent.mkdir(parents=True)
+        track_path.write_bytes(f"{artist_name}-track".encode())
+    now = datetime.now(timezone.utc)
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(
+            setup_url,
+            app_url,
+        )
+        config = {
+            "ALBUM_HAVEN_APP_DATABASE_URL": app_url,
+            "MUSIC_DIR": str(music_dir),
+        }
+        PostgresLibraryRootSettingsStore(config).save_settings(
+            {
+                "main_library_roots": [
+                    {
+                        "id": "main-root",
+                        "path": str(music_dir),
+                        "layout_mode": "artist",
+                    }
+                ],
+                "hoarding_library_roots": [],
+                "new_arrivals_roots": [],
+            }
+        )
+        with isolatedPostgres._connect(setup_url) as connection:
+            root = connection.execute(
+                "select root.id, root.library_id, library.owner_account_id "
+                "from library.library_roots root "
+                "join library.libraries library on library.id = root.library_id "
+                "where root.is_active "
+                "and root.metadata ->> 'root_id' = 'main-root'"
+            ).fetchone()
+            connection.execute(
+                "insert into library.library_memberships "
+                "(library_id, account_id, membership_role) "
+                "values (%s, %s, 'owner') "
+                "on conflict (library_id, account_id) do nothing",
+                (root["library_id"], root["owner_account_id"]),
+            )
+        scope = SimpleNamespace(
+            setup_url=setup_url,
+            app_url=app_url,
+            worker_url=worker_url,
+            library_id=int(root["library_id"]),
+            account_id=int(root["owner_account_id"]),
+            root_database_ids={"main-root": int(root["id"])},
+        )
+        _repository(app_url).mark_dirty(
+            library_id=scope.library_id,
+            logical_root_id="main-root",
+            reason_code="root_unavailable",
+            observed_at=now,
+        )
+        repair_id = _seed_scanning_repair(
+            scope,
+            now=now,
+            logical_root_id="main-root",
+        )
+        scans, accepted, claim, intent, claimed_scope = _claim_linked_full_scan(
+            scope,
+            repair_id=repair_id,
+            now=now,
+            request_ref="pure-relation-refresh:seed",
+            worker_id="pure-relation-refresh-worker",
+            root_ids=("main-root",),
+        )
+        file_cache = {
+            str(track_path): {
+                "path": str(track_path),
+                "mtime": track_path.stat().st_mtime,
+                "size": track_path.stat().st_size,
+                "album": f"{artist_name.removesuffix(' Artist')} Album",
+                "album_artist": artist_name,
+                "artist": artist_name,
+                "title": f"{artist_name} Track",
+                "track_number": 1,
+                "disc_number": 1,
+                "duration_seconds": 60,
+                "year": 2026,
+                "edition": "",
+                "album_rating": 0,
+                "library_root_id": "main-root",
+                "library_root_category": "main_library_roots",
+            }
+            for artist_name, track_path in track_paths.items()
+        }
+        adapter = PostgresScanCacheAdapter(config)
+        inventory = adapter.prepare_full_scan_inventory(file_cache)
+        publication = scans.publish_claimed_full_scan(
+            claim=claim,
+            intent_id=accepted.intent_id,
+            expected_inventory_mutation_revision=(
+                intent.inventory_mutation_revision
+            ),
+            inventory=inventory,
+            observed_root_ids=[root["id"] for root in claimed_scope.roots],
+            now=now,
+        )
+        assert publication["publication_won"] is True, publication
+
+        with isolatedPostgres._connect(app_url) as connection:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    connection.execute(
+                        "update library.local_albums set title = title where false"
+                    )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    connection.execute(
+                        "update library.local_track_files "
+                        "set private_path = private_path where false"
+                    )
+
+        def load_inventory_state():
+            with isolatedPostgres._connect(setup_url) as connection:
+                revisions = dict(
+                    connection.execute(
+                    "select coalesce(nullif(metadata ->> "
+                    "'inventory_mutation_revision', '')::bigint, 0) "
+                    "as inventory_mutation_revision, "
+                    "coalesce(nullif(metadata ->> "
+                    "'cover_mutation_revision', '')::bigint, 0) "
+                    "as cover_mutation_revision "
+                        "from library.libraries where id = %s",
+                        (scope.library_id,),
+                    ).fetchone()
+                )
+                return {
+                    "revisions": revisions,
+                    "albums": [
+                        dict(row)
+                        for row in connection.execute(
+                            "select id, artist_id, album_key, title, metadata "
+                            "from library.local_albums "
+                            "where library_id = %s order by id",
+                            (scope.library_id,),
+                        ).fetchall()
+                    ],
+                    "files": [
+                        dict(row)
+                        for row in connection.execute(
+                            "select file.id, file.track_id, file.library_root_id, "
+                            "file.private_path, file.metadata "
+                            "from library.local_track_files file "
+                            "join library.local_tracks track on track.id = file.track_id "
+                            "where track.library_id = %s order by file.id",
+                            (scope.library_id,),
+                        ).fetchall()
+                    ],
+                    "roots": [
+                        dict(row)
+                        for row in connection.execute(
+                            "select id, root_path, root_kind, is_active, metadata "
+                            "from library.library_roots "
+                            "where library_id = %s order by id",
+                            (scope.library_id,),
+                        ).fetchall()
+                    ],
+                }
+
+        def load_derived_state():
+            with isolatedPostgres._connect(setup_url) as connection:
+                metadata = connection.execute(
+                    "select metadata -> 'scan_cache' -> 'relation_projection' "
+                    "as projection from library.libraries where id = %s",
+                    (scope.library_id,),
+                ).fetchone()["projection"]
+                family_rows = [
+                    dict(row)
+                    for row in connection.execute(
+                        "select selected.name as artist_name, "
+                        "related.name as related_artist_name, "
+                        "links.source_family, links.source_ref "
+                        "from library.local_artist_family_links links "
+                        "join library.local_artists selected "
+                        "on selected.id = links.artist_id "
+                        "join library.local_artists related "
+                        "on related.id = links.related_artist_id "
+                        "where links.library_id = %s "
+                        "order by selected.name, related.name, "
+                        "links.source_family",
+                        (scope.library_id,),
+                    ).fetchall()
+                ]
+                search_rows = [
+                    dict(row)
+                    for row in connection.execute(
+                        "select normalized_artist_key, canonical_artist_name, "
+                        "builder_version, source_fingerprint, relations_last_built "
+                        "from library.local_artist_search_projection "
+                        "where library_id = %s order by normalized_artist_key",
+                        (scope.library_id,),
+                    ).fetchall()
+                ]
+                return {
+                    "metadata": metadata,
+                    "family_rows": family_rows,
+                    "search_rows": search_rows,
+                }
+
+        inventory_before = load_inventory_state()
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "delete from library.local_artist_search_projection "
+                "where library_id = %s",
+                (scope.library_id,),
+            )
+
+        revision_fence = inventory_before["revisions"]
+        result = adapter.refresh_relation_projection(
+            expected_inventory_mutation_revision=(
+                revision_fence["inventory_mutation_revision"]
+            ),
+            expected_cover_mutation_revision=(
+                revision_fence["cover_mutation_revision"]
+            ),
+            publication_commit_guard=lambda commit: commit(),
+        )
+        repaired = load_derived_state()
+        assert set(result["relation_views"]["artists"]) == set(track_paths)
+        assert repaired["metadata"]["status"] == "ready"
+        assert {
+            row["canonical_artist_name"] for row in repaired["search_rows"]
+        } == set(track_paths)
+        assert {
+            (row["artist_name"], row["related_artist_name"])
+            for row in repaired["family_rows"]
+            if row["source_family"] == "folder_derived_runtime"
+        } == {
+            ("Canonical Artist", "Related Artist"),
+            ("Related Artist", "Canonical Artist"),
+        }
+        assert load_inventory_state() == inventory_before
+
+        adapter.refresh_relation_projection(
+            expected_inventory_mutation_revision=(
+                revision_fence["inventory_mutation_revision"]
+            ),
+            expected_cover_mutation_revision=(
+                revision_fence["cover_mutation_revision"]
+            ),
+            publication_commit_guard=lambda commit: commit(),
+        )
+        assert load_derived_state() == repaired
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "insert into library.local_artist_family_links "
+                "(library_id, artist_id, related_artist_id, "
+                "relationship_weight, source_family, source_ref, metadata) "
+                "select %s, selected.id, related.id, 1, "
+                "'owner_curated_test', 'owner:test', '{}'::jsonb "
+                "from library.local_artists selected "
+                "cross join library.local_artists related "
+                "where selected.library_id = %s "
+                "and related.library_id = selected.library_id "
+                "and selected.name = 'Canonical Artist' "
+                "and related.name = 'Isolated Artist'",
+                (scope.library_id, scope.library_id),
+            )
+            connection.execute(
+                "delete from library.local_artist_family_links "
+                "where library_id = %s "
+                "and source_family = 'folder_derived_runtime'",
+                (scope.library_id,),
+            )
+        missing_family_state = load_derived_state()
+        assert missing_family_state["metadata"] == repaired["metadata"]
+        assert missing_family_state["search_rows"] == repaired["search_rows"]
+
+        adapter.refresh_relation_projection(
+            expected_inventory_mutation_revision=(
+                revision_fence["inventory_mutation_revision"]
+            ),
+            expected_cover_mutation_revision=(
+                revision_fence["cover_mutation_revision"]
+            ),
+            publication_commit_guard=lambda commit: commit(),
+        )
+        repaired_missing_family = load_derived_state()
+        assert {
+            (row["artist_name"], row["related_artist_name"])
+            for row in repaired_missing_family["family_rows"]
+            if row["source_family"] == "folder_derived_runtime"
+        } == {
+            ("Canonical Artist", "Related Artist"),
+            ("Related Artist", "Canonical Artist"),
+        }
+        assert [
+            row
+            for row in repaired_missing_family["family_rows"]
+            if row["source_family"] == "owner_curated_test"
+        ] == [
+            {
+                "artist_name": "Canonical Artist",
+                "related_artist_name": "Isolated Artist",
+                "source_family": "owner_curated_test",
+                "source_ref": "owner:test",
+            }
+        ]
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "delete from library.local_artist_family_links "
+                "where library_id = %s "
+                "and source_family = 'folder_derived_runtime'",
+                (scope.library_id,),
+            )
+            connection.execute(
+                "insert into library.local_artist_family_links "
+                "(library_id, artist_id, related_artist_id, "
+                "relationship_weight, source_family, source_ref, metadata) "
+                "select %s, selected.id, related.id, 1, "
+                "'folder_derived_runtime', "
+                "'relation_views.folder_related', '{}'::jsonb "
+                "from library.local_artists selected "
+                "cross join library.local_artists related "
+                "where selected.library_id = %s "
+                "and related.library_id = selected.library_id "
+                "and selected.name = 'Canonical Artist' "
+                "and related.name = 'Isolated Artist'",
+                (scope.library_id, scope.library_id),
+            )
+
+        adapter.refresh_relation_projection(
+            expected_inventory_mutation_revision=(
+                revision_fence["inventory_mutation_revision"]
+            ),
+            expected_cover_mutation_revision=(
+                revision_fence["cover_mutation_revision"]
+            ),
+            publication_commit_guard=lambda commit: commit(),
+        )
+        repaired_stale_family = load_derived_state()
+        assert {
+            (row["artist_name"], row["related_artist_name"])
+            for row in repaired_stale_family["family_rows"]
+            if row["source_family"] == "folder_derived_runtime"
+        } == {
+            ("Canonical Artist", "Related Artist"),
+            ("Related Artist", "Canonical Artist"),
+        }
+        assert any(
+            row["source_family"] == "owner_curated_test"
+            for row in repaired_stale_family["family_rows"]
+        )
+        assert load_inventory_state() == inventory_before
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "delete from library.local_artist_search_projection "
+                "where library_id = %s",
+                (scope.library_id,),
+            )
+        before_callback_failure = load_derived_state()
+
+        def fail_before_commit(_connection):
+            raise RuntimeError("injected callback failure")
+
+        with pytest.raises(RuntimeError, match="injected callback failure"):
+            adapter.refresh_relation_projection(
+                expected_inventory_mutation_revision=(
+                    revision_fence["inventory_mutation_revision"]
+                ),
+                expected_cover_mutation_revision=(
+                    revision_fence["cover_mutation_revision"]
+                ),
+                before_commit=fail_before_commit,
+                publication_commit_guard=lambda commit: commit(),
+            )
+        assert load_derived_state() == before_callback_failure
+        assert load_inventory_state() == inventory_before
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            _drop_application_schemas(setup_url)
+
+
 def test_live_watch_health_keeps_newer_warning_when_older_write_finishes_last(
     monkeypatch,
+    tmp_path,
 ):
-    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    setup_url, runtime_url, worker_url, _readonly_url = _durable_job_database_urls_or_skip(monkeypatch)
     cleanup_complete = False
     release_older = Event()
     older_write: Thread | None = None
@@ -6053,16 +6627,62 @@ def test_live_watch_health_keeps_newer_warning_when_older_write_finishes_last(
             LibraryWatchHealthService,
             PostgresLibraryWatchHealthStore,
         )
+        from music_app.services.library_roots_postgres import PostgresLibraryRootSettingsStore
+        from tests.py.test_watcher_recovery_postgres_live import (
+            _claim_linked_full_scan,
+            _publish_linked_full_scan,
+            _repository,
+            _seed_scanning_repair,
+        )
+
+        observed_at = datetime.now(timezone.utc)
+        scan_started_at = observed_at - timedelta(minutes=1)
+        root_path = tmp_path / "Music"
+        root_path.mkdir()
+        PostgresLibraryRootSettingsStore({
+            "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+            "MUSIC_DIR": str(root_path),
+        }).save_settings({
+            "main_library_roots": [{"id": "main-root", "path": str(root_path), "layout_mode": "artist"}],
+            "hoarding_library_roots": [], "new_arrivals_roots": [],
+        })
+        with isolatedPostgres._connect(setup_url) as connection:
+            root = connection.execute(
+                "select root.id, root.library_id, library.owner_account_id "
+                "from library.library_roots root "
+                "join library.libraries library on library.id=root.library_id "
+                "where root.is_active and root.metadata ->> 'root_id' = 'main-root'"
+            ).fetchone()
+            connection.execute(
+                "insert into library.library_memberships (library_id, account_id, membership_role) "
+                "values (%s, %s, 'owner') on conflict (library_id, account_id) do nothing",
+                (root["library_id"], root["owner_account_id"]),
+            )
+        scope = SimpleNamespace(
+            setup_url=setup_url, app_url=runtime_url, worker_url=worker_url,
+            library_id=int(root["library_id"]), account_id=int(root["owner_account_id"]),
+            root_database_ids={"main-root": int(root["id"])},
+        )
+        _repository(runtime_url).mark_dirty(
+            library_id=scope.library_id, logical_root_id="main-root",
+            reason_code="root_unavailable", observed_at=scan_started_at,
+        )
+        repair_id = _seed_scanning_repair(scope, now=scan_started_at, logical_root_id="main-root")
+        scans, accepted, claim, intent, claimed_scope = _claim_linked_full_scan(
+            scope, repair_id=repair_id, now=scan_started_at,
+            request_ref="watch-health:older-scan", worker_id="watch-health-worker",
+            root_ids=("main-root",),
+        )
 
         older = LibraryWatchHealthProblem(
             root_id="main-root",
             state="root_unavailable",
-            detected_at="2026-09-08T10:00:00+00:00",
+            detected_at=(observed_at - timedelta(minutes=2)).isoformat(),
         )
         newer = LibraryWatchHealthProblem(
             root_id="main-root",
             state="overflow",
-            detected_at="2026-09-08T10:02:00+00:00",
+            detected_at=observed_at.isoformat(),
         )
         older_started = Event()
 
@@ -6111,20 +6731,57 @@ def test_live_watch_health_keeps_newer_warning_when_older_write_finishes_last(
         older_write.start()
         assert older_started.wait(5)
         store.upsert(newer)
-        assert store.load() == [newer]
+
+        def assert_newer_legacy_warning():
+            with isolatedPostgres._connect(setup_url) as connection:
+                row = connection.execute(
+                    "select metadata #> '{library_watch_health,main-root}' as problem "
+                    "from library.libraries where id=%s",
+                    (scope.library_id,),
+                ).fetchone()
+            assert row["problem"] == {
+                "state": newer.state,
+                "detected_at": newer.detected_at,
+                "event_id": newer.event_id,
+            }
+
+        assert_newer_legacy_warning()
         release_older.set()
         older_write.join(5)
 
         assert not older_write.is_alive()
         if older_errors:
             raise older_errors[0]
-        service = LibraryWatchHealthService(store)
-        assert service.clear_after_scan(
+        assert_newer_legacy_warning()
+        publication = _publish_linked_full_scan(
+            scans, accepted, claim, intent, claimed_scope, now=observed_at,
+        )
+        assert_newer_legacy_warning()
+        newer_incident = _repository(runtime_url).mark_dirty(
+            library_id=scope.library_id, logical_root_id="main-root",
+            reason_code="overflow", observed_at=observed_at,
+        )
+        with isolatedPostgres._connect(setup_url) as connection:
+            rendered_timestamp = connection.execute(
+                "select to_jsonb(%s::timestamptz) as value", (observed_at,),
+            ).fetchone()["value"]
+        expected_durable_warning = LibraryWatchHealthProblem(
+            root_id="main-root", state="overflow",
+            detected_at=rendered_timestamp, event_id=newer_incident.incident_id,
+        )
+        assert store.load() == [expected_durable_warning]
+        service = LibraryWatchHealthService(
+            _repository(worker_url), legacy_store=store, library_id=scope.library_id,
+        )
+        assert service.complete_repair(
             scan_mode="manual_full_rescan",
-            observed_root_ids={"main-root"},
-            scan_started_at="2026-09-08T10:01:00+00:00",
-        ) == 0
-        assert store.load() == [newer]
+            repair_id=repair_id,
+            inventory_revision=publication["inventory_mutation_revision"],
+            claim=claim,
+            now=observed_at,
+        ) is True
+        assert_newer_legacy_warning()
+        assert store.load() == [expected_durable_warning]
         assert service.root_allows_destructive_reconciliation("main-root") is False
 
         isolatedPostgres.reset_application_tables(setup_url)
@@ -6632,8 +7289,10 @@ def test_live_removed_member_retains_account_access_and_scoped_admin_recovery(mo
             username_display="Restorable", username_normalized="restorable",
             contact_email="restorable@example.test",
             contact_email_normalized="restorable@example.test",
-            capability_keys=("library.browse.read",), invitation=None,
+            capability_keys=("library.browse.read",), send_invitation=False,
             invitation_expires_at=None, created_at=now, request_ref="member-created",
+            request_origin_ref="browser:member-created",
+            deployment_mode="self_hosted_private_web", client_surface="private_web",
         )
         session = sessions.issue_session(target.account_id)
         resolver = PostgresCurrentActorResolver(config, session_service=sessions)

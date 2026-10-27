@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 import inspect
+import hashlib
 import io
 import os
 from pathlib import Path
@@ -182,6 +184,23 @@ def _jpeg_bytes(color: tuple[int, int, int] = (40, 120, 220)) -> bytes:
     return buffer.getvalue()
 
 
+@pytest.mark.parametrize(
+    ("writer", "entrypoint"),
+    [
+        ("durable_remote_save", cover_lookup_runtime.run_claimed_cover_remote_save),
+        ("linked_remote", cover_lookup_runtime._run_cover_lookup_save_remote_task),
+        ("request_owned_remote_save", cover_lookup_runtime._run_cover_lookup_save_remote_task),
+    ],
+)
+def test_remote_cover_writer_uses_shared_mutation_coordinator(writer, entrypoint):
+    source = inspect.getsource(entrypoint)
+
+    assert "execute_cover_mutation_for_config(" in source, writer
+    assert "run_serialized_cover_selection(" not in source, writer
+    for callback in ("prepare=", "write_artifact=", "publish_committed="):
+        assert callback in source, writer
+
+
 def _capture_task_update(
     updates: list[dict[str, object]],
     task_id: str,
@@ -192,6 +211,79 @@ def _capture_task_update(
     payload = dict(kwargs)
     assert payload.pop("config", None) is expected_config
     updates.append({"task_id": task_id, **payload})
+
+
+def _install_cover_mutation_repository(
+    monkeypatch,
+    *,
+    commit_error: Exception | None = None,
+    on_commit=None,
+):
+    from music_app.services import cache as cache_service
+    from music_app.services import cover_mutation_coordinator
+    from music_app.services.cover_mutation_coordinator import (
+        CoverMutationBaseline,
+        CoverMutationIdentity,
+        CoverMutationOutcome,
+        CoverMutationStatus,
+    )
+
+    identity = CoverMutationIdentity(library_id=1, local_album_id=1)
+    baseline = CoverMutationBaseline(
+        inventory_revision=0,
+        cover_mutation_revision=0,
+        selected_cover_revision=None,
+        selected_cover_path=None,
+    )
+    committed_requests = []
+
+    class FakeCoverMutationRepository:
+        def __init__(self, *, database_url):
+            assert database_url
+
+        def resolve_identity(self, *, library_id, track_paths):
+            assert library_id == identity.library_id
+            assert track_paths
+            return identity
+
+        def load_baseline(self, *, identity):
+            assert identity == expected_identity
+            return baseline
+
+        def commit_selection(self, *, request):
+            committed_requests.append(request)
+            if commit_error is not None:
+                raise commit_error
+            if on_commit is not None:
+                on_commit(request)
+            return CoverMutationOutcome(
+                status=CoverMutationStatus.COMMITTED,
+                cover_mutation_revision=1,
+                selected_cover_revision=request.promoted_cover_revision,
+            )
+
+        def recover_ambiguous(self, *, request):
+            raise AssertionError(f"Unexpected ambiguous recovery: {request!r}")
+
+    expected_identity = identity
+    monkeypatch.setattr(
+        cache_service,
+        "PostgresCoverMutationRepository",
+        FakeCoverMutationRepository,
+    )
+    monkeypatch.setattr(
+        cache_service,
+        "_select_runtime_scan_cache_adapter",
+        lambda _config: SimpleNamespace(
+            load_inventory_publication=lambda: {"library_id": identity.library_id}
+        ),
+    )
+    monkeypatch.setattr(
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
+        lambda **options: options["acquire_local_lock"](),
+    )
+    return committed_requests
 
 
 _EXPECTED_RUNTIME_PHASES = ["discovery", "fetch", "scoring", "persistence"]
@@ -2312,7 +2404,7 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
     track_path.write_bytes(b"track")
     requested_track_paths = {str(track_path)}
     updates: list[dict[str, object]] = []
-    persistence_calls: list[dict[str, object]] = []
+    committed_requests = _install_cover_mutation_repository(monkeypatch)
 
     save_library_root_settings(
         config,
@@ -2354,10 +2446,6 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
         }
         return [{"key": "album-1"}], {"key": "problem-1"}
 
-    def fake_persist_cover_selection_for_tracks(track_paths, **changes):
-        persistence_calls.append({"track_paths": track_paths, "changes": changes})
-        return {"album_rows_updated": 1, "track_file_rows_updated": 1}
-
     monkeypatch.setattr(
         cover_lookup_runtime,
         "update_cover_lookup_task",
@@ -2391,26 +2479,26 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
             art_kind="cover",
         ),
         apply_cover_selection_for_tracks=fake_apply_cover_selection_for_tracks,
-        persist_cover_selection_for_tracks=fake_persist_cover_selection_for_tracks,
+        persist_cover_selection_for_tracks=lambda *_args, **_kwargs: pytest.fail(
+            "linked selection must commit through the coordinator"
+        ),
     )
 
-    assert persistence_calls == [{
-        "track_paths": requested_track_paths,
-        "changes": {
-            "cover_path": None,
-            "cover_selection_origin": "user",
-            "explicit_selection": True,
-            "remote_cover_url": "https://images.example/cover.jpg",
-            "remote_cover_thumbnail_url": "https://images.example/thumb.jpg",
-            "remote_cover_source": "spotify",
-            "remote_cover_source_label": "Spotify",
-            "remote_cover_album_url": "https://open.spotify.com/album/album-1",
-            "remote_cover_width": 1500,
-            "remote_cover_height": 1500,
-            "config": config,
-            "logger": logger,
-        },
-    }]
+    assert len(committed_requests) == 1
+    committed = committed_requests[0]
+    assert set(committed.track_paths) == requested_track_paths
+    assert committed.selected_cover_path is None
+    assert committed.selected_origin == "user"
+    assert committed.explicit_selection is True
+    assert committed.remote_cover == {
+        "remote_cover_url": "https://images.example/cover.jpg",
+        "remote_cover_thumbnail_url": "https://images.example/thumb.jpg",
+        "remote_cover_source": "spotify",
+        "remote_cover_source_label": "Spotify",
+        "remote_cover_album_url": "https://open.spotify.com/album/album-1",
+        "remote_cover_width": 1500,
+        "remote_cover_height": 1500,
+    }
 
     assert updates == [
         {
@@ -2429,7 +2517,9 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
     ]
 
 
-def test_successful_remote_save_requests_event_only_lookup_cancellation(config, logger, library_state, tmp_path: Path):
+def test_successful_remote_save_requests_event_only_lookup_cancellation(
+    config, logger, library_state, monkeypatch, tmp_path: Path
+):
     album_root = (tmp_path / "Album").resolve()
     track_path = album_root / "song.mp3"
     track_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2439,6 +2529,7 @@ def test_successful_remote_save_requests_event_only_lookup_cancellation(config, 
         _album_payload(track_path),
         requested_track_paths,
     )
+    _install_cover_mutation_repository(monkeypatch)
     save_library_root_settings(
         config,
         {
@@ -2637,7 +2728,7 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
     apply_calls: list[dict[str, object]] = []
     download_calls: list[dict[str, object]] = []
     fetch_calls: list[dict[str, object]] = []
-    persistence_calls: list[dict[str, object]] = []
+    committed_requests = _install_cover_mutation_repository(monkeypatch)
 
     save_library_root_settings(
         config,
@@ -2655,10 +2746,13 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
         return SimpleNamespace(payload=_jpeg_bytes())
 
     def delegating_download_remote_cover_to_folder(**kwargs):
-        download_calls.append(kwargs)
+        write_cover_func = kwargs.pop("write_cover_func")
+        assert callable(write_cover_func)
+        download_calls.append(dict(kwargs))
         return cover_workflow.download_remote_cover_to_folder(
             **kwargs,
             fetch_remote_image_func=fake_fetch_remote_image,
+            write_cover_func=write_cover_func,
         )
 
     def fake_apply_cover_selection_for_tracks(
@@ -2673,10 +2767,6 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
             "schedule_cache_update": schedule_cache_update,
         })
         return [{"key": "album-1", "cover_path": str(written_cover)}], None
-
-    def fake_persist_cover_selection_for_tracks(track_paths, **changes):
-        persistence_calls.append({"track_paths": track_paths, "changes": changes})
-        return {"album_rows_updated": 1, "track_file_rows_updated": 1}
 
     monkeypatch.setattr(
         cover_lookup_runtime,
@@ -2710,7 +2800,9 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
             art_kind="cover",
         ),
         apply_cover_selection_for_tracks=fake_apply_cover_selection_for_tracks,
-        persist_cover_selection_for_tracks=fake_persist_cover_selection_for_tracks,
+        persist_cover_selection_for_tracks=lambda *_args, **_kwargs: pytest.fail(
+            "downloaded selection must commit through the coordinator"
+        ),
     )
 
     assert download_calls == [{
@@ -2725,27 +2817,19 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
         "context": f"manual-cover-download:{album_root.name}",
     }]
     assert written_cover.is_file()
-    assert persistence_calls == [{
-        "track_paths": requested_track_paths,
-        "changes": {
-            "cover_path": written_cover,
-            "cover_selection_origin": "user",
-            "explicit_selection": True,
-            "remote_cover_url": None,
-            "remote_cover_thumbnail_url": None,
-            "remote_cover_source": None,
-            "remote_cover_source_label": None,
-            "remote_cover_album_url": None,
-            "remote_cover_width": None,
-            "remote_cover_height": None,
-            "config": config,
-            "logger": logger,
-        },
-    }]
+    assert len(committed_requests) == 1
+    committed = committed_requests[0]
+    assert set(committed.track_paths) == requested_track_paths
+    assert committed.selected_cover_path == str(written_cover)
+    assert committed.selected_origin == "user"
+    assert committed.explicit_selection is True
+    assert (committed.local_cover_width, committed.local_cover_height) == (12, 12)
+    assert committed.remote_cover is None
     assert apply_calls == [{
         "track_paths": requested_track_paths,
         "changes": {
             "cover_path": written_cover,
+            "cover_revision": hashlib.sha256(written_cover.read_bytes()).hexdigest(),
         },
         "schedule_cache_update": False,
     }]
@@ -2804,6 +2888,10 @@ def test_downloaded_cover_persistence_failure_restores_prior_cover_and_removes_o
         })
 
     task_logger = SimpleNamespace(**vars(logger), exception=capture_exception)
+    _install_cover_mutation_repository(
+        monkeypatch,
+        commit_error=RuntimeError(sensitive_detail),
+    )
 
     save_library_root_settings(
         config,
@@ -2824,9 +2912,6 @@ def test_downloaded_cover_persistence_failure_restores_prior_cover_and_removes_o
                 payload=downloaded_cover_bytes,
             ),
         )
-
-    def fail_persistence(*_args, **_kwargs):
-        raise RuntimeError(sensitive_detail)
 
     def capture_apply(*args, **kwargs):
         apply_calls.append({"args": args, "kwargs": kwargs})
@@ -2865,7 +2950,9 @@ def test_downloaded_cover_persistence_failure_restores_prior_cover_and_removes_o
             art_kind="cover",
         ),
         apply_cover_selection_for_tracks=capture_apply,
-        persist_cover_selection_for_tracks=fail_persistence,
+        persist_cover_selection_for_tracks=lambda *_args, **_kwargs: pytest.fail(
+            "coordinator failure must not use direct persistence"
+        ),
     )
 
     assert canonical_cover.read_bytes() == prior_cover_bytes
@@ -2905,6 +2992,12 @@ def test_downloaded_cover_persistence_failure_removes_new_cover_when_none_existe
     requested_track_paths = {str(track_path)}
     updates: list[dict[str, object]] = []
     apply_calls: list[dict[str, object]] = []
+    _install_cover_mutation_repository(
+        monkeypatch,
+        commit_error=RuntimeError(
+            "postgresql://private-user:secret@db/app C:\\Private\\Music"
+        ),
+    )
 
     save_library_root_settings(
         config,
@@ -2961,8 +3054,8 @@ def test_downloaded_cover_persistence_failure_removes_new_cover_when_none_existe
         apply_cover_selection_for_tracks=lambda *args, **kwargs: apply_calls.append(
             {"args": args, "kwargs": kwargs}
         ),
-        persist_cover_selection_for_tracks=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("postgresql://private-user:secret@db/app C:\\Private\\Music")
+        persist_cover_selection_for_tracks=lambda *_args, **_kwargs: pytest.fail(
+            "coordinator failure must not use direct persistence"
         ),
     )
 
@@ -2973,6 +3066,69 @@ def test_downloaded_cover_persistence_failure_removes_new_cover_when_none_existe
     assert updates[0]["message"] == "Failed to save selected cover art."
     assert "secret" not in str(updates)
     assert "Private" not in str(updates)
+
+
+def test_request_owned_download_publishes_promoted_digest_to_every_runtime_surface(
+    config, logger, library_state, monkeypatch, tmp_path: Path,
+):
+    from music_app.routes import api_cover_helpers
+    from music_app.services.library import build_albums_from_file_cache
+
+    album_root = (tmp_path / "Album").resolve()
+    album_root.mkdir()
+    track_path = album_root / "song.mp3"
+    track_path.write_bytes(b"track")
+    library_state["file_cache"] = {str(track_path): {
+        "path": str(track_path), "title": "Song", "artist": "Artist",
+        "album_artist": "Artist", "album": "Album", "track_number": 1,
+        "disc_number": 1, "year": "2001", "cover_path": None,
+    }}
+    library_state["albums"] = build_albums_from_file_cache(library_state["file_cache"], set())
+    assert len(library_state["albums"]) == 1
+    committed = _install_cover_mutation_repository(monkeypatch)
+    save_library_root_settings(config, {"main_library_roots": [{
+        "id": "main-1", "path": str(tmp_path), "layout_mode": "album-at-root",
+    }]})
+    downloaded = _jpeg_bytes((30, 30, 220))
+
+    def download(*, write_cover_func, **kwargs):
+        return cover_workflow.download_remote_cover_to_folder(
+            **kwargs, write_cover_func=write_cover_func,
+            fetch_remote_image_func=lambda *_a, **_k: SimpleNamespace(payload=downloaded),
+        )
+
+    monkeypatch.setattr(cover_lookup_runtime, "download_remote_cover_to_folder", download)
+    monkeypatch.setattr(api_cover_helpers, "schedule_cache_updates_save_for_config", lambda *_a, **_k: None)
+    monkeypatch.setattr(api_cover_helpers, "build_problematic_albums_payload", lambda **_k: {"albums": []})
+    updates = []
+    monkeypatch.setattr(cover_lookup_runtime, "update_cover_lookup_task", lambda task_id, **kwargs:
+        _capture_task_update(updates, task_id, expected_config=config, **kwargs))
+    published_responses = []
+
+    def apply_real(paths, **kwargs):
+        result = api_cover_helpers.apply_cover_selection_for_tracks(
+            paths, config=config, logger=logger, library_state=library_state, **kwargs,
+        )
+        published_responses.append(result)
+        return result
+
+    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+        "task-save-digest", config, logger, library_state,
+        str(config["MUSICBRAINZ_USER_AGENT"]), album_root, {str(track_path)}, "candidate-1",
+        SelectedRemoteImage(id="candidate-1", url="https://images.example/new-cover.jpg",
+                            source="apple", source_label="Apple Music", art_kind="cover"),
+        apply_cover_selection_for_tracks=apply_real,
+        persist_cover_selection_for_tracks=lambda *_a, **_k: pytest.fail("Direct persistence bypassed coordinator"),
+    )
+    digest = hashlib.sha256((album_root / "cover.jpg").read_bytes()).hexdigest()
+    assert len(committed) == 1
+    assert committed[0].promoted_cover_revision == digest
+    assert len(published_responses) == 1
+    assert published_responses[0][0][0]["cover_revision"] == digest
+    assert library_state["file_cache"][str(track_path)]["cover_revision"] == digest
+    album = library_state["albums"][0]
+    assert album.cover_revision == digest
+    assert album.tracks[0].cover_revision == digest
 
 
 def test_downloaded_cover_apply_failure_keeps_file_after_persistence_commits(
@@ -2994,6 +3150,12 @@ def test_downloaded_cover_apply_failure_keeps_file_after_persistence_commits(
     persisted_cover_bytes: list[bytes] = []
     updates: list[dict[str, object]] = []
     sensitive_detail = "postgresql://private-user:secret@db/app C:\\Private\\Music"
+    committed_requests = _install_cover_mutation_repository(
+        monkeypatch,
+        on_commit=lambda request: persisted_cover_bytes.append(
+            Path(request.selected_cover_path).read_bytes()
+        ),
+    )
 
     save_library_root_settings(
         config,
@@ -3014,10 +3176,6 @@ def test_downloaded_cover_apply_failure_keeps_file_after_persistence_commits(
                 payload=downloaded_cover_bytes,
             ),
         )
-
-    def record_persistence(_track_paths, *, cover_path, **_changes):
-        persisted_cover_bytes.append(Path(cover_path).read_bytes())
-        return {"album_rows_updated": 1, "track_file_rows_updated": 1}
 
     monkeypatch.setattr(
         cover_lookup_runtime,
@@ -3054,9 +3212,12 @@ def test_downloaded_cover_apply_failure_keeps_file_after_persistence_commits(
         apply_cover_selection_for_tracks=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError(sensitive_detail)
         ),
-        persist_cover_selection_for_tracks=record_persistence,
+        persist_cover_selection_for_tracks=lambda *_args, **_kwargs: pytest.fail(
+            "committed coordinator path must not use direct persistence"
+        ),
     )
 
+    assert len(committed_requests) == 1
     assert len(persisted_cover_bytes) == 1
     assert canonical_cover.read_bytes() == persisted_cover_bytes[0]
     assert canonical_cover.read_bytes() != prior_cover_bytes
@@ -3068,7 +3229,7 @@ def test_downloaded_cover_apply_failure_keeps_file_after_persistence_commits(
     assert sensitive_detail not in str(updates)
 
 
-def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_album_lock(
+def test_fallback_download_commit_failure_restores_cover_and_releases_album_lock(
     config,
     logger,
     library_state,
@@ -3082,8 +3243,6 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
     requested_track_paths = {str(track_path)}
     canonical_cover = album_root / "cover.jpg"
     preexisting_reserve = album_root / "cover-existing-1.jpg"
-    first_new_reserve = album_root / "cover-existing-2.jpg"
-    second_new_reserve = album_root / "cover-existing-3.jpg"
     prior_cover_bytes = _jpeg_bytes((220, 30, 30))
     prior_reserve_bytes = _jpeg_bytes((30, 220, 30))
     canonical_cover.write_bytes(prior_cover_bytes)
@@ -3094,6 +3253,10 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
     updates: list[dict[str, object]] = []
     persistence_calls: list[dict[str, object]] = []
     apply_calls: list[dict[str, object]] = []
+    _install_cover_mutation_repository(
+        monkeypatch,
+        commit_error=RuntimeError("coordinator commit rejected"),
+    )
 
     save_library_root_settings(
         config,
@@ -3106,17 +3269,18 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
         },
     )
 
-    def fallback_download_remote_cover_to_folder(folder, image_url, user_agent):
+    def fallback_download_remote_cover_to_folder(
+        folder,
+        image_url,
+        user_agent,
+        *,
+        write_cover_func,
+    ):
         assert folder == album_root
         assert image_url == "https://images.example/new-cover.jpg"
         assert user_agent == config["MUSICBRAINZ_USER_AGENT"]
-        canonical_cover.write_bytes(_jpeg_bytes((30, 30, 220)))
-        first_new_reserve.write_bytes(_jpeg_bytes((40, 40, 210)))
-        second_new_reserve.write_bytes(_jpeg_bytes((50, 50, 200)))
-        return canonical_cover, {
-            "reason": "cover_written",
-            "written_path": str(canonical_cover),
-        }
+        written = write_cover_func(folder, _jpeg_bytes((30, 30, 220)))
+        return written, {"reason": "cover_written" if written else "write_failed"}
 
     monkeypatch.setattr(
         cover_lookup_runtime,
@@ -3159,11 +3323,13 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
     )
 
     subsequent_selection_completed = Event()
+
+    def acquire_after_failure() -> None:
+        with cover_workflow.local_cover_selection_lock(album_root):
+            subsequent_selection_completed.set()
+
     selection_thread = Thread(
-        target=lambda: cover_workflow.run_serialized_cover_selection(
-            album_root,
-            subsequent_selection_completed.set,
-        ),
+        target=acquire_after_failure,
         daemon=True,
     )
     selection_thread.start()
@@ -3207,6 +3373,7 @@ def test_run_cover_lookup_save_remote_task_accepts_non_numeric_album_subfolders(
     updates: list[dict[str, object]] = []
     apply_calls: list[dict[str, object]] = []
     download_calls: list[dict[str, object]] = []
+    _install_cover_mutation_repository(monkeypatch)
 
     save_library_root_settings(
         config,
@@ -3220,9 +3387,11 @@ def test_run_cover_lookup_save_remote_task_accepts_non_numeric_album_subfolders(
     )
 
     def fake_download_remote_cover_to_folder(**kwargs):
-        download_calls.append(kwargs)
-        written_cover.write_bytes(_jpeg_bytes())
-        return written_cover, {"reason": "cover_written", "written_path": str(written_cover)}
+        write_cover_func = kwargs.pop("write_cover_func")
+        assert callable(write_cover_func)
+        download_calls.append(dict(kwargs))
+        written = write_cover_func(kwargs["folder"], _jpeg_bytes())
+        return written, {"reason": "cover_written", "written_path": str(written)}
 
     def fake_apply_cover_selection_for_tracks(track_paths, **changes):
         apply_calls.append({"track_paths": track_paths, "changes": changes})
@@ -3259,7 +3428,10 @@ def test_run_cover_lookup_save_remote_task_accepts_non_numeric_album_subfolders(
     }]
     assert apply_calls == [{
         "track_paths": requested_track_paths,
-        "changes": {"cover_path": written_cover},
+        "changes": {
+            "cover_path": written_cover,
+            "cover_revision": hashlib.sha256(written_cover.read_bytes()).hexdigest(),
+        },
     }]
     assert updates == [
         {
@@ -3733,6 +3905,7 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
     written_cover = album_root / "cover.jpg"
     published_snapshots: list[dict[str, object]] = []
     clock_value = 0.0
+    _install_cover_mutation_repository(monkeypatch)
     save_library_root_settings(
         config,
         {
@@ -3749,9 +3922,9 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
         clock_value += 0.002
         return clock_value
 
-    def fake_download_remote_cover_to_folder(**_kwargs):
-        written_cover.write_bytes(_jpeg_bytes())
-        return written_cover, {"reason": "cover_written"}
+    def fake_download_remote_cover_to_folder(*, folder, write_cover_func, **_kwargs):
+        written = write_cover_func(folder, _jpeg_bytes())
+        return written, {"reason": "cover_written" if written else "write_failed"}
 
     original_publish = cover_lookup_runtime._publish_save_runtime_phase_metrics
 
@@ -3795,9 +3968,112 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
     assert final_snapshot["phase_timings_ms"]["persistence"] > 1.5
 
 
+def test_claimed_remote_cover_visual_comparison_precedes_mutation_locks(
+    config,
+    logger,
+    monkeypatch,
+    tmp_path: Path,
+):
+    _install_cover_mutation_repository(monkeypatch)
+    from music_app.services import cover_mutation_coordinator
+
+    events = []
+
+    @contextmanager
+    def serialized(**options):
+        assert events == ["visual-compare"]
+        cover_path.write_bytes(concurrent_cover_bytes)
+        events.append("advisory-acquire")
+        with options["acquire_local_lock"]():
+            events.append("local-acquire")
+            yield
+
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "01.flac"
+    track_path.write_bytes(b"track")
+    cover_path = album_root / "cover.jpg"
+    cover_path.write_bytes(_jpeg_bytes((180, 40, 40)))
+    concurrent_cover_bytes = _jpeg_bytes((40, 180, 40))
+    incoming_bytes = _jpeg_bytes((40, 40, 180))
+
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "fetch_remote_cover_bytes",
+        lambda *_args, **_kwargs: (incoming_bytes, "image/jpeg"),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "prepare_remote_cover_bytes_for_authoritative_write",
+        lambda raw_bytes: raw_bytes,
+    )
+    monkeypatch.setattr(
+        cover_workflow,
+        "images_are_visually_similar",
+        lambda *_args, **_kwargs: events.append("visual-compare") or True,
+    )
+    monkeypatch.setattr(
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
+        serialized,
+    )
+    checkpoint_revision = 0
+
+    def checkpoint(_name, **_kwargs):
+        nonlocal checkpoint_revision
+        checkpoint_revision += 1
+        return checkpoint_revision
+
+    result = cover_lookup_runtime.run_claimed_cover_remote_save(
+        scope=SimpleNamespace(
+            library_root_path=str(album_root),
+            track_paths=(str(track_path),),
+            selected_candidate={
+                "id": "candidate-1",
+                "url": "https://images.invalid/cover.jpg",
+                "art_kind": "cover",
+            },
+        ),
+        config=config,
+        logger=logger,
+        should_cancel=lambda: False,
+        checkpoint=checkpoint,
+        persist_selection=lambda **_kwargs: checkpoint_revision + 1,
+        publish=lambda **_kwargs: True,
+        library_id=1,
+        job_id=10,
+        attempt=1,
+        worker_id="worker-1",
+        lease_token="lease-1",
+        task_id=20,
+        checkpoint_revision=0,
+    )
+
+    assert result == {"status": "succeeded"}
+    assert events.index("visual-compare") < events.index("advisory-acquire")
+    assert events.index("visual-compare") < events.index("local-acquire")
+    assert (album_root / "cover-existing-1.jpg").read_bytes() == concurrent_cover_bytes
+
+
 def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publication(
     config, logger, monkeypatch, tmp_path: Path
 ):
+    _install_cover_mutation_repository(monkeypatch)
+    from music_app.services import cover_mutation_coordinator
+
+    events = []
+    prepare_remote_cover = (
+        cover_lookup_runtime.prepare_remote_cover_bytes_for_authoritative_write
+    )
+    remote_image = _jpeg_bytes((40, 120, 220))
+
+    @contextmanager
+    def serialized(**options):
+        assert events == ["decode"]
+        events.append("advisory-acquire")
+        with options["acquire_local_lock"]():
+            events.append("local-acquire")
+            yield
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)
     track_path = album_root / "01.flac"
@@ -3815,15 +4091,27 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
     promotion = SimpleNamespace(
         cover_path=cover_path,
         promoted_cover_revision="revision-1",
+        prior_cover_existed=False,
+        prior_cover_bytes=None,
     )
     monkeypatch.setattr(
         cover_lookup_runtime,
         "fetch_remote_cover_bytes",
-        lambda *_args, **_kwargs: (b"remote-image", "image/jpeg"),
+        lambda *_args, **_kwargs: (remote_image, "image/jpeg"),
     )
     monkeypatch.setattr(
         cover_lookup_runtime,
-        "begin_remote_cover_promotion",
+        "prepare_remote_cover_bytes_for_authoritative_write",
+        lambda raw_bytes: events.append("decode") or prepare_remote_cover(raw_bytes),
+    )
+    monkeypatch.setattr(
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
+        serialized,
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "begin_prepared_remote_cover_promotion",
         lambda *_args, **_kwargs: promotion,
     )
     completed = []
@@ -3846,6 +4134,7 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
     def persist_selection(**kwargs):
         nonlocal revision
         revision += 1
+        events.append("commit")
         persisted.append(kwargs)
         return revision
 
@@ -3858,7 +4147,16 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
         should_cancel=lambda: False,
         checkpoint=checkpoint,
         persist_selection=persist_selection,
-        publish=lambda **kwargs: published.append(kwargs) is None,
+        publish=lambda **kwargs: (
+            events.append("publish"), published.append(kwargs)
+        )[-1] is None,
+        library_id=1,
+        job_id=10,
+        attempt=1,
+        worker_id="worker-1",
+        lease_token="lease-1",
+        task_id=20,
+        checkpoint_revision=0,
     )
 
     assert result == {"status": "succeeded"}
@@ -3868,29 +4166,44 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
         "promotion_completed",
     ]
     assert persisted[0]["selected_cover_path"] == str(cover_path)
+    assert persisted[0]["selected_cover_revision"] == "revision-1"
+    assert persisted[0]["linked_remote"] is False
     assert completed == [promotion]
     assert published[0]["linked_remote"] is False
+    assert events == [
+        "decode",
+        "advisory-acquire",
+        "local-acquire",
+        "commit",
+        "publish",
+    ]
 
 
 def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_checkpoint_is_lost(
     config, logger, monkeypatch, tmp_path: Path
 ):
+    _install_cover_mutation_repository(monkeypatch)
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)
     track_path = album_root / "01.flac"
     track_path.write_bytes(b"track")
+    promoted_bytes = _jpeg_bytes((40, 120, 220))
+    promoted_cover_path = album_root / "cover.jpg"
+    promoted_cover_path.write_bytes(promoted_bytes)
     promotion = SimpleNamespace(
-        cover_path=album_root / "cover.jpg",
-        promoted_cover_revision="revision-1",
+        cover_path=promoted_cover_path,
+        promoted_cover_revision=hashlib.sha256(promoted_bytes).hexdigest(),
+        prior_cover_existed=False,
+        prior_cover_bytes=None,
     )
     monkeypatch.setattr(
         cover_lookup_runtime,
         "fetch_remote_cover_bytes",
-        lambda *_args, **_kwargs: (b"remote-image", "image/jpeg"),
+        lambda *_args, **_kwargs: (promoted_bytes, "image/jpeg"),
     )
     monkeypatch.setattr(
         cover_lookup_runtime,
-        "begin_remote_cover_promotion",
+        "begin_prepared_remote_cover_promotion",
         lambda *_args, **_kwargs: promotion,
     )
     rolled_back = []
@@ -3927,9 +4240,73 @@ def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_chec
     assert rolled_back == [promotion]
 
 
+def test_claimed_remote_cover_save_preserves_artifact_when_selection_commit_is_uncertain(
+    config, logger, monkeypatch, tmp_path: Path
+):
+    _install_cover_mutation_repository(monkeypatch)
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "01.flac"
+    track_path.write_bytes(b"track")
+    remote_image = _jpeg_bytes((40, 120, 220))
+    promotion = SimpleNamespace(
+        cover_path=album_root / "cover.jpg",
+        promoted_cover_revision="revision-1",
+        prior_cover_existed=False,
+        prior_cover_bytes=None,
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "fetch_remote_cover_bytes",
+        lambda *_args, **_kwargs: (remote_image, "image/jpeg"),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "begin_prepared_remote_cover_promotion",
+        lambda *_args, **_kwargs: promotion,
+    )
+    rolled_back = []
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "rollback_local_image_promotion",
+        lambda value: rolled_back.append(value),
+    )
+
+    result = cover_lookup_runtime.run_claimed_cover_remote_save(
+        scope=SimpleNamespace(
+            library_root_path=str(album_root),
+            track_paths=(str(track_path),),
+            selected_candidate={
+                "id": "candidate-1",
+                "url": "https://images.invalid/cover.jpg",
+            },
+        ),
+        config=config,
+        logger=logger,
+        should_cancel=lambda: False,
+        checkpoint=lambda _name, **_kwargs: 1,
+        persist_selection=lambda **_kwargs: None,
+        publish=lambda **_kwargs: pytest.fail("uncertain selection must not publish"),
+        library_id=1,
+        job_id=10,
+        attempt=1,
+        worker_id="worker-1",
+        lease_token="lease-1",
+        task_id=20,
+        checkpoint_revision=0,
+    )
+
+    assert result == {
+        "status": "ambiguous",
+        "reason_code": "selection_commit_uncertain",
+    }
+    assert rolled_back == []
+
+
 def test_claimed_remote_cover_save_does_not_replace_cover_after_lease_expires_waiting_for_selection_lock(
     config, logger, monkeypatch, tmp_path: Path
 ):
+    _install_cover_mutation_repository(monkeypatch)
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)
     track_path = album_root / "01.flac"
@@ -4007,6 +4384,7 @@ def test_claimed_remote_cover_save_does_not_replace_cover_after_lease_expires_wa
 def test_claimed_display_only_remote_cover_commits_link_without_fetch(
     config, logger, monkeypatch, tmp_path: Path
 ):
+    _install_cover_mutation_repository(monkeypatch)
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)
     track_path = album_root / "01.flac"
@@ -4017,11 +4395,14 @@ def test_claimed_display_only_remote_cover_commits_link_without_fetch(
         lambda *_args, **_kwargs: pytest.fail("display-only art must not be fetched"),
     )
     revision = 0
+    checkpoints = []
     persisted = []
 
-    def next_revision(*_args, **_kwargs):
+    def next_revision(name=None, **_kwargs):
         nonlocal revision
         revision += 1
+        if name is not None:
+            checkpoints.append(name)
         return revision
 
     def persist(**kwargs):
@@ -4045,8 +4426,17 @@ def test_claimed_display_only_remote_cover_commits_link_without_fetch(
         checkpoint=next_revision,
         persist_selection=persist,
         publish=lambda **_kwargs: True,
+        library_id=1,
+        job_id=10,
+        attempt=1,
+        worker_id="worker-1",
+        lease_token="lease-1",
+        task_id=20,
+        checkpoint_revision=0,
     )
 
     assert result == {"status": "succeeded"}
+    assert checkpoints == ["artifact_written", "promotion_completed"]
     assert persisted[0]["linked_remote"] is True
     assert persisted[0]["selected_cover_path"] is None
+    assert persisted[0]["selected_cover_revision"] is None

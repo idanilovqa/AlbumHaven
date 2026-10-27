@@ -49,6 +49,7 @@ from music_app.services.covers import (
 from music_app.services.cover_workflow import (
     cover_revision_for_path,
     decode_image_bytes,
+    prepare_cover_reservation,
     prepare_remote_cover_bytes_for_authoritative_write,
     write_prepared_remote_cover_bytes,
     write_remote_cover_bytes_as_authoritative_cover,
@@ -1306,10 +1307,19 @@ def ensure_best_cover_for_folder(
                 2,
             )
             return local_cover, False, detail
+        prepared_reservation = (
+            prepare_cover_reservation(folder, prepared_write_bytes)
+            if production_write
+            else None
+        )
 
         def write_action():
             if production_write:
-                return write_prepared_remote_cover_bytes(folder, prepared_write_bytes)
+                return write_prepared_remote_cover_bytes(
+                    folder,
+                    prepared_write_bytes,
+                    reservation=prepared_reservation,
+                )
             return write_cover_func(folder, prepared_write_bytes)
 
         # The production guard uses these immutable inputs to stage the

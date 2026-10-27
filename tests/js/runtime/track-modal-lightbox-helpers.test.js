@@ -685,6 +685,60 @@ test('S05 closing artwork never restores focus to a detached trigger', () => {
   assert.doesNotThrow(() => context.closeImageLightbox());
 });
 
+for (const activation of ['pointer', 'keyboard']) {
+  for (const dismissal of ['button', 'Escape']) {
+    for (const replacementState of ['same', 'different', 'hidden', 'css-hidden']) {
+      test(`S04 ${activation} artwork restores safe ${replacementState} replacement focus after ${dismissal}`, () => {
+        const { context, trigger, close, lightboxOverlay, utilityModal, keydown } = lightboxFocusHarness();
+        vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js'), 'utf8'), context);
+        utilityModal.hidden = false;
+        const detail = new FakeHtmlElement('utility-problematic-detail');
+        detail.hidden = false;
+        const replacement = new FakeHtmlElement('replacement-artwork');
+        replacement.hidden = replacementState === 'hidden';
+        replacement.isConnected = true;
+        replacement.setAttribute('data-album-key', replacementState === 'different' ? 'other::album' : 'owner::selected album');
+        replacement.focus = () => { context.document.activeElement = replacement; };
+        const getComputedStyle = context.getComputedStyle;
+        context.getComputedStyle = element => ({
+          ...getComputedStyle(element),
+          visibility: element === replacement && replacementState === 'css-hidden' ? 'hidden' : 'visible',
+        });
+        const utilityClose = new FakeHtmlElement('utility-modal-close');
+        utilityClose.hidden = false;
+        utilityClose.isConnected = true;
+        utilityClose.focus = () => { context.document.activeElement = utilityClose; };
+        utilityModal.querySelector = () => utilityClose;
+        utilityModal.contains = element => [trigger, replacement, utilityClose].includes(element);
+        detail.querySelectorAll = () => [replacement];
+        trigger.parentElement = detail;
+        detail.closest = selector => selector === '[id]' ? detail : null;
+        trigger.setAttribute('data-album-key', 'owner::selected album');
+        trigger.setAttribute('data-cover-src', '/selected-cover.png');
+        trigger.closest = selector => selector === '[data-open-lightbox="1"]' ? trigger : null;
+        const getElementById = context.document.getElementById;
+        context.document.getElementById = id => id === detail.id ? detail : getElementById(id);
+        close.closest = selector => selector === '#image-lightbox-close' ? close
+          : selector === '#image-lightbox' ? lightboxOverlay : null;
+
+        trigger.focus();
+        context.handleGalleryBootstrapClick({
+          target: trigger, detail: activation === 'pointer' ? 1 : 0, preventDefault() {},
+        });
+        assert.equal(context.document.activeElement, close);
+        trigger.isConnected = false;
+        trigger.focus = () => assert.fail('detached trigger cannot receive focus');
+        if (dismissal === 'Escape') keydown({ key: 'Escape' });
+        else context.handleGalleryBootstrapClick({ target: close, preventDefault() {} });
+
+        assert.equal(lightboxOverlay.hidden, true);
+        assert.equal(context.document.activeElement, replacementState === 'same' ? replacement : utilityClose);
+        assert.equal(utilityModal.hidden, false);
+      });
+    }
+  }
+}
+
 async function flushAlbumDetailsHydration() {
   await Promise.resolve();
   await Promise.resolve();

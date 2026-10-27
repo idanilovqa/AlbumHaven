@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +9,20 @@ import pytest
 import threading
 
 from music_app.services import cover_refresh_execution, cover_refresh_runtime
+
+
+def test_automatic_cover_writer_uses_shared_mutation_coordinator():
+    source = inspect.getsource(cover_refresh_execution._build_automatic_cover_write_guard)
+
+    assert "execute_cover_mutation_for_config(" in source
+    assert "run_serialized_cover_selection(" not in source
+    for callback in (
+        "prepare=",
+        "write_artifact=",
+        "recover_selection=",
+        "publish_committed=",
+    ):
+        assert callback in source
 
 
 def test_cover_pass_snapshot_refreshes_selection_once_without_runtime_alias(monkeypatch):
@@ -668,6 +683,13 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
 
 @pytest.fixture
 def claimed_existing_cover(tmp_path, monkeypatch):
+    from music_app.services import cache as cache_service
+    from music_app.services import cover_mutation_coordinator
+    from music_app.services.cover_mutation_coordinator import (
+        CoverMutationBaseline,
+        CoverMutationIdentity,
+    )
+
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)
     cover = folder / "cover.jpg"
@@ -685,13 +707,67 @@ def claimed_existing_cover(tmp_path, monkeypatch):
         "scan_in_progress": False,
         "cover_generation": 11,
     }
-    config = {}
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://claimed-recovery"}
+    identity = CoverMutationIdentity(library_id=1, local_album_id=19)
+    authority = {
+        "cover_mutation_revision": 0,
+        "selected_cover_path": None,
+        "selected_cover_revision": "previous-revision",
+    }
+
+    class FakeCoverMutationRepository:
+        def __init__(self, *, database_url):
+            assert database_url == config["ALBUM_HAVEN_APP_DATABASE_URL"]
+
+        def resolve_identity(self, *, library_id, track_paths):
+            assert library_id == identity.library_id
+            assert set(track_paths) == {track}
+            return identity
+
+        def load_baseline(self, *, identity):
+            return CoverMutationBaseline(
+                inventory_revision=0,
+                cover_mutation_revision=authority["cover_mutation_revision"],
+                selected_cover_revision=authority["selected_cover_revision"],
+                selected_cover_path=authority["selected_cover_path"],
+            )
+
+        def recover_ambiguous(self, *, request):
+            raise AssertionError(f"Unexpected generic recovery: {request!r}")
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "PostgresCoverMutationRepository",
+        FakeCoverMutationRepository,
+    )
+    monkeypatch.setattr(
+        cache_service,
+        "PostgresCoverMutationRepository",
+        FakeCoverMutationRepository,
+    )
+    monkeypatch.setattr(
+        cache_service,
+        "_select_runtime_scan_cache_adapter",
+        lambda _config: SimpleNamespace(
+            load_inventory_publication=lambda: {"library_id": identity.library_id}
+        ),
+    )
+    monkeypatch.setattr(
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
+        lambda **options: options["acquire_local_lock"](),
+    )
     monkeypatch.setattr(
         cover_refresh_execution, "persist_cover_selection_for_tracks_for_config",
         lambda *_args, **_kwargs: pytest.fail("claimed recovery must not use generic persistence"),
     )
     return SimpleNamespace(
-        track=track, cover=cover, entries=entries, state=state, config=config,
+        track=track,
+        cover=cover,
+        entries=entries,
+        state=state,
+        config=config,
+        authority=authority,
         kwargs={
             "config": config,
             "job": {"folder": folder, "track_paths": [track]},
@@ -721,16 +797,40 @@ def test_existing_cover_recovery_uses_claimed_persister_with_exact_fence(
     def persist(track_paths, selected_cover_path, **options):
         calls.append((track_paths, selected_cover_path))
         assert options.keys() == {
-            "cover_revision", "cover_selection_origin", "reject_if_user_controlled",
-            "expected_cover_state", "commit_guard",
+            "cover_revision",
+            "cover_selection_origin",
+            "expected_library_id",
+            "expected_album_id",
+            "expected_inventory_revision",
+            "expected_cover_mutation_revision",
+            "local_cover_width",
+            "local_cover_height",
+            "reject_if_user_controlled",
+            "reject_if_explicit_selection",
+            "expected_cover_state",
+            "expected_cover_selection_origin",
+            "expected_cover_revision",
+            "commit_guard",
         }
         assert options["cover_revision"] == selected_revision
         assert options["cover_selection_origin"] == "automatic"
+        assert options["expected_library_id"] == 1
+        assert options["expected_album_id"] == 19
+        assert options["expected_inventory_revision"] == 0
+        assert options["expected_cover_mutation_revision"] == 0
         assert options["reject_if_user_controlled"] is True
         assert options["expected_cover_state"] == (origin, revision)
         assert case.entries[case.track]["cover_path"] is None
         assert case.state["file_cache"][case.track]["cover_path"] is None
-        options["commit_guard"](lambda: commits.append("committed"))
+        def commit():
+            case.authority.update(
+                cover_mutation_revision=1,
+                selected_cover_path=str(case.cover.resolve()),
+                selected_cover_revision=selected_revision,
+            )
+            commits.append("committed")
+
+        options["commit_guard"](commit)
         return {"album_rows_updated": 1, "track_file_rows_updated": 1}
 
     case.config["CLAIMED_COVER_SELECTION_PERSISTER"] = persist

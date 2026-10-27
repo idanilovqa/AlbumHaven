@@ -31,6 +31,12 @@ _COVER_CONSISTENCY_MIGRATION = (
     / "postgres"
     / "0122_close_cover_consistency.sql"
 )
+_AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "migrations"
+    / "postgres"
+    / "0127_restore_authoritative_exception_clear.sql"
+)
 
 
 class FakeCursor:
@@ -854,6 +860,38 @@ def test_postgres_exception_clear_restores_detached_track_to_its_nonempty_album(
     _assert_album_restore_updates_existing_track_identity_in_place(connection)
 
 
+def test_postgres_exception_clear_reports_complete_source_transfer(monkeypatch):
+    from music_app.services import scan_cache_persistence
+
+    paths, restored, previous = _entries(album="Two Track Rarity Fixture")
+    selected_path = paths[0]
+    previous = {selected_path: previous[selected_path]}
+    previous[selected_path]["exception_type"] = "Non-album rarity"
+    restored = {selected_path: {**restored[selected_path], "exception_type": ""}}
+    connection = StructuralTagEditConnection(_successful_result(path_count=1))
+    adapter = _adapter(monkeypatch, connection)
+    source_transfer_flags: list[bool] = []
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "_patch_structural_relation_projection",
+        lambda _connection, *, source_album_vacated, **_kwargs: (
+            source_transfer_flags.append(source_album_vacated)
+            or {"projection_mode": "targeted"}
+        ),
+    )
+
+    result = adapter.persist_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
+        changed_field_names={"exception_type"},
+        rebuild_relation_projection=True,
+    )
+
+    assert source_transfer_flags == [True]
+    assert result["projection_mode"] == "targeted"
+
+
 def test_postgres_album_restore_accepts_mixed_inferred_and_detached_blank_tracks(
     monkeypatch,
 ):
@@ -1143,6 +1181,261 @@ def test_artist_only_projection_keeps_existing_album_owner():
 
     assert projection.album_artist == owner
     assert projection.key == "control signal lead::control lead solo"
+
+
+def test_live_postgres_exception_clear_restores_attached_album_from_authoritative_overrides(
+    monkeypatch,
+):
+    database_url = _isolated_runtime_database_url_or_skip()
+    if not _ISOLATED_SETUP_DATABASE_URL:
+        pytest.skip("Isolated setup is required for the exception-clear contract.")
+    isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
+    from music_app.services.scan_cache_persistence import (
+        PostgresScanCacheAdapter,
+        _structural_destination_album_projection,
+    )
+    from music_app.services import gallery_projection_postgres
+
+    monkeypatch.setattr(
+        gallery_projection_postgres,
+        "schedule_gallery_projection_refresh",
+        lambda *_args, **_kwargs: None,
+    )
+
+    token = uuid4().hex
+    artist = f"Interview Restore Artist {token}"
+    title = f"Interview Restore Album {token}"
+    scanned = {
+        f"C:/__exception_clear__/{token}/{index:02d}.flac": {
+            "path": f"C:/__exception_clear__/{token}/{index:02d}.flac",
+            "album": title,
+            "album_artist": artist,
+            "artist": artist,
+            "title": f"Track {index}",
+            "track_number": str(index),
+            "disc_number": "1",
+            "duration_seconds": 180 + index,
+            "year": 2026,
+            "release_date": "2026",
+            "mtime": 1000.0 + index,
+            "size": 2000 + index,
+        }
+        for index in range(1, 19)
+    }
+    previous = {
+        path: {**entry, "exception_type": "Interview"}
+        for path, entry in scanned.items()
+    }
+    updated = {
+        path: {**entry, "exception_type": ""}
+        for path, entry in scanned.items()
+    }
+    connection = psycopg.connect(_ISOLATED_SETUP_DATABASE_URL)
+    try:
+        connection.execute(
+            _AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION.read_text(encoding="utf-8")
+        )
+        adapter = PostgresScanCacheAdapter(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+            connect=lambda _url: _CommitSuppressingConnection(connection),
+        )
+        projection = _structural_destination_album_projection(
+            adapter._build_albums,
+            updated,
+            frozenset({"exception_type"}),
+            set(),
+        )
+        library_id = connection.execute(
+            """select libraries.id from app.bootstrap_owners owners
+               join library.libraries libraries on libraries.owner_account_id=owners.account_id
+               where owners.owner_key='local-bootstrap-owner'
+                 and libraries.name='Local Library' and libraries.library_kind='local'"""
+        ).fetchone()[0]
+        artist_id = connection.execute(
+            """insert into library.local_artists(library_id,artist_key,name,metadata)
+               values(%s,%s,%s,'{}'::jsonb) returning id""",
+            (library_id, artist.casefold(), artist),
+        ).fetchone()[0]
+        album_id = connection.execute(
+            """insert into library.local_albums
+               (library_id,artist_id,album_key,title,release_year,metadata)
+               values(%s,%s,%s,%s,2026,%s::jsonb) returning id""",
+            (
+                library_id,
+                artist_id,
+                projection.key,
+                title,
+                json.dumps({"album_artist": artist, "release_date": "2026"}),
+            ),
+        ).fetchone()[0]
+        track_ids, track_file_ids = [], []
+        for index, (path, entry) in enumerate(scanned.items(), start=1):
+            track_id = connection.execute(
+                """insert into library.local_tracks
+                   (library_id,album_id,artist_id,track_key,title,track_number,metadata)
+                   values(%s,%s,%s,%s,%s,%s,%s::jsonb) returning id""",
+                (
+                    library_id,
+                    album_id,
+                    artist_id,
+                    f"exception-clear-{token}-{index}",
+                    entry["title"],
+                    index,
+                    json.dumps({"album": title, "preserved": token}),
+                ),
+            ).fetchone()[0]
+            track_file_id = connection.execute(
+                """insert into library.local_track_files(track_id,private_path,metadata)
+                   values(%s,%s,jsonb_build_object('scan_cache',jsonb_build_object(
+                     'source','scan_cache','stale',false,'file_entry',%s::jsonb)))
+                   returning id""",
+                (track_id, path, json.dumps(entry)),
+            ).fetchone()[0]
+            override_rows = [
+                (path, {"exception_type": "Interview"}, "0 seconds")
+            ]
+            if index == 2:
+                override_rows = [(path, "Interview", "0 seconds")]
+            elif index == 3:
+                override_rows = [
+                    (f"fallback-old-{token}", {"exception_type": ""}, "-1 second"),
+                    (
+                        f"fallback-new-{token}",
+                        {"exception_type": "Interview"},
+                        "0 seconds",
+                    ),
+                ]
+            elif index == 4:
+                override_rows = [
+                    (path, {}, "-1 second"),
+                    (
+                        f"shadowed-track-{token}",
+                        {"exception_type": "Interview"},
+                        "0 seconds",
+                    ),
+                ]
+            for override_key, override_payload, updated_offset in override_rows:
+                connection.execute(
+                    """insert into library.exception_overrides
+                       (library_id,track_id,track_key,override_payload,updated_at)
+                       values(%s,%s,%s,%s::jsonb,now() + %s::interval)""",
+                    (
+                        library_id,
+                        track_id,
+                        override_key,
+                        json.dumps(override_payload),
+                        updated_offset,
+                    ),
+                )
+            track_ids.append(track_id)
+            track_file_ids.append(track_file_id)
+        connection.commit()
+        connection.close()
+        connection = psycopg.connect(database_url)
+        before_tracks, before_files = _live_restore_rows(
+            connection,
+            track_ids=track_ids,
+            track_file_ids=track_file_ids,
+        )
+        assert all(
+            "exception_type" not in row[3]["scan_cache"]["file_entry"]
+            for row in before_files
+        )
+
+        adapter = PostgresScanCacheAdapter(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+            connect=lambda _url: _CommitSuppressingConnection(connection),
+        )
+
+        missing_key_path = list(scanned)[0]
+        missing_key_entry = dict(updated[missing_key_path])
+        missing_key_entry.pop("exception_type")
+        with pytest.raises(
+            psycopg.errors.InvalidParameterValue,
+            match="must resolve eligible selected tracks",
+        ):
+            adapter.persist_structural_tag_edit(
+                changed_paths={missing_key_path},
+                previous_file_entries={missing_key_path: previous[missing_key_path]},
+                updated_file_entries={missing_key_path: missing_key_entry},
+                changed_field_names={"exception_type"},
+            )
+        connection.rollback()
+
+        shadowed_path = list(scanned)[3]
+        with pytest.raises(
+            psycopg.errors.InvalidParameterValue,
+            match="must resolve eligible selected tracks",
+        ):
+            adapter.persist_structural_tag_edit(
+                changed_paths={shadowed_path},
+                previous_file_entries={shadowed_path: previous[shadowed_path]},
+                updated_file_entries={shadowed_path: updated[shadowed_path]},
+                changed_field_names={"exception_type"},
+            )
+        connection.rollback()
+        with psycopg.connect(_ISOLATED_SETUP_DATABASE_URL) as setup_connection:
+            setup_connection.execute(
+                """update library.exception_overrides
+                   set override_payload = jsonb_build_object('exception_type', 'Interview')
+                   where library_id = %s and track_key = %s""",
+                (library_id, shadowed_path),
+            )
+
+        def clear_authoritative_overrides(commit_connection):
+            commit_connection.execute(
+                """update library.exception_overrides
+                   set override_payload = jsonb_build_object('exception_type', '')
+                   where library_id = %s and track_id = any(%s)""",
+                (library_id, track_ids),
+            )
+
+        result = adapter.persist_structural_tag_edit(
+            changed_paths=set(scanned),
+            previous_file_entries=previous,
+            updated_file_entries=updated,
+            changed_field_names={"exception_type"},
+            before_commit=clear_authoritative_overrides,
+            commit_guard=lambda _commit: None,
+        )
+
+        assert result["destination_album_id"] == album_id
+        assert result["track_rows_updated"] == 18
+        assert result["track_file_rows_updated"] == 18
+        after_tracks, after_files = _live_restore_rows(
+            connection,
+            track_ids=track_ids,
+            track_file_ids=track_file_ids,
+        )
+        assert [row[:3] for row in after_tracks] == [row[:3] for row in before_tracks]
+        assert [row[:3] for row in after_files] == [row[:3] for row in before_files]
+        assert all(
+            row[3]["scan_cache"]["file_entry"]["exception_type"] == ""
+            for row in after_files
+        )
+        assert connection.execute(
+            "select id from library.local_albums where library_id=%s order by id",
+            (library_id,),
+        ).fetchall() == [(album_id,)]
+        assert connection.execute(
+            "select id from library.local_tracks where album_id=%s order by id",
+            (album_id,),
+        ).fetchall() == [(track_id,) for track_id in track_ids]
+        assert connection.execute(
+            """select count(*) from library.exception_overrides
+               where library_id=%s and track_id=any(%s)
+                 and nullif(btrim(coalesce(
+                   override_payload ->> 'exception_type',
+                   case when jsonb_typeof(override_payload) = 'string'
+                     then override_payload #>> '{}' else '' end
+                 )), '') is not null""",
+            (library_id, track_ids),
+        ).fetchone() == (0,)
+    finally:
+        if not connection.closed:
+            connection.rollback()
+        connection.close()
+        isolatedPostgres.reset_application_tables(_ISOLATED_SETUP_DATABASE_URL)
 
 
 @pytest.mark.parametrize("selected_count", [1, 9])
@@ -1523,6 +1816,25 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
         assert connection.execute("select current_user").fetchone()[0] == urlparse(database_url).username
         proxy = _CommitSuppressingConnection(connection)
         adapter = PostgresScanCacheAdapter(config, connect=lambda _url: proxy)
+        for table in ("library.local_albums", "library.local_track_files"):
+            assert connection.execute(
+                "select has_table_privilege(current_user, %s, 'INSERT,UPDATE,DELETE')",
+                (table,),
+            ).fetchone()[0] is False
+        selected_state_sql = """
+            select to_jsonb(album), to_jsonb(track), to_jsonb(file)
+            from library.local_tracks track
+            join library.local_albums album on album.id = track.album_id
+            join library.local_track_files file on file.track_id = track.id
+            where track.id = any(%s) order by file.id
+        """
+        before_prevalidation = connection.execute(selected_state_sql, (track_ids,)).fetchall()
+        assert len(before_prevalidation) == len(track_ids) == 2
+        adapter.validate_structural_tag_edit(
+            changed_paths={selected_path}, previous_file_entries=previous,
+            updated_file_entries=updated, changed_field_names={changed_field},
+        )
+        assert connection.execute(selected_state_sql, (track_ids,)).fetchall() == before_prevalidation
         result = adapter.persist_structural_tag_edit(
             changed_paths={selected_path}, previous_file_entries=previous,
             updated_file_entries=updated, changed_field_names={changed_field},

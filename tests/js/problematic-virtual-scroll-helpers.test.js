@@ -92,6 +92,41 @@ function capturePage() {
     listening: () => Boolean(listener) };
 }
 
+test('complete summary versions survive bounded and complete refresh responses', async () => {
+  const { observeProblematicDetails } = await load();
+  const page = capturePage();
+  const capture = observeProblematicDetails(page);
+  const first = Array.from({ length: 358 }, (_, index) => ({ key: `first::${index}` }));
+  const second = Array.from({ length: 358 }, (_, index) => ({ key: `second::${index}` }));
+  const awaitingFirst = capture.summary(1);
+  page.emit('/utilities/problematic-files?limit=50', { complete: false, items: first.slice(0, 50) });
+  assert.equal(await Promise.race([
+    awaitingFirst.then(() => 'resolved', () => 'rejected'),
+    new Promise(resolve => setImmediate(() => resolve('pending'))),
+  ]), 'pending', 'A bounded response must not settle a future complete-summary request');
+  page.emit('/utilities/problematic-files', { complete: true, items: first });
+  assert.deepEqual(await awaitingFirst, first);
+  page.emit('/utilities/problematic-files?limit=50', { complete: false, items: second.slice(0, 50) });
+  assert.deepEqual(await capture.summary(1), first);
+  page.emit('/utilities/problematic-files', { complete: true, items: second });
+  assert.deepEqual(await capture.summary(1), first);
+  assert.deepEqual(await capture.summary(2), second);
+  const copy = await capture.summary(1);
+  copy[0].key = 'consumer mutation';
+  assert.deepEqual(await capture.summary(1), first);
+  await capture.dispose();
+});
+
+test('disposing capture rejects a future complete-summary request', async () => {
+  const { observeProblematicDetails } = await load();
+  const page = capturePage();
+  const capture = observeProblematicDetails(page);
+  const pendingSummary = assert.rejects(capture.summary(), /disposed/i);
+  await capture.dispose();
+  await pendingSummary;
+  assert.equal(page.listening(), false);
+});
+
 test('normal response snapshots are independent immutable copies across cached revisits', async () => {
   const { observeProblematicDetails } = await load();
   const page = capturePage();
@@ -119,8 +154,9 @@ for (const [label, url, response, ok] of [
   test(`capture rejects ${label} rather than replacing missing authority`, async () => {
     const { observeProblematicDetails } = await load();
     const page = capturePage(); const capture = observeProblematicDetails(page);
+    const pendingSummary = capture.summary();
     page.emit(url, response, ok);
-    await assert.rejects(capture.summary(), /evidence capture failed/);
+    await assert.rejects(pendingSummary, /evidence capture failed/);
     await assert.rejects(capture.dispose(), /evidence capture failed/);
     assert.equal(page.listening(), false);
   });

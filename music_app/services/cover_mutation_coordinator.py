@@ -44,20 +44,29 @@ class CoverArtifactIdentity:
     promoted_cover_revision: str | None
     prior_cover_existed: bool
     prior_cover_bytes: bytes | None
+    prior_cover_atime_ns: int | None = None
+    prior_cover_mtime_ns: int | None = None
+    local_cover_width: int | None = None
+    local_cover_height: int | None = None
 
     def __post_init__(self) -> None:
         if self.private_path is None:
             if (
                 self.post_write_exists
-                or self.sha256 is None
+                or self.sha256 is not None
                 or self.selected_cover_path is not None
-                or self.promoted_cover_revision is None
+                or self.promoted_cover_revision is not None
                 or self.prior_cover_existed
                 or self.prior_cover_bytes is not None
+                or self.prior_cover_atime_ns is not None
+                or self.prior_cover_mtime_ns is not None
+                or self.local_cover_width is not None
+                or self.local_cover_height is not None
             ):
                 raise ValueError(
-                    "linked remote artifacts require a digest and promoted revision only"
+                    "linked remote artifacts cannot carry local artifact identity"
                 )
+            return
         elif self.post_write_exists != (self.sha256 is not None):
             raise ValueError("local artifact existence and digest must agree")
         elif self.post_write_exists and (
@@ -69,10 +78,12 @@ class CoverArtifactIdentity:
         ):
             raise ValueError("deleted artifacts require prior cover bytes")
         elif not self.post_write_exists and (
-            self.selected_cover_path is not None
-            or self.promoted_cover_revision is not None
+            (self.selected_cover_path is None)
+            != (self.promoted_cover_revision is None)
         ):
-            raise ValueError("deleted artifacts cannot retain a selection")
+            raise ValueError(
+                "deleted artifacts require paired fallback selection fields"
+            )
         if self.prior_cover_existed != (self.prior_cover_bytes is not None):
             raise ValueError("prior cover bytes must match prior cover existence")
 
@@ -91,8 +102,13 @@ class CoverMutationRequest:
     lease_token: str | None
     task_id: int | None
     checkpoint_revision: int | None
+    explicit_selection: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.clear_selection, bool):
+            raise TypeError("clear_selection must be a boolean")
+        if not isinstance(self.explicit_selection, bool):
+            raise TypeError("explicit_selection must be a boolean")
         claim = (
             self.job_id,
             self.attempt,
@@ -170,6 +186,9 @@ class CoverSelectionCommit:
     lease_token: str | None
     task_id: int | None
     checkpoint_revision: int | None
+    explicit_selection: bool = False
+    local_cover_width: int | None = None
+    local_cover_height: int | None = None
 
     def __post_init__(self) -> None:
         claim = (
@@ -324,6 +343,16 @@ def execute_cover_mutation(
                 try:
                     canceled = dependencies.should_cancel()
                     if not canceled:
+                        checkpoint_revision = request.checkpoint_revision
+                        prepare_commit = getattr(dependencies, "prepare_commit", None)
+                        if callable(prepare_commit):
+                            checkpoint_revision = prepare_commit(artifact)
+                            canceled = dependencies.should_cancel()
+                    if not canceled:
+                        clear_selection = request.clear_selection or (
+                            artifact.selected_cover_path is None
+                            and request.remote_cover is None
+                        )
                         commit_request = CoverSelectionCommit(
                             identity=locked_identity,
                             track_paths=tuple(request.track_paths),
@@ -332,8 +361,10 @@ def execute_cover_mutation(
                             expected_selected_cover_revision=locked_baseline.selected_cover_revision,
                             selected_cover_path=artifact.selected_cover_path,
                             promoted_cover_revision=artifact.promoted_cover_revision,
-                            selected_origin=request.selected_origin,
-                            clear_selection=request.clear_selection,
+                            selected_origin=(
+                                None if clear_selection else request.selected_origin
+                            ),
+                            clear_selection=clear_selection,
                             remote_cover=request.remote_cover,
                             artifact_sha256=artifact.sha256,
                             observed_at=dependencies.clock(),
@@ -342,7 +373,10 @@ def execute_cover_mutation(
                             worker_id=request.worker_id,
                             lease_token=request.lease_token,
                             task_id=request.task_id,
-                            checkpoint_revision=request.checkpoint_revision,
+                            checkpoint_revision=checkpoint_revision,
+                            explicit_selection=(False if clear_selection else request.explicit_selection),
+                            local_cover_width=artifact.local_cover_width,
+                            local_cover_height=artifact.local_cover_height,
                         )
                 except Exception:
                     failure = compensate(locked_baseline, locked_identity, artifact)
@@ -388,7 +422,15 @@ def execute_cover_mutation(
                 if outcome.status is CoverMutationStatus.AMBIGUOUS:
                     return outcome
                 if outcome.status is CoverMutationStatus.COMMITTED:
-                    assert outcome.cover_mutation_revision is not None
+                    assert (
+                        outcome.cover_mutation_revision is not None
+                        or outcome.finalization_checkpoint_revision is not None
+                    )
+                    publish_committed = getattr(
+                        dependencies, "publish_committed", None
+                    )
+                    if callable(publish_committed):
+                        publish_committed(outcome, artifact)
                     return outcome
                 raise AssertionError(
                     f"unknown cover mutation outcome status: {outcome.status!r}"
@@ -408,6 +450,7 @@ def compensate_if_still_owned(
     library_id: int,
     track_paths: Collection[str],
     artifact: CoverArtifactIdentity,
+    restore_artifact: Callable[[CoverArtifactIdentity], None] | None = None,
 ) -> None:
     try:
         current_identity = repository.resolve_identity(
@@ -478,9 +521,16 @@ def compensate_if_still_owned(
                 "deleted cover path was recreated before compensation"
             )
     try:
-        if artifact.prior_cover_existed:
+        if restore_artifact is not None:
+            restore_artifact(artifact)
+        elif artifact.prior_cover_existed:
             assert artifact.prior_cover_bytes is not None
-            _atomic_replace_file_bytes(artifact.private_path, artifact.prior_cover_bytes)
+            _atomic_replace_file_bytes(
+                artifact.private_path,
+                artifact.prior_cover_bytes,
+                atime_ns=artifact.prior_cover_atime_ns,
+                mtime_ns=artifact.prior_cover_mtime_ns,
+            )
         else:
             artifact.private_path.unlink(missing_ok=True)
     except CommitOutcomeUnknown:

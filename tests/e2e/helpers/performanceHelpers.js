@@ -181,6 +181,7 @@ function isChromiumBrowser(page) {
 export async function sampleIdleMemory(page, options = {}) {
   const sampleCount = Number(options.sampleCount || 1);
   const delayMs = Number(options.delayMs || 0);
+  const shouldCollectGarbage = options.collectGarbage !== false;
   const cdpSession = isChromiumBrowser(page)
     ? await page.context().newCDPSession(page)
     : null;
@@ -190,7 +191,7 @@ export async function sampleIdleMemory(page, options = {}) {
     if (index > 0 && delayMs > 0) {
       await page.waitForTimeout(delayMs);
     }
-    await collectGarbage(cdpSession);
+    if (shouldCollectGarbage) await collectGarbage(cdpSession);
     const measureMemory = await readMeasureMemory(page);
     const sample = measureMemory && measureMemory.bytes > 0
       ? measureMemory
@@ -206,8 +207,8 @@ export async function sampleIdleMemory(page, options = {}) {
   return samples;
 }
 
-export async function sampleMemoryPoint(page) {
-  const [sample] = await sampleIdleMemory(page, { sampleCount: 1 });
+export async function sampleMemoryPoint(page, options = {}) {
+  const [sample] = await sampleIdleMemory(page, { ...options, sampleCount: 1 });
   return sample || {
     index: 0,
     source: 'unavailable',

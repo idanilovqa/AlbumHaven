@@ -49,6 +49,24 @@ def test_resolve_requested_artist_keeps_collaboration_alias_selection():
     ) == "Neal Morse & The Resonance"
 
 
+def test_artist_alias_matching_rejects_unrelated_phrases_for_initialed_names():
+    assert not artist_alias_matches_query(
+        "U.D.O.",
+        [],
+        split_search_terms("Featured Signal Collection"),
+    )
+    assert not artist_alias_matches_query(
+        "U.D.O.",
+        [],
+        split_search_terms("X"),
+    )
+    assert artist_alias_matches_query(
+        "Uriah Heep",
+        ["U.D.O."],
+        split_search_terms("U.D.O."),
+    )
+
+
 def test_artist_search_buckets_prefers_direct_artist_and_track_matches():
     direct_album = SimpleNamespace(
         key="neal-1",

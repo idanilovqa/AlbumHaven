@@ -5769,6 +5769,7 @@ def main() -> None:
     ).strip()
     fixture_profile_mode = classify_fixture_profile_mode(fixture_profile)
     is_preloaded_fixture = fixture_profile_mode == "preloaded-release"
+    requires_watcher_recovery_fixture = fixture_profile != "utility-problematic-files"
     temp_root = (
         Path(configured_temp_root).expanduser().resolve(strict=False)
         if configured_temp_root
@@ -5854,7 +5855,7 @@ def main() -> None:
         watcher_recovery_manifest_path = (
             temp_root / "app-data" / "watcher-recovery-fixture.json"
         )
-        if not reuse_state:
+        if requires_watcher_recovery_fixture and not reuse_state:
             watcher_recovery_roots = persist_watcher_recovery_roots(
                 setup_database_url,
                 media_root=library_root,
@@ -5894,7 +5895,7 @@ def main() -> None:
                 ),
                 encoding="utf-8",
             )
-        elif not watcher_recovery_manifest_path.is_file():
+        elif requires_watcher_recovery_fixture and not watcher_recovery_manifest_path.is_file():
             raise RuntimeError("Watcher recovery fixture manifest missing during restart.")
 
         if args.prepare_only:

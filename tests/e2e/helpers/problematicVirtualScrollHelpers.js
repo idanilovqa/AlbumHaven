@@ -90,7 +90,15 @@ export function observeProblematicDetails(page) {
   const details = new Map();
   const pending = new Set();
   const errors = [];
-  let summary = null;
+  const summaries = [];
+  let disposed = false;
+  let resolveChange;
+  let change = new Promise(resolve => { resolveChange = resolve; });
+  const signalChange = () => {
+    const resolve = resolveChange;
+    change = new Promise(nextResolve => { resolveChange = nextResolve; });
+    resolve();
+  };
   const remember = (key, payload) => {
     assert.ok(key && payload && payload.key === key, 'Observed detail must match the independently requested key');
     details.set(key, JSON.stringify(payload));
@@ -105,12 +113,15 @@ export function observeProblematicDetails(page) {
         remember(url.searchParams.get('album_key'), payload);
       } else {
         assert.ok(Array.isArray(payload.items), 'Normal summary must expose its complete items');
-        summary = JSON.stringify(payload.items);
+        if (payload.complete !== false) summaries.push(JSON.stringify(payload.items));
         assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
           'Any initial detail must belong to captured summary');
         if (payload.initial_detail) remember(payload.initial_detail.key, payload.initial_detail);
       }
-    })().catch(error => errors.push(error)).finally(() => pending.delete(task));
+    })().catch(error => errors.push(error)).finally(() => {
+      pending.delete(task);
+      signalChange();
+    });
     pending.add(task);
   };
   page.on('response', responseListener);
@@ -119,9 +130,23 @@ export function observeProblematicDetails(page) {
     if (errors.length) throw new AggregateError(errors, 'Problematic evidence capture failed');
   };
   return {
-    async summary() { await settle(); assert.ok(summary, 'Capture must be installed before the normal summary request'); return JSON.parse(summary); },
+    async summary(version = 1) {
+      assert.ok(Number.isInteger(version) && version > 0, 'Complete summary version must be a positive integer');
+      while (true) {
+        const observedChange = change;
+        await settle();
+        if (summaries[version - 1]) return JSON.parse(summaries[version - 1]);
+        assert.equal(disposed, false, `Problematic evidence capture disposed before complete summary version ${version}`);
+        await observedChange;
+      }
+    },
     async detail(key) { await settle(); return details.has(key) ? JSON.parse(details.get(key)) : null; },
-    async dispose() { page.off('response', responseListener); await settle(); },
+    async dispose() {
+      disposed = true;
+      page.off('response', responseListener);
+      signalChange();
+      await settle();
+    },
   };
 }
 

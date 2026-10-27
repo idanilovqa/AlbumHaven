@@ -3519,7 +3519,7 @@ function renderLibraryWarning(data = {}, options = {}) {
   const loader = document.getElementById('library-loader');
   const scanPageVisible = options.scanPageVisible
     ?? Boolean(loader?.classList?.contains('is-scan-page'));
-  const hidden = !model.warning || !scanPageVisible;
+  const hidden = !model.warning || !model.dismissed || !scanPageVisible;
   if (scanNotice.hidden !== hidden) scanNotice.hidden = hidden;
   if (libraryHealth && libraryHealth.hidden !== hidden) libraryHealth.hidden = hidden;
   loader?.classList?.toggle?.('has-library-health', !hidden);
@@ -4339,7 +4339,7 @@ function buildUtilityAlbumArtbox(album, {
     coverHtml: preview ? `<img class="utility-detail-cover-image" ${previewSourceAttributes} alt="${escapeHtml(label)}" loading="${interactive ? 'eager' : 'lazy'}" decoding="async" data-cover-path="${escapeHtml(album?.cover_path || '')}" data-remote-cover-url="${escapeHtml(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '')}" onerror="handleUtilityAlbumArtboxError(this)">` : '',
   });
   return interactive && preview
-    ? `<button type="button" class="utility-artbox-trigger" data-open-lightbox="1" data-cover-src="${escapeHtml(fullSource)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}">${artbox}</button>`
+    ? `<button type="button" class="utility-artbox-trigger" data-open-lightbox="1"${album?.key ? ` data-album-key="${escapeHtml(album.key)}"` : ''} data-cover-src="${escapeHtml(fullSource)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}">${artbox}</button>`
     : artbox;
 }
 
@@ -13196,6 +13196,7 @@ function getTrackModalLightboxSourceAlbumKey(button) {
 }
 
 let imageLightboxReturnFocus = null;
+let imageLightboxReturnIdentity = null;
 let imageLightboxHistoryOpen = false;
 let imageLightboxHistoryClosing = false;
 
@@ -13236,7 +13237,13 @@ function bindLightboxSwipe(overlay) {
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
-  if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
+  if (els.overlay.hidden) {
+    imageLightboxReturnFocus = document.activeElement;
+    const albumKey = imageLightboxReturnFocus?.getAttribute?.('data-album-key');
+    const container = imageLightboxReturnFocus?.parentElement?.closest?.('[id]');
+    imageLightboxReturnIdentity = albumKey && container?.id
+      ? { albumKey, containerId: container.id } : null;
+  }
   if (els.overlay.hidden && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
       && typeof window !== 'undefined' && window.history?.pushState) {
     window.history.pushState({ ...window.history.state, imageLightbox: true }, '');
@@ -13322,9 +13329,25 @@ function closeImageLightbox() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
-  const returnFocus = imageLightboxReturnFocus;
+  let returnFocus = imageLightboxReturnFocus;
+  const identity = imageLightboxReturnIdentity;
   imageLightboxReturnFocus = null;
-  if (returnFocus?.isConnected) returnFocus.focus?.();
+  imageLightboxReturnIdentity = null;
+  const foreground = getTopmostOpenModal();
+  const canFocus = element => element?.isConnected && !element.disabled
+    && !element.closest?.('[hidden], [inert]') && element.getClientRects?.().length > 0
+    && !['hidden', 'collapse'].includes(getComputedStyle(element).visibility)
+    && (!foreground || foreground.contains?.(element));
+  if (!canFocus(returnFocus)
+      || identity && returnFocus.getAttribute?.('data-album-key') !== identity.albumKey) {
+    const container = identity && document.getElementById(identity.containerId);
+    returnFocus = Array.from(container?.querySelectorAll?.('[data-open-lightbox="1"][data-album-key]') || [])
+      .find(element => element.getAttribute('data-album-key') === identity.albumKey && canFocus(element));
+  }
+  if (!returnFocus) {
+    returnFocus = foreground?.querySelector?.('#utility-modal-close, #track-modal-close');
+  }
+  if (canFocus(returnFocus)) returnFocus.focus?.();
 }
 
 function closeTrackModal() {
@@ -23695,10 +23718,13 @@ function mountAlertsAppearanceEditor(detail) {
 
     const render = (nextItems, nextSelectedKey) => {
       const previousSelectedKey = selectedKey;
+      if (frame) renderNow();
+      const selectedWasMounted = mountedRows.has(String(nextSelectedKey || ''));
       items = Array.isArray(nextItems) ? nextItems : [];
       selectedKey = String(nextSelectedKey || '');
       renderNow();
-      if (selectedKey !== previousSelectedKey) {
+      if (selectedKey !== previousSelectedKey
+        || (selectedKey && selectedWasMounted && !mountedRows.has(selectedKey))) {
         reveal(selectedKey);
         renderNow();
       }

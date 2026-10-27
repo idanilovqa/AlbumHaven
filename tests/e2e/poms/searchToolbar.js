@@ -787,7 +787,16 @@ export class SearchToolbar extends BasePage {
       }
       const initiallyBusy = initialObservation.activeRequestCount > 0
         || initialObservation.pendingPayloadReadCount > 0;
- let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
+      if (initiallyBusy) {
+        lastObservedState = {
+          activeRequestCount: Math.max(1, initialObservation.activeRequestCount),
+          latestFullRequestUrl: initialObservation.latestFullRequestUrl,
+          pendingPayloadReadCount: initialObservation.pendingPayloadReadCount,
+        };
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
+      let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
         && !initialObservation.latestFullPayload && !initiallyBusy
         ? await this.readProductionBootstrapPayload()
         : null;
@@ -795,6 +804,23 @@ export class SearchToolbar extends BasePage {
         bootstrapPayload.startup_payload?.first_paint_view || bootstrapPayload.initial_view,
         initialObservation.stateRevision,
       )) bootstrapPayload = null;
+      const postBootstrapObservation = this.productionViewObserver.read();
+      if (postBootstrapObservation.latestFullPayloadError || postBootstrapObservation.latestGalleryPageError) {
+        throw new Error(`Production view observation failed: ${postBootstrapObservation.latestFullPayloadError || postBootstrapObservation.latestGalleryPageError}`);
+      }
+      if (
+        postBootstrapObservation.activeRequestCount > 0
+        || postBootstrapObservation.pendingPayloadReadCount > 0
+        || postBootstrapObservation.stateRevision !== initialObservation.stateRevision
+      ) {
+        lastObservedState = {
+          activeRequestCount: Math.max(1, postBootstrapObservation.activeRequestCount),
+          latestFullRequestUrl: postBootstrapObservation.latestFullRequestUrl,
+          pendingPayloadReadCount: postBootstrapObservation.pendingPayloadReadCount,
+        };
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
       const payload = initialObservation.latestFullPayload
         || bootstrapPayload?.startup_payload?.first_paint_view
         || bootstrapPayload?.initial_view
@@ -918,6 +944,7 @@ export class SearchToolbar extends BasePage {
         && lastObservedState.inputQuery === expected
         && lastObservedState.locationQuery === expected
         && !lastObservedState.activeLoader
+        && !lastObservedState.runtimeBusy
         && !lastObservedState.startupHydrating
       ) {
         return;

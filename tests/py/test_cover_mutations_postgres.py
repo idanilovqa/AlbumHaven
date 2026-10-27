@@ -290,6 +290,39 @@ def test_load_baseline_rejects_invalid_authority_revisions(field, value) -> None
         )
 
 
+def test_assert_baseline_binds_identity_paths_and_revisions_without_rewriting() -> None:
+    connection = _Connection(None)
+    repository, _ = _repository(connection)
+    request = _commit_request()
+
+    outcome = repository.assert_baseline(request=request)
+
+    assert outcome.status is CoverMutationStatus.COMMITTED
+    assert outcome.cover_mutation_revision == 11
+    assert outcome.selected_cover_revision == "cover-11"
+    sql, parameters = _call(connection, "library.assert_cover_mutation_baseline")
+    assert parameters == {
+        "library_id": 7,
+        "album_id": 91,
+        "track_paths": list(request.track_paths),
+        "expected_inventory_revision": 20,
+        "expected_cover_mutation_revision": 11,
+    }
+    for argument in parameters:
+        assert f"%({argument})s" in sql
+
+
+def test_assert_baseline_maps_serialization_failure_to_definite_conflict() -> None:
+    repository, _ = _repository(
+        _Connection(execute_error=errors.SerializationFailure("stale baseline"))
+    )
+
+    with pytest.raises(CoverMutationConflict) as exc_info:
+        repository.assert_baseline(request=_commit_request())
+
+    assert exc_info.value.reason_code == "identity_conflict"
+
+
 def test_commit_selection_binds_every_field_and_maps_durable_commit() -> None:
     connection = _Connection(
         {
@@ -325,6 +358,9 @@ def test_commit_selection_binds_every_field_and_maps_durable_commit() -> None:
         "selected_cover_path": "covers/album.jpg",
         "promoted_cover_revision": "cover-12",
         "selected_origin": "user",
+        "explicit_selection": False,
+        "local_cover_width": None,
+        "local_cover_height": None,
         "clear_selection": False,
         "remote_cover": None,
         "artifact_sha256": SHA256,
@@ -338,6 +374,132 @@ def test_commit_selection_binds_every_field_and_maps_durable_commit() -> None:
     }
     for argument in parameters:
         assert f"%({argument})s" in sql
+
+
+def test_commit_selection_binds_explicit_manual_cover_dimensions() -> None:
+    connection = _Connection(
+        {
+            "committed": True,
+            "cover_mutation_revision": 12,
+            "reason_code": "committed",
+            "finalization_checkpoint_id": 501,
+            "finalization_checkpoint_revision": 44,
+        }
+    )
+    repository, _ = _repository(connection)
+
+    repository.commit_selection(
+        request=_commit_request(
+            explicit_selection=True,
+            local_cover_width=1200,
+            local_cover_height=800,
+        )
+    )
+
+    _, parameters = _call(connection, "library.commit_cover_selection")
+    assert parameters["explicit_selection"] is True
+    assert parameters["local_cover_width"] == 1200
+    assert parameters["local_cover_height"] == 800
+
+
+def test_commit_selection_accepts_request_owned_link_without_local_revision() -> None:
+    connection = _Connection(
+        {
+            "committed": True,
+            "cover_mutation_revision": 12,
+            "reason_code": "committed",
+            "finalization_checkpoint_id": None,
+            "finalization_checkpoint_revision": None,
+        }
+    )
+    repository, _ = _repository(connection)
+
+    outcome = repository.commit_selection(
+        request=_commit_request(
+            selected_cover_path=None,
+            promoted_cover_revision=None,
+            remote_cover={"remote_cover_url": "https://images.invalid/cover.jpg"},
+            artifact_sha256=None,
+            job_id=None,
+            attempt=None,
+            worker_id=None,
+            lease_token=None,
+            task_id=None,
+            checkpoint_revision=None,
+            explicit_selection=True,
+            local_cover_width=None,
+            local_cover_height=None,
+        )
+    )
+
+    assert outcome.status is CoverMutationStatus.COMMITTED
+    _, parameters = _call(connection, "library.commit_cover_selection")
+    assert parameters["promoted_cover_revision"] is None
+    assert parameters["selected_cover_path"] is None
+    assert parameters["explicit_selection"] is True
+
+
+@pytest.mark.parametrize(
+    "changes,message",
+    [
+        (
+            {"explicit_selection": "yes"},
+            "explicit_selection must be a boolean",
+        ),
+        (
+            {"selected_origin": "automatic", "explicit_selection": True},
+            "explicit selection requires user origin",
+        ),
+        (
+            {"local_cover_width": 1200, "local_cover_height": None},
+            "local cover dimensions must be paired positive integers",
+        ),
+        (
+            {"local_cover_width": 0, "local_cover_height": 800},
+            "local cover dimensions must be paired positive integers",
+        ),
+        (
+            {"local_cover_width": True, "local_cover_height": 800},
+            "local cover dimensions must be paired positive integers",
+        ),
+        (
+            {"local_cover_width": 800, "local_cover_height": -1},
+            "local cover dimensions must be paired positive integers",
+        ),
+        (
+            {
+                "local_cover_width": 800,
+                "local_cover_height": 800,
+                "remote_cover": {"remote_cover_url": "https://images.invalid/cover.jpg"},
+                "selected_cover_path": None,
+            },
+            "local cover dimensions require a local replacement",
+        ),
+        (
+            {"local_cover_width": 800, "local_cover_height": 800, "clear_selection": True},
+            "local cover dimensions require a local replacement",
+        ),
+        (
+            {
+                "promoted_cover_revision": None,
+                "selected_cover_path": None,
+                "remote_cover": {"remote_cover_url": "https://images.invalid/cover.jpg"},
+            },
+            "local or claimed replacement requires revision",
+        ),
+    ],
+)
+def test_commit_selection_validates_manual_metadata_before_connecting(
+    changes,
+    message,
+) -> None:
+    connector = _Connector(error=AssertionError("must not connect"))
+    repository, _ = _repository(connector=connector)
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        repository.commit_selection(request=_commit_request(**changes))
+
+    assert connector.calls == []
 
 
 def test_commit_selection_maps_non_durable_no_change_without_checkpoint() -> None:

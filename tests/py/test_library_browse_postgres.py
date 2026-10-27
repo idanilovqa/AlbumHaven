@@ -17815,9 +17815,68 @@ def test_live_watcher_repairs_search_without_rebuilding_scan_relations(
     from tests.e2e.support import isolatedPostgres
 
     fixture = watcher_repair_inventory
-    fixture.seed(fixture.entry('Owner/Album/01.flac'))
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+    from tests.py.test_isolated_postgres_live import _durable_job_database_urls_or_skip
+    from tests.py.test_watcher_recovery_postgres_live import _claim_enqueued_full_scan
+
+    setup_url, app_url, worker_url, _readonly_url = _durable_job_database_urls_or_skip(monkeypatch)
+    assert (setup_url, app_url) == (fixture.setup_url, fixture.runtime_url)
+    for key, value in {
+        'ALBUM_HAVEN_BOOTSTRAP_USERNAME': isolatedPostgres.PERFORMANCE_AUTH_USERNAME,
+        'ALBUM_HAVEN_BOOTSTRAP_EMAIL': isolatedPostgres.PERFORMANCE_AUTH_EMAIL,
+        'ALBUM_HAVEN_PUBLIC_BASE_URL': 'https://127.0.0.1:4173',
+        'ALBUM_HAVEN_AUTH_HMAC_SECRET': isolatedPostgres.PERFORMANCE_AUTH_HMAC_SECRET,
+        'ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION': '1',
+        'ALBUM_HAVEN_WELCOME_EMAIL_ENABLED': 'false',
+        'ALBUM_HAVEN_PASSWORD_RESET_EMAIL_ENABLED': 'false',
+    }.items():
+        monkeypatch.setenv(key, value)
+    isolatedPostgres.provision_performance_auth_owner(app_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        owner = connection.execute(
+            "select id, owner_account_id from library.libraries "
+            "where library_kind = 'local' and name = 'Local Library'"
+        ).fetchone()
+    now = datetime.now(timezone.utc)
+    accepted = PostgresScanJobRepository(
+        database_url=app_url, connect_to_database=isolatedPostgres._connect,
+    ).enqueue_full_scan(
+        library_id=owner['id'], account_id=owner['owner_account_id'],
+        capability_key='library.refresh', request_origin_ref='watcher-search:seed',
+        deployment_mode='self_hosted_private_web', client_surface='private_web',
+        root_ids=tuple(root['id'] for root in fixture.roots),
+        mode='manual_full_rescan', force=True, scheduled_at=now - timedelta(seconds=1),
+    )
+    scans, claim, intent, claimed_scope = _claim_enqueued_full_scan(
+        SimpleNamespace(worker_url=worker_url), now=now, request_ref='watcher-search:seed',
+    )
+    entry = fixture.entry('Families/Progressive/Owner/Album/01.flac')
+    related = fixture.entry('Families/Progressive/Related/Other/01.flac', artist='Related', album='Other')
+    related['album_artist'] = 'Related'
+    publication = scans.publish_claimed_full_scan(
+        claim=claim, intent_id=accepted.intent_id,
+        expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+        inventory=fixture.adapter.prepare_full_scan_inventory({
+            entry['path']: entry, related['path']: related,
+        }),
+        observed_root_ids=[root['id'] for root in claimed_scope.roots], now=now,
+    )
+    assert publication['publication_won'] is True, publication
+    original = fixture.adapter.refresh_relation_projection()
+
+    def protected_rows(connection):
+        return {
+            table: connection.execute(
+                f"select to_jsonb(row) as value from library.{table} row order by to_jsonb(row)::text"
+            ).fetchall()
+            for table in (
+                'local_albums', 'local_tracks', 'local_track_files',
+                'local_artist_family_links', 'libraries',
+            )
+        }
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        original = persistence._commit_structural_relation_projection(connection, fixture.config)
         if search_state == 'missing':
             connection.execute("delete from library.local_artist_search_projection")
         else:
@@ -17833,14 +17892,16 @@ def test_live_watcher_repairs_search_without_rebuilding_scan_relations(
         before = projections._relation_projection_scan_cache_from_row(
             connection.execute(projections._load_relation_projection_sql()).fetchone())
         assert projections.artist_search_projection_stale_reason(before)
+        protected_before = protected_rows(connection)
+        assert protected_before['local_artist_family_links']
 
     def unexpected(*args, **kwargs):
         pytest.fail('search repair must preserve stored family relations')
     monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', unexpected)
     monkeypatch.setattr(persistence, 'replace_artist_family_projection_in_transaction', unexpected)
+    repaired = fixture.adapter.refresh_relation_projection()
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        repaired = persistence._commit_structural_relation_projection(
-            connection, fixture.config, reason='targeted_reconciliation')
+        assert protected_rows(connection) == protected_before
         after = projections._relation_projection_scan_cache_from_row(
             connection.execute(projections._load_relation_projection_sql()).fetchone())
         assert repaired == original

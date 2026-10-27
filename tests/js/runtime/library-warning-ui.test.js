@@ -31,7 +31,7 @@ function renderScanWarning(problem, {
     repair_required: repairRequired, problems,
   } });
   const notice = elements.get('library-scan-warning');
-  assert.equal(notice.hidden, !scanPageVisible);
+  assert.equal(notice.hidden, !scanPageVisible || !dismissed);
   return notice.innerHTML;
 }
 
@@ -129,6 +129,15 @@ test('Library warning requires acknowledgement of the current warning token', ()
   assert.equal(context.libraryWarningPresentation({ ...health, dismissed: true }, '').dismissed, true);
   assert.equal(context.libraryWarningPresentation({ ...health, warning_token: 'second' }, 'first').dismissed, false);
   assert.equal(context.libraryWarningPresentation({ state: 'healthy' }, 'first').warning, false);
+});
+
+test('Library Status withholds an unacknowledged watcher incident', () => {
+  const html = renderScanWarning({
+    state: 'overflow',
+    allowed_actions: { 'library.refresh': true },
+  }, { dismissed: false, scanPageVisible: true });
+
+  assert.equal(html, '');
 });
 
 test('Library Status keeps an acknowledged unresolved incident visible', () => {

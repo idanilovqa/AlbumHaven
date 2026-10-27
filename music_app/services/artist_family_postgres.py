@@ -143,6 +143,31 @@ def load_selected_artist_family_projection(
     }
 
 
+def artist_family_projection_matches_in_transaction(
+    connection: Any,
+    relation_views: Mapping[str, object],
+    *,
+    relations_last_built: float | None = None,
+) -> bool:
+    """Compare every runtime-owned edge without interpreting manual links."""
+    expected = [
+        {**row, "relationship_weight": 1, "source_ref": "relation_views.folder_related"}
+        for row in _projection_rows(
+            relation_views, relations_last_built=relations_last_built
+        )
+    ]
+    expected.sort(key=lambda row: (row["artist_key"], row["family_artist_key"]))
+    actual = [
+        _row_mapping(row)
+        for row in connection.execute(
+            _load_owned_artist_family_projection_sql(),
+            {"relationship_source": _RELATIONSHIP_SOURCE},
+        ).fetchall()
+    ]
+    actual.sort(key=lambda row: (row["artist_key"], row["family_artist_key"]))
+    return actual == expected
+
+
 def replace_artist_family_projection_in_transaction(
     connection: Any,
     relation_views: Mapping[str, object],
@@ -347,6 +372,40 @@ def _projection_rows(
                 }
             )
     return rows
+
+
+def _load_owned_artist_family_projection_sql() -> str:
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )
+        select coalesce(selected_artist.artist_key, '') as artist_key,
+               coalesce(family_artist.artist_key, '') as family_artist_key,
+               link.relationship_weight,
+               link.source_ref,
+               jsonb_build_object(
+                 'source', link.metadata -> 'source',
+                 'selected_artist', link.metadata -> 'selected_artist',
+                 'family_artist', link.metadata -> 'family_artist',
+                 'relations_last_built', link.metadata -> 'relations_last_built'
+               ) as metadata
+        from library.local_artist_family_links as link
+        join bootstrap_context on bootstrap_context.library_id = link.library_id
+        left join library.local_artists as selected_artist
+          on selected_artist.id = link.artist_id
+         and selected_artist.library_id = link.library_id
+        left join library.local_artists as family_artist
+          on family_artist.id = link.related_artist_id
+         and family_artist.library_id = link.library_id
+        where link.source_family = %(relationship_source)s;
+    """
 
 
 def _replace_artist_family_projection_sql() -> str:

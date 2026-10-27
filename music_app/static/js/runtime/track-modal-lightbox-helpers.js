@@ -779,6 +779,7 @@ function getTrackModalLightboxSourceAlbumKey(button) {
 }
 
 let imageLightboxReturnFocus = null;
+let imageLightboxReturnIdentity = null;
 let imageLightboxHistoryOpen = false;
 let imageLightboxHistoryClosing = false;
 
@@ -819,7 +820,13 @@ function bindLightboxSwipe(overlay) {
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
-  if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
+  if (els.overlay.hidden) {
+    imageLightboxReturnFocus = document.activeElement;
+    const albumKey = imageLightboxReturnFocus?.getAttribute?.('data-album-key');
+    const container = imageLightboxReturnFocus?.parentElement?.closest?.('[id]');
+    imageLightboxReturnIdentity = albumKey && container?.id
+      ? { albumKey, containerId: container.id } : null;
+  }
   if (els.overlay.hidden && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
       && typeof window !== 'undefined' && window.history?.pushState) {
     window.history.pushState({ ...window.history.state, imageLightbox: true }, '');
@@ -905,9 +912,25 @@ function closeImageLightbox() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
-  const returnFocus = imageLightboxReturnFocus;
+  let returnFocus = imageLightboxReturnFocus;
+  const identity = imageLightboxReturnIdentity;
   imageLightboxReturnFocus = null;
-  if (returnFocus?.isConnected) returnFocus.focus?.();
+  imageLightboxReturnIdentity = null;
+  const foreground = getTopmostOpenModal();
+  const canFocus = element => element?.isConnected && !element.disabled
+    && !element.closest?.('[hidden], [inert]') && element.getClientRects?.().length > 0
+    && !['hidden', 'collapse'].includes(getComputedStyle(element).visibility)
+    && (!foreground || foreground.contains?.(element));
+  if (!canFocus(returnFocus)
+      || identity && returnFocus.getAttribute?.('data-album-key') !== identity.albumKey) {
+    const container = identity && document.getElementById(identity.containerId);
+    returnFocus = Array.from(container?.querySelectorAll?.('[data-open-lightbox="1"][data-album-key]') || [])
+      .find(element => element.getAttribute('data-album-key') === identity.albumKey && canFocus(element));
+  }
+  if (!returnFocus) {
+    returnFocus = foreground?.querySelector?.('#utility-modal-close, #track-modal-close');
+  }
+  if (canFocus(returnFocus)) returnFocus.focus?.();
 }
 
 function closeTrackModal() {

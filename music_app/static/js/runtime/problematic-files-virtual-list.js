@@ -143,10 +143,13 @@
 
     const render = (nextItems, nextSelectedKey) => {
       const previousSelectedKey = selectedKey;
+      if (frame) renderNow();
+      const selectedWasMounted = mountedRows.has(String(nextSelectedKey || ''));
       items = Array.isArray(nextItems) ? nextItems : [];
       selectedKey = String(nextSelectedKey || '');
       renderNow();
-      if (selectedKey !== previousSelectedKey) {
+      if (selectedKey !== previousSelectedKey
+        || (selectedKey && selectedWasMounted && !mountedRows.has(selectedKey))) {
         reveal(selectedKey);
         renderNow();
       }

@@ -515,6 +515,60 @@ test('artist-family benchmark explicitly submits the empty query before awaiting
   assert.match(clearStep, /waitForUrlWithoutQueryParameter\('q', \{ timeout: 10000 \}\)/);
 });
 
+test('timing checkpoints sample memory without forcing garbage collection before the next action', async () => {
+  const fixture = readRepoFile('tests/e2e/support/performanceFixtures.js');
+  assert.match(
+    fixture,
+    /recordTimingCheckpoint[\s\S]*?sampleMemoryPoint\(page,\s*\{\s*collectGarbage:\s*false\s*\}\)/,
+  );
+
+  const helperUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/performanceHelpers.js'),
+  ).href;
+  const { sampleIdleMemory, sampleMemoryPoint, samplePeakMemory } = await import(helperUrl);
+  const createPage = () => {
+    const commands = [];
+    const cdpSession = {
+      async send(command) {
+        commands.push(command);
+        if (command === 'Performance.getMetrics') {
+          return { metrics: [{ name: 'JSHeapUsedSize', value: 1024 }] };
+        }
+        return {};
+      },
+    };
+    return {
+      commands,
+      page: {
+        context: () => ({
+          browser: () => ({ browserType: () => ({ name: () => 'chromium' }) }),
+          newCDPSession: async () => cdpSession,
+        }),
+        evaluate: async () => null,
+        waitForTimeout: async () => {},
+      },
+    };
+  };
+  const garbageCollections = ({ commands }) => commands
+    .filter((command) => command === 'HeapProfiler.collectGarbage').length;
+
+  const checkpoint = createPage();
+  await sampleMemoryPoint(checkpoint.page, { collectGarbage: false });
+  assert.equal(garbageCollections(checkpoint), 0);
+
+  const point = createPage();
+  await sampleMemoryPoint(point.page);
+  assert.equal(garbageCollections(point), 1);
+
+  const idle = createPage();
+  await sampleIdleMemory(idle.page, { sampleCount: 2 });
+  assert.equal(garbageCollections(idle), 2);
+
+  const peak = createPage();
+  await samplePeakMemory(peak.page, { sampleCount: 3 });
+  assert.equal(garbageCollections(peak), 3);
+});
+
 test('artist-family click-to-response timings exclude tree and gallery preparation work', () => {
   const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
 

@@ -209,7 +209,6 @@ function Prepare-PerformanceFixture {
 
     if ($FixtureMode -in @('preloaded-release', 'preloaded-derived')) {
         Restore-PerformanceDatabase
-        $env:ALBUM_HAVEN_E2E_REUSE_STATE = '1'
         return
     }
 
@@ -228,6 +227,7 @@ function Prepare-PerformanceFixture {
 }
 
 function Restore-PerformanceDatabase {
+    $env:ALBUM_HAVEN_E2E_REUSE_STATE = $null
     $loader = Join-Path $RepositoryRoot 'scripts\ci\load-fixture-profile.py'
     & $PythonPath $loader `
         --fixture-root $env:ALBUM_HAVEN_FIXTURE_ROOT `
@@ -235,6 +235,12 @@ function Restore-PerformanceDatabase {
         --database-url $env:DATABASE_MIGRATOR_URL `
         --replace-existing
     if ($LASTEXITCODE -ne 0) { throw "Fixture restoration failed for $FixtureProfile." }
+    if ($FixtureMode -in @('preloaded-release', 'preloaded-derived')) {
+        $isolatedApp = Join-Path $RepositoryRoot 'tests\e2e\support\isolatedLibraryApp.py'
+        & $PythonPath $isolatedApp --prepare-only --port $BasePort --provider-port ($BasePort + 2)
+        if ($LASTEXITCODE -ne 0) { throw "Runtime fixture preparation failed for $FixtureProfile." }
+    }
+    $env:ALBUM_HAVEN_E2E_REUSE_STATE = '1'
 }
 
 Set-Location $RepositoryRoot
@@ -264,7 +270,7 @@ try {
         ExpectedMajorVersion = $ExpectedPostgresMajor
         Port = $PostgresPort
         Pgbin = $Pgbin
-        HostName = '127.0.0.1'
+        HostName = 'localhost'
         DatabaseSuffix = $DatabaseSuffixBase
         RepositoryRoot = $RepositoryRoot
         RunnerTemp = $RunnerTemp
@@ -347,6 +353,7 @@ try {
     }
 } catch {
     $setupFailure = $_
+    Write-Error -ErrorRecord $setupFailure -ErrorAction Continue
     foreach ($target in $targetNames) {
         if (-not $failedTargets.Contains($target)) {
             [void]$failedTargets.Add($target)
@@ -363,7 +370,7 @@ try {
                 -ExpectedMajorVersion $ExpectedPostgresMajor `
                 -Port $PostgresPort `
                 -Pgbin $Pgbin `
-                -HostName 127.0.0.1 `
+                -HostName localhost `
                 -DatabaseSuffix $DatabaseSuffixBase `
                 -RepositoryRoot $RepositoryRoot `
                 -RunnerTemp $RunnerTemp `

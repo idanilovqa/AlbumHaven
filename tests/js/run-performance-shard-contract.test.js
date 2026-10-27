@@ -8,6 +8,26 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(repoRoot, 'scripts', 'ci', 'run-performance-shard.ps1');
 const targetRunnerPath = path.join(repoRoot, 'scripts', 'run-performance-playwright.cjs');
 
+test('performance shard uses the pgpass-compatible localhost identity', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(source, /HostName\s*=\s*['"]localhost['"]/);
+  assert.doesNotMatch(source, /HostName\s*=\s*['"]127\.0\.0\.1['"]/);
+});
+
+test('performance shard reports the original setup error before teardown', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const setupCatch = source.match(
+    /} catch \{\r?\n\s*\$setupFailure = \$_[\s\S]*?\r?\n} finally \{/,
+  );
+
+  assert.ok(setupCatch);
+  assert.match(
+    setupCatch[0],
+    /\$setupFailure\s*=\s*\$_\s*\r?\n\s*Write-Error\s+-ErrorRecord\s+\$setupFailure\s+-ErrorAction\s+Continue\s*\r?\n\s*foreach\s*\(\$target\s+in\s+\$targetNames\)/,
+  );
+});
+
 test('performance shard exports its runner temp root to managed child processes', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
 
@@ -193,6 +213,70 @@ test('performance shard restores the prepared database after every mutating targ
     'failed mutating targets must also mark the shared database dirty',
   );
 });
+
+for (const fixtureMode of ['preloaded-release', 'preloaded-derived']) {
+  for (const failure of ['', 'load', 'prepare']) {
+    test(`performance ${fixtureMode} restore prepares runtime state before reuse (${failure || 'success'})`, () => {
+      const source = fs.readFileSync(runnerPath, 'utf8');
+      const restoreStart = source.indexOf('function Restore-PerformanceDatabase {');
+      const restoreEnd = source.indexOf('\nSet-Location $RepositoryRoot', restoreStart);
+      assert.ok(restoreStart >= 0 && restoreEnd > restoreStart);
+      const preparation = source.slice(source.indexOf('function Prepare-PerformanceFixture {'), restoreStart);
+      assert.match(preparation, /Restore-PerformanceDatabase\s+return/,
+        'initial preloaded preparation must use the shared complete restoration path');
+      assert.match(source, /if\s*\(\$restorePreparedDatabaseBeforeNextTarget\)\s*\{\s*Restore-PerformanceDatabase/,
+        'inter-target restoration must use the same complete restoration path');
+      const powerShell = process.platform === 'win32'
+        ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+        : 'pwsh';
+      const result = spawnSync(powerShell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `
+$ErrorActionPreference = 'Stop'
+$RepositoryRoot = '${repoRoot.replace(/'/g, "''")}'
+$FixtureMode = '${fixtureMode}'
+$FixtureProfile = 'synthetic-large-library'
+$BasePort = 5200
+$PythonPath = 'Invoke-TestPython'
+$env:ALBUM_HAVEN_E2E_TEMP_ROOT = 'owned-prepared-profile'
+$env:ALBUM_HAVEN_E2E_PRESERVE_ON_SHUTDOWN = '1'
+$env:ALBUM_HAVEN_FIXTURE_ROOT = 'verified-fixture'
+$env:ALBUM_HAVEN_MEDIA_ROOT = 'verified-fixture/media'
+function Invoke-TestPython {
+  $global:LASTEXITCODE = 0
+  if ($args[0] -match 'load-fixture-profile.py$') {
+    Write-Output 'LOAD'
+    if ('${failure}' -eq 'load') { $global:LASTEXITCODE = 17 }
+  } elseif ($args[0] -match 'isolatedLibraryApp.py$') {
+    if ($env:ALBUM_HAVEN_E2E_REUSE_STATE) { throw 'Preparation received reuse state.' }
+    if ($args -notcontains '--prepare-only') { throw 'Preparation would start a server.' }
+    if ($env:ALBUM_HAVEN_E2E_TEMP_ROOT -ne 'owned-prepared-profile' -or
+        $env:ALBUM_HAVEN_E2E_PRESERVE_ON_SHUTDOWN -ne '1') { throw 'Preparation lost ownership.' }
+    Write-Output 'PREPARE'
+    if ('${failure}' -eq 'prepare') { $global:LASTEXITCODE = 18 }
+  } else { throw 'Unexpected Python entry point.' }
+}
+${source.slice(restoreStart, restoreEnd)}
+try {
+  foreach ($iteration in 1..2) {
+    $env:ALBUM_HAVEN_E2E_REUSE_STATE = '1'
+    Restore-PerformanceDatabase
+    if ($env:ALBUM_HAVEN_E2E_REUSE_STATE -ne '1') { throw 'Restoration did not enable reuse.' }
+    Write-Output 'READY'
+  }
+} catch {
+  if ($env:ALBUM_HAVEN_E2E_REUSE_STATE) { Write-Output 'UNSAFE_REUSE' }
+  Write-Output $_.Exception.Message
+  exit 1
+}
+`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+      assert.equal(result.status, failure ? 1 : 0, result.stderr || result.stdout);
+      assert.doesNotMatch(result.stdout, /UNSAFE_REUSE/);
+      const events = result.stdout.split(/\r?\n/).filter((line) => /^(LOAD|PREPARE|READY)$/.test(line));
+      assert.deepEqual(events, failure === 'load' ? ['LOAD']
+        : failure === 'prepare' ? ['LOAD', 'PREPARE']
+          : ['LOAD', 'PREPARE', 'READY', 'LOAD', 'PREPARE', 'READY']);
+    });
+  }
+}
 
 test('Edit Tags performance target receives only a private writable DDT media copy', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');

@@ -199,6 +199,61 @@ test('initial render reveals an offscreen selected row', () => {
   assert.ok(mountedKeys(list.innerHTML).includes('album-700'));
 });
 
+test('rerender reveals an unchanged selected row after the list broadens', () => {
+  const { api } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+
+  virtualList.render([{ key: 'album-700' }], 'album-700');
+  virtualList.render(makeItems(706), 'album-700');
+
+  assert.ok(mountedKeys(list.innerHTML).includes('album-700'), 'selected row must remain mounted when filters broaden');
+});
+
+test('rerender preserves deep scroll when the unchanged selected row was already unmounted', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  const items = makeItems(706);
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+
+  virtualList.render(items, 'album-0');
+  list.scrollTop = 6800;
+  list.emit('scroll');
+  frames.shift()();
+  const deepKeys = mountedKeys(list.innerHTML);
+  assert.ok(!deepKeys.includes('album-0'), 'selected row must be outside the deep mounted window');
+
+  virtualList.render(items, 'album-0');
+
+  assert.equal(list.scrollTop, 6800, 'background refresh must preserve intentional deep scroll');
+  assert.deepEqual(mountedKeys(list.innerHTML), deepKeys);
+});
+
+test('rerender preserves pending deep scroll before checking unchanged selection', () => {
+  const { api } = loadVirtualList();
+  const list = createList();
+  const items = makeItems(706);
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+
+  virtualList.render(items, 'album-0');
+  list.scrollTop = 6800;
+  list.emit('scroll');
+  virtualList.render(items, 'album-0');
+
+  assert.equal(list.scrollTop, 6800, 'background refresh must honor the pending user scroll');
+  assert.ok(!mountedKeys(list.innerHTML).includes('album-0'));
+  assert.ok(mountedKeys(list.innerHTML).includes('album-100'));
+});
+
 test('mobile mode windows the existing horizontal strip', () => {
   const { api } = loadVirtualList({ horizontal: true });
   const list = createList();

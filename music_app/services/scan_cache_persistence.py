@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.artist_family_postgres import (
+    artist_family_projection_matches_in_transaction,
     replace_artist_family_projection_in_transaction,
 )
 from music_app.services.cache import (
@@ -111,6 +112,15 @@ class StructuralTagEditDestinationConflict(RuntimeError):
 
 
 class ScanCacheAdapter(Protocol):
+    def refresh_relation_projection(
+        self,
+        *,
+        expected_inventory_mutation_revision: int | None = None,
+        expected_cover_mutation_revision: int | None = None,
+        before_commit: Callable[[Any], object] | None = None,
+        publication_commit_guard: Callable[[Callable[[], object]], object] | None = None,
+    ) -> dict[str, object]: ...
+
     backend: str
 
     def load_snapshot(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
@@ -180,6 +190,10 @@ class ScanCacheAdapter(Protocol):
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
         expected_cover_state: tuple[str | None, str | None] | None = None,
+        expected_library_id: int | None = None,
+        expected_album_id: int | None = None,
+        expected_inventory_revision: int | None = None,
+        expected_cover_mutation_revision: int | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         ...
@@ -394,6 +408,129 @@ class PostgresScanCacheAdapter:
             ),
             "cover_mutation_revision": projection.get("cover_mutation_revision"),
         }
+
+    def refresh_relation_projection(
+        self,
+        *,
+        expected_inventory_mutation_revision: int | None = None,
+        expected_cover_mutation_revision: int | None = None,
+        before_commit: Callable[[Any], object] | None = None,
+        publication_commit_guard: Callable[[Callable[[], object]], object] | None = None,
+    ) -> dict[str, object]:
+        """Publish derived relations without granting cached inventory write authority."""
+        for _attempt in range(2):
+            started_at = perf_counter()
+            with self._connect_to_database() as preparation:
+                _ensure_bootstrap_context(preparation)
+                revisions = _row_mapping(
+                    _first_row(preparation.execute(_load_library_revisions_sql()))
+                )
+                if not revisions.get("library_id"):
+                    raise RuntimeError("Relation refresh requires an existing library.")
+                for field, expected in (
+                    ("inventory_mutation_revision", expected_inventory_mutation_revision),
+                    ("cover_mutation_revision", expected_cover_mutation_revision),
+                ):
+                    if expected is not None and revisions.get(field) != expected:
+                        raise ScanCachePublicationSuperseded(
+                            f"Relation refresh {field} changed before preparation."
+                        )
+                source_rows = list(
+                    preparation.execute(load_relation_source_rows_sql()).fetchall()
+                )
+                source_fingerprint = relation_source_fingerprint(source_rows)
+                snapshot = _row_mapping(
+                    _first_row(preparation.execute(_load_scan_snapshot_sql()))
+                ).get("scan_cache")
+                prepared_payload = None
+                if not _relation_projection_matches_source(
+                    preparation, snapshot, source_fingerprint
+                ):
+                    views = build_relation_views_from_postgres_rows(self._config, source_rows)
+                    if not relation_projection_structure_complete(views):
+                        raise RuntimeError(
+                            "Relation projection builder returned an incomplete projection."
+                        )
+                    prepared_payload = serialize_relation_views(views)
+
+            with self._connect_to_database() as connection:
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                current_revisions = _row_mapping(
+                    _first_row(connection.execute(_load_library_revisions_sql()))
+                )
+                for field in (
+                    "library_id", "inventory_mutation_revision", "cover_mutation_revision"
+                ):
+                    if current_revisions.get(field) != revisions.get(field):
+                        raise ScanCachePublicationSuperseded(
+                            f"Relation refresh {field} changed during preparation."
+                        )
+                connection.execute(relation_projection_advisory_lock_sql())
+                snapshot = _row_mapping(
+                    _first_row(connection.execute(_load_scan_snapshot_sql()))
+                ).get("scan_cache")
+                next_snapshot = dict(snapshot) if isinstance(snapshot, dict) else {}
+                ready = _relation_projection_matches_source(
+                    connection, next_snapshot, source_fingerprint
+                )
+                if not ready:
+                    if prepared_payload is None:
+                        # A concurrent relation repair changed readiness without an
+                        # inventory revision. Release both locks before preparing again.
+                        continue
+                    relations_last_built = datetime.now(timezone.utc).timestamp()
+                    metadata = build_ready_relation_projection_metadata(
+                        source_fingerprint,
+                        reason="relation_refresh",
+                        duration_ms=(perf_counter() - started_at) * 1000,
+                        source_row_count=len(source_rows),
+                    )
+                    replace_artist_family_projection_in_transaction(
+                        connection,
+                        prepared_payload,
+                        relations_last_built=relations_last_built,
+                    )
+                    replace_artist_search_projection_in_transaction(
+                        connection,
+                        prepared_payload,
+                        metadata=metadata,
+                        relations_last_built=relations_last_built,
+                    )
+                    next_snapshot.update({
+                        "relation_views": prepared_payload,
+                        "relations_last_built": relations_last_built,
+                        RELATION_PROJECTION_METADATA_KEY: metadata,
+                    })
+                    connection.execute(
+                        _save_scan_snapshot_sql(), {"scan_cache": _jsonb(next_snapshot)}
+                    )
+                else:
+                    persisted = _relation_projection_scan_cache_from_row(
+                        _first_row(connection.execute(_load_relation_projection_sql()))
+                    )
+                    if artist_search_projection_stale_reason(persisted):
+                        replace_artist_search_projection_in_transaction(
+                            connection,
+                            next_snapshot["relation_views"],
+                            metadata=next_snapshot[RELATION_PROJECTION_METADATA_KEY],
+                            relations_last_built=_float_or_zero(
+                                next_snapshot.get("relations_last_built")
+                            ),
+                        )
+                result = {
+                    "relation_views": deserialize_relation_views(next_snapshot["relation_views"]),
+                    "relations_last_built": _float_or_zero(next_snapshot.get("relations_last_built")),
+                }
+                if before_commit is not None:
+                    before_commit(connection)
+                if publication_commit_guard is None:
+                    connection.commit()
+                else:
+                    publication_commit_guard(connection.commit)
+                return result
+        raise ScanCachePublicationSuperseded(
+            "Relation projection readiness changed repeatedly during preparation."
+        )
 
     def prepare_full_scan_inventory(
         self,
@@ -770,6 +907,8 @@ class PostgresScanCacheAdapter:
                 hydrated_entry = deserialize_file_entry(file_entry)
             except Exception:
                 hydrated_entry = dict(file_entry)
+            if "file_size_bytes" in row_payload:
+                hydrated_entry["size"] = safe_int(row_payload["file_size_bytes"])
             hydrated_entry["path"] = path
             if type(row_payload.get("album_is_compilation")) is bool:
                 hydrated_entry["is_compilation"] = row_payload[
@@ -821,6 +960,10 @@ class PostgresScanCacheAdapter:
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
         expected_cover_state: tuple[str | None, str | None] | None = None,
+        expected_library_id: int | None = None,
+        expected_album_id: int | None = None,
+        expected_inventory_revision: int | None = None,
+        expected_cover_mutation_revision: int | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         normalized_track_paths = sorted(
@@ -878,6 +1021,8 @@ class PostgresScanCacheAdapter:
             raise ValueError("Cover selection requires a local path or linked remote URL.")
         if resolved_cover_path is not None and normalized_remote_url is not None:
             raise ValueError("Cover selection cannot persist local and linked remote covers together.")
+        if not clear_selection and normalized_origin is None:
+            raise ValueError("Cover replacement requires a selection origin.")
         if resolved_cover_path is not None and not cover_revision:
             from music_app.services.cover_workflow import cover_revision_for_path
 
@@ -896,95 +1041,183 @@ class PostgresScanCacheAdapter:
             if linked_remote
             else {}
         )
+        baseline_values = (
+            expected_library_id,
+            expected_album_id,
+            expected_inventory_revision,
+            expected_cover_mutation_revision,
+        )
+        has_supplied_baseline = any(value is not None for value in baseline_values)
+        if has_supplied_baseline and not all(value is not None for value in baseline_values):
+            raise psycopg.errors.SerializationFailure(
+                "cover mutation requires complete baseline"
+            )
+        if has_supplied_baseline and (
+            type(expected_library_id) is not int
+            or type(expected_album_id) is not int
+            or type(expected_inventory_revision) is not int
+            or type(expected_cover_mutation_revision) is not int
+            or expected_library_id < 1
+            or expected_album_id < 1
+            or expected_inventory_revision < 0
+            or expected_cover_mutation_revision < 0
+        ):
+            raise psycopg.errors.SerializationFailure(
+                "cover mutation requires complete baseline"
+            )
+        if normalized_origin == "automatic" and not has_supplied_baseline:
+            raise psycopg.errors.SerializationFailure(
+                "automatic cover mutation requires complete baseline"
+            )
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
-            expected_cover_state_guard = expected_cover_state is not None or normalized_expected_origin is not None
-            if not reject_if_user_controlled and not expected_cover_state_guard:
-                connection.execute(_increment_cover_mutation_revision_sql())
-            result_row = _first_row(
-                connection.execute(
-                    _persist_local_cover_selection_sql(
-                        include_origin=normalized_origin is not None,
-                        include_linked_remote=linked_remote,
-                        include_expected_cover_state=expected_cover_state_guard,
-                        include_clear_selection=clear_selection,
-                        include_explicit_selection=explicit_selection,
-                        include_reject_explicit_selection=reject_if_explicit_selection,
-                        include_local_dimensions=has_local_dimensions,
-                    ),
+            publication = _row_mapping(
+                _first_row(connection.execute(_load_library_revisions_sql()))
+            )
+            configured_library_id = int(publication.get("library_id") or 0)
+            if has_supplied_baseline:
+                if expected_library_id != configured_library_id:
+                    raise psycopg.errors.SerializationFailure(
+                        "cover mutation library conflict"
+                    )
+                library_id = expected_library_id
+                album_id = expected_album_id
+                inventory_revision = expected_inventory_revision
+                cover_mutation_revision = expected_cover_mutation_revision
+            else:
+                library_id = configured_library_id
+                inventory_revision = int(
+                    publication.get("inventory_mutation_revision") or 0
+                )
+                cover_mutation_revision = int(
+                    publication.get("cover_mutation_revision") or 0
+                )
+                identities = connection.execute(
+                    _resolve_cover_mutation_identity_sql(),
                     {
+                        "library_id": library_id,
                         "track_paths": normalized_track_paths,
-                        "selected_cover_path": str(resolved_cover_path) if resolved_cover_path else None,
-                        "cover_revision": str(cover_revision) if cover_revision else None,
-                        **({"local_cover_width": local_cover_width, "local_cover_height": local_cover_height} if has_local_dimensions else {}),
-                        **remote_params,
-                        **(
-                            {
-                                "expected_cover_selection_origin": normalized_expected_origin,
-                                "expected_cover_revision": normalized_expected_revision,
-                            }
-                            if expected_cover_state_guard
-                            else {}
-                        ),
-                        **(
-                            {
-                                "cover_selection_origin": normalized_origin,
-                                "reject_if_user_controlled": bool(reject_if_user_controlled),
-                            }
-                            if normalized_origin is not None
-                            else {}
-                        ),
                     },
+                ).fetchall()
+                if len(identities) != 1:
+                    raise psycopg.errors.SerializationFailure(
+                        "cover mutation identity conflict"
+                    )
+                identity = _row_mapping(identities[0])
+                if int(identity.get("library_id") or 0) != library_id:
+                    raise psycopg.errors.SerializationFailure(
+                        "cover mutation library conflict"
+                    )
+                album_id = int(identity.get("local_album_id") or 0)
+                if library_id < 1 or album_id < 1:
+                    raise psycopg.errors.SerializationFailure(
+                        "cover mutation identity conflict"
+                    )
+            parameters = {
+                "library_id": library_id,
+                "album_id": album_id,
+                "track_paths": normalized_track_paths,
+                "expected_inventory_revision": inventory_revision,
+                "expected_cover_mutation_revision": cover_mutation_revision,
+            }
+            connection.execute(_assert_cover_mutation_baseline_sql(), parameters)
+            current = _row_mapping(
+                _first_row(
+                    connection.execute(
+                        _load_locked_cover_selection_state_sql(), parameters
+                    )
                 )
             )
-            result = _row_mapping(result_row)
-            input_path_count = int(result.get("input_path_count") or 0)
-            resolved_path_count = int(result.get("resolved_path_count") or 0)
-            selected_album_count = int(result.get("selected_album_count") or 0)
-            album_track_file_count = int(result.get("album_track_file_count") or 0)
-            album_rows_updated = int(result.get("album_rows_updated") or 0)
-            track_file_rows_updated = int(result.get("track_file_rows_updated") or 0)
-            blocked_by_user_selection = bool(result.get("blocked_by_user_selection"))
-            blocked_by_expected_cover_state = bool(
-                result.get("blocked_by_expected_cover_state")
+            if not current:
+                raise psycopg.errors.SerializationFailure(
+                    "cover mutation album conflict"
+                )
+            current_origin = str(
+                current.get("cover_selection_origin") or ""
+            ).strip().casefold()
+            current_provenance = str(
+                current.get("cover_selection_provenance") or ""
+            ).strip().casefold()
+            current_revision = str(current.get("cover_revision") or "").strip()
+            current_cover_path = str(current.get("cover_path") or "").strip()
+            expected_cover_state_guard = (
+                expected_cover_state is not None
+                or normalized_expected_origin is not None
             )
-            if blocked_by_user_selection:
-                # A guarded automatic cover write must never run when the
-                # persisted user-selection check rejected this transaction.
+            if reject_if_user_controlled and current_origin == "user":
                 connection.commit()
                 return {
                     "album_rows_updated": 0,
                     "track_file_rows_updated": 0,
                     "blocked_by_user_selection": True,
                 }
-            if blocked_by_expected_cover_state:
+            if reject_if_explicit_selection and current_provenance == "explicit":
+                connection.commit()
+                return {
+                    "album_rows_updated": 0,
+                    "track_file_rows_updated": 0,
+                    "blocked_by_user_selection": True,
+                }
+            if expected_cover_state_guard and (
+                current_origin != (normalized_expected_origin or "")
+                or current_revision != (normalized_expected_revision or "")
+            ):
                 connection.commit()
                 return {
                     "album_rows_updated": 0,
                     "track_file_rows_updated": 0,
                     "blocked_by_expected_cover_state": True,
                 }
-            if reject_if_user_controlled or expected_cover_state_guard:
-                connection.execute(_increment_cover_mutation_revision_sql())
-            if (
-                input_path_count != len(normalized_track_paths)
-                or resolved_path_count != input_path_count
-                or selected_album_count != 1
-                or album_rows_updated != 1
-                or album_track_file_count < resolved_path_count
-                or track_file_rows_updated != album_track_file_count
-            ):
-                raise RuntimeError(
-                    "Targeted cover persistence did not update the complete selected album inventory."
-                    f" expected_path_count={len(normalized_track_paths)}"
-                    f" input_path_count={input_path_count}"
-                    f" resolved_path_count={resolved_path_count}"
-                    f" selected_album_count={selected_album_count}"
-                    f" album_track_file_count={album_track_file_count}"
-                    f" album_rows_updated={album_rows_updated}"
-                    f" track_file_rows_updated={track_file_rows_updated}"
+            remote_cover = _jsonb(remote_params) if linked_remote else None
+            preserve_explicit_selection = bool(
+                normalized_origin == "user"
+                and expected_cover_state_guard
+                and current_provenance == "explicit"
+                and resolved_cover_path is not None
+                and current_cover_path == str(resolved_cover_path)
+            )
+            outcome = _row_mapping(
+                _first_row(
+                    connection.execute(
+                        _commit_cover_selection_sql(),
+                        {
+                            **parameters,
+                            "expected_selected_cover_revision": (
+                                current_revision or None
+                            ),
+                            "selected_cover_path": (
+                                str(resolved_cover_path)
+                                if resolved_cover_path is not None
+                                else None
+                            ),
+                            "promoted_cover_revision": (
+                                str(cover_revision) if cover_revision else None
+                            ),
+                            "selected_origin": normalized_origin,
+                            "explicit_selection": bool(
+                                explicit_selection or preserve_explicit_selection
+                            ),
+                            "local_cover_width": local_cover_width,
+                            "local_cover_height": local_cover_height,
+                            "clear_selection": bool(clear_selection),
+                            "remote_cover": remote_cover,
+                            "observed_at": datetime.now(timezone.utc),
+                        },
+                    )
                 )
+            )
+            if not bool(outcome.get("committed")):
+                reason = str(outcome.get("reason_code") or "unknown")
+                if reason.endswith("conflict"):
+                    raise psycopg.errors.SerializationFailure(
+                        f"cover mutation {reason.replace('_', ' ')}"
+                    )
+                raise RuntimeError(f"Cover mutation was not committed: {reason}.")
+            album_rows_updated = 1
+            track_file_rows_updated = int(
+                current.get("album_track_file_count") or 0
+            )
             if commit_guard is not None:
                 commit_guard(connection.commit)
         return {
@@ -1195,6 +1428,10 @@ class PostgresScanCacheAdapter:
             )))
             input_path_count = int(result.get("input_path_count") or 0)
             resolved_path_count = int(result.get("resolved_path_count") or 0)
+            source_album_count = int(result.get("source_album_count") or 0)
+            source_album_track_file_count = int(
+                result.get("source_album_track_file_count") or 0
+            )
             destination_album_count = int(
                 result.get("destination_album_count") or 0
             )
@@ -2772,6 +3009,29 @@ def _patch_structural_relation_projection(
     }
 
 
+def _relation_projection_matches_source(
+    connection: Any, snapshot: object, source_fingerprint: str
+) -> bool:
+    if relation_projection_stale_reason(snapshot):
+        return False
+    if snapshot[RELATION_PROJECTION_METADATA_KEY]["built_from_fingerprint"] != source_fingerprint:
+        return False
+    persisted = _relation_projection_scan_cache_from_row(
+        _first_row(connection.execute(_load_relation_projection_sql()))
+    )
+    return (
+        not relation_projection_stale_reason(persisted)
+        and persisted[RELATION_PROJECTION_METADATA_KEY]["built_from_fingerprint"]
+        == source_fingerprint
+        and persisted.get("relation_views") == snapshot.get("relation_views")
+        and artist_family_projection_matches_in_transaction(
+            connection,
+            snapshot["relation_views"],
+            relations_last_built=_float_or_zero(snapshot.get("relations_last_built")),
+        )
+    )
+
+
 def _commit_structural_relation_projection(
     connection: Any,
     config: dict[str, object],
@@ -3383,7 +3643,7 @@ def _fallback_file_entry(row: dict[str, object]) -> dict[str, object] | None:
     return {
         "path": path,
         "mtime": _float_or_zero(row.get("modified_at_epoch")),
-        "size": safe_int(row.get("file_size_bytes")) or 0,
+        "size": safe_int(row.get("file_size_bytes")),
         "album": row.get("album_title") or "Unknown Album",
         "album_artist": row.get("album_artist") or "Unknown Artist",
         "title": row.get("track_title") or Path(path).stem,
@@ -3479,6 +3739,78 @@ def _load_library_revisions_sql() -> str:
         join bootstrap_context
           on bootstrap_context.library_id = library.libraries.id
         limit 1;
+    """
+
+
+def _resolve_cover_mutation_identity_sql() -> str:
+    return """
+        select *
+        from library.resolve_cover_mutation_identity(
+          %(library_id)s,
+          %(track_paths)s::text[]
+        );
+    """
+
+
+def _assert_cover_mutation_baseline_sql() -> str:
+    return """
+        select library.assert_cover_mutation_baseline(
+          %(library_id)s,
+          %(album_id)s,
+          %(track_paths)s::text[],
+          %(expected_inventory_revision)s,
+          %(expected_cover_mutation_revision)s
+        );
+    """
+
+
+def _load_locked_cover_selection_state_sql() -> str:
+    return """
+        select
+          nullif(album.metadata ->> 'cover_selection_origin', '') as cover_selection_origin,
+          nullif(album.metadata ->> 'cover_selection_provenance', '') as cover_selection_provenance,
+          nullif(album.metadata ->> 'cover_revision', '') as cover_revision,
+          nullif(album.cover_path, '') as cover_path,
+          count(file.id)::integer as album_track_file_count
+        from library.local_albums as album
+        left join library.local_tracks as track
+          on track.album_id = album.id
+         and track.library_id = album.library_id
+        left join library.local_track_files as file
+          on file.track_id = track.id
+        where album.library_id = %(library_id)s
+          and album.id = %(album_id)s
+        group by album.id;
+    """
+
+
+def _commit_cover_selection_sql() -> str:
+    return """
+        select *
+        from library.commit_cover_selection(
+          %(library_id)s,
+          %(album_id)s,
+          %(track_paths)s::text[],
+          %(expected_inventory_revision)s,
+          %(expected_cover_mutation_revision)s,
+          %(expected_selected_cover_revision)s,
+          %(selected_cover_path)s,
+          %(promoted_cover_revision)s,
+          %(selected_origin)s,
+          %(explicit_selection)s,
+          %(local_cover_width)s,
+          %(local_cover_height)s,
+          %(clear_selection)s,
+          %(remote_cover)s::jsonb,
+          null::text,
+          null::bigint,
+          null::integer,
+          null::text,
+          null::text,
+          null::bigint,
+          null::bigint,
+          %(observed_at)s
+        );
     """
 
 
@@ -4510,7 +4842,6 @@ def _validate_structural_album_tag_edit_sql() -> str:
             false
           ) is false
           order by library.local_tracks.id, library.local_track_files.id
-          for update of local_tracks, local_track_files
         ),
         selection_scope as materialized (
           select
@@ -4549,7 +4880,6 @@ def _validate_structural_album_tag_edit_sql() -> str:
                  or library.local_albums.album_key = %(destination_album_key)s
                )
           order by library.local_albums.id
-          for update of local_albums
         ),
         existing_destination_album as materialized (
           select locked_album_scope.id

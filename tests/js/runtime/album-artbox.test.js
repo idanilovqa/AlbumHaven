@@ -15,6 +15,14 @@ test('loop artwork uses the scoped public cover URL for preview and enlargement 
   assert.match(html, /data-cover-src="\/cover\?loop_id=owned-loop"/);
 });
 
+test('S04 utility artwork retains escaped album identity for semantic focus restoration', () => {
+  const context = loadAlbumArtbox();
+  const html = context.buildUtilityAlbumArtbox(
+    { key: 'owner::album"name', cover_url: '/cover.png' }, { interactive: true },
+  );
+  assert.match(html, /data-album-key="owner::album&quot;name"/);
+});
+
 test('utility album artbox can defer its preview to the shared gallery cover loader', () => {
   const context = loadAlbumArtbox();
   context.buildAlbumDisplayCoverUrl = () => '/cover?path=family-preview';

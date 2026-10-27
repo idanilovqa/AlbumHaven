@@ -235,11 +235,18 @@ def images_are_visually_similar(existing_path: Path, raw_bytes: bytes) -> bool:
             pass
 
 
-def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | None:
+def reserve_existing_cover_variant(
+    folder: Path,
+    raw_bytes: bytes,
+    *,
+    visually_similar: bool | None = None,
+) -> Path | None:
     current_cover = folder / "cover.jpg"
     if not current_cover.is_file():
         return None
-    if images_are_visually_similar(current_cover, raw_bytes):
+    if visually_similar is None:
+        visually_similar = images_are_visually_similar(current_cover, raw_bytes)
+    if visually_similar:
         return None
     current_bytes = current_cover.read_bytes()
     index = 1

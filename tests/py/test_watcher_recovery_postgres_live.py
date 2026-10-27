@@ -489,6 +489,36 @@ def test_watcher_function_privilege_matrix(live_watcher_database):
             "library.acknowledge_local_watcher_incidents(bigint,uuid[])",
             False,
         ),
+        (
+            "album_haven_app",
+            "library.load_library_warning_acknowledgement(bigint,bigint)",
+            True,
+        ),
+        (
+            "album_haven_worker",
+            "library.load_library_warning_acknowledgement(bigint,bigint)",
+            False,
+        ),
+        (
+            "album_haven_readonly",
+            "library.load_library_warning_acknowledgement(bigint,bigint)",
+            False,
+        ),
+        (
+            "album_haven_app",
+            "library.acknowledge_library_warning(bigint,bigint,text,timestamptz)",
+            True,
+        ),
+        (
+            "album_haven_worker",
+            "library.acknowledge_library_warning(bigint,bigint,text,timestamptz)",
+            False,
+        ),
+        (
+            "album_haven_readonly",
+            "library.acknowledge_library_warning(bigint,bigint,text,timestamptz)",
+            False,
+        ),
     )
     with isolatedPostgres._connect(scope.setup_url) as connection:
         for role, signature, allowed in expectations:
@@ -2220,6 +2250,507 @@ def test_app_acknowledges_durable_incidents_without_table_access(
     }
 
 
+@pytest.mark.parametrize(
+    "event_id",
+    ("\t\u200311111111-1111-1111-1111-111111111111\u2003\n", None),
+    ids=("event-id", "legacy-hash"),
+)
+def test_app_acknowledges_current_legacy_warning_and_rejects_stale_token(
+    live_watcher_database,
+    event_id,
+):
+    from music_app.services.library_warning_dismissals import (
+        PostgresLibraryWarningDismissals,
+        warning_token,
+    )
+    from music_app.services.library_watch_health import opaque_root_key
+
+    scope = live_watcher_database
+    detected_at = "2026-10-09T12:00:00+00:00"
+    stored_problem = {"state": "overflow", "detected_at": detected_at}
+    projected_problem = {
+        "root_key": opaque_root_key("root-a"),
+        "state": "overflow",
+        "detected_at": detected_at,
+    }
+    if event_id is not None:
+        stored_problem["event_id"] = event_id
+        projected_problem["event_id"] = event_id
+    token = warning_token({"state": "warning", "problems": [projected_problem]})
+    stale_token = (
+        "22222222-2222-2222-2222-222222222222" if event_id else "0" * 64
+    )
+    assert token and token != stale_token
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = pg_catalog.jsonb_set(
+              coalesce(metadata, '{}'::jsonb),
+              '{library_watch_health}',
+              %s::jsonb,
+              true
+            )
+            where id = %s
+            """,
+            (json.dumps({"root-a": stored_problem}), scope.library_id),
+        )
+
+    acknowledgements = PostgresLibraryWarningDismissals(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
+        connect=isolatedPostgres._connect,
+    )
+    acknowledgements.library_id = scope.library_id
+
+    assert acknowledgements.load(scope.account_id) == ""
+    with pytest.raises(ValueError, match="not current"):
+        acknowledgements.save(scope.account_id, stale_token)
+    assert acknowledgements.load(scope.account_id) == ""
+
+    acknowledgements.save(scope.account_id, token)
+    assert acknowledgements.load(scope.account_id) == token
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        stored_token = connection.execute(
+            """
+            select metadata #>> array['watcher_warning_dismissals', %s] as token
+            from library.libraries
+            where id = %s
+            """,
+            (str(scope.account_id), scope.library_id),
+        ).fetchone()["token"]
+    assert stored_token == token
+
+
+def test_nonmember_cannot_acknowledge_legacy_warning(live_watcher_database):
+    from music_app.services.library_warning_dismissals import (
+        PostgresLibraryWarningDismissals,
+    )
+
+    scope = live_watcher_database
+    event_id = "11111111-1111-1111-1111-111111111111"
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        nonmember_id = int(
+            connection.execute(
+                """
+                insert into app.accounts (
+                  display_name, username_display, username_normalized,
+                  contact_email, contact_email_normalized, account_kind, is_active
+                ) values (
+                  'Watcher Nonmember', 'watcher-nonmember', 'watcher-nonmember',
+                  'watcher-nonmember@example.invalid',
+                  'watcher-nonmember@example.invalid', 'managed', true
+                ) returning id
+                """
+            ).fetchone()["id"]
+        )
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = pg_catalog.jsonb_set(
+              coalesce(metadata, '{}'::jsonb),
+              '{library_watch_health}',
+              %s::jsonb,
+              true
+            )
+            where id = %s
+            """,
+            (
+                json.dumps(
+                    {
+                        "root-a": {
+                            "state": "overflow",
+                            "detected_at": "2026-10-09T12:00:00+00:00",
+                            "event_id": event_id,
+                        }
+                    }
+                ),
+                scope.library_id,
+            ),
+        )
+
+    acknowledgements = PostgresLibraryWarningDismissals(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
+        connect=isolatedPostgres._connect,
+    )
+    acknowledgements.library_id = scope.library_id
+
+    assert acknowledgements.load(nonmember_id) == ""
+    with pytest.raises(ValueError, match="not current"):
+        acknowledgements.save(nonmember_id, event_id)
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        stored_token = connection.execute(
+            """
+            select metadata #>> array['watcher_warning_dismissals', %s] as token
+            from library.libraries
+            where id = %s
+            """,
+            (str(nonmember_id), scope.library_id),
+        ).fetchone()["token"]
+    assert stored_token is None
+
+
+def test_legacy_event_token_selection_matches_python_codepoint_order(
+    live_watcher_database,
+):
+    from music_app.services.library_warning_dismissals import (
+        PostgresLibraryWarningDismissals,
+        warning_token,
+    )
+    from music_app.services.library_watch_health import opaque_root_key
+
+    scope = live_watcher_database
+    detected_at = "2026-10-09T12:00:00+00:00"
+    event_ids = (
+        "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    )
+    raw_health = {
+        "root-a": {
+            "state": "overflow",
+            "detected_at": detected_at,
+            "event_id": event_ids[0],
+        },
+        "root-b": {
+            "state": "root_unavailable",
+            "detected_at": detected_at,
+            "event_id": event_ids[1],
+        },
+    }
+    projected_health = {
+        "state": "warning",
+        "problems": [
+            {
+                "root_key": opaque_root_key(root_id),
+                **problem,
+            }
+            for root_id, problem in raw_health.items()
+        ],
+    }
+    expected_token = warning_token(projected_health)
+    assert expected_token == event_ids[0]
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = pg_catalog.jsonb_set(
+              coalesce(metadata, '{}'::jsonb),
+              '{library_watch_health}',
+              %s::jsonb,
+              true
+            )
+            where id = %s
+            """,
+            (json.dumps(raw_health), scope.library_id),
+        )
+
+    acknowledgements = PostgresLibraryWarningDismissals(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
+        connect=isolatedPostgres._connect,
+    )
+    acknowledgements.library_id = scope.library_id
+
+    acknowledgements.save(scope.account_id, expected_token)
+    assert acknowledgements.load(scope.account_id) == expected_token
+
+
+def test_legacy_warning_hash_matches_projected_python_token(live_watcher_database):
+    from music_app.services.library_warning_dismissals import (
+        PostgresLibraryWarningDismissals,
+        warning_token,
+    )
+    from music_app.services.library_watch_health import opaque_root_key
+
+    scope = live_watcher_database
+    raw_health = {
+        "\t\u2003root-b\u2003\n": {
+            "state": "\n\u2003overflow\u2003\t",
+            "detected_at": "\t\u20032026-10-09T12:01:00+00:00–é\u2003\n",
+            "event_id": "\t\u2003\n",
+        },
+        "\nroot-a\t": {
+            "state": "\troot_unavailable\n",
+            "detected_at": "\n2026-10-09T12:00:00+00:00\t",
+        },
+        "   ": {"state": "overflow", "detected_at": "ignored"},
+        "not-an-object": "ignored",
+        "unknown-state": {"state": "future_state", "detected_at": "ignored"},
+        "blank-state": {"state": "  ", "detected_at": "ignored"},
+        "blank-detected": {"state": "overflow", "detected_at": None},
+    }
+    expected_token = warning_token(
+        {
+            "state": "warning",
+            "problems": [
+                {
+                    "root_key": opaque_root_key("root-b"),
+                    "state": "overflow",
+                    "detected_at": "2026-10-09T12:01:00+00:00–é",
+                },
+                {
+                    "root_key": opaque_root_key("root-a"),
+                    "state": "root_unavailable",
+                    "detected_at": "2026-10-09T12:00:00+00:00",
+                },
+            ],
+        }
+    )
+    assert len(expected_token) == 64
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = pg_catalog.jsonb_set(
+              coalesce(metadata, '{}'::jsonb),
+              '{library_watch_health}',
+              %s::jsonb,
+              true
+            )
+            where id = %s
+            """,
+            (json.dumps(raw_health), scope.library_id),
+        )
+
+    acknowledgements = PostgresLibraryWarningDismissals(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
+        connect=isolatedPostgres._connect,
+    )
+    acknowledgements.library_id = scope.library_id
+
+    acknowledgements.save(scope.account_id, expected_token)
+    assert acknowledgements.load(scope.account_id) == expected_token
+
+
+def test_durable_warning_acknowledgements_precede_legacy_until_resolution(
+    live_watcher_database,
+):
+    from music_app.services.library_warning_dismissals import (
+        PostgresLibraryWarningDismissals,
+    )
+
+    scope = live_watcher_database
+    legacy_token = "11111111-1111-1111-1111-111111111111"
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = pg_catalog.jsonb_set(
+              coalesce(metadata, '{}'::jsonb),
+              '{library_watch_health}',
+              %s::jsonb,
+              true
+            )
+            where id = %s
+            """,
+            (
+                json.dumps(
+                    {
+                        "root-c": {
+                            "state": "overflow",
+                            "detected_at": "2026-10-09T11:59:00+00:00",
+                            "event_id": legacy_token,
+                        }
+                    }
+                ),
+                scope.library_id,
+            ),
+        )
+
+    repository = _repository(scope.app_url)
+    durable_tokens = sorted(
+        (
+            repository.mark_dirty(
+                library_id=scope.library_id,
+                logical_root_id="root-a",
+                reason_code="overflow",
+                observed_at=NOW,
+            ).warning_token,
+            repository.mark_dirty(
+                library_id=scope.library_id,
+                logical_root_id="root-b",
+                reason_code="root_unavailable",
+                observed_at=NOW + timedelta(seconds=1),
+            ).warning_token,
+        )
+    )
+    acknowledgements = PostgresLibraryWarningDismissals(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
+        connect=isolatedPostgres._connect,
+    )
+    acknowledgements.library_id = scope.library_id
+
+    with pytest.raises(ValueError, match="not current"):
+        acknowledgements.save(scope.account_id, legacy_token)
+    acknowledgements.save(scope.account_id, durable_tokens[0])
+    assert acknowledgements.load(scope.account_id) == durable_tokens[0]
+    with pytest.raises(ValueError, match="not current"):
+        acknowledgements.save(scope.account_id, legacy_token)
+    acknowledgements.save(scope.account_id, durable_tokens[1])
+    assert acknowledgements.load(scope.account_id) == durable_tokens[0]
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        acknowledgement_count = int(
+            connection.execute(
+                """
+                select count(*) as count
+                from library.watcher_incident_acknowledgements
+                where library_id = %s and account_id = %s
+                """,
+                (scope.library_id, scope.account_id),
+            ).fetchone()["count"]
+        )
+        assert acknowledgement_count == 2
+        connection.execute(
+            """
+            update library.watcher_incidents
+            set resolved_at = %s
+            where library_id = %s and resolved_at is null
+            """,
+            (NOW + timedelta(seconds=2), scope.library_id),
+        )
+
+    assert acknowledgements.load(scope.account_id) == ""
+    acknowledgements.save(scope.account_id, legacy_token)
+    assert acknowledgements.load(scope.account_id) == legacy_token
+
+
+def test_legacy_acknowledgement_waits_for_watcher_lock_before_library_row(
+    live_watcher_database,
+):
+    from music_app.services.library_warning_dismissals import (
+        PostgresLibraryWarningDismissals,
+    )
+
+    scope = live_watcher_database
+    legacy_token = "11111111-1111-1111-1111-111111111111"
+    application_name = f"warning-ack-lock-{scope.library_id}"
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = pg_catalog.jsonb_set(
+              coalesce(metadata, '{}'::jsonb),
+              '{library_watch_health}',
+              %s::jsonb,
+              true
+            )
+            where id = %s
+            """,
+            (
+                json.dumps(
+                    {
+                        "root-a": {
+                            "state": "overflow",
+                            "detected_at": "2026-10-09T12:00:00+00:00",
+                            "event_id": legacy_token,
+                        }
+                    }
+                ),
+                scope.library_id,
+            ),
+        )
+
+    started = Event()
+    finished = Event()
+    outcome = {}
+
+    def connect_with_application_name(database_url):
+        connection = isolatedPostgres._connect(database_url)
+        connection.execute(
+            "select pg_catalog.set_config('application_name', %s, false)",
+            (application_name,),
+        )
+        outcome["pid"] = connection.execute(
+            "select pg_catalog.pg_backend_pid() as pid"
+        ).fetchone()["pid"]
+        started.set()
+        return connection
+
+    acknowledgements = PostgresLibraryWarningDismissals(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
+        connect=connect_with_application_name,
+    )
+    acknowledgements.library_id = scope.library_id
+
+    def acknowledge_legacy():
+        try:
+            acknowledgements.save(scope.account_id, legacy_token)
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            finished.set()
+
+    thread = Thread(target=acknowledge_legacy, daemon=True)
+    blocker = isolatedPostgres._connect(scope.setup_url)
+    durable_created = False
+    thread_started = False
+    try:
+        blocker.execute(
+            "select pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtextextended('album-haven:watcher:' || %s::text, 0))",
+            (scope.library_id,),
+        )
+        blocker_pid = blocker.execute(
+            "select pg_catalog.pg_backend_pid() as pid"
+        ).fetchone()["pid"]
+        thread.start()
+        thread_started = True
+        assert started.wait(2)
+        deadline = time.monotonic() + 5
+        blocking_pids = []
+        while time.monotonic() < deadline:
+            with isolatedPostgres._connect(scope.setup_url) as observer:
+                row = observer.execute(
+                    """
+                    select pg_catalog.pg_blocking_pids(%s) as blocking_pids
+                    """,
+                    (outcome["pid"],),
+                ).fetchone()
+            blocking_pids = list((row or {}).get("blocking_pids") or ())
+            if blocker_pid in blocking_pids:
+                break
+            time.sleep(0.02)
+        assert blocker_pid in blocking_pids, (
+            blocking_pids,
+            dict(outcome),
+            finished.is_set(),
+        )
+        assert not finished.is_set(), dict(outcome)
+
+        with isolatedPostgres._connect(scope.setup_url) as row_probe:
+            row_probe.execute(
+                "select id from library.libraries where id = %s for update nowait",
+                (scope.library_id,),
+            ).fetchone()
+
+        rows = blocker.execute(
+            """
+            select *
+            from library.mark_watcher_roots_dirty(%s, %s::text[], %s, %s)
+            """,
+            (scope.library_id, ["root-a"], "overflow", NOW),
+        ).fetchall()
+        assert rows
+        durable_created = True
+    finally:
+        if durable_created:
+            blocker.commit()
+        else:
+            blocker.rollback()
+        blocker.close()
+        if thread_started:
+            thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert isinstance(outcome.get("error"), ValueError)
+    assert "not current" in str(outcome["error"])
+    assert acknowledgements.load(scope.account_id) == ""
+
+
 def test_running_full_scan_repairs_a_later_incident_through_root_catch_up(
     live_watcher_database,
 ):
@@ -3853,6 +4384,78 @@ def test_full_scan_publication_completes_linked_watcher_repair(
     assert repair["inventory_revision"] == publication["inventory_mutation_revision"]
     assert repair["completed_at"] is not None
     assert incident["resolved_at"] is not None
+
+
+@pytest.mark.parametrize(
+    ("timestamp_fields", "retained"),
+    [
+        ({"detected_at": (NOW - timedelta(seconds=1)).isoformat()}, False),
+        ({"detected_at": NOW.isoformat()}, False),
+        ({"detected_at": NOW.astimezone(timezone(timedelta(hours=3))).isoformat()}, False),
+        ({"detected_at": (NOW + timedelta(seconds=1)).isoformat()}, True),
+        ({}, True),
+        ({"detected_at": None}, True),
+        ({"detected_at": ""}, True),
+        ({"detected_at": "not-a-timestamp"}, True),
+        ({"detected_at": "2026-02-30T00:00:00Z"}, True),
+        ({"detected_at": "infinity"}, True),
+        ({"detected_at": "-infinity"}, True),
+    ],
+    ids=[
+        "covered-older", "covered-equal", "covered-offset-equal", "newer", "absent", "null",
+        "empty", "malformed", "invalid-date", "infinite", "negative-infinite",
+    ],
+)
+def test_repair_clears_only_legacy_warnings_covered_by_its_start(
+    live_watcher_database, timestamp_fields, retained,
+):
+    scope = live_watcher_database
+    seeded = _seed_claimed_linked_full_scan(
+        scope, now=NOW,
+        request_origin_ref="watcher:legacy-summary-boundary",
+        worker_id="watcher-legacy-summary-worker",
+    )
+    root_warning = {"state": "overflow", "event_id": "summary-only", **timestamp_fields}
+    unrelated_warning = {
+        "state": "root_unavailable", "event_id": "unrelated-summary",
+        "detected_at": (NOW - timedelta(seconds=1)).isoformat(),
+    }
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update library.libraries set metadata = jsonb_set("
+            "metadata, '{library_watch_health}', %s::jsonb) where id = %s",
+            (json.dumps({"root-a": root_warning, "root-b": unrelated_warning}), scope.library_id),
+        )
+
+    def assert_summary_and_incident_state():
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            summary = connection.execute(
+                "select metadata -> 'library_watch_health' as health "
+                "from library.libraries where id = %s", (scope.library_id,),
+            ).fetchone()["health"]
+            incidents = connection.execute(
+                "select resolved_at from library.watcher_incidents "
+                "where library_id = %s and root_id = %s",
+                (scope.library_id, scope.root_database_ids["root-a"]),
+            ).fetchall()
+        expected = {"root-b": unrelated_warning}
+        if retained:
+            expected["root-a"] = root_warning
+        assert summary == expected
+        assert len(incidents) == 1
+        assert incidents[0]["resolved_at"] is not None
+
+    publication = _publish_linked_full_scan(
+        seeded.worker_scans, seeded.full_scan, seeded.claim, seeded.intent,
+        seeded.scope, now=NOW + timedelta(seconds=2),
+    )
+    assert_summary_and_incident_state()
+    assert seeded.worker_repository.complete_repair(
+        claim=seeded.claim, repair_id=seeded.repair_id,
+        inventory_revision=publication["inventory_mutation_revision"],
+        now=NOW + timedelta(seconds=3),
+    ) is True
+    assert_summary_and_incident_state()
 
 
 def test_complete_repair_is_idempotent_after_atomic_full_scan_publication(

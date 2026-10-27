@@ -671,6 +671,7 @@ def build_cover_remote_save_handler(
             next_checkpoint: str,
             *,
             artifact_key: Any = None,
+            artifact_sha256: str | None = None,
             cover_revision: str | None = None,
             reason_code: str | None = None,
         ) -> int | None:
@@ -684,6 +685,7 @@ def build_cover_remote_save_handler(
                     expected_row_revision=checkpoint_revision,
                     next_checkpoint=next_checkpoint,
                     artifact_key=artifact_key,
+                    artifact_sha256=artifact_sha256,
                     cover_revision=cover_revision,
                     reason_code=reason_code,
                 )
@@ -717,7 +719,9 @@ def build_cover_remote_save_handler(
 
         def publish(**options: object) -> bool:
             nonlocal checkpoint_revision, fence_lost
-            options.pop("expected_checkpoint_revision", None)
+            expected_checkpoint_revision = int(
+                options.pop("expected_checkpoint_revision", checkpoint_revision)
+            )
             if should_cancel():
                 return False
             try:
@@ -725,7 +729,7 @@ def build_cover_remote_save_handler(
                     **_refresh_claim_parameters(claim, now()),
                     checkpoint_id=scope.checkpoint_id,
                     task_id=int(claim.parameters["task_id"]),
-                    expected_checkpoint_revision=checkpoint_revision,
+                    expected_checkpoint_revision=expected_checkpoint_revision,
                     expected_task_revision=int(scope.task_revision),
                     **options,
                 )
@@ -748,6 +752,13 @@ def build_cover_remote_save_handler(
                 checkpoint=checkpoint,
                 persist_selection=persist_selection,
                 publish=publish,
+                library_id=int(claim.library_id or 0),
+                job_id=claim.job_id,
+                attempt=claim.attempt,
+                worker_id=claim.worker_id,
+                lease_token=claim.lease_token,
+                task_id=int(claim.parameters["task_id"]),
+                checkpoint_revision=checkpoint_revision,
             )
         except Exception:
             result = {"status": "ambiguous" if checkpoint_revision > 0 else "failed"}

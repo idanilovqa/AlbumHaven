@@ -285,7 +285,7 @@ test('dismissal persists the displayed token and leaves recovery notice only on 
   context.syncLibraryWatcherWarning(warning);
   context.syncScanLibraryWatcherHealth(warning, true);
   assert.equal(toasts.length, 1);
-  assert.equal(scanNotice.hidden, false, 'Library Status keeps the unresolved incident visible');
+  assert.equal(scanNotice.hidden, true, 'Library Status waits for warning acknowledgement');
   assert.equal(await context.dismissLibraryWatcherWarning(warningButton(toasts[0])), true);
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, '/account/library-warning/dismiss');
@@ -503,6 +503,16 @@ test('global toast layer stays noninteractive and above every other runtime CSS 
     toastLayerZIndex > highestOtherLayer,
     `Expected toast layer ${toastLayerZIndex} above runtime layer ${highestOtherLayer}.`,
   );
+});
+
+test('persistent watcher warning only intercepts its action buttons', () => {
+  const warningRule = baseLayoutSource.match(/\.system-warning-notification\s*\{([^}]*)\}/u)?.[1] || '';
+  const actionRule = baseLayoutSource.match(
+    /\.system-warning-notification\s+\.ui-button\s*\{([^}]*)\}/u,
+  )?.[1] || '';
+
+  assert.match(warningRule, /pointer-events:\s*none\s*;/u);
+  assert.match(actionRule, /pointer-events:\s*auto\s*;/u);
 });
 
 test('managed cover-start assertion proves center-point stacking above the active overlay', () => {

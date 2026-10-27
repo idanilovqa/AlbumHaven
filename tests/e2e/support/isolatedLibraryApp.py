@@ -4224,8 +4224,30 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 1800,
             "candidate_fixture_mode": "artist-conjunction",
         })
+        split_source_root = derivative_root or Path(str(cover_specs[0]["staged_path"])).parent
+        split_source_root.mkdir(parents=True, exist_ok=True)
+        split_source_path = split_source_root / "ddt-studio-recordings-split-source.jpg"
+        split_other_art_path = split_source_root / "ddt-studio-recordings-split-other.jpg"
+        from PIL import Image
+
+        split_source = Image.new("RGB", (96, 96), (15, 28, 47))
+        try:
+            split_source.paste((198, 53, 39), (0, 0, 48, 48))
+            split_source.paste((242, 183, 5), (48, 0, 96, 48))
+            split_source.paste((28, 148, 96), (0, 48, 48, 96))
+            split_source.paste((54, 93, 173), (48, 48, 96, 96))
+            split_source.save(split_source_path, format="JPEG", quality=95)
+            split_other_art = split_source.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            try:
+                split_other_art.save(split_other_art_path, format="JPEG", quality=95)
+            finally:
+                split_other_art.close()
+        finally:
+            split_source.close()
         self.cover_lookup_split_identity_spec = prepare_provider_artwork_spec({
             **dict(cover_specs[0]),
+            "staged_path": str(split_source_path),
+            "other_art_staged_path": str(split_other_art_path),
             "cover_id": "ddt-studio-recordings-split",
             "artist": "ДДТ",
             "album": "Студийные записи",

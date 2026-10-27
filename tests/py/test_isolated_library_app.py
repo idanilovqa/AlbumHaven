@@ -5565,6 +5565,48 @@ def test_provider_fixture_prepares_generated_apple_artwork_before_start(
         service._server.server_close()
 
 
+def test_split_identity_provider_artwork_does_not_reuse_another_album_cover(tmp_path):
+    from PIL import Image
+
+    cover_specs = []
+    colors = ((32, 64, 96), (96, 64, 32), (32, 96, 64), (64, 32, 96))
+    for index, color in enumerate(colors):
+        cover_path = tmp_path / f"fixture-{index}.jpg"
+        with Image.new("RGB", (64, 64), color) as cover:
+            cover.save(cover_path, format="JPEG")
+        other_art_path = tmp_path / f"fixture-{index}-other-art.jpg"
+        with Image.new("RGB", (32, 48), color) as other_art:
+            other_art.save(other_art_path, format="JPEG")
+        cover_specs.append({
+            "cover_id": f"fixture-{index}",
+            "staged_path": str(cover_path),
+            "other_art_staged_path": str(other_art_path),
+            "artist": f"Fixture Artist {index}",
+            "album": f"Fixture Album {index}",
+            "year": 2024,
+            "width": 64,
+            "height": 64,
+        })
+
+    service = isolatedLibraryApp.ProviderFixtureService(
+        0,
+        cover_specs,
+        derivative_root=tmp_path / "provider-artwork",
+    )
+    try:
+        split_spec = service._server.cover_lookup_split_identity_spec
+        source_hashes = {
+            hashlib.sha256(Path(spec["staged_path"]).read_bytes()).hexdigest()
+            for spec in cover_specs
+        }
+        assert split_spec["original_source_sha256"] not in source_hashes
+        assert hashlib.sha256(
+            Path(split_spec["other_art_staged_path"]).read_bytes()
+        ).hexdigest() not in source_hashes
+    finally:
+        service._server.server_close()
+
+
 def test_provider_fixture_serves_every_cover_matching_candidate_image(tmp_path):
     cover_specs = []
     for index, payload in enumerate((b"large-fixture-image", b"small-fixture-image")):

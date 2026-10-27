@@ -205,8 +205,8 @@ def test_live_album_identity_lineage_rejects_cycles_and_cross_library_moves(
             connection.execute(
                 """
                 insert into library.libraries (
-                  owner_account_id, name, library_kind, source_descriptor
-                ) values (%s, 'Other Library', 'local', '{}'::jsonb)
+                  owner_account_id, name, library_kind
+                ) values (%s, 'Other Library', 'local')
                 returning id
                 """,
                 (account_id,),

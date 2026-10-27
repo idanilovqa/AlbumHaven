@@ -365,6 +365,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         artist: FULL_REFRESH_SEARCH_QUERY,
         album: `Gallery Refresh ${Date.now()}`,
         year: 2026,
+        createLocalArt: true,
         context,
         managedAppLifecycle,
       });

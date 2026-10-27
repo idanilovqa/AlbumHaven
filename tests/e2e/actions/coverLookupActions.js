@@ -933,19 +933,7 @@ export class CoverLookupActions {
   async readTaskCardEvidenceById(taskId) {
     const card = this.coverLookup.taskCardById(taskId);
     await expect(card).toBeVisible();
-    // parity-check: allow-read-only-measurement-evaluate -- atomically bind card identity, click target, and rendered art
-    return card.evaluate((element) => {
-      const opener = element.querySelector('[data-open-cover-lookup-task]');
-      const image = element.querySelector('img.cover-lookup-task-cover');
-      return {
-        taskId: String(opener?.getAttribute('data-open-cover-lookup-task') || ''),
-        title: String(element.querySelector('.cover-lookup-task-title')?.textContent || '').trim(),
-        byline: String(element.querySelector('.cover-lookup-task-byline')?.textContent || '').trim(),
-        imageSrc: image instanceof HTMLImageElement
-          ? String(image.currentSrc || image.getAttribute('src') || '').trim()
-          : '',
-      };
-    });
+    return this.coverLookup.readTaskCardEvidenceById(taskId);
   }
 
   async readTaskStatus(taskTitle) {
@@ -1160,12 +1148,10 @@ export class CoverLookupActions {
     await expect(this.coverLookup.taskCardByTitle(taskTitle)).toBeHidden({ timeout });
     await countsPromise;
     // parity-check: allow-read-only-measurement-evaluate -- settle the clear response's next paint before proving no toast was rendered
-    await this.coverLookup.page.locator('body').evaluate(() => new Promise((resolve) => {
+    await this.coverLookup.drawerBody.evaluate(() => new Promise((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(resolve));
     }));
-    await expect(
-      this.coverLookup.page.locator(this.coverLookup.toastSelector).filter({ hasText: 'Notification cleared.' }),
-    ).toHaveCount(0);
+    await expect(this.coverLookup.notificationClearedToast).toHaveCount(0);
   }
 
   async waitForTaskActive(taskTitle, options = {}) {
@@ -1207,16 +1193,7 @@ export class CoverLookupActions {
     await expect(this.coverLookup.mobileSheet).toBeVisible();
     await expect(this.coverLookup.mobilePage).toHaveCount(0);
     await expect(this.coverLookup.drawer).toBeVisible();
-    const stacking = await this.coverLookup.mobileSheet.evaluate((sheet) => {
-      const dialog = sheet.querySelector('.cover-lookup-modal-dialog');
-      const drawer = document.getElementById('cover-lookup-drawer');
-      const sheetBox = dialog?.getBoundingClientRect();
-      return {
-        bottomGap: sheetBox ? Math.abs(window.innerHeight - sheetBox.bottom) : Number.POSITIVE_INFINITY,
-        sheetZ: Number.parseInt(getComputedStyle(sheet).zIndex, 10) || 0,
-        drawerZ: drawer ? Number.parseInt(getComputedStyle(drawer).zIndex, 10) || 0 : 0,
-      };
-    });
+    const stacking = await this.coverLookup.readMobileSheetStacking();
     expect(stacking.bottomGap).toBeLessThanOrEqual(1);
     expect(stacking.sheetZ).toBeGreaterThan(stacking.drawerZ);
   }

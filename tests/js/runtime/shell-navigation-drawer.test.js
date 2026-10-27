@@ -395,6 +395,29 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 }
 
 
+{
+  const { context } = loadHelper({ isMobile: true });
+  context.state.ui.artistsDrawerOpen = true;
+  let prevented = false;
+  let propagationStopped = false;
+  const target = {
+    closest(selector) {
+      return selector === '#artist-tree-context-menu' ? this : null;
+    },
+  };
+
+  const handled = context.handleArtistsDrawerClick({
+    target,
+    preventDefault() { prevented = true; },
+    stopImmediatePropagation() { propagationStopped = true; },
+  });
+
+  assert.equal(handled, false);
+  assert.equal(prevented, false);
+  assert.equal(propagationStopped, false);
+  assert.equal(context.state.ui.artistsDrawerOpen, true);
+}
+
 // A pending hidden-tree reveal runs only after expansion settles. Ordinary
 // expansion without a reveal must retain the user's existing scroll position.
 for (const pendingArtist of ['', 'Latest Artist']) {

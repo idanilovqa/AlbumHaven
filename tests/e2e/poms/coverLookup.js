@@ -62,6 +62,9 @@ export class CoverLookup extends BasePage {
       .locator(this.toastSelector)
       .filter({ hasText: 'Cover art lookup started.' })
       .last();
+    this.notificationClearedToast = page
+      .locator(this.toastSelector)
+      .filter({ hasText: 'Notification cleared.' });
     this.toolbarRight = page.locator(this.toolbarRightSelector);
     this.coverLookupStartedToastMessage = this.coverLookupStartedToast.locator('.on-page-alert__message');
   }
@@ -488,6 +491,20 @@ export class CoverLookup extends BasePage {
     });
   }
 
+  async readMobileSheetStacking() {
+    // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns its mobile-sheet stacking evidence
+    return this.mobileSheet.evaluate((sheet) => {
+      const dialog = sheet.querySelector('.cover-lookup-modal-dialog');
+      const drawer = document.getElementById('cover-lookup-drawer');
+      const sheetBox = dialog?.getBoundingClientRect();
+      return {
+        bottomGap: sheetBox ? Math.abs(window.innerHeight - sheetBox.bottom) : Number.POSITIVE_INFINITY,
+        sheetZ: Number.parseInt(getComputedStyle(sheet).zIndex, 10) || 0,
+        drawerZ: drawer ? Number.parseInt(getComputedStyle(drawer).zIndex, 10) || 0 : 0,
+      };
+    });
+  }
+
   localCoverResolutionWithin(card) {
     return card.locator(this.localCoverResolutionWithinCardSelector).first();
   }
@@ -530,6 +547,22 @@ export class CoverLookup extends BasePage {
     return this.page.locator(
       `[data-open-cover-lookup-task="${String(taskId || '').replaceAll('"', '\\"')}"]`,
     ).locator('..');
+  }
+
+  readTaskCardEvidenceById(taskId) {
+    // parity-check: allow-read-only-measurement-evaluate -- atomically bind card identity, click target, and rendered art
+    return this.taskCardById(taskId).evaluate((element) => {
+      const opener = element.querySelector('[data-open-cover-lookup-task]');
+      const image = element.querySelector('img.cover-lookup-task-cover');
+      return {
+        taskId: String(opener?.getAttribute('data-open-cover-lookup-task') || ''),
+        title: String(element.querySelector('.cover-lookup-task-title')?.textContent || '').trim(),
+        byline: String(element.querySelector('.cover-lookup-task-byline')?.textContent || '').trim(),
+        imageSrc: image instanceof HTMLImageElement
+          ? String(image.currentSrc || image.getAttribute('src') || '').trim()
+          : '',
+      };
+    });
   }
 
   taskOpenButtonById(taskId) {

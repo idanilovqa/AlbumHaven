@@ -250,6 +250,8 @@ function handleArtistsDrawerClick(event) {
     return true;
   }
 
+  if (event.target.closest('#artist-tree-context-menu')) return false;
+
   if (!state.ui.artistsDrawerOpen || !isArtistsDrawerMobileViewport()) {
     return false;
   }

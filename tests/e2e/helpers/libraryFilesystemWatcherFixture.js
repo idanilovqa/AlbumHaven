@@ -237,6 +237,7 @@ async function buildWatchedAlbumFixture({
   trackArtists = null,
   discNumbers = null,
   removeEmbeddedArtwork = false,
+  createLocalArt = false,
   ownedDirectoryName = 'watcher-reconciliation',
 } = {}) {
   const mediaRoot = resolveWatcherFixtureMediaRoot();
@@ -273,6 +274,11 @@ async function buildWatchedAlbumFixture({
         stagingParent: path.dirname(mediaRoot),
         destination: directory,
         async buildAlbum(stagedAlbum) {
+          if (createLocalArt) {
+            await execFileAsync(resolvePlaywrightPython(process.env), [
+              '-c', CREATE_LOCAL_ART_SCRIPT, stagedAlbum,
+            ], { encoding: 'utf8', windowsHide: true });
+          }
           for (const [index, title] of titles.entries()) {
             const discNumber = normalizedDiscNumbers[index];
             const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;

@@ -10,6 +10,7 @@ _EDITION_QUALIFIER = re.compile(
     r"\b(?:anniversary|collector(?:'s)?|definitive|deluxe|expanded|limited|special|tour)\b",
     re.IGNORECASE,
 )
+_RUSSIAN_EDITION = re.compile(r"\b(?:пере)?издание\b", re.IGNORECASE)
 
 
 def parse_edition_title(value: object) -> dict[str, str] | None:
@@ -24,7 +25,9 @@ def parse_edition_title(value: object) -> dict[str, str] | None:
     edition_folded = edition.casefold()
     if re.search(r"\bsoundtrack\b", edition_folded):
         return None
-    is_named_edition = "edition" in edition_folded and _EDITION_QUALIFIER.search(edition)
+    is_named_edition = (
+        "edition" in edition_folded and _EDITION_QUALIFIER.search(edition)
+    ) or _RUSSIAN_EDITION.search(edition)
     is_expanded_remaster = (
         "expanded" in edition_folded and "remaster" in edition_folded
     )

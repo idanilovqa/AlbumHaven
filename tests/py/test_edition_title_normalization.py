@@ -17,6 +17,17 @@ from music_app.services.edition_title_normalization import (
         ("Album (40th Anniversary Edition)", "Album", "40th Anniversary Edition"),
         ("Album (Expanded & Remastered)", "Album", "Expanded & Remastered"),
         ("Album [Limited Tour Edition]", "Album", "Limited Tour Edition"),
+        (
+            "Идём на Восток! [Подарочное издание]",
+            "Идём на Восток!",
+            "Подарочное издание",
+        ),
+        (
+            "Попытка к бегству (издание 2011)",
+            "Попытка к бегству",
+            "издание 2011",
+        ),
+        ("Альбом (Переиздание 2015)", "Альбом", "Переиздание 2015"),
     ],
 )
 def test_parse_edition_title_extracts_only_terminal_high_confidence_editions(
@@ -47,6 +58,7 @@ def test_parse_edition_title_extracts_only_terminal_high_confidence_editions(
         "Album (Deluxe Edition]",
         "Album [Deluxe Edition)",
         "Album (Deluxe Edition) extra",
+        "Издание книги",
     ],
 )
 def test_parse_edition_title_rejects_identity_and_release_type_false_positives(title):

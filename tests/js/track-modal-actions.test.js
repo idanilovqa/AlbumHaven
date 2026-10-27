@@ -74,6 +74,18 @@ test('TrackModalActions recognizes a visible empty shared Artbox without placeho
   assert.equal(summary.coverReady, true);
 });
 
+test('TrackModalActions reads the visible mobile album summary', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+  const { trackModal } = createTrackModalStub({ coverLoaded: true });
+  trackModal.mobilePage = createLocator({ visible: true });
+  trackModal.mobileSummary = createLocator({ text: 'Mastodon · 2009' });
+  trackModal.subtitle = createLocator({ text: '' });
+
+  const summary = await new TrackModalActions(trackModal).readSummary();
+
+  assert.equal(summary.subtitle, 'Mastodon · 2009');
+});
+
 test('TrackModalActions.waitForLoadedSummary accepts a modal with loaded cover art', async () => {
   const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
   const { trackModal, waitCalls } = createTrackModalStub({ coverLoaded: true });

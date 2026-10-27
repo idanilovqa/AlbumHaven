@@ -206,6 +206,9 @@ export class TrackModalActions {
 
   async readSummary() {
     const albumCoverImage = this.trackModal.detailedCoverImage;
+    const subtitle = await this.trackModal.mobilePage?.isVisible?.()
+      ? this.trackModal.mobileSummary
+      : this.trackModal.subtitle;
     // parity-check: allow-read-only-measurement-evaluate -- atomic decoded visible album-cover state only
     const coverLoaded = await albumCoverImage.evaluateAll((images) => images.some((image) => (
       image instanceof HTMLImageElement
@@ -220,7 +223,7 @@ export class TrackModalActions {
     ) || await this.trackModal.missingArtbox.isVisible();
     return {
       title: String(await this.trackModal.title.textContent() || '').trim(),
-      subtitle: String(await this.trackModal.subtitle.textContent() || '').trim(),
+      subtitle: String(await subtitle.textContent() || '').trim(),
       footer: String(await this.trackModal.footer.textContent() || '').trim(),
       total: String(await this.trackModal.albumTrackTable.total.textContent() || '').trim(),
       playButtons: await this.trackModal.playButtons.count(),

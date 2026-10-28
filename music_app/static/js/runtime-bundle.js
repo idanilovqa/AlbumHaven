@@ -32131,9 +32131,9 @@ async function saveRemoteCoverFromLookup() {
     }
     const optimisticCoverPath = String(data.optimistic_cover_path || '').trim();
     const previousOptimisticCovers = { ...(state.coverLookup.optimisticAlbumCovers || {}) };
-    if (selectedMatch) {
-      applyOptimisticRemoteCoverSelection(album, selectedMatch, optimisticCoverPath);
-    }
+    const optimisticAlbum = selectedMatch
+      ? applyOptimisticRemoteCoverSelection(album, selectedMatch, optimisticCoverPath)
+      : null;
     const acceptedTaskId = String(data.task?.id || taskId || '').trim();
     if (acceptedTaskId && selectedMatch) {
       const optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
@@ -32143,6 +32143,7 @@ async function saveRemoteCoverFromLookup() {
         signature: optimisticEntry?.[0] || '',
         optimisticCover: optimisticEntry?.[1],
       });
+      markCoverLookupTaskActionTaken(acceptedTaskId, optimisticAlbum || album, { persist: false });
     }
     if (ownsModal()) {
       state.coverLookup.modal.saving = false;

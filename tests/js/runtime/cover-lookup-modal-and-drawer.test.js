@@ -33,6 +33,7 @@ function loadHelper(overrides = {}) {
     },
     URLSearchParams,
     console,
+    markCoverLookupTaskActionTaken: () => {},
     ...overrides,
   };
   vm.createContext(context);
@@ -2352,14 +2353,14 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     task_id: 'remote-save-task',
     candidate_id: 'candidate-1',
   });
-  assert.deepEqual(markCalls, []);
+  assert.deepEqual(markCalls, ['remote-save-task']);
   assert.deepEqual(context.state.coverLookup.tasks.map((task) => task.id), [
     'newer-task',
     'remote-save-task',
     'older-task',
   ]);
   assert.equal(context.state.coverLookup.tasks[1].status, 'completed');
-  assert.equal(context.state.coverLookup.tasks[1].notification_action_taken, false);
+  assert.equal(context.state.coverLookup.tasks[1].notification_action_taken, true);
   assert.deepEqual(lifecycleCalls, ['poll', 'render']);
 })().catch((error) => {
   console.error(error);

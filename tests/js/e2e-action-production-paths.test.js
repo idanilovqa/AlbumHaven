@@ -248,8 +248,20 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         querySelector: () => ({ getBoundingClientRect: () => ({ height: progressVisible ? 80 : 0 }) }),
         getBoundingClientRect: () => ({ ...rectangle }),
       };
+      const HTMLButtonElement = class {};
+      const findBetterButton = new HTMLButtonElement();
+      findBetterButton.disabled = true;
+      const modalStatus = { textContent: 'Starting cover search…' };
       const context = {
-        document: { querySelector: () => modal, querySelectorAll: () => [toast] },
+        HTMLButtonElement,
+        document: {
+          querySelector: (selector) => {
+            if (selector === '.find-better') return findBetterButton;
+            if (selector === '.modal-status') return modalStatus;
+            return modal;
+          },
+          querySelectorAll: () => [toast],
+        },
         getComputedStyle: () => ({ opacity: settled ? '1' : '0.5' }),
         requestAnimationFrame: (callback) => { frames.set(++nextId, callback); return nextId; },
         cancelAnimationFrame: (id) => frames.delete(id),
@@ -257,7 +269,9 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         clearTimeout: (id) => timers.delete(id),
       };
       const measurement = await CoverLookup.prototype.observeStartedToastEntrance.call({
+        findBetterButtonSelector: '.find-better',
         modalDialogSelector: '.dialog',
+        modalStatusSelector: '.modal-status',
         toastSelector: '.toast',
         page: { evaluateHandle: (callback, args) => vm.runInNewContext(`(${callback})`, context)(args) },
       }, { timeout: 100 });
@@ -1333,7 +1347,7 @@ test('FTC-COVERS-007 alert-placement scenario cleans its completed lookup state'
   const spec = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarioTitle = 'FTC-COVERS-007 lookup-start alert does not reposition the cover modal';
   const scenarioMarker = `test('${scenarioTitle}',`;
-  const nextScenarioMarker = "test('FTC-COVERS-007 notification states and bulk clear preserve active work',";
+  const nextScenarioMarker = "test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work',";
   const scenarioStart = spec.indexOf(scenarioMarker);
   assert.ok(scenarioStart >= 0, `Expected exact scenario title: ${scenarioTitle}`);
   assert.equal(
@@ -1606,7 +1620,7 @@ test('manual all-provider scenarios explicitly opt into normal provider results'
   const spec = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarios = [
     {
-      title: 'FTC-COVERS-007 notification states and bulk clear preserve active work',
+      title: 'FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work',
       searchMarker: 'startSearchAndReadToastPlacement()',
     },
     {
@@ -5089,7 +5103,7 @@ test('search readiness waits for the committed URL query and completed view requ
 test('the long cover notification lifecycle owns enough CI budget to reach cancellation', () => {
   const coverLookup = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarioStart = coverLookup.indexOf(
-    "test('FTC-COVERS-007 notification states and bulk clear preserve active work'",
+    "test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work'",
   );
   const nextScenario = coverLookup.indexOf('\ntest(', scenarioStart + 1);
   const scenario = coverLookup.slice(scenarioStart, nextScenario);

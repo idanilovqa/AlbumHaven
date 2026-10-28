@@ -887,7 +887,7 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     assert pasted_payload["selected_cover_path"] == selected_cover_path
     pasted_revision = pasted_payload["cover_revision"]
     assert pasted_revision
-    assert pasted_payload["gallery"]["active_cover_path"] == selected_cover_path
+    assert "gallery" not in pasted_payload
     assert pasted_payload["updated_album"]["cover_revision"] == pasted_revision
     assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_path"] == selected_cover_path
     assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_revision"] == pasted_revision

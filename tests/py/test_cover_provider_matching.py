@@ -419,6 +419,42 @@ def test_swedish_language_qualifier_is_an_edition_variant_and_gets_plain_query()
     )
 
 
+def test_match_score_accepts_named_provider_credit_for_various_artists_soundtrack():
+    assert matching.match_score(
+        target_artist="Various Artists",
+        target_album="Mulan",
+        target_edition=None,
+        target_year=1998,
+        candidate_artist="Lea Salonga & Donny Osmond",
+        candidate_album="Mulan (Original Motion Picture Soundtrack)",
+        candidate_year=1998,
+    ) > 0.0
+
+
+def test_match_score_rejects_unrequested_localized_soundtrack_version():
+    assert matching.match_score(
+        target_artist="Various Artists",
+        target_album="Mulan",
+        target_edition=None,
+        target_year=1998,
+        candidate_artist="Various Artists",
+        candidate_album="Mulan (Original Motion Picture Soundtrack/Japanese Version)",
+        candidate_year=1998,
+    ) == 0.0
+
+
+def test_match_score_allows_provider_to_omit_requested_language_qualifier():
+    assert matching.match_score(
+        target_artist="Sabaton",
+        target_album="Carolus Rex (Svenska)",
+        target_edition=None,
+        target_year=2012,
+        candidate_artist="Sabaton",
+        candidate_album="Carolus Rex",
+        candidate_year=2012,
+    ) > 0.0
+
+
 def test_match_score_rejects_prefixed_and_suffixed_tribute_artist_identities():
     shared = {
         "target_artist": "Metallica",

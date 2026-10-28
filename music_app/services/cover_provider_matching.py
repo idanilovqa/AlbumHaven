@@ -41,6 +41,7 @@ _ALBUM_VARIANT_KEYWORDS = (
     "reissue",
     "single",
     "stereo",
+    "soundtrack",
     "svenska",
     "swedish",
     "version",
@@ -50,6 +51,26 @@ _FEATURE_VARIANT_KEYWORDS = {"feat", "feature", "featured", "featuring", "ft"}
 _MIX_VARIANT_KEYWORDS = {"mix", "mixed", "mixes", "mixing"}
 _REMASTER_VARIANT_KEYWORDS = {"remaster", "remastered"}
 _REMIX_VARIANT_KEYWORDS = {"remix", "remixed", "remixes", "remixing"}
+_VARIOUS_ARTIST_KEYS = {"va", "v a", "various", "various artist", "various artists"}
+_LANGUAGE_VARIANT_ALIASES = {
+    "chinese": "chinese",
+    "danish": "danish",
+    "dansk": "danish",
+    "dutch": "dutch",
+    "finnish": "finnish",
+    "french": "french",
+    "german": "german",
+    "italian": "italian",
+    "japanese": "japanese",
+    "korean": "korean",
+    "norwegian": "norwegian",
+    "polish": "polish",
+    "portuguese": "portuguese",
+    "russian": "russian",
+    "spanish": "spanish",
+    "svenska": "swedish",
+    "swedish": "swedish",
+}
 _COLLABORATION_SEPARATOR_RE = re.compile(
     r"\s*,\s*|\s+(?:with|feat(?:uring)?\.?|ft\.?)\s+|\s+&\s+",
     re.IGNORECASE,
@@ -304,6 +325,11 @@ def incompatible_album_variant_markers(value: str) -> set[str]:
         markers.add("remix")
     if tokens & _FEATURE_VARIANT_KEYWORDS:
         markers.add("feature")
+    markers.update(
+        f"language:{canonical}"
+        for token, canonical in _LANGUAGE_VARIANT_ALIASES.items()
+        if token in tokens
+    )
     return markers
 
 
@@ -473,15 +499,27 @@ def match_score(
     *,
     enforce_year: bool = True,
 ) -> float:
-    artist_match_target = _cover_artist_match_target(target_artist, candidate_artist)
-    if artist_match_target is None:
-        return 0.0
-    artist_score = similarity(artist_match_target, candidate_artist)
-    if artist_match_target != target_artist:
-        artist_score *= 0.98
+    target_is_various_artists = normalize(target_artist) in _VARIOUS_ARTIST_KEYS
+    if target_is_various_artists:
+        if target_year and candidate_year != target_year:
+            return 0.0
+        artist_score = 1.0
+    else:
+        artist_match_target = _cover_artist_match_target(target_artist, candidate_artist)
+        if artist_match_target is None:
+            return 0.0
+        artist_score = similarity(artist_match_target, candidate_artist)
+        if artist_match_target != target_artist:
+            artist_score *= 0.98
     album_score = similarity(target_album, candidate_album)
-    if incompatible_album_variant_markers(target_album) != incompatible_album_variant_markers(
-        candidate_album
+    target_variant_markers = incompatible_album_variant_markers(target_album)
+    candidate_variant_markers = incompatible_album_variant_markers(candidate_album)
+    target_language_markers = {marker for marker in target_variant_markers if marker.startswith("language:")}
+    candidate_language_markers = {marker for marker in candidate_variant_markers if marker.startswith("language:")}
+    if (
+        target_variant_markers - target_language_markers
+        != candidate_variant_markers - candidate_language_markers
+        or not candidate_language_markers.issubset(target_language_markers)
     ):
         return 0.0
     target_album_is_remaster, target_album_remaster_years = remaster_identity(target_album)

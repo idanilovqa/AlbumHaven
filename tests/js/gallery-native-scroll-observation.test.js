@@ -180,6 +180,22 @@ test('response-overlap setup keeps native input active through fixture and respo
   );
 });
 
+test('desktop continuation preposition retries native input after stale cursor recovery', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js',
+  ), 'utf8');
+  const helper = source.slice(
+    source.indexOf('async function positionWithWheelBeforeContinuation'),
+    source.indexOf('async function dispatchTouchSwipe'),
+  );
+
+  assert.match(
+    helper,
+    /expect\.poll\(\s*async \(\) => \{\s*await page\.mouse\.wheel\(0, retryDelta\);\s*retryDelta \*= -1;\s*return readLoadedAlbumCount\(page\);/,
+  );
+});
+
 test('response-overlap wheel ownership is bounded and explicitly stopped during cleanup', () => {
   const source = fs.readFileSync(path.resolve(
     __dirname,

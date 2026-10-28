@@ -159,10 +159,14 @@ async function positionWithWheelBeforeContinuation(ui, page) {
     if (geometry.remaining >= lower && geometry.remaining <= upper) return;
     if (geometry.remaining < lower) {
       const loadedBefore = await readLoadedAlbumCount(page);
-      await page.mouse.wheel(0, 32);
+      let retryDelta = 1;
       await expect.poll(
-        async () => readLoadedAlbumCount(page),
-        { intervals: [16, 32, 64], timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
+        async () => {
+          await page.mouse.wheel(0, retryDelta);
+          retryDelta *= -1;
+          return readLoadedAlbumCount(page);
+        },
+        { intervals: [64, 128, 250], timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
       ).toBeGreaterThan(loadedBefore);
       continue;
     }

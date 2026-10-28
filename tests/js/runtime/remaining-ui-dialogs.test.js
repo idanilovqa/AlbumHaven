@@ -44,7 +44,7 @@ test('alerts wrap adjacent actions and lightbox closure restores focus without c
   assert.doesNotMatch(closeLightbox, /closeCoverLookupModal\s*\(/);
 });
 
-test('Cover Look Up puts its full-search action and description in the footer', () => {
+test('Cover Look Up puts one full-search action in the footer without redundant helper text', () => {
   const markup = read('music_app/templates/partials/primary-modals.html');
   const modalStart = markup.indexOf('<div class="cover-lookup-modal"');
   const modal = markup.slice(modalStart, markup.indexOf('<div class="non-album-modal"', modalStart));
@@ -56,8 +56,8 @@ test('Cover Look Up puts its full-search action and description in the footer', 
   assert.equal((modal.match(/id="cover-lookup-find-better-button"/g) || []).length, 1);
   assert.doesNotMatch(modal.slice(0, footerStart), /Find Better Art|cover-lookup-search-action/);
   assert.doesNotMatch(modal, /Find better cover art|Search for higher-quality artwork/);
-  assert.match(footer, /aria-describedby="cover-lookup-search-hint"/);
-  assert.match(footer, /id="cover-lookup-search-hint">Runs a full cover art search/);
+  assert.doesNotMatch(footer, /aria-describedby="cover-lookup-search-hint"/);
+  assert.doesNotMatch(footer, /id="cover-lookup-search-hint"/);
 });
 
 test('Cover Look Up keeps search and save actions on one desktop footer row', () => {
@@ -116,9 +116,9 @@ test('cover lookup notifications use self-contained cards, state labels, and sha
  assert.ok(markup.indexOf("id='cover-lookup-drawer-clear'") < markup.indexOf('data-close-cover-lookup-drawer'));
   assert.match(drawer, /cover-lookup-task-card \$\{taskStateClass\}/);
   assert.doesNotMatch(drawer, /cover-lookup-task-card navigation-tree-item/);
-  assert.match(drawer, /taskStateClass = status === 'failed'[^]*'is-failed'[^]*'is-running'[^]*'is-completed'/s);
+  assert.match(drawer, /taskStateClass = artChosen[^]*'is-completed'[^]*status === 'failed'[^]*'is-failed'[^]*'is-running'[^]*'is-completed'/s);
   assert.match(drawer, /cover-lookup-task-status-label \$\{taskStateClass\}/);
-  assert.match(drawer, /ui-button--icon[^>]*cover-lookup-task-retry[^>]*aria-label="Retry lookup"[^]*?<svg/);
+  assert.match(drawer, /ButtonComponent\.renderActionButton\(\{\s*icon: 'refresh',[^]*?ariaLabel: 'Retry lookup',[^]*?className: 'cover-lookup-task-retry'/);
   assert.doesNotMatch(drawer, /data-retry-cover-lookup-task="[^]*>Retry<\/button>/);
   assert.match(drawer, /ButtonComponent\.renderActionButton\(\{\s*icon: 'delete',\s*semantic: 'destructive',[^]*?className: 'cover-lookup-task-clear',[^]*?'data-clear-cover-lookup-task': task.id/);
   assert.doesNotMatch(css, /\.cover-lookup-task-clear(?::hover)?\s*\{/);
@@ -128,7 +128,7 @@ test('cover lookup notifications use self-contained cards, state labels, and sha
   assert.doesNotMatch(css, /\.cover-lookup-drawer-button\.has-active-lookups\s*\{[^}]*border-color:[^;}]*appearance-accent/s);
   assert.match(css, /\.cover-lookup-drawer-badge\s*\{[^}]*background:\s*var\(--appearance-info,\s*#64a8ff\)/s);
   assert.match(css, /\.cover-lookup-task-card:hover[^}]*background:\s*var\(--appearance-item-hover/s);
-  assert.match(css, /\.cover-lookup-task-card\s*\{[^}]*min-height:\s*66px[^}]*border-color:\s*var\(--appearance-line/s);
+  assert.match(css, /\.cover-lookup-task-card\s*\{[^}]*height:\s*86px[^}]*border-color:\s*var\(--appearance-line/s);
   assert.match(css, /\.cover-lookup-drawer-body\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s);
   assert.match(css, /\.cover-lookup-task-open:hover[^}]*background:\s*transparent/s);
   assert.match(css, /\.cover-lookup-task-card\.is-running[^]*\.cover-lookup-task-progress span[^}]*var\(--appearance-info/s);

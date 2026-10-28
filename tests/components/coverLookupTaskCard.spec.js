@@ -259,7 +259,7 @@ for (const viewport of [
     const cards = body.locator('.cover-lookup-task-card');
     await expect(cards).toHaveCount(24);
     await expect(cards.first().locator('.cover-lookup-task-title')).toBeVisible();
-    await expect(cards.first()).toHaveCSS('min-height', '66px');
+      await expect(cards.first()).toHaveCSS('height', '86px');
 
     const geometry = await page.evaluate(() => {
       const drawerElement = document.getElementById('cover-lookup-drawer');
@@ -286,7 +286,7 @@ for (const viewport of [
     expect(geometry.drawerBottom).toBeCloseTo(geometry.playerTop, 0);
     expect(geometry.bodyOverflowY).toBe('auto');
     expect(geometry.bodyScrollHeight).toBeGreaterThan(geometry.bodyClientHeight);
-    expect(geometry.firstCardHeight).toBeGreaterThanOrEqual(66);
+      expect(geometry.firstCardHeight).toBe(86);
     expect(geometry.firstCardProgressClearance).toBeGreaterThanOrEqual(4);
 
     await body.evaluate(element => { element.scrollTop = element.scrollHeight; });

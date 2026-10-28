@@ -252,7 +252,7 @@
   gap: 4px;
   overflow: hidden;
   padding: 0;
-  height: 66px;
+  height: 86px;
   border-color: var(--appearance-line, var(--border));
   border-radius: 9px;
   background: var(--appearance-card, color-mix(in srgb, var(--appearance-ink, var(--text)) 3%, var(--appearance-panel-background, var(--panel))));

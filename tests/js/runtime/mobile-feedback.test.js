@@ -1172,3 +1172,26 @@ test('mobile gallery cards do not move when touch hover or focus changes during 
     /\.album-card:is\(:hover, :focus-within\)\s*\{[^}]*transform:\s*none;/,
   );
 });
+
+test('mobile album Cover Lookup keeps Manual Search visible', () => {
+  const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
+  assert.doesNotMatch(
+    css,
+    /\.is-mobile-page\s+\.cover-lookup-manual-add[^}]*display:\s*none/,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.is-mobile-page\s+\.cover-lookup-results\[data-search-started="false"\][^}]*display:\s*none/,
+  );
+});
+
+test('notification card status labels stay on one line', () => {
+  const css = fs.readFileSync(
+    path.join(runtime, '../../css/runtime/cover-lookup-drawer-and-related.css'),
+    'utf8',
+  );
+  const rule = css.match(/\.cover-lookup-task-status-label\s*\{[^}]*\}/)?.[0] || '';
+  assert.match(rule, /white-space:\s*nowrap/);
+  assert.match(rule, /overflow:\s*hidden/);
+  assert.match(rule, /text-overflow:\s*ellipsis/);
+});

@@ -336,6 +336,8 @@
 .cover-lookup-task-status-label {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
   min-height: 19px;
   padding: 1px 7px;
   border: 1px solid currentColor;
@@ -343,6 +345,9 @@
   font-size: 0.66rem;
   font-weight: 750;
   line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cover-lookup-task-status-label.is-running {
   color: var(--appearance-info, #64a8ff);

@@ -29087,6 +29087,12 @@ function extractCoverLookupPendingAttachments() {
       ? state.coverLookup.modal.pastedImages : []),
   ];
   state.coverLookup.modal.manualImageAttachments = [];
+  const taskId = String(state.coverLookup.modal.taskId || '').trim();
+  const task = (state.coverLookup.tasks || []).find(item => String(item?.id || '') === taskId);
+  if (taskId && state.coverLookup.modal.album && isCompletedCoverLookupTask(task)) {
+    markCoverLookupTaskActionTaken(taskId, state.coverLookup.modal.album);
+    renderCoverLookupDrawer({ taskIds: [taskId] });
+  }
   return attachments.length;
 }
 
@@ -29379,6 +29385,7 @@ function applyCoverLookupCandidateSource(candidateSource) {
   }
   const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
   if (hasExplicitRemoteSelection) {
+    modal.suggestedRemoteId = '';
     const incomingOverride = possibleMatches.find(candidateMatchesOverride);
     const selectedOverride = overrideGeneration !== generation
       ? (retainedOverride || incomingOverride)
@@ -29406,6 +29413,7 @@ function applyCoverLookupCandidateSource(candidateSource) {
   }
   modal.possibleMatches = possibleMatches;
   if (retainedPreviousMatches) {
+    modal.suggestedRemoteId = '';
     modal.selectedRemoteId = '';
     return;
   }
@@ -29423,13 +29431,16 @@ function applyCoverLookupCandidateSource(candidateSource) {
     && !Boolean(candidate?.display_only)
   ));
   if (hasPendingNonRemoteSelection) {
+    modal.suggestedRemoteId = '';
     modal.selectedRemoteId = '';
     return;
   }
   if (bestCandidateIsSelectable) {
+    modal.suggestedRemoteId = bestCandidateId;
     modal.selectedRemoteId = bestCandidateId;
     return;
   }
+  modal.suggestedRemoteId = '';
   reconcileCoverLookupRemoteSelection(possibleMatches);
 }
 
@@ -29810,7 +29821,11 @@ function syncCoverLookupSelectionUi() {
   });
   modal.querySelectorAll('[data-select-remote-cover]').forEach((card) => {
     const isActive = String(card.getAttribute('data-select-remote-cover') || '') === selectedRemoteId;
+    const isSuggested = isActive
+      && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+      && String(card.getAttribute('data-select-remote-cover') || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
     card.classList.toggle('is-active', isActive);
+    card.classList.toggle('is-suggested', isSuggested);
     let check = card.querySelector('.cover-lookup-art-check');
     if (isActive && !check) {
       check = document.createElement('span');
@@ -30365,7 +30380,51 @@ function getCoverLookupTaskRenderWindow(tasks, body) {
   return { start, end, rowHeight };
 }
 
-function replaceCoverLookupDrawerMarkup(body, markup) {
+function captureCoverLookupDrawerScrollAnchor(body) {
+  const bodyRect = body?.getBoundingClientRect?.();
+  if (!bodyRect) return null;
+  const task = Array.from(body.querySelectorAll?.('[data-open-cover-lookup-task]') || [])
+    .find((element) => {
+      const rect = element.getBoundingClientRect?.();
+      return rect
+        && Number(rect.bottom || 0) > Number(bodyRect.top || 0)
+        && Number(rect.top || 0) < Number(bodyRect.bottom || 0);
+    });
+  const taskId = String(task?.getAttribute?.('data-open-cover-lookup-task') || '').trim();
+  const taskRect = task?.getBoundingClientRect?.();
+  return taskId && taskRect ? { taskId, offset: Number(taskRect.top || 0) - Number(bodyRect.top || 0) } : null;
+}
+
+function restoreCoverLookupDrawerScrollAnchor(body, anchor) {
+  if (!body || !anchor?.taskId) return false;
+  const task = Array.from(body.querySelectorAll?.('[data-open-cover-lookup-task]') || [])
+    .find((element) => String(element.getAttribute?.('data-open-cover-lookup-task') || '') === anchor.taskId);
+  const bodyRect = body.getBoundingClientRect?.();
+  const taskRect = task?.getBoundingClientRect?.();
+  if (!bodyRect || !taskRect) return false;
+  body.scrollTop = Math.max(0, Number(body.scrollTop || 0)
+    + Number(taskRect.top || 0) - Number(bodyRect.top || 0) - Number(anchor.offset || 0));
+  return true;
+}
+
+function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
+  const targetedTaskIds = new Set((Array.isArray(taskIds) ? taskIds : [])
+    .map((taskId) => String(taskId || '').trim())
+    .filter(Boolean));
+  if (targetedTaskIds.size && typeof document.createElement === 'function') {
+    const detached = document.createElement('div');
+    detached.innerHTML = markup;
+    const indexTasks = (root) => new Map(Array.from(root.querySelectorAll?.('[data-open-cover-lookup-task]') || [])
+      .map((element) => [String(element.getAttribute?.('data-open-cover-lookup-task') || ''), element]));
+    const currentTasks = indexTasks(body);
+    const incomingTasks = indexTasks(detached);
+    targetedTaskIds.forEach((taskId) => {
+      const current = currentTasks.get(taskId)?.closest?.('.cover-lookup-task-card');
+      const incoming = incomingTasks.get(taskId)?.closest?.('.cover-lookup-task-card');
+      if (current && incoming) current.replaceWith(incoming);
+    });
+    return;
+  }
   const retainedTasks = new Map();
   const retainedImages = new Map();
   body.querySelectorAll?.('[data-open-cover-lookup-task]').forEach((taskElement) => {
@@ -30450,7 +30509,7 @@ function replaceCoverLookupDrawerMarkup(body, markup) {
   });
 }
 
-function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
+function renderCoverLookupDrawer({ preserveInteraction = true, taskIds = [] } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
   const badge = document.getElementById('cover-lookup-drawer-badge');
@@ -30550,6 +30609,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const restoreScrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
+  const scrollAnchor = taskIds.length ? null : captureCoverLookupDrawerScrollAnchor(body);
   const renderWindow = getCoverLookupTaskRenderWindow(tasks, body);
   state.coverLookup.taskRenderWindowStart = renderWindow.start;
   const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
@@ -30687,8 +30747,10 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
       ${taskMarkup}
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
-    `);
-    body.scrollTop = Math.max(0, restoreScrollTop);
+    `, taskIds);
+    if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
+      body.scrollTop = Math.max(0, restoreScrollTop);
+    }
     state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
   }
   syncCoverLookupElapsedTimer();
@@ -30850,6 +30912,10 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       )
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
+  const isSuggested = kind === 'remote'
+    && isActive
+    && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+    && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
     ? String(item?.path || '')
     : kind === 'pasted'
@@ -30897,7 +30963,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
   return `
     <div class="cover-lookup-art-card-shell">
-      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
+      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
         ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
@@ -31885,10 +31951,10 @@ async function startCoverLookupForAlbum(album, options = {}) {
     }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = true;
-      state.coverLookup.modal.statusText = 'Starting cover search…';
+      state.coverLookup.modal.statusText = 'Cover search started.';
       state.coverLookup.modal.statusTone = 'neutral';
       renderCoverLookupModal();
-      showToast('Starting cover search…', 'info', 2200, { placement: 'top-center' });
+      showToast('Cover search started.', 'info', 2200, { placement: 'top-center' });
     }
     const manualUrls = !backgroundOnly ? collectManualCoverLookupUrls() : [];
     const response = await fetch('/utilities/cover-lookup/start', {
@@ -31923,12 +31989,6 @@ async function startCoverLookupForAlbum(album, options = {}) {
       state.coverLookup.modal.manualBusy = false;
       renderCoverLookupModal();
     }
-    showToast(
-      'Cover art lookup started.',
-      'success',
-      5000,
-      { placement: 'top-center' },
-    );
     if (backgroundOnly) {
       await loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     }
@@ -32003,7 +32063,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     if (taskId) {
       markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
-      renderCoverLookupDrawer();
+      renderCoverLookupDrawer({ taskIds: [taskId] });
     }
     if (ownsModal()) closeCoverLookupModal();
     const preloadResult = updatedAlbums[0]
@@ -32201,7 +32261,7 @@ async function saveRemoteCoverFromLookup() {
       closeCoverLookupModal();
     }
     ensureCoverLookupPolling();
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ taskIds: acceptedTaskId ? [acceptedTaskId] : [] });
   } catch (error) {
     if (ownsModal()) {
       state.coverLookup.modal.saving = false;
@@ -32316,10 +32376,11 @@ async function savePastedCoverFromLookup(imageId) {
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
-    (data.notification_action_taken_task_ids || []).forEach((actionedTaskId) => {
+    const actionedTaskIds = data.notification_action_taken_task_ids || [];
+    actionedTaskIds.forEach((actionedTaskId) => {
       markCoverLookupTaskActionTaken(actionedTaskId, updatedAlbums[0] || album, { persist: false });
     });
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ taskIds: actionedTaskIds });
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);

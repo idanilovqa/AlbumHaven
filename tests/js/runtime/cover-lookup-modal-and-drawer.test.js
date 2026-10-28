@@ -157,6 +157,29 @@ for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', '
   });
 }
 
+require('node:test')('only the active automatic suggestion receives suggested styling', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  context.state.coverLookup.modal = {
+    selectedRemoteId: 'suggested-cover',
+    suggestedRemoteId: 'suggested-cover',
+    remoteSelectionOverrideGeneration: '',
+  };
+  const suggested = context.buildCoverLookupCard({
+    id: 'suggested-cover',
+    source: 'discogs',
+    url: 'https://images.example/suggested.jpg',
+  }, 'remote');
+  assert.match(suggested, /cover-lookup-art-card is-active is-suggested/);
+
+  context.state.coverLookup.modal.remoteSelectionOverrideGeneration = 'manual-choice';
+  const manuallySelected = context.buildCoverLookupCard({
+    id: 'suggested-cover',
+    source: 'discogs',
+    url: 'https://images.example/suggested.jpg',
+  }, 'remote');
+  assert.doesNotMatch(manuallySelected, /is-suggested/);
+});
+
 require('node:test')('completed lookup counts covers while retaining every other artwork alternative', () => {
   const { context, bodyElement } = createDrawerHarness();
   const covers = [{ id: 'cover-default' }, ...['one', 'two', 'three'].map(id => ({ id, art_kind: 'cover' }))];
@@ -276,6 +299,59 @@ require('node:test')('notification rerenders retain only each task\'s own unchan
   assert.strictEqual(replacementFirst.replacedWith, retainedFirst);
   assert.equal(replacementSecond.replacedWith, undefined);
   assert.equal(replacementFailed.replacedWith, undefined);
+});
+
+require('node:test')('updating one notification does not rerender its sibling cards', () => {
+  const retainedOuters = ['task-1', 'task-2', 'task-3'].map((taskId) => ({
+    taskId,
+    replaceWith(value) { this.replacedWith = value; },
+  }));
+  const retainedCards = retainedOuters.map((outer) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? outer.taskId : '',
+    closest: () => outer,
+  }));
+  const incomingOuters = ['task-1', 'task-2', 'task-3'].map((taskId) => ({ taskId }));
+  const incomingCards = incomingOuters.map((outer) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? outer.taskId : '',
+    closest: () => outer,
+  }));
+  let fullRenders = 0;
+  const body = { querySelectorAll: () => retainedCards };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '',
+    set: () => { fullRenders += 1; },
+  });
+  const detached = { innerHTML: '', querySelectorAll: () => incomingCards };
+  const context = loadHelper({ document: {
+    getElementById: () => null,
+    createElement: () => detached,
+  } });
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated cards</div>', ['task-2']);
+
+  assert.equal(fullRenders, 0, 'the live notification list must not be rebuilt');
+  assert.equal(retainedOuters[0].replacedWith, undefined);
+  assert.strictEqual(retainedOuters[1].replacedWith, incomingOuters[1]);
+  assert.equal(retainedOuters[2].replacedWith, undefined);
+});
+
+require('node:test')('notification insertion preserves the visible task pixel anchor', () => {
+  let afterInsert = false;
+  const anchoredTask = {
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'visible-task' : '',
+    getBoundingClientRect: () => ({ top: afterInsert ? 220 : 120, bottom: afterInsert ? 300 : 200 }),
+  };
+  const body = {
+    scrollTop: 500,
+    getBoundingClientRect: () => ({ top: 100, bottom: 700 }),
+    querySelectorAll: () => [anchoredTask],
+  };
+  const context = loadHelper();
+
+  const anchor = context.captureCoverLookupDrawerScrollAnchor(body);
+  afterInsert = true;
+  assert.equal(context.restoreCoverLookupDrawerScrollAnchor(body, anchor), true);
+  assert.equal(body.scrollTop, 600);
 });
 
 require('node:test')('notification URL transition keeps its decoded task image until the replacement loads', () => {
@@ -2135,13 +2211,14 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   const overlay = { hidden: true };
   const saveButton = new TestButton();
   const fetchCalls = [];
+  const toastMessages = [];
   let taskReloads = 0;
   let galleryReloads = 0;
   let appliedGallery = null;
   const context = loadHelper({
     HTMLButtonElement: TestButton,
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
-    showToast: () => {},
+    showToast: (message) => toastMessages.push(message),
     fetch: async (url, options = {}) => {
       fetchCalls.push({ url, options });
       return {
@@ -2189,6 +2266,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   await context.startCoverLookupForAlbum(secondAlbum);
 
   assert.equal(fetchCalls.length, 1);
+  assert.deepEqual(toastMessages, ['Cover search started.']);
   assert.equal(taskReloads, 0, 'start response already contains the queued task');
   assert.equal(galleryReloads, 0, 'starting a lookup must retain the gallery already loaded by the open modal');
   assert.equal(appliedGallery, null);
@@ -5034,6 +5112,44 @@ require('node:test')('adding files renders a pending image card before file deco
 
   assert.equal(renderStates.at(-1), 0);
   assert.equal(context.state.coverLookup.modal.manualImageAttachments.length, 1);
+});
+
+require('node:test')('extracting a staged image marks only a finished lookup as art chosen', () => {
+  const album = {
+    album_artist: 'Extractor Artist',
+    name: 'Extractor Album',
+    tracks: [{ path: 'C:/Music/Extractor/01.flac' }],
+  };
+  for (const [status, expectedCalls] of [['completed', 1], ['running', 0]]) {
+    const calls = [];
+    const context = loadHelper();
+    context.state.coverLookup.tasks = [{
+      id: `extractor-${status}`,
+      status,
+      notification_action_taken: false,
+      album_payload: album,
+    }];
+    context.state.coverLookup.modal = {
+      album,
+      taskId: `extractor-${status}`,
+      pastedImages: [],
+      manualImageAttachments: [{
+        id: `staged-${status}`,
+        data_url: 'data:image/jpeg;base64,AAAA',
+      }],
+    };
+    context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum) => {
+      calls.push({ taskId, selectedAlbum });
+    };
+    context.renderCoverLookupDrawer = () => {};
+
+    assert.equal(context.extractCoverLookupPendingAttachments(), 1);
+    assert.equal(calls.length, expectedCalls);
+    if (expectedCalls) {
+      assert.equal(calls[0].taskId, `extractor-${status}`);
+      assert.strictEqual(calls[0].selectedAlbum, album);
+    }
+  }
 });
 
 require('node:test')('a new running lookup keeps cached candidates until replacement results settle', () => {

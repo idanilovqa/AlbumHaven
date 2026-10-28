@@ -530,6 +530,17 @@
   outline-offset: -2px;
   box-shadow: none;
 }
+.cover-lookup-art-card.is-suggested {
+  border-color: var(--appearance-success, var(--success, #52d7aa));
+  outline-color: var(--appearance-success, var(--success, #52d7aa));
+  animation: cover-lookup-suggested-pulse 1.8s ease-in-out infinite;
+}
+@keyframes cover-lookup-suggested-pulse {
+  50% { box-shadow: 0 0 16px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 58%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cover-lookup-art-card.is-suggested { animation: none; }
+}
 .cover-lookup-art-preview {
   position: relative;
   display: block;

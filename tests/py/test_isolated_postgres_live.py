@@ -135,6 +135,13 @@ def test_live_album_identity_lineage_survives_rename_split_merge_and_restart(
     assert renamed["status"] == "resolved"
     assert renamed["album"]["album_key"] == "lineage::renamed"
 
+    stale_id_with_current_key = repository.resolve(
+        album_id=999_999_999,
+        album_key="lineage::renamed",
+    )
+    assert stale_id_with_current_key["status"] == "current"
+    assert stale_id_with_current_key["album"]["album_id"] == fixture.album_ids["old"]
+
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         tracks = connection.execute(
             "select id from library.local_tracks order by track_key"

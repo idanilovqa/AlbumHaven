@@ -3146,9 +3146,6 @@ def persist_provider_storage_policy_candidates(
     )
 
     cover_id = str(provider_spec["cover_id"])
-    matched_artist = str(provider_spec["artist"]).strip()
-    matched_album = str(provider_spec["album"]).strip()
-    matched_year = int(provider_spec["year"])
     image_url = (
         f"http://{_PUBLIC_COVER_FIXTURE_HOST}:{provider_port}"
         f"/apple/artwork/{cover_id}/100x100bb.jpg"
@@ -4147,8 +4144,8 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "artist": "Watcher Automatic Cover Artist",
             "album": "Watcher Automatic Cover Album",
             "year": 2006,
-            "width": 1800,
-            "height": 1800,
+            "width": 2000,
+            "height": 2000,
             "candidate_fixture_mode": "watcher-automatic-candidate",
         })
         neutral_user_cover_source = cover_specs[1] if len(cover_specs) > 1 else cover_specs[0]
@@ -4272,8 +4269,19 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
                 ("b", cover_specs[3] if len(cover_specs) > 3 else cover_specs[-1]),
             )
         ]
+        self.cover_lookup_normal_specs = [
+            prepare_provider_artwork_spec({
+                **dict(cover_specs[(index - 2) % len(cover_specs)]),
+                "cover_id": f"normal-crack-the-skye-{index:02d}",
+                "artist": "Mastodon",
+                "album": f"Crack The Skye Fixture {index:02d}",
+                "year": 2009,
+            })
+            for index in range(2, 11)
+        ]
         self.cover_specs = [
             *(dict(spec) for spec in cover_specs),
+            *self.cover_lookup_normal_specs,
             *(dict(spec) for spec in self.cover_lookup_matching_specs),
             self.cover_lookup_automatic_candidate_spec,
             self.cover_lookup_watcher_candidate_spec,

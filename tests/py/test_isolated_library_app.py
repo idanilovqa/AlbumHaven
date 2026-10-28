@@ -2066,7 +2066,7 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
         ]
 
 
-def test_provider_storage_policy_candidates_use_spec_album_identity(monkeypatch):
+def test_provider_storage_policy_candidates_ignore_source_spec_identity(monkeypatch):
     recorded_calls = []
 
     class FakeConnection:
@@ -2095,14 +2095,16 @@ def test_provider_storage_policy_candidates_use_spec_album_identity(monkeypatch)
             "album": "Profile Album",
             "year": 2026,
         },
+        fixture_profile="functional-core",
     )
 
     _sql, params = recorded_calls[0]
-    assert params[-3:] == ("Profile Artist", "Profile Album", 2026)
+    expected_identity = ("Mastodon", "Crack The Skye", 2009)
+    assert params[-3:] == expected_identity
     assert {
         (candidate["artist"], candidate["album"], candidate["year"])
         for candidate in json.loads(params[0])
-    } == {("Profile Artist", "Profile Album", 2026)}
+    } == {expected_identity}
 
 
 def test_real_cover_pool_reuses_staged_metadata_without_copying_sources(
@@ -4575,7 +4577,8 @@ def test_provider_fixture_defaults_to_no_results_until_provider_scenarios_opt_in
             )
             response = connection.getresponse()
             assert response.status == 200
-            assert json.loads(response.read())["resultCount"] == 1
+            expected_count = 2 if target.endswith("07") else 1
+            assert json.loads(response.read())["resultCount"] == expected_count
     finally:
         if connection is not None:
             connection.close()
@@ -4738,9 +4741,14 @@ def test_provider_fixture_automatic_coverless_primes_fixture09_without_improving
         assert [spec["cover_id"] for spec in watcher_specs] == [
             "watcher-automatic-candidate",
         ]
-        assert service._server.apple_artwork_payload(
+        assert watcher_specs[0]["width"] >= 2000
+        assert watcher_specs[0]["height"] >= 2000
+        watcher_payload = service._server.apple_artwork_payload(
             "watcher-automatic-candidate"
         )
+        assert watcher_payload
+        with Image.open(io.BytesIO(watcher_payload)) as watcher_image:
+            assert watcher_image.size == (2000, 2000)
 
         fixture09_specs = handler._matching_specs(
             "Mastodon Crack The Skye Fixture 09",
@@ -4841,13 +4849,21 @@ def test_provider_fixture_later_request_returns_candidates_before_terminal_mode_
         assert "error" not in request_result
         assert request_result["status"] == 200
         assert request_result["payload"] == {
-            "count": 1,
-            "releases": [{
-                "id": "fixture-07",
-                "title": "Crack The Skye Fixture 07",
-                "date": "2009-01-01",
-                "artist-credit": [{"name": "Mastodon"}],
-            }],
+            "count": 2,
+            "releases": [
+                {
+                    "id": "fixture-07",
+                    "title": "Crack The Skye Fixture 07",
+                    "date": "2009-01-01",
+                    "artist-credit": [{"name": "Mastodon"}],
+                },
+                {
+                    "id": "normal-crack-the-skye-07",
+                    "title": "Crack The Skye Fixture 07",
+                    "date": "2009-01-01",
+                    "artist-credit": [{"name": "Mastodon"}],
+                },
+            ],
         }
 
         service._server.set_cover_lookup_mode("no-results")
@@ -4920,7 +4936,7 @@ def test_provider_fixture_later_gate_also_holds_discogs_requests(tmp_path):
         assert not request_thread.is_alive(), "released Discogs response did not complete"
         assert "error" not in request_result
         assert request_result["status"] == 200
-        assert request_result["payload"]["pagination"]["items"] == 1
+        assert request_result["payload"]["pagination"]["items"] == 2
         assert service._server.snapshot_cover_lookup_evidence()[
             "later_provider_completed"
         ] == 1

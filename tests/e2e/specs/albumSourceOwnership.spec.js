@@ -107,6 +107,7 @@ test('FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is
     await appBarActions.waitForScanAndCoverRefreshIdle();
   });
   await stepLogger.step('Keep mixed-folder artwork off the unrelated loose release', async () => {
+    await galleryActions.scrollToAlbumUnderHeading(fixture.artist, 'Unrelated Album');
     await expect(galleryActions.albumCoverByName('Unrelated Album')).toHaveCount(0);
     await expect(galleryActions.albumArtboxByName('Unrelated Album'))
       .toHaveAttribute('data-album-artbox-state', 'empty');

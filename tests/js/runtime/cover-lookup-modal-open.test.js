@@ -650,7 +650,7 @@ test('starting lookup publishes visible feedback before the start request settle
   const startPromise = context.startCoverLookupForAlbum(album, { taskId: 'persisted-lookup' });
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(startRequestBody.task_id, 'persisted-lookup');
+  assert.equal(startRequestBody.task_id, '', 'a modal search starts a new generation');
 
   assert.ok(renderSnapshots.some((snapshot) => (
     snapshot.manualBusy === true && snapshot.statusText === 'Cover search started.'

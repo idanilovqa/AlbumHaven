@@ -19,9 +19,11 @@ class _Connection:
     def __init__(self, rows):
         self.rows = list(rows)
         self.params = None
+        self.sql = None
 
     def execute(self, sql, params):
         assert "album_identity_lineage_resolution_v1" in str(sql)
+        self.sql = str(sql)
         self.params = dict(params)
         return _Result(self.rows)
 
@@ -90,6 +92,25 @@ def test_resolve_follows_a_merge_to_one_current_album():
     assert result["status"] == "resolved"
     assert result["album"]["album_id"] == 9
     assert result["choices"] == []
+
+
+def test_resolve_treats_album_id_and_key_as_alternative_identity_evidence():
+    repository, connection = _repository([_candidate(9, "artist::current", depth=0)])
+
+    result = repository.resolve(album_id=4, album_key="artist::current")
+
+    assert result["status"] == "current"
+    compact_sql = " ".join(connection.sql.split())
+    assert (
+        "where (%(album_id)s::bigint is not null and "
+        "transitions.predecessor_album_id = %(album_id)s::bigint) or "
+        "(%(album_key)s::text is not null and "
+        "transitions.predecessor_album_key = %(album_key)s::text)"
+    ) in compact_sql
+    assert (
+        "where (%(album_id)s::bigint is not null and albums.id = %(album_id)s::bigint) "
+        "or (%(album_key)s::text is not null and albums.album_key = %(album_key)s::text)"
+    ) in compact_sql
 
 
 def test_resolve_returns_split_choices_without_guessing():

@@ -2533,6 +2533,35 @@ async function run() {
     );
   }
 
+  test('speculative Album Details prewarm includes the projected album id', async () => {
+    const album = {
+      album_id: 401,
+      key: 'jordsjø / breidablik::watcher joint credit release',
+      name: 'Watcher Joint Credit Release',
+      preview_only: true,
+      tracks: [],
+    };
+    const { context } = loadHelper({
+      initialAlbums: [album],
+      onFetchAlbumDetails() {
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            ok: true,
+            album: { ...album, preview_only: false, tracks: [{ path: 'C:\\Music\\track.flac' }] },
+          }),
+        };
+      },
+    });
+
+    context.queueTrackModalAlbumDetailsPrewarm(album.key);
+    await flushMicrotasks();
+
+    const requestUrl = new URL(`http://localhost${context.fetchCalls[0].url}`);
+    assert.equal(requestUrl.searchParams.get('album_id'), '401');
+  });
+
   test('openTrackModalForButton must not bypass the current-album identity resolver', () => {
     const originalTrackPath = 'D:\\Synthetic Music\\Rarity Artist\\Original\\01 Stay.mp3';
     const movedTrackPath = 'D:\\Synthetic Music\\Rarity Artist\\Destination\\02 Move.mp3';

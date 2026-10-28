@@ -20,6 +20,7 @@ export class CoverLookup extends BasePage {
     this.cancelButton = this.modal.getByRole('button', { name: 'Cancel', exact: true });
     this.manualUrlInput = page.locator(this.manualUrlInputSelector);
     this.manualExtractButton = page.locator(this.manualExtractButtonSelector);
+    this.manualStatus = this.modal.locator('.cover-lookup-manual-status');
     this.addImageButton = this.modal.getByRole('button', { name: 'Add image', exact: true });
     this.manualDropZone = this.modal.locator('[data-cover-lookup-drop-zone]');
     this.pendingAttachments = this.modal.locator('[data-cover-lookup-pending-attachment]');
@@ -61,7 +62,7 @@ export class CoverLookup extends BasePage {
     this.drawerEmptyState = page.locator(this.drawerEmptyStateSelector);
     this.coverLookupStartedToast = page
       .locator(this.toastSelector)
-      .filter({ hasText: 'Cover art lookup started.' })
+      .filter({ hasText: 'Cover search started.' })
       .last();
     this.notificationClearedToast = page
       .locator(this.toastSelector)
@@ -243,7 +244,7 @@ export class CoverLookup extends BasePage {
       let finish;
       let baseline;
       let busyButtonSeen = false;
-      let startingStatusSeen = false;
+      let startedStatusSeen = false;
       let settledFrames = 0;
       let sampledFrames = 0;
       const delta = { height: 0, width: 0, x: 0, y: 0 };
@@ -262,11 +263,11 @@ export class CoverLookup extends BasePage {
             findBetterButton instanceof HTMLButtonElement
             && findBetterButton.disabled
           );
-          startingStatusSeen = startingStatusSeen
-            || String(modalStatus?.textContent || '').includes('Starting cover search…');
+          startedStatusSeen = startedStatusSeen
+            || String(modalStatus?.textContent || '').includes('Cover search started.');
           const toast = Array.from(document.querySelectorAll(toastSelector)).findLast(
             (candidate) => candidate.querySelector('.on-page-alert__message')
-              ?.textContent?.trim() === 'Cover art lookup started.',
+              ?.textContent?.trim() === 'Cover search started.',
           );
           if (modal && progress?.getBoundingClientRect().height > 0 && toast) {
             const style = getComputedStyle(toast);
@@ -291,7 +292,7 @@ export class CoverLookup extends BasePage {
                 busyButtonSeen,
                 delta,
                 sampledFrames,
-                startingStatusSeen,
+                startedStatusSeen,
                 baselineUnsettled: true,
               });
               return;
@@ -374,7 +375,7 @@ export class CoverLookup extends BasePage {
         && !toast.getAnimations().some((animation) => animation.playState === 'running');
     }, { timeout }, {
       toastSelector: this.toastSelector,
-      toastText: 'Cover art lookup started.',
+      toastText: 'Cover search started.',
     });
 
     // parity-check: allow-read-only-measurement-evaluate -- two paints prove settled toast transform and rectangle

@@ -46,7 +46,7 @@ def test_select_background_cover_refresh_jobs_queues_missing_and_skips_adequate_
     )]
 
 
-def test_select_background_cover_refresh_jobs_can_exclude_user_owned_covers():
+def test_select_background_cover_refresh_jobs_always_excludes_user_owned_covers():
     logger = _LoggerStub()
 
     jobs = cover_refresh_jobs.select_background_cover_refresh_jobs(
@@ -63,7 +63,6 @@ def test_select_background_cover_refresh_jobs_can_exclude_user_owned_covers():
         ],
         logger=logger,
         scan_generation=1,
-        exclude_user_owned=True,
     )
 
     assert jobs == [{"folder": "missing", "needs_cover_fetch": True}]

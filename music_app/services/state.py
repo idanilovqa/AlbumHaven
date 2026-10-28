@@ -314,10 +314,7 @@ def _drain_watcher_cover_refresh_queue(
                 logger=logger,
                 log_app_event=log_app_event,
                 select_background_cover_refresh_jobs=lambda **kwargs: (
-                    select_background_cover_refresh_jobs(
-                        **kwargs,
-                        exclude_user_owned=True,
-                    )
+                    select_background_cover_refresh_jobs(**kwargs)
                 ),
                 build_cover_jobs=build_cover_refresh_jobs,
                 run_cover_jobs=lambda **kwargs: run_cover_jobs(

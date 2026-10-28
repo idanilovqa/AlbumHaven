@@ -182,10 +182,10 @@ def _resolution_sql() -> str:
             false as cycle_detected
           from library.local_album_identity_transitions as transitions
           join active_library using (library_id)
-          where (%(album_id)s::bigint is null
-                 or transitions.predecessor_album_id = %(album_id)s::bigint)
-            and (%(album_key)s::text is null
-                 or transitions.predecessor_album_key = %(album_key)s::text)
+          where (%(album_id)s::bigint is not null
+                 and transitions.predecessor_album_id = %(album_id)s::bigint)
+             or (%(album_key)s::text is not null
+                 and transitions.predecessor_album_key = %(album_key)s::text)
 
           union all
 
@@ -213,8 +213,8 @@ def _resolution_sql() -> str:
                  false as cycle_detected
           from active_library
           join library.local_albums as albums using (library_id)
-          where (%(album_id)s::bigint is null or albums.id = %(album_id)s::bigint)
-            and (%(album_key)s::text is null or albums.album_key = %(album_key)s::text)
+          where (%(album_id)s::bigint is not null and albums.id = %(album_id)s::bigint)
+             or (%(album_key)s::text is not null and albums.album_key = %(album_key)s::text)
         ),
         live_candidates as (
           select distinct on (albums.id)

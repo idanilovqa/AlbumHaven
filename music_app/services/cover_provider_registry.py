@@ -484,7 +484,7 @@ def _search_service_cover_candidates(
                     all_candidates,
                     lookup_group="services",
                 )
-                if callable(on_candidates) and not (
+                if service_candidates and callable(on_candidates) and not (
                     callable(should_cancel) and should_cancel()
                 ):
                     on_candidates(published_matches)

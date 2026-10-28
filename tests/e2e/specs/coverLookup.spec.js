@@ -117,8 +117,8 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     expect(failed.status).toBe(400);
     expect(failed.payload.ok).toBe(false);
     expect(failed.payload.error).toBe('No usable cover art could be extracted from those links');
-    await expect(lookup.modalStatusTitle).toHaveText('Cover lookup failed');
-    await expect(lookup.modalStatusMessage).toHaveText('No usable cover art could be extracted from those links');
+    await expect(lookup.manualStatus).toHaveText("Couldn't extract images.");
+    await expect(lookup.manualStatus).toHaveAttribute('role', 'alert');
     await expect(lookup.manualUrlInput).toHaveValue(missingUrl);
     await expect(lookup.stagedCoverCardByName(pickerName)).toBeVisible();
     await expect(lookup.stagedCoverCardByName('image.png')).toBeVisible();
@@ -870,7 +870,6 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
 
   await coverLookupActions.closeDrawer();
   await page.reload();
-  await galleryActions.waitForGalleryReady();
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
   expect(await readCards()).toEqual(afterSave);
@@ -2229,7 +2228,16 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
       neutralBaselineFullSizeCover.sha256.toLowerCase(),
     );
     const evidenceAfterOpen = await coverLookupActions.readProviderFixtureEvidence();
-    expect(evidenceAfterOpen).toEqual(evidenceBeforeOpen);
+    const {
+      apple_artwork_requests: artworkRequestsBeforeOpen,
+      ...providerDiscoveryBeforeOpen
+    } = evidenceBeforeOpen;
+    const {
+      apple_artwork_requests: artworkRequestsAfterOpen,
+      ...providerDiscoveryAfterOpen
+    } = evidenceAfterOpen;
+    expect(artworkRequestsAfterOpen).toBe(artworkRequestsBeforeOpen + 1);
+    expect(providerDiscoveryAfterOpen).toEqual(providerDiscoveryBeforeOpen);
     await coverLookupActions.closeModal();
     await trackModalActions.close();
   });

@@ -1414,39 +1414,43 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     except FileNotFoundError:
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
     deleted_cover_bytes = resolved.read_bytes()
+    active_cover = active_cover_path_for_track_paths_in_state(
+        library_state.get("file_cache", {}) or {},
+        album_context.track_paths,
+    )
     next_cover = delete_local_cover_and_choose_next(
         album_root=album_context.album_root,
         source_path=resolved,
-        active_cover_path=active_cover_path_for_track_paths_in_state(
-            library_state.get("file_cache", {}) or {},
-            album_context.track_paths,
-        ),
+        active_cover_path=active_cover,
         image_extensions=set(config["IMAGE_EXTENSIONS"]),
         image_dimensions=image_dimensions,
         is_squareish_cover=_is_squareish_cover,
         score_image=score_image,
     )
-    try:
-        persist_cover_selection_for_tracks(
+    updated_albums: list[dict[str, object]] = []
+    updated_problematic_album = None
+    if active_cover == resolved:
+        try:
+            persist_cover_selection_for_tracks(
+                album_context.track_paths,
+                next_cover,
+                config=config,
+                logger=logger,
+                cover_selection_origin="user" if next_cover is not None else None,
+                explicit_selection=next_cover is not None,
+                clear_selection=next_cover is None,
+            )
+        except Exception:
+            resolved.write_bytes(deleted_cover_bytes)
+            raise
+        updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
             album_context.track_paths,
             next_cover,
             config=config,
             logger=logger,
-            cover_selection_origin="user" if next_cover is not None else None,
-            explicit_selection=next_cover is not None,
-            clear_selection=next_cover is None,
+            library_state=library_state,
+            schedule_cache_update=False,
         )
-    except Exception:
-        resolved.write_bytes(deleted_cover_bytes)
-        raise
-    updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
-        album_context.track_paths,
-        next_cover,
-        config=config,
-        logger=logger,
-        library_state=library_state,
-        schedule_cache_update=False,
-    )
     return JSONResponse(
         {
             "ok": True,
@@ -1597,6 +1601,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     task_id = str(payload.get("task_id") or "").strip()
     candidate_id = str(payload.get("candidate_id") or "").strip()
     snapshot_generation = str(payload.get("snapshot_generation") or "").strip()
+    client_surface = client_surface_from_request(request)
     if not task_id and snapshot_generation:
         try:
             task_id = UUID(snapshot_generation).hex
@@ -1612,12 +1617,13 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             task_payload = cover_lookup_result(normalized_task_id)
             if task_payload:
                 task_id = normalized_task_id
-        if not task_payload:
+        if not task_payload and not (client_surface == "tv" and snapshot_generation):
             task_payload = await run_in_threadpool(
                 load_cover_lookup_notification,
                 dict(config),
                 task_id,
             ) or {}
+    task_payload = task_payload or {}
     task_track_paths = _cover_lookup_task_track_paths(task_payload)
     album, album_context = await _resolve_album_payload_context(
         config,
@@ -1701,7 +1707,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             ),
             None,
         ) if isinstance(snapshot_candidates, list) else None
-    if (selected_match and client_surface_from_request(request) == "tv"
+    if (selected_match and client_surface == "tv"
             and not is_provider_lookup_match(selected_match)):
         return _json_response(({"ok": False, "error": "Only provider cover candidates can be selected on TV."}, 403))
     if selected_match and not task_payload:

@@ -216,7 +216,7 @@ export class CoverLookupActions {
       if (entrance.error) throw new Error(entrance.error);
       expect(entrance.baselineUnsettled).toBe(true);
       expect(entrance.busyButtonSeen).toBe(true);
-      expect(entrance.startingStatusSeen).toBe(true);
+      expect(entrance.startedStatusSeen).toBe(true);
       expect(entrance.sampledFrames).toBeGreaterThanOrEqual(3);
     } finally {
       try {
@@ -229,7 +229,7 @@ export class CoverLookupActions {
     const finalVisualState = await this.coverLookup
       .waitForCoverLookupStartedToastFinalState({ timeout });
     await expect(this.coverLookup.coverLookupStartedToast).toBeVisible({ timeout });
-    await expect(this.coverLookup.coverLookupStartedToastMessage).toHaveText('Cover art lookup started.');
+    await expect(this.coverLookup.coverLookupStartedToastMessage).toHaveText('Cover search started.');
     await expect(this.coverLookup.searchProgress).toBeVisible({ timeout });
     const toastOcclusionTargets = this.coverLookup.toastOcclusionTargets();
     const targetEntries = Object.entries(toastOcclusionTargets);
@@ -567,6 +567,7 @@ export class CoverLookupActions {
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
     return {
+      ...payload,
       payload,
       requestPayload: response.request().postDataJSON(),
     };

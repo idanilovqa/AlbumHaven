@@ -517,29 +517,20 @@ def test_various_artists_owner_does_not_create_composite_display_artist(
     artist_rows, album_rows, featured_rows, track_rows, _track_file_rows = rows
 
     assert album.album_artist == "Jordsjø / Breidablik"
-    assert album_rows[0]["artist_key"] == "various artists"
+    assert album.artists == ["Jordsjø", "Breidablik"]
+    assert album_rows[0]["artist_key"] is None
     assert album_rows[0]["metadata"]["album_artist"] == "Jordsjø / Breidablik"
     assert {
-        row["artist_key"]
+        (row["artist_key"], row["featured_kind"])
         for row in featured_rows
-        if row["featured_kind"] == "owner"
-    } == {"various artists"}
-    assert {
-        row["artist_key"]
-        for row in featured_rows
-        if row["featured_kind"] == "featured_track_artist"
-    } == {"jordsjø", "breidablik"}
-    assert not [
-        row
-        for row in featured_rows
-        if row["featured_kind"] == "featured_member"
-    ]
-    assert {row["artist_key"] for row in track_rows} == {"jordsjø", "breidablik"}
-    assert {row["artist_key"] for row in artist_rows} == {
-        "various artists",
-        "jordsjø",
-        "breidablik",
+    } == {
+        ("jordsjø", "featured_member"),
+        ("breidablik", "featured_member"),
+        ("jordsjø", "featured_track_artist"),
+        ("breidablik", "featured_track_artist"),
     }
+    assert {row["artist_key"] for row in track_rows} == {"jordsjø", "breidablik"}
+    assert {row["artist_key"] for row in artist_rows} == {"jordsjø", "breidablik"}
 
 
 def test_structured_shared_release_does_not_persist_composite_owner(monkeypatch):

@@ -51,7 +51,7 @@ test('FTC-COVERS-034 watcher prefers front-named local art over a larger booklet
         ...WATCHER_LOCAL_COVER_TARGET,
         year: Number(WATCHER_LOCAL_COVER_TARGET.year),
         fixtureDirectory: 'watcher-local-cover-ranking',
-        localArtworkCandidates: true,
+        createLocalArt: true,
         removeEmbeddedArtwork: true,
         context,
         managedAppLifecycle,

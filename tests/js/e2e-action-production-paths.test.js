@@ -240,7 +240,7 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
       let progressVisible = false;
       let rectangle = { x: 100, y: 50, width: 800, height: 700 };
       const toast = {
-        querySelector: () => ({ textContent: 'Cover art lookup started.' }),
+        querySelector: () => ({ textContent: 'Cover search started.' }),
         classList: { contains: () => settled },
         getAnimations: () => settled ? [] : [{ playState: 'running' }],
       };
@@ -251,7 +251,7 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
       const HTMLButtonElement = class {};
       const findBetterButton = new HTMLButtonElement();
       findBetterButton.disabled = true;
-      const modalStatus = { textContent: 'Starting cover search…' };
+      const modalStatus = { textContent: 'Cover search started.' };
       const context = {
         HTMLButtonElement,
         document: {

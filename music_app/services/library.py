@@ -759,7 +759,12 @@ def _preview_open_directory_paths(album: Album) -> list[str]:
     seen: set[str] = set()
     tracks = list(getattr(album, "tracks", []) or [])
     directories = _contextual_album_containers([
-        (track.path, track.disc_number, track.album, track.edition)
+        (
+            getattr(track, "path", None),
+            getattr(track, "disc_number", None),
+            getattr(track, "album", None),
+            getattr(track, "edition", None),
+        )
         for track in tracks
     ])
     for directory in directories:

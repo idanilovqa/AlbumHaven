@@ -1488,6 +1488,26 @@ def test_initial_view_preview_can_strip_private_album_preference_overlays_for_pu
     assert preview_album["tracks"] == []
 
 
+def test_asgi_unrevisioned_cover_preview_stays_in_app_data(app, asgi_app):
+    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "Art" / "Front.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1200, 1200), color=(32, 96, 160)).save(
+        cover_path, format="JPEG", quality=92
+    )
+
+    status, _headers, body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={"path": str(cover_path), "size": "480"},
+    )
+
+    assert status == 200
+    assert body != cover_path.read_bytes()
+    assert (app.config["DATA_DIR"] / "display-cover-cache").is_dir()
+    assert not (cover_path.parent / ".album-haven").exists()
+
+
 def test_asgi_cover_route_probes_exact_cached_variant_off_event_loop(app, asgi_app, monkeypatch):
     cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
     cover_path.parent.mkdir(parents=True, exist_ok=True)

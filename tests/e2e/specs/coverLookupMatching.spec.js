@@ -83,7 +83,7 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
       .toBe(Object.values(TARGET).join(' • '));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
-    expect(await coverLookupActions.readModalSubtitle()).toBe(Object.values(TARGET).join(' - '));
+    expect(await coverLookupActions.readModalSubtitle()).toBe(Object.values(TARGET).join(' · '));
     taskTitle = TARGET.album;
     baselineLocalCover = await coverLookupActions.readActiveLocalCoverEvidence();
     expect(baselineLocalCover.isActive).toBe(true);

@@ -18,7 +18,7 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 67],
-  ['cover-providers-1', 21],
+  ['cover-providers-1', 22],
   ['cover-providers-2', 14],
   ['metadata-mutations', 16],
   ['playback-utilities-1', 14],
@@ -116,7 +116,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved seven-way 160-case assignment', () => {
+test('functional shard contract pins the approved seven-way 161-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -130,7 +130,7 @@ test('functional shard contract pins the approved seven-way 160-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 160);
+  assert.equal(total, 161);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -722,19 +722,20 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
     "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
     "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
+    "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
   ]);
   const isolatedInvocations = waves.flatMap((wave) => wave.invocations).filter(
     (invocation) => invocation.baselineMode === 'isolated-app-process',
   );
 
-  assert.equal(isolatedInvocations.length, 9);
+  assert.equal(isolatedInvocations.length, 10);
   assert.deepEqual(
     new Set(isolatedInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name))),
     expectedCases,
   );
   assert.deepEqual(
     isolatedInvocations.map((invocation) => invocation.cases.length),
-    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   );
   const secondWaveInvocations = waves
     .filter((wave) => wave.wave === 2)
@@ -752,6 +753,7 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
       "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
       "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
       "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
+      "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
     ].sort(),
   );
   assert.equal(
@@ -923,7 +925,7 @@ validatorTest('all seven shards use explicit effect-compatible wave budgets', ()
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
     ['gallery-search-visual', { cases: 67, waves: [1, 2, 3, 4] }],
-    ['cover-providers-1', { cases: 21, waves: [1, 2, 4] }],
+    ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 14, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],

@@ -814,6 +814,10 @@ require('node:test')('mobile notification scrolling defers virtual-window rerend
   let renderCount = 0;
   context.renderCoverLookupDrawer = () => { renderCount += 1; };
 
+  const anchor = context.captureCoverLookupDrawerScrollAnchor(bodyElement);
+  assert.equal(anchor.taskId, 'task-40');
+  assert.equal(anchor.offset, 100);
+
   await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
 
   assert.equal(renderCount, 0, 'active swipe must not replace the scrolling DOM');
@@ -2343,7 +2347,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album: secondAlbum,
     manual_urls: [],
-    task_id: 'flaming-row-lookup',
+    task_id: '',
   });
 })().catch((error) => {
   console.error(error);

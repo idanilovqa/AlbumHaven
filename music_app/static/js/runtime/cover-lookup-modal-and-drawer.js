@@ -2737,7 +2737,7 @@ function handleCoverLookupDrawerScroll(event) {
     coverLookupDrawerScrollRenderTimer = 0;
   }
   const renderWindowChanged = nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0);
-  if (renderWindowChanged && !captureCoverLookupDrawerScrollAnchor(body)) {
+  if (renderWindowChanged && !captureCoverLookupDrawerScrollAnchor(body)?.taskId) {
     renderCoverLookupDrawer({ preserveInteraction: false });
   } else if (renderWindowChanged && typeof window.setTimeout === 'function') {
     coverLookupDrawerScrollRenderTimer = window.setTimeout(() => {
@@ -3185,7 +3185,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         album,
-        task_id: String(options?.taskId || state.coverLookup.modal.taskId || ''),
+        task_id: backgroundOnly ? retryTaskId : '',
         manual_urls: manualUrls,
       }),
     });

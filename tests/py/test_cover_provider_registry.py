@@ -460,6 +460,31 @@ def test_search_service_cover_candidates_publishes_fast_provider_before_slow_pro
     assert errors == []
 
 
+def test_search_service_cover_candidates_does_not_republish_after_empty_provider(monkeypatch):
+    _patch_service_lookup_output(monkeypatch)
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_apple_candidates",
+        lambda *_args, **_kwargs: [_candidate("apple")],
+    )
+    for provider_name in (
+        "search_deezer_candidates",
+        "search_youtube_music_candidates",
+        "search_spotify_candidates",
+        "search_genius_candidates",
+    ):
+        monkeypatch.setattr(cover_provider_runtime, provider_name, lambda *_args, **_kwargs: [])
+
+    published_sources: list[tuple[str, ...]] = []
+    _search_service_cover_candidates(
+        on_candidates=lambda matches: published_sources.append(
+            tuple(match["source"] for match in matches)
+        )
+    )
+
+    assert published_sources == [("apple",)]
+
+
 def test_search_service_cover_candidates_never_publishes_an_older_subset_after_a_newer_one(
     monkeypatch,
 ):

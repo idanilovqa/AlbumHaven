@@ -196,6 +196,39 @@ test('Artist Family controls follow selected artist and close without focusing a
   assert.equal(focusCount, 0);
 });
 
+test('an open Album Types menu hydrates deferred loose tracks after navigation changes the view', async () => {
+  let hydrationCount = 0;
+  const view = {};
+  const anchor = { setAttribute() {}, contains: () => false };
+  const surface = {
+    hidden: true,
+    matches: () => false,
+    setAttribute() {},
+    contains: () => false,
+    classList: { add() {}, remove() {} },
+  };
+  const context = loadRuntime({
+    state: { view },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: () => null,
+      body: { appendChild() {} },
+    },
+  });
+  context.ensureGalleryMainState = () => ({ albumTypes: [], sources: {} });
+  context.focusGalleryMainSurface = () => {};
+  context.hydrateDeferredNonAlbumTracks = async () => { hydrationCount += 1; };
+  context.openGalleryMainSurface('album-types', anchor, surface);
+
+  view.non_album_tracks_deferred = true;
+  context.updateGalleryMainControls();
+  await Promise.resolve();
+
+  assert.equal(hydrationCount, 1);
+});
+
 test('initial Artist Family markup is hidden only when no effective artist is selected', () => {
   const button = indexTemplateSource.match(/<button[^>]*data-gallery-bar-action="artist-family"[^>]*>/)?.[0];
   assert.match(button, /\{% if not effective_selected_artist %\} hidden\{% endif %\}/);
@@ -421,7 +454,7 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /typeAnchor[\s\S]*?openGalleryMainSurface\('album-types'[\s\S]*?hydrateDeferredNonAlbumTracks\(\{ libraryWide: true \}\)/,
+    /typeAnchor[\s\S]*?openGalleryMainSurface\('album-types'[\s\S]*?hydrateDeferredNonAlbumTracksForAlbumTypes\(\)/,
   );
   assert.match(
     galleryMainCssSource,

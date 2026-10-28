@@ -2693,6 +2693,46 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     assert _decode_json(pasted_body) == {"ok": False, "error": "Clipboard image format is invalid."}
 
 
+def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selection(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    active_cover = track_path.parent / "cover.jpg"
+    active_cover.write_bytes(_jpeg_bytes((40, 180, 220)))
+    inactive_cover = track_path.parent / "back.jpg"
+    inactive_cover.write_bytes(_jpeg_bytes((220, 160, 30)))
+    _seed_album_state(app.library_state, track_path)
+    app.library_state["file_cache"][str(track_path)]["cover_path"] = str(active_cover)
+
+    def fail_if_selection_changes(*_args, **_kwargs):
+        raise AssertionError("deleting inactive artwork must not rewrite the active selection")
+
+    monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", fail_if_selection_changes)
+    monkeypatch.setattr(asgi_routes, "apply_cover_path_for_tracks", fail_if_selection_changes)
+    asgi_app = _make_wave_d_app(app)
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/local-delete",
+        json_body={"album": _album_payload(track_path), "source_path": str(inactive_cover)},
+    )
+
+    payload = _decode_json(body)
+    assert status == 200
+    assert payload["ok"] is True
+    assert not inactive_cover.exists()
+    assert active_cover.exists()
+    assert payload["gallery"]["active_cover_path"] == str(active_cover)
+    assert [
+        candidate["path"]
+        for candidate in payload["gallery"]["local_covers"]
+        if candidate["is_active"]
+    ] == [str(active_cover)]
+
+
 def test_asgi_cover_lookup_delete_final_local_cover_durably_clears_selection(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 

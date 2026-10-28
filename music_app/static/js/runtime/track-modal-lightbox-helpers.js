@@ -602,6 +602,7 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
   if (controller) trackModalSpeculativePrewarmControllers.add(controller);
   trackModalActiveSpeculativePrewarms += 1;
   loadTrackModalAlbumDetails(normalizedAlbumKey, {
+    albumId: indexedAlbum.album_id || indexedAlbum.id,
     controller,
     signal: controller?.signal,
     speculative: true,

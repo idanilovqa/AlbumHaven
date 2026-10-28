@@ -30423,6 +30423,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   } else if (!state.coverLookup.drawerOpen && typeof clearTriggerAnchor === 'function') {
     clearTriggerAnchor(drawer);
   }
+  if (!state.coverLookup.drawerOpen && body.innerHTML) {
+    state.coverLookup.drawerScrollTop = Math.max(0, Number(body.scrollTop || 0));
+  }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
   const loadedActiveCount = tasks.filter((task) => isActiveCoverLookupSearchTask(task)).length;
@@ -30462,9 +30465,6 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     body.inert = clearInProgress;
   }
   if (!state.coverLookup.drawerOpen) {
-    if (body.innerHTML) {
-      state.coverLookup.drawerScrollTop = Math.max(0, Number(body.scrollTop || 0));
-    }
     body.innerHTML = '';
     state.coverLookup.taskRenderWindowStart = 0;
     syncCoverLookupElapsedTimer();

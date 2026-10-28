@@ -623,6 +623,16 @@ require('node:test')('polling preserves a pressed task before selection exists a
 
 require('node:test')('closed drawer releases cards and renders terminal task state when reopened', () => {
   const { context, bodyElement } = createDrawerHarness();
+  const drawerElement = context.document.getElementById('cover-lookup-drawer');
+  let drawerHidden = false;
+  Object.defineProperty(drawerElement, 'hidden', {
+    configurable: true,
+    get: () => drawerHidden,
+    set(value) {
+      drawerHidden = value;
+      if (value) bodyElement.scrollTop = 0;
+    },
+  });
   const task = { id: 'saved-task', status: 'running', artist: 'Artist', album: 'Album' };
   context.state.coverLookup.tasks = [task];
   context.renderCoverLookupDrawer();

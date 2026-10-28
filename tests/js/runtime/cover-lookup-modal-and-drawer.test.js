@@ -1441,7 +1441,11 @@ require('node:test')('notification virtualization keeps one fixed row geometry w
   context.renderCoverLookupDrawer({ preserveInteraction: false });
 
   assert.match(bodyElement.innerHTML, /cover-lookup-task-spacer[^>]+height:3192px/);
-  assert.match(drawerCss, /\.cover-lookup-drawer-body\s*\{[^}]*gap:\s*0;/s);
+  const drawerBodyGaps = Array.from(
+    drawerCss.matchAll(/\.cover-lookup-drawer-body\s*\{([^}]*)\}/gs),
+    match => match[1].match(/gap:\s*([^;]+);/)?.[1]?.trim(),
+  ).filter(Boolean);
+  assert.equal(drawerBodyGaps.at(-1), '0', 'the final drawer-body rule must not add virtualized spacing');
   assert.match(drawerCss, /\.cover-lookup-task-card\s*\{[^}]*margin-bottom:\s*10px;/s);
   assert.equal(context.state.coverLookup.taskEstimatedHeight, 140);
 });

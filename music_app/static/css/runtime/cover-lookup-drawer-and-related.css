@@ -242,7 +242,7 @@
   color: #fee2e2;
 }
 .cover-lookup-drawer-body {
-  gap: 4px;
+  gap: 0;
   padding: 10px;
 }
 .cover-lookup-task-card {

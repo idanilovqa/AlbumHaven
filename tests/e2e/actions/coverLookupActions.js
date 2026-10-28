@@ -1179,14 +1179,24 @@ export class CoverLookupActions {
   }
 
   async scrollDrawerAwayFromEdges() {
-    return this.coverLookup.drawerBody.evaluate((body) => {
-      body.scrollTop = Math.floor((body.scrollHeight - body.clientHeight) / 2);
-      return body.scrollTop;
-    });
+    await this.coverLookup.drawerBody.hover();
+    await this.coverLookup.page.mouse.wheel(0, 100000);
+    await expect.poll(() => this.readDrawerScrollTop()).toBeGreaterThan(0);
+    const bottom = await this.readDrawerScrollTop();
+    if (bottom > 2) {
+      await this.coverLookup.page.mouse.wheel(0, -Math.max(1, Math.floor(bottom / 2)));
+      await expect.poll(() => this.readDrawerScrollTop()).toBeLessThan(bottom);
+    }
+    return this.readDrawerScrollTop();
   }
 
   async readDrawerScrollTop() {
+    // parity-check: allow-read-only-measurement-evaluate -- read native drawer scroll position without changing it
     return this.coverLookup.drawerBody.evaluate((body) => body.scrollTop);
+  }
+
+  readVisibleTaskIds() {
+    return this.coverLookup.readVisibleTaskIds();
   }
 
   async expectNotificationMobileSheet() {

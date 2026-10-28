@@ -384,6 +384,24 @@ export class GalleryPage extends BasePage {
       .locator(this.albumRowWithinSectionSelector);
   }
 
+  albumRowsByArtistAndAlbumName(artistName, albumName) {
+    return this.albumRowsByArtistName(artistName).filter({
+      has: this.page.locator(this.albumTitleButtonWithinSectionSelector).filter({
+        hasText: exactNormalizedText(albumName),
+      }),
+    });
+  }
+
+  async readAlbumSubsectionTitle(artistName, albumName) {
+    const row = this.albumRowsByArtistAndAlbumName(artistName, albumName).first();
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read the production subsection preceding one owned album row
+    return row.evaluate((element) => {
+      let sibling = element.previousElementSibling;
+      while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
+      return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
+    });
+  }
+
   async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {
     const section = this.sectionByArtistHeading(artistName);
     const matchingCards = section.locator(

@@ -778,12 +778,11 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     ]),
   ));
   const before = await readCards();
-  const readTargetOrder = async () => page.locator('[data-open-cover-lookup-task]').evaluateAll(
-    (elements, taskIds) => elements
-      .map((element) => String(element.getAttribute('data-open-cover-lookup-task') || ''))
-      .filter((taskId) => taskIds.includes(taskId)),
-    notifications.map(({ taskId }) => taskId),
-  );
+  const readTargetOrder = async () => {
+    const taskIds = notifications.map(({ taskId }) => taskId);
+    return (await coverLookupActions.readVisibleTaskIds())
+      .filter((taskId) => taskIds.includes(taskId));
+  };
   const orderBeforeSave = await readTargetOrder();
   expect(new Set(Object.values(before).map((evidence) => evidence.taskId)).size).toBe(3);
   expect(new Set(Object.values(before).map((evidence) => evidence.imageSrc)).size).toBe(3);
@@ -1221,6 +1220,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
 });
 
 test('FTC-COVERS-039 stale split identity stays open and chooses an exact current release', { tag: '@area:cover-providers' }, async ({
+  freshBrowserSession,
   page,
   galleryActions,
   trackModalActions,
@@ -1230,7 +1230,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
   let splitApplied = false;
   let taskId = '';
   let candidateId = '';
-  let staleAlbum = null;
+  let staleSession = null;
   try {
     const artistUrl = `/?surface=albums&artist=${encodeURIComponent(SPLIT_FIXTURE.artist)}`;
     const sourceIdentity = {
@@ -1243,9 +1243,6 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     expect(await galleryActions.selectAlbumDetailsByIdentity(sourceIdentity))
       .toEqual(sourceIdentity);
     await trackModalActions.waitForLoadedSummary();
-    staleAlbum = await page.evaluate(() => structuredClone(
-      state.modalReleases?.[state.modalReleaseIndex] || null,
-    ));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
     await coverLookupActions.setProviderFixtureMode('split-identity');
@@ -1262,6 +1259,14 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     await coverLookupActions.waitForTaskStatusById(taskId, /^[1-9]\d* covers? found$/);
     await coverLookupActions.closeDrawer();
 
+    staleSession = await freshBrowserSession.create();
+    await staleSession.galleryActions.goto(artistUrl);
+    await staleSession.galleryActions.waitForGalleryReady();
+    await staleSession.galleryActions.waitForAlbumVisibleUnderHeading(
+      SPLIT_FIXTURE.artist,
+      SPLIT_FIXTURE.album,
+    );
+
     await tagEditorActions.openForAlbum({
       album: SPLIT_FIXTURE.album,
       artist: SPLIT_FIXTURE.artist,
@@ -1276,19 +1281,16 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     splitApplied = true;
     await trackModalActions.closeIfOpen();
 
-    await page.evaluate((album) => openTrackModal({
-      ...album,
-      preview_only: true,
-      tracks: [],
-    }), staleAlbum);
-    const albumDetailsSelector = page.getByRole('group', { name: 'Current releases' });
-    await expect(albumDetailsSelector).toBeVisible();
-    await albumDetailsSelector.getByRole('button', {
-      name: new RegExp(SPLIT_FIXTURE.splitAlbum),
-    }).click();
-    await trackModalActions.waitForLoadedSummary();
-    await expect(page.locator('#track-modal-title')).toContainText(SPLIT_FIXTURE.splitAlbum);
-    await trackModalActions.closeIfOpen();
+    await staleSession.galleryActions.selectAlbumDetailsByIdentity(sourceIdentity);
+    await staleSession.trackModalActions.waitForIdentitySplitChoices([
+      SPLIT_FIXTURE.album,
+      SPLIT_FIXTURE.splitAlbum,
+    ]);
+    const splitSummary = await staleSession.trackModalActions.chooseCurrentRelease(
+      SPLIT_FIXTURE.splitAlbum,
+    );
+    expect(splitSummary.title).toContain(SPLIT_FIXTURE.splitAlbum);
+    await staleSession.trackModalActions.closeIfOpen();
 
     await coverLookupActions.openDrawer();
     await coverLookupActions.openTaskWithKeyboard(SPLIT_FIXTURE.album, 'Enter');

@@ -55,6 +55,7 @@ export class CoverLookup extends BasePage {
     this.drawerTitle = this.drawer.locator('.cover-lookup-drawer-title');
     this.drawerBadge = page.locator(this.drawerBadgeSelector);
     this.drawerBody = page.locator(this.drawerBodySelector);
+    this.taskOpenButtons = this.drawer.locator(this.taskOpenButtonWithinCardSelector);
     this.drawerCloseButton = page.locator(this.drawerCloseButtonSelector);
     this.drawerClearCompletedButton = page.locator(this.drawerClearCompletedButtonSelector);
     this.drawerEmptyState = page.locator(this.drawerEmptyStateSelector);
@@ -567,6 +568,13 @@ export class CoverLookup extends BasePage {
 
   taskOpenButtonById(taskId) {
     return this.taskCardById(taskId).locator('.cover-lookup-task-open');
+  }
+
+  readVisibleTaskIds() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the rendered notification order from POM-owned task controls
+    return this.taskOpenButtons.evaluateAll((elements) => elements
+      .map((element) => String(element.getAttribute('data-open-cover-lookup-task') || '').trim())
+      .filter(Boolean));
   }
 
   taskCoverById(taskId) {

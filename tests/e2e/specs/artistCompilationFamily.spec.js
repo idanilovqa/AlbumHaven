@@ -326,12 +326,10 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
     await navigationPanelActions.waitForSidebarSelection(CONTROL_PARTNER);
     await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_PARTNER, CONTROL_SHARED_ALBUM);
 
-    const subsectionTitle = await page.locator('.album-title-button', { hasText: CONTROL_SHARED_ALBUM }).evaluate((button) => {
-      const row = button.closest('.album-row');
-      let sibling = row?.previousElementSibling || null;
-      while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
-      return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
-    });
+    const subsectionTitle = await galleryActions.readAlbumSubsectionTitle(
+      CONTROL_PARTNER,
+      CONTROL_SHARED_ALBUM,
+    );
     expect(subsectionTitle).toBe('Featured On');
     expect(await galleryActions.readAlbumNamesByHeading(CONTROL_PARTNER)).toEqual([CONTROL_SHARED_ALBUM]);
   });

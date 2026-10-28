@@ -185,12 +185,7 @@ async function expectFeaturedAlbumOccurrence({
   await galleryActions.waitForArtistHeadings([artist]);
   await galleryActions.waitForAlbumVisible(album, 60000);
 
-  const subsectionTitle = await page.locator('.album-title-button', { hasText: album }).evaluate((button) => {
-    const row = button.closest('.album-row');
-    let sibling = row?.previousElementSibling || null;
-    while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
-    return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
-  });
+  const subsectionTitle = await galleryActions.readAlbumSubsectionTitle(artist, album);
   expect(subsectionTitle).toBe('Featured On');
 }
 
@@ -215,16 +210,9 @@ async function expectOwnedAlbumOccurrence({
   await galleryActions.waitForArtistHeadings([artist]);
   await galleryActions.waitForAlbumVisible(album, 60000);
 
-  const albumRows = page.locator('.album-row', {
-    has: page.locator('.album-title-button', { hasText: album }),
-  });
-  await expect(albumRows).toHaveCount(1);
-  const subsectionTitle = await albumRows.locator('.album-title-button').evaluate((button) => {
-    const row = button.closest('.album-row');
-    let sibling = row?.previousElementSibling || null;
-    while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
-    return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
-  });
+  expect((await galleryActions.readAlbumNamesByHeading(artist))
+    .filter((albumName) => albumName === album)).toHaveLength(1);
+  const subsectionTitle = await galleryActions.readAlbumSubsectionTitle(artist, album);
   expect(subsectionTitle).toBeNull();
 }
 

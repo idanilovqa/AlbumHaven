@@ -430,11 +430,11 @@ test('toast placement is opt-in for the cover lookup start notification', () => 
     'Cover art lookup started.',
     'success',
     2200,
-    { placement: 'top-center' },
+    { placement: 'top-center', fixedViewport: true },
   );
 
   assert.equal(toasts[0].className, 'toast');
-  assert.equal(toasts[1].className, 'toast is-top-center');
+  assert.equal(toasts[1].className, 'toast is-top-center is-viewport-fixed');
 });
 
 test('toast alerts render as compact single-line notifications without a heading', () => {

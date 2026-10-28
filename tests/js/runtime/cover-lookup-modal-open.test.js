@@ -653,9 +653,10 @@ test('starting lookup publishes visible feedback before the start request settle
   assert.equal(startRequestBody.task_id, 'persisted-lookup');
 
   assert.ok(renderSnapshots.some((snapshot) => (
-    snapshot.manualBusy === true && snapshot.statusText === 'Starting cover search…'
+    snapshot.manualBusy === true && snapshot.statusText === 'Cover search started.'
   )));
-  assert.equal(toastCalls[0]?.[0], 'Starting cover search…');
+  assert.equal(toastCalls[0]?.[0], 'Cover search started.');
+  assert.equal(toastCalls[0]?.[3]?.fixedViewport, true);
 
   resolveStart({
     ok: true,
@@ -760,18 +761,12 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
   const startPromise = context.startCoverLookupForAlbum(album);
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(
-    toastCalls.map((call) => call[0]),
-    ['Starting cover search…', 'Cover art lookup started.'],
-  );
-  const acceptedToast = toastCalls[1];
-  assert.equal(acceptedToast[1], 'success');
-  assert.equal(
-    acceptedToast[2],
-    5000,
-    'the lookup-start notification must remain readable while the accepted task begins rendering',
-  );
+  assert.deepEqual(toastCalls.map((call) => call[0]), ['Cover search started.']);
+  const acceptedToast = toastCalls[0];
+  assert.equal(acceptedToast[1], 'info');
+  assert.equal(acceptedToast[2], 2200);
   assert.equal(acceptedToast[3]?.placement, 'top-center');
+  assert.equal(acceptedToast[3]?.fixedViewport, true);
   assert.ok(renderSnapshots.some((snapshot) => (
     snapshot.manualBusy === false
     && snapshot.taskId === acceptedTask.id

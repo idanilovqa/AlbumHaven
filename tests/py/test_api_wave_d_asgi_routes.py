@@ -2576,6 +2576,14 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
         "/utilities/cover-lookup/local-delete",
         json_body={"album": _album_payload(track_path), "source_path": str(track_path.parent / "cover.jpg")},
     )
+    async def fail_if_pasted_save_rebuilds_gallery(*_args, **_kwargs):
+        raise AssertionError("pasted cover save must not block on a redundant gallery rebuild")
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "_serialize_cover_gallery_from_asgi",
+        fail_if_pasted_save_rebuilds_gallery,
+    )
     pasted_success_status, _pasted_success_headers, pasted_success_body = _run_asgi_request(
         asgi_app,
         "POST",
@@ -2633,7 +2641,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     pasted_success_payload = _decode_json(pasted_success_body)
     assert pasted_success_payload["ok"] is True
     assert pasted_success_payload["selected_cover_path"] == str(track_path.parent / "cover.jpg")
-    assert pasted_success_payload["gallery"]["album_root"] == str(track_path.parent)
+    assert "gallery" not in pasted_success_payload
     assert actioned_track_paths == [{str(track_path)}]
     assert apply_calls == [
         {

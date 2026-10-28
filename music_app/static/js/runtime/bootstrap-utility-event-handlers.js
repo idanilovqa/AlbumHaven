@@ -906,6 +906,7 @@ async function handleUtilityBootstrapClick(event) {
     openImageLightbox(
       coverLookupLightboxButton.getAttribute('data-cover-src'),
       coverLookupLightboxButton.getAttribute('data-cover-alt'),
+      { previewSrc: coverLookupLightboxButton.getAttribute('data-cover-preview-src') },
     );
     return;
   }

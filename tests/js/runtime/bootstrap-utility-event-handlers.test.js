@@ -80,6 +80,13 @@ test('Cover Lookup album link uses the shared album-details navigation action', 
     /closest\('\[data-open-cover-lookup-album-details="1"\]'\)[\s\S]*?openCoverLookupAlbumDetails\(\)/,
   );
 });
+test('Cover Lookup lightbox passes the already-loaded preview fallback', () => {
+  assert.match(
+    helperSource,
+    /openImageLightbox\([\s\S]*?getAttribute\('data-cover-src'\)[\s\S]*?previewSrc:\s*coverLookupLightboxButton\.getAttribute\('data-cover-preview-src'\)/,
+  );
+});
+
 const utilityListBuildersSource = fs.readFileSync(utilityListBuildersPath, 'utf8');
 const utilityLoadersSource = fs.readFileSync(utilityLoadersPath, 'utf8');
 const utilityRenderersSource = fs.readFileSync(path.join(

@@ -1569,11 +1569,6 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             "notification_action_taken_task_ids": [
                 str(task.get("id") or "") for task in actioned_tasks
             ],
-            "gallery": await _serialize_cover_gallery_from_asgi(
-                request,
-                album_context.album_root,
-                album_context.track_paths,
-            ),
         }
     )
 

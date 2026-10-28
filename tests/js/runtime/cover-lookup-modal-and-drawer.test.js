@@ -157,6 +157,20 @@ for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', '
   });
 }
 
+require('node:test')('local Cover Lookup cards retain their loaded preview as the full-size fallback', () => {
+  const context = loadHelper({
+    escapeHtml: value => String(value ?? ''),
+    buildCoverUrl: (path, options = {}) => `/cover?path=${path}${options.size ? `&size=${options.size}` : ''}`,
+  });
+  const card = context.buildCoverLookupCard({
+    path: 'N:/Music/Dissection/cover.jpg',
+    filename: 'cover.jpg',
+    cover_revision: 'dissection-cover',
+  }, 'local');
+
+  assert.match(card, /data-cover-preview-src="[^"]*size=480[^"]*"/);
+});
+
 require('node:test')('only the active automatic suggestion receives suggested styling', () => {
   const context = loadHelper({ escapeHtml: value => String(value ?? '') });
   context.state.coverLookup.modal = {
@@ -4793,6 +4807,38 @@ require('node:test')('initial cover gallery load finishes before task polling st
   finishGallery();
   await closedBeforeReady;
   assert.deepEqual(order, ['gallery']);
+});
+
+require('node:test')('reopening Cover Lookup renders its cached gallery before refreshing', async () => {
+  class TestButton {}
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const saveButton = new TestButton();
+  const album = { tracks: [{ path: 'N:/Music/Dissection/01.flac' }] };
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': saveButton,
+      }[id] || null),
+    },
+    showToast: () => {},
+  });
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true,
+    local_covers: [{ path: 'N:/Music/Dissection/cover.jpg' }, { path: 'N:/Music/Dissection/cover-existing-1.jpg' }],
+    other_art: [],
+  });
+  context.renderCoverLookupModal = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.refreshCoverLookupGallery = async (showLoading) => {
+    assert.equal(showLoading, false);
+    assert.equal(context.state.coverLookup.modal.loading, false);
+    assert.equal(context.state.coverLookup.modal.localCovers.length, 2);
+  };
+
+  await context.openCoverLookupModal(album);
 });
 
 require('node:test')('actioned terminal notifications render source-neutral Art chosen status', () => {

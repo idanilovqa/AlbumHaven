@@ -577,6 +577,22 @@ export class CoverLookup extends BasePage {
       .filter(Boolean));
   }
 
+  readFirstVisibleTaskAnchor() {
+    // parity-check: allow-read-only-measurement-evaluate -- read visible notification identity and exact pixel offset
+    return this.taskOpenButtons.evaluateAll((elements, drawerBodySelector) => {
+      const body = document.querySelector(drawerBodySelector);
+      const bodyRect = body?.getBoundingClientRect();
+      if (!bodyRect) return null;
+      const task = elements.find((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.bottom > bodyRect.top && rect.top < bodyRect.bottom;
+      });
+      const taskRect = task?.getBoundingClientRect();
+      const taskId = String(task?.getAttribute('data-open-cover-lookup-task') || '').trim();
+      return taskId && taskRect ? { taskId, offset: taskRect.top - bodyRect.top } : null;
+    }, this.drawerBodySelector);
+  }
+
   taskCoverById(taskId) {
     return this.taskCardById(taskId).locator('img.cover-lookup-task-cover').first();
   }

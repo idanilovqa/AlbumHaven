@@ -368,6 +368,21 @@ require('node:test')('notification insertion preserves the visible task pixel an
   assert.equal(body.scrollTop, 600);
 });
 
+require('node:test')('notification render window follows the visible anchor when its task is reordered', () => {
+  const { context } = createDrawerHarness();
+  const tasks = Array.from({ length: 200 }, (_, index) => ({ id: `task-${index}` }));
+  const body = { innerHTML: '<div>rendered</div>', scrollTop: 50 * 96 };
+
+  const renderWindow = context.getCoverLookupTaskRenderWindow(
+    tasks,
+    body,
+    { taskId: 'task-150', offset: 12 },
+  );
+
+  assert.ok(renderWindow.start <= 150);
+  assert.ok(renderWindow.end > 150);
+});
+
 require('node:test')('notification URL transition keeps its decoded task image until the replacement loads', () => {
   const listeners = {};
   const retained = {

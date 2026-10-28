@@ -143,6 +143,81 @@ export async function seedCoverLookupNotificationHistory() {
   return existingCount + inserted;
 }
 
+export async function insertNewCoverLookupNotification() {
+  const taskKey = await executeFixtureSql(`
+    with fixture_library as (
+      select libraries.id
+      from app.bootstrap_owners owners
+      join library.libraries libraries
+        on libraries.owner_account_id = owners.account_id
+      where owners.owner_key = 'local-bootstrap-owner'
+        and libraries.name = 'Local Library'
+        and libraries.library_kind = 'local'
+      limit 1
+    )
+    insert into ops.cover_lookup_tasks (
+      library_id,
+      task_key,
+      status,
+      requested_at,
+      metadata
+    )
+    select
+      fixture_library.id,
+      '${TASK_PREFIX}new-arrival',
+      'running',
+      now(),
+      jsonb_build_object(
+        'source_family', 'cover_lookup_notifications',
+        'source_payload', jsonb_build_object(
+          'type', 'cover_lookup',
+          'artist', 'New Notification Artist',
+          'album', 'New Notification Album',
+          'year', 2026,
+          'progress', 10,
+          'progress_label', 'Searching',
+          'started_at', now()::text,
+          'updated_at', now()::text
+        )
+      )
+    from fixture_library
+    returning task_key;
+  `);
+  if (!taskKey) throw new Error('Failed to insert the new notification fixture.');
+  return taskKey;
+}
+
+export async function removeNewCoverLookupNotification() {
+  const taskKey = await executeFixtureSql(`
+    delete from ops.cover_lookup_tasks
+    where task_key = '${TASK_PREFIX}new-arrival'
+    returning task_key;
+  `);
+  if (!taskKey) throw new Error('Failed to remove the new notification fixture.');
+}
+
+export async function markCoverLookupNotificationArtChosen(taskKey) {
+  const normalizedTaskKey = String(taskKey || '').trim();
+  if (!/^notification-history-performance-[a-z0-9-]+$/u.test(normalizedTaskKey)) {
+    throw new Error(`Refusing to mutate an unowned notification task: ${normalizedTaskKey}`);
+  }
+  const updatedTaskKey = await executeFixtureSql(`
+    update ops.cover_lookup_tasks
+    set completed_at = now() + interval '1 second',
+        metadata = jsonb_set(
+          jsonb_set(metadata, '{notification_action_taken}', 'true'::jsonb, true),
+          '{source_payload,updated_at}',
+          to_jsonb(now()::text),
+          true
+        )
+    where task_key = '${normalizedTaskKey}'
+    returning task_key;
+  `);
+  if (updatedTaskKey !== normalizedTaskKey) {
+    throw new Error(`Failed to update notification fixture ${normalizedTaskKey}.`);
+  }
+}
+
 export async function clearCoverLookupNotificationHistory() {
   await executeFixtureSql(`
     delete from ops.cover_lookup_tasks

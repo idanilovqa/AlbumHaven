@@ -9,6 +9,9 @@ import {
 } from '../helpers/index.js';
 import {
   clearCoverLookupNotificationHistory,
+  insertNewCoverLookupNotification,
+  markCoverLookupNotificationArtChosen,
+  removeNewCoverLookupNotification,
   seedCoverLookupNotificationHistory,
 } from '../helpers/coverLookupNotificationHistoryFixture.js';
 import { COVER_LOOKUP_TEST_TARGETS } from '../helpers/coverLookupFixtureData.js';
@@ -186,6 +189,40 @@ test.describe(`${CASE_ID} large notification history`, () => {
       expect(notification.totalCount).toBe(notificationHistorySize);
       expect(notification.visibleTitles).toContain('Notification Album 0528');
       samples.push(await sampleRenderer(coverLookupActions.coverLookup, cdp, 'history-loaded'));
+
+      await stepLogger.step('Keep the visible notification anchored across inserts and cover updates', async () => {
+        await coverLookupActions.scrollDrawerAwayFromEdges();
+        const anchor = await coverLookupActions.coverLookup.readFirstVisibleTaskAnchor();
+        expect(anchor?.taskId).toMatch(/^notification-history-performance-/u);
+
+        await insertNewCoverLookupNotification();
+        await expect(coverLookupActions.coverLookup.drawerBadge).toHaveText(String(notificationHistorySize + 1), {
+          timeout: 30_000,
+        });
+        await expect.poll(async () => (
+          await coverLookupActions.coverLookup.readFirstVisibleTaskAnchor()
+        )?.taskId).toBe(anchor.taskId);
+        await expect.poll(async () => Math.abs((
+          await coverLookupActions.coverLookup.readFirstVisibleTaskAnchor()
+        )?.offset - anchor.offset)).toBeLessThanOrEqual(1);
+
+        await removeNewCoverLookupNotification();
+        await expect(coverLookupActions.coverLookup.drawerBadge).toHaveText(String(notificationHistorySize), {
+          timeout: 30_000,
+        });
+        await expect.poll(async () => (
+          await coverLookupActions.coverLookup.readFirstVisibleTaskAnchor()
+        )?.taskId).toBe(anchor.taskId);
+
+        await markCoverLookupNotificationArtChosen(anchor.taskId);
+        await coverLookupActions.waitForTaskStatusById(anchor.taskId, 'Art chosen');
+        await expect.poll(async () => (
+          await coverLookupActions.coverLookup.readFirstVisibleTaskAnchor()
+        )?.taskId).toBe(anchor.taskId);
+        await expect.poll(async () => Math.abs((
+          await coverLookupActions.coverLookup.readFirstVisibleTaskAnchor()
+        )?.offset - anchor.offset)).toBeLessThanOrEqual(1);
+      });
 
       const historyScroll = await stepLogger.step(
         'Exercise repeated long-scroll window replacement',

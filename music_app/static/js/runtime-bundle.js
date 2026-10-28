@@ -30374,13 +30374,18 @@ const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
 const COVER_LOOKUP_TASK_OVERSCAN = 10;
 const COVER_LOOKUP_TASK_ROW_HEIGHT = 96;
 
-function getCoverLookupTaskRenderWindow(tasks, body) {
+function getCoverLookupTaskRenderWindow(tasks, body, scrollAnchor = null) {
   const rowHeight = COVER_LOOKUP_TASK_ROW_HEIGHT;
   const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
   const scrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
-  const visibleStart = Math.floor(Math.max(0, scrollTop) / rowHeight);
+  const anchorIndex = scrollAnchor?.taskId
+    ? tasks.findIndex((task) => String(task?.id || '').trim() === scrollAnchor.taskId)
+    : -1;
+  const visibleStart = anchorIndex >= 0
+    ? anchorIndex
+    : Math.floor(Math.max(0, scrollTop) / rowHeight);
   const start = Math.min(maximumStart, Math.max(0, visibleStart - COVER_LOOKUP_TASK_OVERSCAN));
   const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
   return { start, end, rowHeight };
@@ -30616,7 +30621,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true, taskIds = [] } = 
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
   const scrollAnchor = taskIds.length ? null : captureCoverLookupDrawerScrollAnchor(body);
-  const renderWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  const renderWindow = getCoverLookupTaskRenderWindow(tasks, body, scrollAnchor);
   state.coverLookup.taskRenderWindowStart = renderWindow.start;
   const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
   const taskMarkup = visibleTasks.map((task) => {

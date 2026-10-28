@@ -46299,6 +46299,7 @@ function cleanupMobilePage(descriptor) {
     state.coverLookup.returnToDrawerAfterAlbumDetails = false;
     state.coverLookup.drawerOpen = true;
     renderCoverLookupDrawer();
+    restoreCoverLookupDrawerScroll();
   }
   return original?.returnFocus;
 }

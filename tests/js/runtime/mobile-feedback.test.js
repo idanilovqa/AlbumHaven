@@ -693,6 +693,7 @@ test('both history Back and direct Back restore the root page viewport, not a hi
 
 test('closing mobile Album Details opened from Notifications restores the drawer', () => {
   let renders = 0;
+  let restores = 0;
   const context = load('mobile-navigation.js', {
     document: { getElementById: () => null },
     state: {
@@ -704,6 +705,7 @@ test('closing mobile Album Details opened from Notifications restores the drawer
     },
     closeTrackModal() {},
     renderCoverLookupDrawer() { renders += 1; },
+    restoreCoverLookupDrawerScroll() { restores += 1; },
   });
 
   context.cleanupMobilePage({ kind: 'album' });
@@ -712,6 +714,7 @@ test('closing mobile Album Details opened from Notifications restores the drawer
   assert.equal(context.state.coverLookup.drawerScrollTop, 384);
   assert.equal(context.state.coverLookup.returnToDrawerAfterAlbumDetails, false);
   assert.equal(renders, 1);
+  assert.equal(restores, 1);
 });
 
 test('mobile page presentation round-trips the same surfaces and parent stack without closing or rewriting history', () => {

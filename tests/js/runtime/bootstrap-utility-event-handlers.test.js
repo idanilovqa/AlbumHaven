@@ -1066,6 +1066,9 @@ test('applying the base incomplete-order filter preserves a selection after deta
 
 test('opening a cover lookup task keeps the drawer open behind the task modal', async () => {
   const { context } = createContext();
+  context.document.getElementById = (id) => (
+    id === 'cover-lookup-drawer-body' ? { scrollTop: 71 } : null
+  );
   const albumPayload = {
     album: 'Kill Em All',
     artist: 'Metallica',
@@ -1099,6 +1102,7 @@ test('opening a cover lookup task keeps the drawer open behind the task modal', 
 
   assert.equal(wasPrevented(), true);
   assert.equal(context.state.coverLookup.drawerOpen, true);
+  assert.equal(context.state.coverLookup.drawerScrollTop, 71);
   assert.deepEqual(transitions, [
       'open:true:Metallica:Kill Em All:cover-task-12:true',
   ]);

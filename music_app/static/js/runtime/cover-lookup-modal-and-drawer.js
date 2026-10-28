@@ -2935,6 +2935,13 @@ function closeCoverLookupModal() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
+  const restoreDrawerScroll = () => {
+    if (!state.coverLookup.drawerOpen) return;
+    const drawerBody = document.getElementById('cover-lookup-drawer-body');
+    if (drawerBody) drawerBody.scrollTop = Math.max(0, Number(state.coverLookup.drawerScrollTop || 0));
+  };
+  restoreDrawerScroll();
+  window.requestAnimationFrame?.(restoreDrawerScroll);
   stopCoverLookupPollingIfIdle();
 }
 

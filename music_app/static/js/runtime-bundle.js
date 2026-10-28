@@ -31743,6 +31743,13 @@ function closeCoverLookupModal() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
+  const restoreDrawerScroll = () => {
+    if (!state.coverLookup.drawerOpen) return;
+    const drawerBody = document.getElementById('cover-lookup-drawer-body');
+    if (drawerBody) drawerBody.scrollTop = Math.max(0, Number(state.coverLookup.drawerScrollTop || 0));
+  };
+  restoreDrawerScroll();
+  window.requestAnimationFrame?.(restoreDrawerScroll);
   stopCoverLookupPollingIfIdle();
 }
 
@@ -42634,6 +42641,9 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
     if (task?.album_payload) {
+      state.coverLookup.drawerScrollTop = Number(
+        document.getElementById?.('cover-lookup-drawer-body')?.scrollTop || 0,
+      );
       openCoverLookupModal(task.album_payload, { taskId, mobileSheet: true });
     }
     return;

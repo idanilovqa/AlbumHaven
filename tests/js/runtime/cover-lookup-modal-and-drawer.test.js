@@ -1514,15 +1514,18 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   class TestButton {}
   const overlay = { hidden: false };
   const modalBody = { innerHTML: '<img src="https://images.example/large-cover.jpg">' };
+  const drawerBody = { scrollTop: 0 };
   const saveButton = new TestButton();
   const context = loadHelper({
     HTMLButtonElement: TestButton,
+    window: { requestAnimationFrame: (callback) => callback() },
     document: {
       body: { classList: { remove() {} } },
       getElementById: (id) => ({
         'cover-lookup-modal': overlay,
         'cover-lookup-modal-body': modalBody,
         'cover-lookup-save-remote-button': saveButton,
+        'cover-lookup-drawer-body': drawerBody,
         'track-modal': { hidden: true },
         'utility-modal': { hidden: true },
       }[id] || null),
@@ -1537,6 +1540,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     candidateSnapshot: { search_generation: 'completed-task', candidates: [{ id: 'remote-cover' }] },
   });
   context.state.coverLookup.tasks = [];
+  context.state.coverLookup.drawerOpen = true;
+  context.state.coverLookup.drawerScrollTop = 71;
 
   context.closeCoverLookupModal();
 
@@ -1548,6 +1553,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   assert.equal(context.state.coverLookup.modal.otherArt.length, 0);
   assert.equal(context.state.coverLookup.modal.possibleMatches.length, 0);
   assert.equal(context.state.coverLookup.modal.candidateSnapshot, null);
+  assert.equal(drawerBody.scrollTop, 71);
 });
 
 (async () => {

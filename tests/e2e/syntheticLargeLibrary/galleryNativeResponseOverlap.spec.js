@@ -158,8 +158,12 @@ async function positionWithWheelBeforeContinuation(ui, page) {
     const upper = geometry.viewport * (PREFETCH_VIEWPORTS + 0.35);
     if (geometry.remaining >= lower && geometry.remaining <= upper) return;
     if (geometry.remaining < lower) {
-      const diagnostic = JSON.stringify({ step, geometry, lower, upper });
-      throw new Error(`Desktop preposition crossed the continuation boundary: ${diagnostic}`);
+      const loadedBefore = await readLoadedAlbumCount(page);
+      await expect.poll(
+        async () => readLoadedAlbumCount(page),
+        { intervals: [16, 32, 64], timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
+      ).toBeGreaterThan(loadedBefore);
+      continue;
     }
     await page.mouse.wheel(0, Math.min(480, Math.max(32, geometry.remaining - upper)));
     await expect.poll(

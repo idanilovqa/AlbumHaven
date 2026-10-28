@@ -155,6 +155,7 @@ test('ActionButton CSS owns one 34px theme-aware surface and inert disabled trea
   assert.match(css, /\.action-button:disabled,[^{]*\.action-button\[aria-disabled='true'\]\s*\{[^}]*opacity:[^;}]+;[^}]*cursor:\s*not-allowed/s);
   assert.match(css, /\.action-button--round\s*\{[^}]*border-radius:\s*50%/s);
   assert.match(css, /\.action-button__icon\.ui-icon\s*\{[^}]*display:\s*block[^}]*stroke:\s*currentColor[^}]*fill:\s*none/s);
+  assert.match(css, /\.action-button\[aria-busy='true'\][^{]*::before\s*\{[^}]*animation:\s*spin/s);
   assert.match(css, /\.action-button--destructive:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)[^{]*\{[^}]*border-color:\s*var\(--alert-error-edge[^}]*outline-color:\s*var\(--alert-error-focus/s);
   assert.match(css, /\.action-button--destructive:focus-visible\s*\{[^}]*outline-color:\s*var\(--alert-error-focus/s);
 });

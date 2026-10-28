@@ -15,12 +15,23 @@ _LOCAL_COVER_FIELDS = (
 )
 
 
+def inferred_local_cover_belongs_to_track(cover_path: object, track_path: object) -> bool:
+    cover_value = str(cover_path or "").strip()
+    track_value = str(track_path or "").strip()
+    return bool(
+        cover_value
+        and track_value
+        and Path(cover_value).is_relative_to(Path(physical_album_root(track_value)))
+    )
+
+
 def clear_ambiguous_folder_covers(
     file_cache: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
     """Drop inferred folder art when one physical folder contains multiple releases."""
     albums_by_folder: dict[str, set[str]] = {}
     folder_by_cache_path: dict[str, str] = {}
+    roots_by_cover_path: dict[str, set[str]] = {}
     for cache_path, entry in file_cache.items():
         path = str(entry.get("path") or cache_path).strip()
         if not path:
@@ -30,6 +41,11 @@ def clear_ambiguous_folder_covers(
         albums_by_folder.setdefault(folder, set()).add(
             " ".join(str(entry.get("album") or "").casefold().split())
         )
+        cover_path = str(entry.get("cover_path") or "").strip()
+        if cover_path:
+            roots_by_cover_path.setdefault(cover_path.casefold(), set()).add(
+                physical_album_root(path)
+            )
 
     ambiguous_folders = {
         folder for folder, albums in albums_by_folder.items() if len(albums) > 1
@@ -38,13 +54,22 @@ def clear_ambiguous_folder_covers(
     for cache_path, entry in file_cache.items():
         path = str(entry.get("path") or cache_path).strip()
         cover_path = str(entry.get("cover_path") or "").strip()
+        ambiguous_inferred_cover = (
+            folder_by_cache_path.get(cache_path) in ambiguous_folders
+            and physical_album_folder(cover_path) == folder_by_cache_path.get(cache_path)
+        )
+        foreign_inferred_cover = (
+            str(entry.get("cover_selection_origin") or "").casefold() == "automatic"
+            and len(roots_by_cover_path.get(cover_path.casefold(), set())) > 1
+            and not inferred_local_cover_belongs_to_track(cover_path, path)
+        )
         if (
             not path
             or not cover_path
-            or folder_by_cache_path.get(cache_path) not in ambiguous_folders
-            or physical_album_folder(cover_path) != folder_by_cache_path.get(cache_path)
+            or not (ambiguous_inferred_cover or foreign_inferred_cover)
             or str(entry.get("cover_selection_origin") or "").casefold() == "user"
             or str(entry.get("cover_selection_provenance") or "").casefold() == "explicit"
+            or bool(entry.get("remote_cover_url"))
         ):
             continue
         for field in _LOCAL_COVER_FIELDS:

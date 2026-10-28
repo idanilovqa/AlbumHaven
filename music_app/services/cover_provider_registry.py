@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import wait
+from concurrent.futures import FIRST_COMPLETED, wait
 from dataclasses import dataclass
+from threading import Lock
 import time
 
 from music_app.services import cover_manual_links
@@ -172,6 +173,7 @@ class CoverLookupProviderRegistry:
         should_cancel: Callable[[], bool] | None = None,
         deadline_at: float | None = None,
         log_event: Callable[..., object] | None = None,
+        on_candidates: Callable[[list[dict[str, object]], list[dict[str, object]]], object] | None = None,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         configured_deadline_seconds = cover_lookup_provider_deadline_seconds(
             cover_provider_runtime.Config
@@ -252,20 +254,31 @@ class CoverLookupProviderRegistry:
                 if include_discogs
                 else None
             )
-        futures = [future for future in (caa_future, discogs_future) if future is not None]
-        wait_timeout = None
-        if deadline_at is not None:
-            wait_timeout = max(0.0, deadline_at - time.perf_counter()) + 0.05
-        completed_futures, incomplete_futures = wait(futures, timeout=wait_timeout)
-        for future in completed_futures:
-            if future is caa_future:
-                archive_candidates = [
-                    _cover_art_archive_candidate_to_lookup_match(item)
-                    for item in (future.result() or [])
-                    if isinstance(item, dict)
-                ]
-            elif future is discogs_future:
-                discogs_candidates = future.result() or []
+        incomplete_futures = set(
+            future for future in (caa_future, discogs_future) if future is not None
+        )
+        while incomplete_futures:
+            wait_timeout = None
+            if deadline_at is not None:
+                wait_timeout = max(0.0, deadline_at - time.perf_counter()) + 0.05
+            completed_futures, incomplete_futures = wait(
+                incomplete_futures,
+                timeout=wait_timeout,
+                return_when=FIRST_COMPLETED,
+            )
+            if not completed_futures:
+                break
+            for future in completed_futures:
+                if future is caa_future:
+                    archive_candidates = [
+                        _cover_art_archive_candidate_to_lookup_match(item)
+                        for item in (future.result() or [])
+                        if isinstance(item, dict)
+                    ]
+                elif future is discogs_future:
+                    discogs_candidates = future.result() or []
+            if on_candidates is not None:
+                on_candidates(list(discogs_candidates), list(archive_candidates))
         for future in incomplete_futures:
             future.cancel()
         return discogs_candidates, archive_candidates
@@ -333,6 +346,7 @@ def _search_service_cover_candidates(
     on_candidates: Callable[[list[dict[str, object]]], None] | None = None,
 ) -> list[dict[str, object]]:
     all_candidates: list[CoverCandidate] = []
+    candidates_lock = Lock()
     app_log_event = log_event or cover_provider_runtime.log_app_event
     enabled_service_names = normalize_enabled_music_services(enabled_services)
 
@@ -459,16 +473,21 @@ def _search_service_cover_candidates(
                 ),
                 elapsed_ms=round((time.perf_counter() - service_started_at) * 1000, 2),
             )
-            all_candidates.extend(service_candidates)
-            if callable(on_candidates) and not (
-                callable(should_cancel) and should_cancel()
-            ):
-                on_candidates(
-                    build_lookup_matches_from_candidates(
-                        all_candidates,
-                        lookup_group="services",
-                    )
+            with candidates_lock:
+                all_candidates.extend(service_candidates)
+                all_candidates[:] = cover_provider_matching.order_provider_items(
+                    all_candidates,
+                    order=cover_provider_matching.MANUAL_PRIMARY_PROVIDER_ORDER,
+                    provider_name=lambda candidate: candidate.source,
                 )
+                published_matches = build_lookup_matches_from_candidates(
+                    all_candidates,
+                    lookup_group="services",
+                )
+                if callable(on_candidates) and not (
+                    callable(should_cancel) and should_cancel()
+                ):
+                    on_candidates(published_matches)
             if callable(should_cancel) and should_cancel():
                 app_log_event(
                     {},
@@ -482,10 +501,19 @@ def _search_service_cover_candidates(
                 )
                 break
 
-    run_service_searches(early_primary_service_searches)
+    if callable(on_candidates):
+        primary_futures = [
+            _LATER_PROVIDER_EXECUTOR.submit(run_service_searches, [service_search])
+            for service_search in early_primary_service_searches + youtube_music_searches
+        ]
+        for future in primary_futures:
+            future.result()
+    else:
+        run_service_searches(early_primary_service_searches)
     if callable(should_cancel) and should_cancel():
         return build_lookup_matches_from_candidates(all_candidates, lookup_group="services")
-    run_service_searches(youtube_music_searches)
+    if not callable(on_candidates):
+        run_service_searches(youtube_music_searches)
     if callable(should_cancel) and should_cancel():
         return build_lookup_matches_from_candidates(all_candidates, lookup_group="services")
     early_primary_acceptable_services = {

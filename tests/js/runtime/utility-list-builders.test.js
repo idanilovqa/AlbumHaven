@@ -159,6 +159,7 @@ function loadHelpers() {
       return nextIndex;
     },
     renderView() {},
+    rememberCurrentRuntimeAlbumCoverAuthority() {},
     getViewportScrollPosition() {
       return { x: 0, y: 0 };
     },
@@ -1251,6 +1252,29 @@ test('findVisibleAlbumByTrackPaths prefers a duplicate projection with album pre
   );
 });
 
+test('findVisibleAlbumByTrackPaths fills missing cover authority from duplicate projections', () => {
+  const context = loadHelpers();
+  const sharedPath = 'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\01 Source Track.mp3';
+  context.flattenVisibleAlbums = () => [{
+    key: 'preferred',
+    track_paths: [sharedPath],
+    album_preference: { rating: 8 },
+    cover_path: null,
+  }, {
+    key: 'covered',
+    track_paths: [sharedPath],
+    cover_path: 'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
+  }];
+
+  const album = context.findVisibleAlbumByTrackPaths(new Set([sharedPath]));
+
+  assert.equal(album.key, 'preferred');
+  assert.equal(
+    album.cover_path,
+    'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
+  );
+});
+
 test('applyUpdatedAlbumsToCurrentView merges a second moved track into the stable visible destination', () => {
   const context = loadHelpers();
   const firstMovedTrack = {
@@ -1337,6 +1361,104 @@ test('applyUpdatedAlbumsToCurrentView merges a second moved track into the stabl
     ...visibleDestination,
     tracks: [firstMovedTrack, secondMovedTrack],
   });
+});
+
+test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split payloads omit them', () => {
+  const context = loadHelpers();
+  const sourcePath = 'D:\\Music\\Artist\\Album\\02 Source.mp3';
+  const destinationPath = 'D:\\Music\\Artist\\Album\\01 Destination.mp3';
+  const coverPath = 'D:\\Music\\Artist\\Album\\cover.png';
+  const remoteCoverUrl = 'https://covers.example/album.jpg';
+  const visibleSource = {
+    key: 'artist::album::2000',
+    name: 'Album',
+    album_artist: 'Artist',
+    year: 2000,
+    cover_path: coverPath,
+    remote_cover_url: remoteCoverUrl,
+    tracks: [{ path: sourcePath }],
+  };
+  const visibleDestination = {
+    key: 'artist::album renamed::2000',
+    name: 'Album Renamed',
+    album_artist: 'Artist',
+    year: 2000,
+    cover_path: coverPath,
+    remote_cover_url: remoteCoverUrl,
+    tracks: [{ path: destinationPath }],
+  };
+  const finalized = [visibleSource, visibleDestination].map((album) => ({
+    ...album,
+    cover_path: null,
+    remote_cover_url: null,
+  }));
+  context.state.view.selected_artist = '';
+  context.state.view.primary_artist_groups = [];
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = [{
+    artist: 'Artist',
+    albums: [visibleSource, visibleDestination],
+  }];
+  context.getAlbumRequestKey = (album) => String(album?.key || '');
+  context.getAlbumIdentity = (album) => String(album?.key || '');
+
+  context.applyUpdatedAlbumsToCurrentView(finalized, {
+    originalAlbum: visibleSource,
+    skipRender: true,
+  });
+
+  for (const album of context.lastMergedPayload.artist_groups[0].albums) {
+    assert.equal(album.cover_path, coverPath);
+    assert.equal(album.remote_cover_url, remoteCoverUrl);
+  }
+});
+
+test('applyUpdatedAlbumsToCurrentView keeps covers through consecutive selected-artist splits', () => {
+  const context = loadHelpers();
+  const coverPath = 'D:\\Music\\Artist\\Album\\cover.png';
+  const coverPreviewUrl = '/cover?path=opaque&size=480&v=revision';
+  const remoteCoverUrl = 'https://covers.example/album.jpg';
+  const albums = [
+    ['artist::source::2000', 'Source', '03 Source.mp3'],
+    ['artist::split-a::2000', 'Split A', '01 Split A.mp3'],
+    ['artist::split-b::2000', 'Split B', '02 Split B.mp3'],
+  ].map(([key, name, fileName]) => ({
+    key,
+    album_ref: key,
+    name,
+    album_artist: 'Artist',
+    year: 2000,
+    tracks: [{ path: `D:\\Music\\Artist\\Album\\${fileName}` }],
+  }));
+  const coveredAlbums = albums.map((album) => ({
+    ...album,
+    cover_path: coverPath,
+    cover_preview_url: coverPreviewUrl,
+    remote_cover_url: remoteCoverUrl,
+  }));
+  const finalizedAlbums = albums.map((album) => ({
+    ...album,
+    cover_path: null,
+    cover_preview_url: null,
+    remote_cover_url: null,
+  }));
+  context.state.view.selected_artist = 'Artist';
+  context.state.view.primary_artist_groups = [{ artist: 'Artist', albums }];
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: coveredAlbums }];
+  context.getAlbumRequestKey = (album) => String(album?.album_ref || album?.key || '');
+  context.getAlbumIdentity = (album) => String(album?.key || '');
+
+  context.applyUpdatedAlbumsToCurrentView(finalizedAlbums, {
+    originalAlbum: albums[0],
+    skipRender: true,
+  });
+
+  for (const album of context.lastMergedPayload.primary_artist_groups[0].albums) {
+    assert.equal(album.cover_path, coverPath);
+    assert.equal(album.cover_preview_url, coverPreviewUrl);
+    assert.equal(album.remote_cover_url, remoteCoverUrl);
+  }
 });
 
 test('applyUpdatedAlbumsToCurrentView merges disjoint tracks for the same visible runtime album identity', () => {
@@ -5138,6 +5260,7 @@ test('watchSaveTask patches finalized albums into visible state when canonical r
         preserveScroll: true,
         preserveGalleryOptionsMenu: true,
         preserveMountedGalleryChildren: true,
+        preserveMissingAlbumCoverAuthority: true,
         restartIfSameUrl: true,
       },
     ]],
@@ -5736,6 +5859,7 @@ test('watchSaveTask preserves absolute scroll intent through a required view ref
       preserveAbsoluteScroll: true,
       preserveGalleryOptionsMenu: true,
       preserveMountedGalleryChildren: true,
+    preserveMissingAlbumCoverAuthority: true,
       retainMountedGalleryIfEquivalent: true,
       restartIfSameUrl: true,
     },
@@ -6283,6 +6407,7 @@ test('watchSaveTask drops origin absolute scroll after navigation before a requi
         preserveScroll: true,
         preserveGalleryOptionsMenu: true,
         preserveMountedGalleryChildren: true,
+          preserveMissingAlbumCoverAuthority: true,
         retainMountedGalleryIfEquivalent: true,
         restartIfSameUrl: true,
       },
@@ -6337,6 +6462,7 @@ test('watchSaveTask retains origin absolute scroll after an overlay-only revisio
         },
         preserveGalleryOptionsMenu: true,
         preserveMountedGalleryChildren: true,
+        preserveMissingAlbumCoverAuthority: true,
         retainMountedGalleryIfEquivalent: true,
         restartIfSameUrl: true,
       },

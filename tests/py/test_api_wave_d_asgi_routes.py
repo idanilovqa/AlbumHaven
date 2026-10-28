@@ -891,9 +891,8 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     assert pasted_payload["updated_album"]["cover_revision"] == pasted_revision
     assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_path"] == selected_cover_path
     assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_revision"] == pasted_revision
-    assert revision_loads
-    assert snapshot_saves
-    assert set(snapshot_saves) == {0}
+    assert revision_loads == []
+    assert snapshot_saves == []
     assert persisted_origins == [
         (selected_cover_path, "user"),
         (next_cover_path, "user"),
@@ -2546,6 +2545,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
                 "config": kwargs.get("config"),
                 "logger": kwargs.get("logger"),
                 "library_state": kwargs.get("library_state"),
+                "schedule_cache_update": kwargs.get("schedule_cache_update"),
                 "include_problematic_album": kwargs.get("include_problematic_album"),
             }
         )
@@ -2642,6 +2642,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "config": app.config,
             "logger": asgi_app.state.logger,
             "library_state": asgi_app.state.library_state,
+            "schedule_cache_update": False,
             "include_problematic_album": False,
         },
         {
@@ -2650,6 +2651,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "config": app.config,
             "logger": asgi_app.state.logger,
             "library_state": asgi_app.state.library_state,
+            "schedule_cache_update": False,
             "include_problematic_album": None,
         },
         {
@@ -2658,6 +2660,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "config": app.config,
             "logger": asgi_app.state.logger,
             "library_state": asgi_app.state.library_state,
+            "schedule_cache_update": False,
             "include_problematic_album": None,
         },
     ]

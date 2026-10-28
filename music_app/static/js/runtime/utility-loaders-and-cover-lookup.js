@@ -1754,6 +1754,7 @@ function getTrackTagInitialValues(track, album) {
     exception_type: String(track?.exception_type || ''),
     custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
+    album_type: String(track?.album_type || ''),
     album_rating: String(track?.album_rating ?? album?.album_rating ?? ''),
   };
 }
@@ -2135,7 +2136,11 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   const sourceTrackPaths = new Set(
     sourceTracks.map((track) => String(track?.path || '')).filter(Boolean),
   );
-  const visibleSourceAlbum = findVisibleAlbumByTrackPaths(sourceTrackPaths);
+  const rememberedSourceAlbum = typeof findRememberedRuntimeAlbumCoverAuthority === 'function'
+    ? findRememberedRuntimeAlbumCoverAuthority(album)
+    : null;
+  const visibleSourceAlbum = findVisibleAlbumByTrackPaths(sourceTrackPaths) || album;
+  const coverSourceAlbum = rememberedSourceAlbum || visibleSourceAlbum;
   const sourceAlbumPreference = album?.album_preference
     || visibleSourceAlbum?.album_preference
     || null;
@@ -2171,6 +2176,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       total_discs: totalDiscs,
       disc_subtitle: Object.prototype.hasOwnProperty.call(edits, 'disc_subtitle') ? String(edits.disc_subtitle || '').trim() : track.disc_subtitle,
       album_rating: Object.prototype.hasOwnProperty.call(edits, 'album_rating') ? parseOptionalInteger(edits.album_rating) : track.album_rating,
+      album_type: Object.prototype.hasOwnProperty.call(edits, 'album_type')
+        ? String(edits.album_type || '').trim()
+        : String(track?.album_type || '').trim(),
       edition: Object.prototype.hasOwnProperty.call(edits, 'edition')
         ? String(edits.edition || '').trim()
         : (inheritedEdition || null),
@@ -2236,16 +2244,18 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         key: canonicalKeyParts.join('::'),
         name: albumName,
         album_artist: albumArtist,
-        cover_path: track?.cover_path || album?.cover_path || null,
-        remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || null,
-        remote_cover_thumbnail_url: track?.remote_cover_thumbnail_url || album?.remote_cover_thumbnail_url || null,
-        remote_cover_source: track?.remote_cover_source || album?.remote_cover_source || null,
-        remote_cover_source_label: track?.remote_cover_source_label || album?.remote_cover_source_label || null,
-        remote_cover_album_url: track?.remote_cover_album_url || album?.remote_cover_album_url || null,
-        remote_cover_width: track?.remote_cover_width || album?.remote_cover_width || null,
-        remote_cover_height: track?.remote_cover_height || album?.remote_cover_height || null,
+        cover_path: track?.cover_path || album?.cover_path || coverSourceAlbum?.cover_path || null,
+        cover_preview_url: track?.cover_preview_url || album?.cover_preview_url || coverSourceAlbum?.cover_preview_url || null,
+        remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || coverSourceAlbum?.remote_cover_url || null,
+        remote_cover_thumbnail_url: track?.remote_cover_thumbnail_url || album?.remote_cover_thumbnail_url || coverSourceAlbum?.remote_cover_thumbnail_url || null,
+        remote_cover_source: track?.remote_cover_source || album?.remote_cover_source || coverSourceAlbum?.remote_cover_source || null,
+        remote_cover_source_label: track?.remote_cover_source_label || album?.remote_cover_source_label || coverSourceAlbum?.remote_cover_source_label || null,
+        remote_cover_album_url: track?.remote_cover_album_url || album?.remote_cover_album_url || coverSourceAlbum?.remote_cover_album_url || null,
+        remote_cover_width: track?.remote_cover_width || album?.remote_cover_width || coverSourceAlbum?.remote_cover_width || null,
+        remote_cover_height: track?.remote_cover_height || album?.remote_cover_height || coverSourceAlbum?.remote_cover_height || null,
         year,
         release_date: String(album?.release_date || '').trim(),
+        release_type: String(track?.album_type || album?.release_type || 'ALBUM').trim() || 'ALBUM',
         edition: edition || null,
         album_rating: normalizedRating ?? 0,
         album_preference: albumPreference,

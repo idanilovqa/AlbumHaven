@@ -1390,6 +1390,19 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
 
 {
   const { context } = loadHelper();
+  assert.equal(
+    context.albumHasDisplayCover({
+      key: 'preview-only',
+      name: 'Preview Only',
+      album_artist: 'Howard Shore',
+      cover_preview_url: '/cover?path=opaque&size=480&v=revision',
+    }),
+    true,
+  );
+}
+
+{
+  const { context } = loadHelper();
   context.rememberFailedLocalDisplayCoverPath('C:/covers/local-primary-1.jpg');
   assert.equal(
     context.albumHasDisplayCover({

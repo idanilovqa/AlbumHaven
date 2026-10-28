@@ -14,6 +14,14 @@ except ImportError:  # pragma: no cover
 
 
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
+_UNKNOWN_IDENTITY_VALUES = {
+    "",
+    "unknown",
+    "unknown artist",
+    "unknown album",
+    "none",
+    "null",
+}
 _FIELDS = (
     "album_id",
     "album_key",
@@ -71,7 +79,12 @@ class AlbumIdentityLineageRepository:
         if any(bool(candidate.get("cycle_detected")) for candidate in candidates):
             return _result("invalid")
 
-        live = [candidate for candidate in candidates if candidate.get("album_id") is not None]
+        live = [
+            candidate
+            for candidate in candidates
+            if candidate.get("album_id") is not None
+            and not _is_synthetic_unknown_album(candidate)
+        ]
         if not live:
             return _result("unresolved")
 
@@ -133,6 +146,14 @@ def _album(candidate: Mapping[str, object]) -> dict[str, object]:
     if candidate.get("track_count") is not None:
         album["track_count"] = int(candidate["track_count"])
     return album
+
+
+def _is_synthetic_unknown_album(candidate: Mapping[str, object]) -> bool:
+    return (
+        str(candidate.get("title") or "").strip().casefold() in _UNKNOWN_IDENTITY_VALUES
+        and str(candidate.get("album_artist") or "").strip().casefold()
+        in _UNKNOWN_IDENTITY_VALUES
+    )
 
 
 def _resolution_sql() -> str:

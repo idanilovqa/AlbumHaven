@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from threading import Event
+from threading import Event, Thread
 import time
 
 import pytest
@@ -390,7 +390,6 @@ def test_search_service_cover_candidates_publishes_cumulative_provider_results(m
         },
         call_order,
     )
-
     results = _search_service_cover_candidates(
         enabled_services={"apple", "deezer"},
         on_candidates=lambda matches: published_matches.append(matches),
@@ -402,6 +401,113 @@ def test_search_service_cover_candidates_publishes_cumulative_provider_results(m
         [{"source": "apple"}, {"source": "deezer"}],
     ]
     assert results == [{"source": "apple"}, {"source": "deezer"}]
+
+
+def test_search_service_cover_candidates_publishes_fast_provider_before_slow_provider_finishes(
+    monkeypatch,
+):
+    release_apple = Event()
+    deezer_published = Event()
+    errors: list[Exception] = []
+
+    _patch_service_lookup_output(monkeypatch)
+
+    def slow_apple(*_args, **_kwargs):
+        assert release_apple.wait(1)
+        return [_candidate("apple")]
+
+    monkeypatch.setattr(cover_provider_runtime, "search_apple_candidates", slow_apple)
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_deezer_candidates",
+        lambda *_args, **_kwargs: [_candidate("deezer")],
+    )
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_youtube_music_candidates",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_spotify_candidates",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_genius_candidates",
+        lambda *_args, **_kwargs: [],
+    )
+
+    def on_candidates(matches):
+        if any(match.get("source") == "deezer" for match in matches):
+            deezer_published.set()
+
+    def run_search():
+        try:
+            _search_service_cover_candidates(on_candidates=on_candidates)
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    worker = Thread(target=run_search)
+    worker.start()
+    try:
+        assert deezer_published.wait(0.5)
+    finally:
+        release_apple.set()
+        worker.join(1)
+
+    assert worker.is_alive() is False
+    assert errors == []
+
+
+def test_search_service_cover_candidates_never_publishes_an_older_subset_after_a_newer_one(
+    monkeypatch,
+):
+    first_callback_started = Event()
+    newer_callback_finished = Event()
+    published_sources: list[tuple[str, ...]] = []
+
+    _patch_service_lookup_output(monkeypatch)
+
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_apple_candidates",
+        lambda *_args, **_kwargs: [_candidate("apple")],
+    )
+
+    def deezer_search(*_args, **_kwargs):
+        assert first_callback_started.wait(1)
+        return [_candidate("deezer")]
+
+    monkeypatch.setattr(cover_provider_runtime, "search_deezer_candidates", deezer_search)
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_youtube_music_candidates",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_spotify_candidates",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_genius_candidates",
+        lambda *_args, **_kwargs: [],
+    )
+
+    def on_candidates(matches):
+        sources = tuple(match["source"] for match in matches)
+        if sources == ("apple",):
+            first_callback_started.set()
+            newer_callback_finished.wait(0.2)
+        published_sources.append(sources)
+        if len(sources) > 1:
+            newer_callback_finished.set()
+
+    _search_service_cover_candidates(on_candidates=on_candidates)
+
+    assert published_sources[:2] == [("apple",), ("apple", "deezer")]
 
 
 def test_search_service_cover_candidates_forwards_cancellation_predicate_to_apple(monkeypatch):
@@ -456,34 +562,44 @@ def test_search_service_cover_candidates_cancellation_before_provider_returns_co
 
 def test_search_service_cover_candidates_cancellation_after_provider_returns_collected_matches(monkeypatch):
     call_order: list[str] = []
-    should_cancel_results = iter([False, True, True, True])
+    canceled = Event()
     published_matches: list[list[dict[str, object]]] = []
     captured_events = _capture_service_events(monkeypatch)
 
     _patch_service_lookup_output(monkeypatch)
+
+    def cancel_after_apple_result():
+        call_order.append("apple")
+        canceled.set()
+        return [_candidate("apple")]
+
     _patch_service_providers(
         monkeypatch,
         {
-            "apple": [_candidate("apple")],
-            "deezer": [_candidate("deezer")],
-            "youtube_music": [_candidate("youtube_music")],
+            "apple": cancel_after_apple_result,
+            "deezer": [],
+            "youtube_music": [],
             "spotify": [_candidate("spotify")],
             "genius": [_candidate("genius")],
         },
         call_order,
     )
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "search_apple_candidates",
+        lambda *_args, **_kwargs: cancel_after_apple_result(),
+    )
 
     results = _search_service_cover_candidates(
-        should_cancel=lambda: next(should_cancel_results),
+        should_cancel=canceled.is_set,
         on_candidates=lambda matches: published_matches.append(matches),
     )
 
-    assert call_order == ["apple"]
+    assert call_order.count("apple") == 1
     assert published_matches == []
     assert results == [{"source": "apple"}]
     assert any(
-        event["action"] == "Cover search canceled after provider"
-        and event.get("service") == "apple"
+        event["action"].startswith("Cover search canceled")
         for event in captured_events
     )
 
@@ -601,6 +717,49 @@ def test_cover_lookup_provider_registry_runs_discogs_and_cover_art_archive_in_pa
     assert cover_art_archive_started.is_set() is True
     assert discogs_started.is_set() is True
     assert observed_parallel_overlap == [True, True]
+
+
+def test_cover_lookup_provider_registry_publishes_discogs_before_slower_archive_finishes(monkeypatch):
+    release_archive = Event()
+    discogs_published = Event()
+    callback_payloads: list[tuple[list[dict[str, object]], list[dict[str, object]]]] = []
+    errors: list[Exception] = []
+
+    def fake_cover_art_archive_search(**_kwargs):
+        assert release_archive.wait(1)
+        return []
+
+    def fake_discogs_search(**_kwargs):
+        return [{"id": "discogs-fast", "url": "https://images.example/discogs-fast.jpg"}]
+
+    def on_candidates(discogs_matches, archive_matches):
+        callback_payloads.append((discogs_matches, archive_matches))
+        if discogs_matches:
+            discogs_published.set()
+
+    monkeypatch.setattr(cover_provider_musicbrainz_caa, "search_cover_art_archive_candidates", fake_cover_art_archive_search)
+    monkeypatch.setattr(cover_provider_discogs, "search_discogs_cover_candidates", fake_discogs_search)
+
+    def run_search():
+        try:
+            CoverLookupProviderRegistry().search_discogs_and_cover_art_archive_matches(
+                _query(),
+                on_candidates=on_candidates,
+            )
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    worker = Thread(target=run_search)
+    worker.start()
+    try:
+        assert discogs_published.wait(0.5)
+    finally:
+        release_archive.set()
+        worker.join(1)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert callback_payloads[0][0][0]["id"] == "discogs-fast"
 
 
 def test_cover_lookup_provider_registry_forwards_cancellation_to_concurrent_providers(monkeypatch):

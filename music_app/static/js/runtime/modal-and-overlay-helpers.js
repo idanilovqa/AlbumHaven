@@ -868,6 +868,10 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
   imageElement.setAttribute('data-cover-visual-state', 'ready');
   imageElement.removeAttribute('data-gallery-cover-object-retry');
   imageElement.removeAttribute('aria-hidden');
+  const loadedCoverPath = imageElement.getAttribute('data-cover-path') || '';
+  if (coverPreviewUrlMatchesAlbum(imageElement.currentSrc || imageElement.src, loadedCoverPath)) {
+    clearFailedLocalDisplayCoverPath(loadedCoverPath);
+  }
   const releaseObjectUrl = () => {
     if (
       typeof galleryCoverPreviewCache !== 'undefined'
@@ -1050,6 +1054,7 @@ function albumHasDisplayCover(album) {
   const localCoverPath = String(album?.cover_path || '').trim();
   return Boolean(
     (optimistic && optimistic.src)
+    || String(album?.cover_preview_url || '').trim()
     || (localCoverPath && !isKnownFailedLocalDisplayCoverPath(localCoverPath))
     || String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim()
   );

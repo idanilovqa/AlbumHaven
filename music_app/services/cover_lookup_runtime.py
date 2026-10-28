@@ -287,6 +287,17 @@ def queue_cover_lookup_save_remote_task(
     persist_cover_selection_for_tracks=None,
 ) -> None:
     resolved_user_agent = str(user_agent or config["MUSICBRAINZ_USER_AGENT"])
+    update_cover_lookup_task(
+        task_id,
+        config=config,
+        status="running",
+        progress=100,
+        progress_label="Saving art",
+        message="Saving selected cover art.",
+        result_kind="",
+        finished_at=None,
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
     future = _COVER_LOOKUP_SAVE_EXECUTOR.submit(
         _run_cover_lookup_save_remote_task,
         task_id,
@@ -627,6 +638,46 @@ def _run_cover_lookup_task(
                 **bandcamp_search_kwargs,
             )
         )
+        progressive_service_candidates: list[dict[str, object]] = []
+        progressive_later_candidates: list[dict[str, object]] = []
+        progressive_candidates_lock = Lock()
+        progressive_candidate_signature: tuple[str, ...] = ()
+
+        def publish_progressive_candidates() -> None:
+            nonlocal progressive_candidate_signature
+            with progressive_candidates_lock:
+                candidates = merge_lookup_matches(
+                    progressive_service_candidates,
+                    progressive_later_candidates,
+                )
+                signature = tuple(
+                    str(candidate.get("id") or candidate.get("url") or "")
+                    for candidate in candidates
+                )
+                if not candidates or signature == progressive_candidate_signature:
+                    return
+                progressive_candidate_signature = signature
+                if cancel_event.is_set():
+                    return
+                publish_candidate_snapshot(candidates)
+                _update_candidate_lookup_task(
+                    task_id,
+                    config=config,
+                    possible_matches=candidates,
+                    **candidate_snapshot_changes(),
+                )
+
+        def retain_later_candidates(
+            discogs_candidates: list[dict[str, object]],
+            archive_candidates: list[dict[str, object]],
+        ) -> None:
+            with progressive_candidates_lock:
+                progressive_later_candidates[:] = merge_lookup_matches(
+                    discogs_candidates,
+                    archive_candidates,
+                )
+            publish_progressive_candidates()
+
         later_provider_search = (
             COVER_LOOKUP_PROVIDER_REGISTRY.search_discogs_and_cover_art_archive_matches
         )
@@ -635,6 +686,8 @@ def _run_cover_lookup_task(
             cancel_event=cancel_event,
             deadline_at=provider_deadline_at,
         )
+        if _callback_accepts_parameter(later_provider_search, "on_candidates"):
+            later_provider_search_kwargs["on_candidates"] = retain_later_candidates
         later_provider_future = _COVER_LOOKUP_PROVIDER_EXECUTOR.submit(
             lambda: later_provider_search(
                 lookup_query,
@@ -643,26 +696,11 @@ def _run_cover_lookup_task(
         )
         phase_started = time.perf_counter()
         service_search = COVER_LOOKUP_PROVIDER_REGISTRY.search_music_service_matches
-        progressive_service_candidates: list[dict[str, object]] = []
-        progressive_service_candidates_lock = Lock()
-        progressive_service_candidates_published = False
 
         def retain_service_candidates(candidates: list[dict[str, object]]) -> None:
-            nonlocal progressive_service_candidates_published
-            with progressive_service_candidates_lock:
+            with progressive_candidates_lock:
                 progressive_service_candidates[:] = list(candidates)
-                should_publish = bool(candidates) and not progressive_service_candidates_published
-                if should_publish:
-                    progressive_service_candidates_published = True
-            if not should_publish or cancel_event.is_set():
-                return
-            publish_candidate_snapshot(candidates)
-            _update_candidate_lookup_task(
-                task_id,
-                config=config,
-                possible_matches=candidates,
-                **candidate_snapshot_changes(),
-            )
+            publish_progressive_candidates()
 
         service_search_kwargs = _provider_call_kwargs(
             service_search,
@@ -683,7 +721,7 @@ def _run_cover_lookup_task(
         )
         service_candidates, manual_candidates = service_result
         if service_timed_out and not service_candidates:
-            with progressive_service_candidates_lock:
+            with progressive_candidates_lock:
                 service_candidates = list(progressive_service_candidates)
         provider_deadline_exhausted = (
             service_timed_out
@@ -714,13 +752,9 @@ def _run_cover_lookup_task(
             count=len(combined_service_candidates),
         )
         phase_started = time.perf_counter()
-        publish_candidate_snapshot(combined_service_candidates)
-        _update_candidate_lookup_task(
-            task_id,
-            config=config,
-            possible_matches=combined_service_candidates,
-            **candidate_snapshot_changes(),
-        )
+        with progressive_candidates_lock:
+            progressive_service_candidates[:] = combined_service_candidates
+        publish_progressive_candidates()
         _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
         _publish_candidate_runtime_phase_metrics(
             task_id,
@@ -799,13 +833,9 @@ def _run_cover_lookup_task(
             count=len(combined_service_candidates),
         )
         phase_started = time.perf_counter()
-        publish_candidate_snapshot(combined_service_candidates)
-        _update_candidate_lookup_task(
-            task_id,
-            config=config,
-            possible_matches=combined_service_candidates,
-            **candidate_snapshot_changes(),
-        )
+        with progressive_candidates_lock:
+            progressive_service_candidates[:] = combined_service_candidates
+        publish_progressive_candidates()
         _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
         _publish_candidate_runtime_phase_metrics(
             task_id,
@@ -1094,9 +1124,10 @@ def _run_cover_lookup_save_remote_task(
                 config=config,
                 status="failed",
                 progress=100,
-                progress_label="Failed",
+                progress_label="Save failed",
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 message="Album root could not be resolved",
+                result_kind="save-failed",
             )
             _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
             _publish_save_runtime_phase_metrics(
@@ -1290,9 +1321,10 @@ def _run_cover_lookup_save_remote_task(
                 config=config,
                 status="failed",
                 progress=100,
-                progress_label="Failed",
+                progress_label="Save failed",
                 finished_at=datetime.now(timezone.utc).isoformat(),
-                message=str(detail.get("reason") or "Failed to save selected cover art."),
+                message="Selected cover could not be downloaded.",
+                result_kind="save-failed",
             )
             _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
             _publish_save_runtime_phase_metrics(
@@ -1346,9 +1378,10 @@ def _run_cover_lookup_save_remote_task(
             config=config,
             status="failed",
             progress=100,
-            progress_label="Failed",
+            progress_label="Save failed",
             finished_at=datetime.now(timezone.utc).isoformat(),
             message="Failed to save selected cover art.",
+            result_kind="save-failed",
         )
         _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
         _publish_save_runtime_phase_metrics(

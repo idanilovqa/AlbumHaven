@@ -52,6 +52,7 @@ _ALLOWED_TAG_EDIT_FIELDS = {
     "total_discs",
     "disc_subtitle",
     "edition",
+    "album_type",
     "album_rating",
     "exception_type",
     "custom_collection_name",

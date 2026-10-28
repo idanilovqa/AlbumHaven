@@ -622,11 +622,14 @@ def update_cover_lookup_task(
         if current_status == "canceled":
             if requested_status != "canceled":
                 return
-        if current_status == "failed":
-            if requested_status not in {"", "failed"}:
-                return
-            if requested_job_kind == "candidate_lookup" and requested_status != "failed":
-                return
+        if current_status == "failed" and not (
+            requested_status in {"", "failed"}
+            or (
+                requested_status == "running"
+                and requested_job_kind == "save_remote_selection"
+            )
+        ):
+            return
         if current_status == "completed" and not (
             requested_status in {"", "completed"}
             or (
@@ -802,9 +805,17 @@ def register_cover_lookup_future(
 ) -> None:
     with _COVER_LOOKUP_TASKS_LOCK:
         _COVER_LOOKUP_FUTURES.setdefault(task_id, set()).add(future)
+        task = _COVER_LOOKUP_TASKS.get(task_id) or {}
+        job_contract = task.get("job_contract")
+        expected_job_kind = str(
+            job_contract.get("job_kind") if isinstance(job_contract, Mapping) else ""
+        ).strip()
     future.add_done_callback(
         lambda completed_future: _finish_cover_lookup_future(
-            task_id, completed_future, config=config
+            task_id,
+            completed_future,
+            config=config,
+            expected_job_kind=expected_job_kind,
         )
     )
 
@@ -814,22 +825,36 @@ def _finish_cover_lookup_future(
     future: Future,
     *,
     config: Mapping[str, object] | None,
+    expected_job_kind: str,
 ) -> None:
     worker_failed = not future.cancelled() and future.exception() is not None
     try:
         current_task = cover_lookup_result(task_id)
         if not worker_failed or not current_task or is_terminal_cover_lookup_task(current_task):
             return
+        current_job_contract = current_task.get("job_contract")
+        current_job_kind = str(
+            current_job_contract.get("job_kind")
+            if isinstance(current_job_contract, Mapping)
+            else ""
+        ).strip()
+        if current_job_kind != expected_job_kind:
+            return
         request_cover_lookup_task_stop(task_id)
+        save_failed = current_job_kind == "save_remote_selection"
         update_cover_lookup_task(
             task_id,
             config=config,
             status="failed",
             progress=100,
-            progress_label="Interrupted",
-            result_kind="interrupted",
+            progress_label="Save failed" if save_failed else "Interrupted",
+            result_kind="save-failed" if save_failed else "interrupted",
             finished_at=datetime.now(timezone.utc).isoformat(),
-            message="Cover art lookup worker stopped before it could finish.",
+            message=(
+                "Cover save worker stopped before it could finish."
+                if save_failed
+                else "Cover art lookup worker stopped before it could finish."
+            ),
         )
     finally:
         discard_cover_lookup_future(task_id, future)

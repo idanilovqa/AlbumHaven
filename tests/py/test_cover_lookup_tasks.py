@@ -396,6 +396,60 @@ def test_failed_worker_future_terminalizes_live_task(monkeypatch, config):
     assert task["progress_label"] == "Interrupted"
 
 
+def test_superseded_candidate_future_cannot_fail_active_cover_save(monkeypatch, config):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, cancel_event = create_cover_lookup_task(
+        {"album_artist": "Rush", "name": "A Farewell to Kings"}, set()
+    )
+    candidate_future = Future()
+    task_service.register_cover_lookup_future(task_id, candidate_future, config=config)
+    update_cover_lookup_task(
+        task_id,
+        status="running",
+        progress_label="Saving art",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    candidate_future.set_exception(RuntimeError("superseded lookup worker stopped"))
+
+    task = cover_lookup_result(task_id)
+    assert not cancel_event.is_set()
+    assert task["status"] == "running"
+    assert task["progress_label"] == "Saving art"
+    assert task["job_contract"]["job_kind"] == "save_remote_selection"
+
+
+def test_failed_cover_save_future_reports_a_save_failure(monkeypatch, config):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, _cancel_event = create_cover_lookup_task(
+        {"album_artist": "Rush", "name": "A Farewell to Kings"}, set()
+    )
+    update_cover_lookup_task(
+        task_id,
+        status="running",
+        progress_label="Saving art",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+    save_future = Future()
+    task_service.register_cover_lookup_future(task_id, save_future, config=config)
+
+    save_future.set_exception(RuntimeError("save worker stopped"))
+
+    task = cover_lookup_result(task_id)
+    assert task["status"] == "failed"
+    assert task["result_kind"] == "save-failed"
+    assert task["progress_label"] == "Save failed"
+    assert "save worker stopped" in task["message"].casefold()
+
+
 def test_failed_future_does_not_resurrect_cleared_terminal_task(monkeypatch):
     monkeypatch.setattr(
         task_service,
@@ -510,6 +564,36 @@ def test_running_transition_records_fresh_activity_timestamp(monkeypatch):
     task = cover_lookup_result(task_id)
     assert task["status"] == "running"
     assert task["updated_at"]
+
+
+def test_failed_lookup_can_transition_to_remote_cover_save(monkeypatch):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, _cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    update_cover_lookup_task(
+        task_id,
+        status="failed",
+        result_kind="interrupted",
+        message="Cover art lookup stopped before it could finish.",
+    )
+
+    update_cover_lookup_task(
+        task_id,
+        status="running",
+        progress=100,
+        progress_label="Saving art",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    task = cover_lookup_result(task_id)
+    assert task["status"] == "running"
+    assert task["job_contract"]["job_kind"] == "save_remote_selection"
+    assert task["progress_label"] == "Saving art"
 
 
 def test_timeout_failure_cannot_be_reversed_by_late_worker_completion(monkeypatch):

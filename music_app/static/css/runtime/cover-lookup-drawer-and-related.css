@@ -126,6 +126,10 @@
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+.cover-lookup-drawer-body.is-clearing {
+  opacity: 0.55;
+  pointer-events: none;
+}
 .cover-lookup-task-spacer {
   flex: 0 0 auto;
   width: 1px;
@@ -247,7 +251,7 @@
   gap: 4px;
   overflow: hidden;
   padding: 0;
-  min-height: 66px;
+  height: 66px;
   border-color: var(--appearance-line, var(--border));
   border-radius: 9px;
   background: var(--appearance-card, color-mix(in srgb, var(--appearance-ink, var(--text)) 3%, var(--appearance-panel-background, var(--panel))));

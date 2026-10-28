@@ -386,7 +386,6 @@ def test_queue_cover_lookup_task_registers_background_future(config, logger, lib
             "registered", (task_id, future)
         ),
     )
-
     task_id = cover_lookup_runtime.queue_cover_lookup_task(
         album=album,
         requested_track_paths=requested_track_paths,
@@ -729,6 +728,11 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
             "registered", (task_id, future)
         ),
     )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "update_cover_lookup_task",
+        lambda task_id, **changes: calls.setdefault("task_update", (task_id, changes)),
+    )
 
     cover_lookup_runtime.queue_cover_lookup_save_remote_task(
         task_id="task-123",
@@ -775,6 +779,10 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
     assert calls["args"][8].art_kind == "cover"
     assert calls["kwargs"]["apply_cover_selection_for_tracks"] is fake_apply_cover_selection_for_tracks
     assert calls["registered"] == ("task-123", "fake-future")
+    assert calls["task_update"][0] == "task-123"
+    assert calls["task_update"][1]["status"] == "running"
+    assert calls["task_update"][1]["progress_label"] == "Saving art"
+    assert calls["task_update"][1]["job_contract"]["job_kind"] == "save_remote_selection"
 
 
 def test_run_cover_lookup_task_queries_discogs_and_cover_art_archive_in_parallel(config, logger, library_state, monkeypatch, tmp_path: Path):
@@ -1784,6 +1792,14 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
         "lookup_group": "services",
         "art_kind": "cover",
     }
+    discogs_candidate = {
+        "id": "discogs-before-services-finish",
+        "url": "https://images.example/discogs-before-services-finish.jpg",
+        "source": "discogs",
+        "source_label": "Discogs",
+        "lookup_group": "discogs",
+        "art_kind": "cover",
+    }
     config["COVER_LOOKUP_PROVIDER_DEADLINE_SECONDS"] = 0.08
 
     class CandidateThenDeadlineProviderRegistry:
@@ -1800,11 +1816,11 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
             if callable(on_candidates):
                 on_candidates([candidate])
                 candidate_publication_counts.append(
-                    sum(update.get("possible_matches") == [candidate] for update in updates)
+                    sum(candidate in update.get("possible_matches", []) for update in updates)
                 )
                 on_candidates([candidate])
                 candidate_publication_counts.append(
-                    sum(update.get("possible_matches") == [candidate] for update in updates)
+                    sum(candidate in update.get("possible_matches", []) for update in updates)
                 )
             while not should_cancel():
                 time.sleep(0.005)
@@ -1814,8 +1830,16 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
         def search_bandcamp_matches(self, _query):
             return [bandcamp_candidate]
 
-        def search_discogs_and_cover_art_archive_matches(self, _query, *, should_cancel=None):
+        def search_discogs_and_cover_art_archive_matches(
+            self,
+            _query,
+            *,
+            should_cancel=None,
+            on_candidates=None,
+        ):
             assert callable(should_cancel)
+            if callable(on_candidates):
+                on_candidates([discogs_candidate], [])
             while not should_cancel():
                 time.sleep(0.005)
             return [], []
@@ -1862,6 +1886,11 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
     )
 
     assert candidate_publication_counts == [1, 1]
+    assert any(
+        {item["id"] for item in update.get("possible_matches", [])}
+        == {candidate["id"], discogs_candidate["id"]}
+        for update in updates
+    )
     completed = updates[-1]
     assert completed["status"] == "completed"
     assert completed["result_kind"] == "possible-matches"
@@ -2646,9 +2675,10 @@ def test_run_cover_lookup_save_remote_task_rejects_display_only_mixed_unsafe_tra
             "task_id": "task-display-only-unsafe-root",
             "status": "failed",
             "progress": 100,
-            "progress_label": "Failed",
+            "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
             "message": "Album root could not be resolved",
+            "result_kind": "save-failed",
         }
     ]
 
@@ -2921,9 +2951,10 @@ def test_downloaded_cover_persistence_failure_restores_prior_cover_and_removes_o
         "task_id": "task-save-persistence-failed",
         "status": "failed",
         "progress": 100,
-        "progress_label": "Failed",
+            "progress_label": "Save failed",
         "finished_at": updates[0]["finished_at"],
         "message": "Failed to save selected cover art.",
+            "result_kind": "save-failed",
     }]
     assert sensitive_detail not in str(updates)
     assert logged_exceptions == [{
@@ -3013,7 +3044,9 @@ def test_downloaded_cover_persistence_failure_removes_new_cover_when_none_existe
     assert list(album_root.glob("cover-existing-*.jpg")) == []
     assert apply_calls == []
     assert library_state == {}
+    assert updates[0]["progress_label"] == "Save failed"
     assert updates[0]["message"] == "Failed to save selected cover art."
+    assert updates[0]["result_kind"] == "save-failed"
     assert "secret" not in str(updates)
     assert "Private" not in str(updates)
 
@@ -3107,7 +3140,9 @@ def test_downloaded_cover_apply_failure_keeps_file_after_persistence_commits(
     assert len(reserve_paths) == 1
     assert reserve_paths[0].read_bytes() == prior_cover_bytes
     assert library_state == {}
+    assert updates[0]["progress_label"] == "Save failed"
     assert updates[0]["message"] == "Failed to save selected cover art."
+    assert updates[0]["result_kind"] == "save-failed"
     assert sensitive_detail not in str(updates)
 
 
@@ -3225,9 +3260,10 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
         "task_id": "task-save-multiple-reserves",
         "status": "failed",
         "progress": 100,
-        "progress_label": "Failed",
+            "progress_label": "Save failed",
         "finished_at": updates[0]["finished_at"],
         "message": "Failed to save selected cover art.",
+            "result_kind": "save-failed",
     }]
     assert lock_was_released
     selection_thread.join(timeout=0.5)
@@ -3372,9 +3408,10 @@ def test_run_cover_lookup_save_remote_task_reports_download_failure_without_appl
             "task_id": "task-save-failed",
             "status": "failed",
             "progress": 100,
-            "progress_label": "Failed",
+            "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
-            "message": "candidate_download_failed",
+            "message": "Selected cover could not be downloaded.",
+            "result_kind": "save-failed",
         }
     ]
 
@@ -3430,9 +3467,10 @@ def test_run_cover_lookup_save_remote_task_reports_write_no_file_without_applyin
             "task_id": "task-save-write-failed",
             "status": "failed",
             "progress": 100,
-            "progress_label": "Failed",
+            "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
-            "message": "write_returned_no_file",
+            "message": "Selected cover could not be downloaded.",
+            "result_kind": "save-failed",
         }
     ]
 
@@ -3504,9 +3542,10 @@ def test_run_cover_lookup_save_remote_task_rejects_mismatched_album_root_before_
             "task_id": "task-save-unsafe-root",
             "status": "failed",
             "progress": 100,
-            "progress_label": "Failed",
+            "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
             "message": "Album root could not be resolved",
+            "result_kind": "save-failed",
         }
     ]
 
@@ -3588,9 +3627,10 @@ def test_run_cover_lookup_save_remote_task_rejects_cross_root_common_parent_befo
             "task_id": "task-save-cross-root",
             "status": "failed",
             "progress": 100,
-            "progress_label": "Failed",
+            "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
             "message": "Album root could not be resolved",
+            "result_kind": "save-failed",
         }
     ]
 
@@ -3697,9 +3737,10 @@ def test_run_cover_lookup_save_remote_task_rejects_same_root_mixed_album_folders
             "task_id": "task-save-mixed-album",
             "status": "failed",
             "progress": 100,
-            "progress_label": "Failed",
+            "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
             "message": "Album root could not be resolved",
+            "result_kind": "save-failed",
         }
     ]
 
@@ -3867,3 +3908,118 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
     assert final_snapshot["phase_timings_ms"]["scoring"] == 4.5
     assert final_snapshot["phase_timings_ms"]["fetch"] > 0
     assert final_snapshot["phase_timings_ms"]["persistence"] > 1.5
+
+
+def test_progressive_candidate_publication_never_regresses_to_an_older_provider_subset(
+    config,
+    logger,
+    monkeypatch,
+    tmp_path: Path,
+):
+    track_path = tmp_path / "song.mp3"
+    album = _album_payload(track_path)
+    service_candidate = {
+        "id": "service-candidate",
+        "url": "https://images.example/service.jpg",
+        "source": "apple",
+        "source_label": "Apple Music",
+        "lookup_group": "services",
+        "art_kind": "cover",
+    }
+    discogs_candidate = {
+        "id": "discogs-candidate",
+        "url": "https://images.example/discogs.jpg",
+        "source": "discogs",
+        "source_label": "Discogs",
+        "lookup_group": "discogs",
+        "art_kind": "cover",
+    }
+    first_publication_started = Event()
+    release_first_publication = Event()
+    published_ids: list[tuple[str, ...]] = []
+    original_update = cover_lookup_runtime._update_candidate_lookup_task
+
+    def capture_update(task_id, *, config, possible_matches=None, **changes):
+        if possible_matches is None:
+            return original_update(task_id, config=config, **changes)
+        ids = tuple(str(candidate["id"]) for candidate in possible_matches)
+        if ids == (service_candidate["id"],):
+            first_publication_started.set()
+            assert release_first_publication.wait(timeout=1)
+        published_ids.append(ids)
+        return original_update(
+            task_id,
+            config=config,
+            possible_matches=possible_matches,
+            **changes,
+        )
+
+    class RacingProviderRegistry:
+        def search_music_service_matches(
+            self,
+            _query,
+            *,
+            manual_urls=None,
+            should_cancel=None,
+            on_candidates=None,
+        ):
+            assert callable(on_candidates)
+            on_candidates([service_candidate])
+            return [service_candidate], []
+
+        def search_discogs_and_cover_art_archive_matches(
+            self,
+            _query,
+            *,
+            should_cancel=None,
+            on_candidates=None,
+        ):
+            assert first_publication_started.wait(timeout=1)
+            assert callable(on_candidates)
+            on_candidates([discogs_candidate], [])
+            return [discogs_candidate], []
+
+        def search_bandcamp_matches(self, _query):
+            return []
+
+        def search_artist_website_matches(self, _query):
+            return []
+
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "COVER_LOOKUP_PROVIDER_REGISTRY",
+        RacingProviderRegistry(),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "_update_candidate_lookup_task",
+        capture_update,
+    )
+
+    def release_after_provider_overlap():
+        assert first_publication_started.wait(timeout=1)
+        time.sleep(0.05)
+        release_first_publication.set()
+
+    release_thread = Thread(target=release_after_provider_overlap, daemon=True)
+    release_thread.start()
+
+    cover_lookup_runtime._run_cover_lookup_task(
+        "task-progressive-race",
+        config,
+        logger,
+        str(config["MUSICBRAINZ_USER_AGENT"]),
+        album,
+        {str(track_path)},
+        Event(),
+        manual_urls=[],
+    )
+    release_thread.join(timeout=1)
+    assert not release_thread.is_alive()
+
+    combined_index = next(
+        index
+        for index, ids in enumerate(published_ids)
+        if set(ids) == {service_candidate["id"], discogs_candidate["id"]}
+    )
+    assert (service_candidate["id"],) not in published_ids[combined_index + 1 :]

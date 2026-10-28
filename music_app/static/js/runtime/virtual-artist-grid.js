@@ -37,6 +37,7 @@ function albumCardHtml(album, options = {}) {
     total_duration_seconds: Number(album?.total_duration_seconds || 0),
     total_duration_display: String(album?.total_duration_display || ''),
     cover_path: String(album?.cover_path || ''),
+    cover_preview_url: String(album?.cover_preview_url || ''),
     cover_revision: String(album?.cover_revision || ''),
     remote_cover_url: String(album?.remote_cover_url || ''),
     remote_cover_thumbnail_url: String(album?.remote_cover_thumbnail_url || ''),

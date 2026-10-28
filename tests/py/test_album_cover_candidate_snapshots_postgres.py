@@ -172,6 +172,10 @@ def test_resolve_album_id_for_track_paths_uses_complete_active_library_inventory
     assert "count(distinct resolved_tracks.album_id) = 1" in normalized_sql
     assert "count(distinct resolved_tracks.private_path)" in normalized_sql
     assert "cardinality(%(track_paths)s::text[])" in normalized_sql
+    assert "join library.local_albums as resolved_albums" in normalized_sql
+    assert "left join library.local_artists as resolved_artists" in normalized_sql
+    assert "and not ( lower(btrim(coalesce(resolved_albums.title, ''))) in" in normalized_sql
+    assert "and lower(btrim(coalesce(resolved_artists.name, ''))) in" in normalized_sql
 
 
 def test_resolve_album_id_for_track_paths_allows_stale_copy_when_active_copy_remains():

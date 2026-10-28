@@ -2970,6 +2970,7 @@ def _inventory_rows_from_albums(
                         ),
                         "featured_artists": [],
                         "edition": getattr(album, "edition", None),
+                        "release_type": getattr(album, "release_type", None) or "ALBUM",
                         "cover_revision": getattr(album, "cover_revision", None),
                         **_album_cover_authority_metadata(album),
                         "root_provenance": getattr(album, "root_provenance", None),

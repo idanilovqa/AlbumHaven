@@ -1120,6 +1120,12 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
         authoritative_track_paths = resolve_authoritative_album_track_paths(
             selected_inventory_state,
             album_context.track_paths,
+            album_key=str(
+                album.get("_persisted_album_key")
+                or album.get("key")
+                or album.get("album_ref")
+                or ""
+            ),
         )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 409))
@@ -1429,6 +1435,7 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
         config=config,
         logger=logger,
         library_state=library_state,
+        schedule_cache_update=False,
     )
     return JSONResponse(
         {
@@ -1521,6 +1528,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
         logger=logger,
         library_state=library_state,
         cover_revision=cover_revision,
+        schedule_cache_update=False,
     )
     task_id = str(payload.get("task_id") or "").strip()
     try:

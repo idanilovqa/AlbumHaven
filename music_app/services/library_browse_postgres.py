@@ -4902,7 +4902,7 @@ def _duplicate_sources_from_rows(
             disc_subtitle=entry.get("disc_subtitle"),
             track_number=entry.get("track_number"),
             duration_seconds=_coerce_duration_seconds(payload.get("duration_seconds")),
-            edition=entry.get("edition"), release_date=entry.get("release_date"),
+            edition=entry.get("edition"), album_type=entry.get("album_type"), release_date=entry.get("release_date"),
             cover_path=cover_path if cover_path else None,
             library_root_id=payload.get("file_library_root_id") or file_entry.get("library_root_id"),
             library_root_category=payload.get("file_library_root_category") or file_entry.get("library_root_category"),

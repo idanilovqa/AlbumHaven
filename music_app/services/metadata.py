@@ -27,7 +27,7 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 4
+FILE_METADATA_SCHEMA_VERSION = 5
 
 if EasyID3 is not None:
     EasyID3.RegisterTXXXKey("albumrating", "Album Rating")
@@ -626,6 +626,7 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     year = extract_year(tags)
     release_date = extract_release_date(tags)
     edition = first_tag(tags, ["edition", "album edition", "albumedition", "version"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
+    album_type = first_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"]) or first_custom_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"])
     album_rating = extract_album_rating(tags)
     exception_type = normalize_exception_value(first_custom_tag(tags, NON_ALBUM_EXCEPTION_TAG_NAMES))
     return {
@@ -634,7 +635,7 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
         "genre": genre,
         "track_number": track_number, "disc_number": disc_number, "disc_number_raw": disc_number_raw,
         "total_discs": total_discs, "disc_subtitle": disc_subtitle or None, "artist": track_artist,
-        "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_rating": album_rating,
+        "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_type": album_type, "album_rating": album_rating,
         "exception_type": exception_type or None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }

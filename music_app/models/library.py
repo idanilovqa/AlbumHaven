@@ -17,6 +17,7 @@ class Track:
     genre: str | None = None
     year: int | None = None
     edition: str | None = None
+    album_type: str | None = None
     album_rating: int | None = None
     exception_type: str | None = None
     custom_collection_name: str | None = None
@@ -61,6 +62,7 @@ class Album:
     remote_cover_height: int | None = None
     year: int | None = None
     edition: str | None = None
+    release_type: str | None = None
     album_rating: int | None = None
     total_duration_seconds: int = 0
     release_date: str | None = None

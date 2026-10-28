@@ -309,7 +309,20 @@ def _resolve_album_id_for_track_paths_sql() -> str:
             on library.local_tracks.id = library.local_track_files.track_id
           join active_library
             on active_library.library_id = library.local_tracks.library_id
+          join library.local_albums as resolved_albums
+            on resolved_albums.id = library.local_tracks.album_id
+           and resolved_albums.library_id = active_library.library_id
+          left join library.local_artists as resolved_artists
+            on resolved_artists.id = resolved_albums.artist_id
           where library.local_tracks.album_id is not null
+            and not (
+              lower(btrim(coalesce(resolved_albums.title, ''))) in (
+                '', 'unknown', 'unknown artist', 'unknown album', 'none', 'null'
+              )
+              and lower(btrim(coalesce(resolved_artists.name, ''))) in (
+                '', 'unknown', 'unknown artist', 'unknown album', 'none', 'null'
+              )
+            )
         )
         select case
           when count(distinct resolved_tracks.album_id) = 1

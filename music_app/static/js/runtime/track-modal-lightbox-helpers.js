@@ -430,16 +430,32 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const albumIdQuery = Number.isInteger(albumId) && albumId > 0
     ? `&album_id=${encodeURIComponent(String(albumId))}`
     : '';
-  const response = await fetch(`/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}${albumIdQuery}`, {
+  const albumKeyUrl = `/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`;
+  const requestOptions = {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
-  });
+  };
+  let response = await fetch(`${albumKeyUrl}${albumIdQuery}`, requestOptions);
   let payload = null;
   try {
     payload = await response.json();
   } catch (_error) {
     payload = null;
+  }
+  if (
+    albumIdQuery
+    && response.status === 400
+    && payload?.error === 'Unsupported album-details query parameter'
+    && Array.isArray(payload.unsupported_parameters)
+    && payload.unsupported_parameters.includes('album_id')
+  ) {
+    response = await fetch(albumKeyUrl, requestOptions);
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = null;
+    }
   }
   if (!response.ok || !payload?.ok || !payload?.album) {
     const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);

@@ -7,10 +7,37 @@ from types import SimpleNamespace
 
 from music_app.services.cover_state import (
     apply_cover_selection_for_tracks,
+    resolve_authoritative_album_track_paths,
     serialize_cover_gallery_payload,
 )
 from music_app.services import covers as covers_module
 from music_app.services.covers import Image, image_dimensions
+
+
+def test_authoritative_track_resolution_uses_album_key_without_scanning_unrelated_tracks():
+    class UnrelatedAlbum:
+        key = "other::album"
+
+        @property
+        def tracks(self):
+            raise AssertionError("Unrelated album tracks must not be scanned")
+
+    target = SimpleNamespace(
+        key="artist::target album",
+        tracks=[
+            SimpleNamespace(path="N:/Music/Artist/Target/01.mp3"),
+            SimpleNamespace(path="N:/Music/Artist/Target/02.mp3"),
+        ],
+    )
+
+    assert resolve_authoritative_album_track_paths(
+        {"albums": [UnrelatedAlbum(), target]},
+        {"N:/Music/Artist/Target/01.mp3"},
+        album_key="artist::target album",
+    ) == {
+        "N:/Music/Artist/Target/01.mp3",
+        "N:/Music/Artist/Target/02.mp3",
+    }
 
 
 def _write_jpeg(path: Path, color: tuple[int, int, int], *, size: tuple[int, int] = (12, 12)) -> None:

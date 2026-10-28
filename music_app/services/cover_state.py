@@ -69,6 +69,8 @@ def active_remote_cover_for_track_paths(
 def resolve_authoritative_album_track_paths(
     library_state: dict[str, object],
     selected_track_paths: set[str],
+    *,
+    album_key: str | None = None,
 ) -> set[str]:
     """Resolve selected paths to exactly one complete live album inventory."""
     normalized_selected_paths = {
@@ -78,6 +80,23 @@ def resolve_authoritative_album_track_paths(
     }
     if not normalized_selected_paths:
         raise ValueError("Cover selection requires at least one live track path.")
+
+    normalized_album_key = str(album_key or "").strip().casefold()
+    if normalized_album_key:
+        keyed_albums = [
+            album
+            for album in list(library_state.get("albums", []) or [])
+            if str(getattr(album, "key", "") or "").strip().casefold()
+            == normalized_album_key
+        ]
+        if len(keyed_albums) == 1:
+            keyed_track_paths = {
+                str(getattr(track, "path", "") or "").strip()
+                for track in list(getattr(keyed_albums[0], "tracks", []) or [])
+                if str(getattr(track, "path", "") or "").strip()
+            }
+            if normalized_selected_paths <= keyed_track_paths:
+                return keyed_track_paths
 
     matching_album_track_sets: list[set[str]] = []
     resolved_selected_paths: set[str] = set()

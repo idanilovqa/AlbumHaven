@@ -465,7 +465,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-61:] == [
+    assert migration_names[-63:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -527,6 +527,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0099_reconcile_cover_lookup_notification_album_identities.sql",
         "0100_archive_invalid_featured_track_cover_notifications.sql",
         "0101_create_local_album_identity_transitions.sql",
+        "0102_narrow_synthetic_unknown_album_identity_guard.sql",
+        "0103_repair_synthetic_unknown_cover_task_identities.sql",
     ]
 
 
@@ -614,11 +616,11 @@ def test_album_raw_artist_search_index_matches_search_preview_expression():
 
 
 def test_album_identity_lineage_migration_is_additive_scoped_and_trigger_owned():
-    sql = _normalized_sql(
-        (MIGRATIONS_DIR / "0101_create_local_album_identity_transitions.sql").read_text(
-            encoding="utf-8"
-        )
+    migration_path = MIGRATIONS_DIR / "0101_create_local_album_identity_transitions.sql"
+    assert hashlib.sha256(migration_path.read_bytes()).hexdigest() == (
+        "c08cc70188bd840a87502eda607c66d832373c054bbe232ac3ad70bb2fbb08e9"
     )
+    sql = _normalized_sql(migration_path.read_text(encoding="utf-8"))
 
     assert "create table library.local_album_identity_transitions" in sql
     assert "predecessor_album_id bigint not null" in sql
@@ -633,6 +635,41 @@ def test_album_identity_lineage_migration_is_additive_scoped_and_trigger_owned()
     assert "after update of album_key on library.local_albums" in sql
     assert "old.library_id <> new.library_id" in sql
     assert "grant select on library.local_album_identity_transitions to album_haven_app" in sql
+
+
+def test_unknown_album_identity_guard_only_rejects_the_synthetic_both_unknown_case():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0102_narrow_synthetic_unknown_album_identity_guard.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "create or replace function library.record_local_track_album_identity_transition()" in sql
+    assert "create or replace function library.record_local_album_key_identity_transition()" in sql
+    assert "lower(btrim(coalesce(successor_title, ''))) in" in sql
+    assert "and lower(btrim(coalesce(successor_artist, ''))) in" in sql
+
+
+def test_synthetic_unknown_cover_task_repair_requires_unique_exact_live_evidence():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0103_repair_synthetic_unknown_cover_task_identities.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "lower(btrim(artists.name)) = lower(btrim(tasks.source_artist))" in sql
+    assert "lower(btrim(albums.title)) = lower(btrim(tasks.source_album))" in sql
+    assert "having count(*) = 1" in sql
+    assert "having count(distinct resolved_paths.private_path)" in sql
+    assert "and count(distinct resolved_paths.current_album_id) = 1" in sql
+    assert "having count(distinct mappings.target_album_id) > 1" in sql
+    assert "delete from synthetic_unknown_cover_task_mappings as mappings" in sql
+    assert "current_album.title" in sql and "current_artist.name" in sql
+    assert "update library.local_tracks as tracks" in sql
+    assert "update ops.cover_lookup_tasks as tasks" in sql
+    assert "synthetic_unknown_identity_repair" in sql
+    assert "417655" not in sql
+    assert "751471" not in sql
 
 
 def test_album_raw_artist_search_index_prerequisite_relocates_pg_trgm_without_rewriting_0083():

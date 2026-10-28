@@ -79,39 +79,53 @@ function isCoverLookupMobileSheet(overlay) {
 
 function bindCoverLookupMobileSheetSwipe(overlay) {
   const header = overlay?.querySelector?.('.cover-lookup-modal-header');
-  if (!header || header.dataset.coverLookupSheetSwipeBound === '1') return;
-  header.dataset.coverLookupSheetSwipeBound = '1';
-  let startX = 0;
-  let startY = 0;
-  let dragY = 0;
-  const reset = () => {
-    dragY = 0;
-    overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
-  };
-  header.addEventListener('touchstart', (event) => {
-    if (!isCoverLookupMobileSheet(overlay) || event.touches.length !== 1) return;
-    startX = event.touches[0].clientX;
-    startY = event.touches[0].clientY;
-    dragY = 0;
-  }, { passive: true });
-  header.addEventListener('touchmove', (event) => {
-    if (!isCoverLookupMobileSheet(overlay) || event.touches.length !== 1) return;
-    const dx = event.touches[0].clientX - startX;
-    const dy = Math.max(0, event.touches[0].clientY - startY);
-    if (dy <= Math.abs(dx)) {
+  const body = overlay?.querySelector?.('.cover-lookup-modal-body');
+  const bindTarget = (target, canStart) => {
+    if (!target || target.dataset.coverLookupSheetSwipeBound === '1') return;
+    target.dataset.coverLookupSheetSwipeBound = '1';
+    let startX = 0;
+    let startY = 0;
+    let dragY = 0;
+    let dragging = false;
+    const reset = () => {
+      dragY = 0;
+      dragging = false;
+      overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
+    };
+    target.addEventListener('touchstart', (event) => {
+      if (
+        !isCoverLookupMobileSheet(overlay)
+        || event.touches.length !== 1
+        || !canStart()
+      ) return;
+      startX = event.touches[0].clientX;
+      startY = event.touches[0].clientY;
+      dragY = 0;
+      dragging = true;
+    }, { passive: true });
+    target.addEventListener('touchmove', (event) => {
+      if (!dragging || !isCoverLookupMobileSheet(overlay) || event.touches.length !== 1) return;
+      const dx = event.touches[0].clientX - startX;
+      const dy = Math.max(0, event.touches[0].clientY - startY);
+      if (dy <= Math.abs(dx)) {
+        reset();
+        return;
+      }
+      dragY = dy;
+      overlay.style?.setProperty?.('--cover-lookup-sheet-drag-y', `${dy}px`);
+      event.preventDefault();
+    }, { passive: false });
+    target.addEventListener('touchend', () => {
+      const dismiss = dragging
+        && isCoverLookupMobileSheet(overlay)
+        && dragY >= COVER_LOOKUP_SHEET_DISMISS_DISTANCE;
       reset();
-      return;
-    }
-    dragY = dy;
-    overlay.style?.setProperty?.('--cover-lookup-sheet-drag-y', `${dy}px`);
-    event.preventDefault();
-  }, { passive: false });
-  header.addEventListener('touchend', () => {
-    const dismiss = isCoverLookupMobileSheet(overlay) && dragY >= COVER_LOOKUP_SHEET_DISMISS_DISTANCE;
-    reset();
-    if (dismiss) closeCoverLookupModal();
-  });
-  header.addEventListener('touchcancel', reset);
+      if (dismiss) closeCoverLookupModal();
+    });
+    target.addEventListener('touchcancel', reset);
+  };
+  bindTarget(header, () => true);
+  bindTarget(body, () => Number(body.scrollTop || 0) <= 0);
 }
 
 function revokeCoverLookupPastedImageUrls() {
@@ -164,13 +178,27 @@ async function addPastedImageToCoverLookup(file) {
     throw new Error('Failed to read pasted image.');
   }
   const objectUrl = URL.createObjectURL(file);
+  let width = 0;
+  let height = 0;
+  if (typeof createImageBitmap === 'function') {
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+      width = Number(bitmap?.width || 0) || 0;
+      height = Number(bitmap?.height || 0) || 0;
+    } catch (_error) {
+      // The preview remains usable when this browser cannot decode dimensions here.
+    } finally {
+      bitmap?.close?.();
+    }
+  }
   const nextItem = {
     id: buildCoverLookupPastedImageId(),
     filename: String(file.name || 'Pasted image').trim() || 'Pasted image',
     album: 'Pasted image',
-    resolution: 'Clipboard image',
-    width: 0,
-    height: 0,
+    resolution: '',
+    width,
+    height,
     object_url: objectUrl,
     data_url: dataUrl,
     mime_type: String(file.type || 'image/png').trim() || 'image/png',
@@ -189,10 +217,23 @@ async function addPastedImageToCoverLookup(file) {
 
 async function addCoverLookupFiles(files) {
   const candidates = Array.from(files || []);
+  if (!candidates.length) return 0;
+
+  state.coverLookup.modal.manualPendingCount =
+    Math.max(0, Number(state.coverLookup.modal.manualPendingCount || 0)) + candidates.length;
+  renderCoverLookupModal();
   let added = 0;
-  for (const file of candidates) {
-    await addPastedImageToCoverLookup(file);
-    added += 1;
+  try {
+    for (const file of candidates) {
+      await addPastedImageToCoverLookup(file);
+      added += 1;
+    }
+  } finally {
+    state.coverLookup.modal.manualPendingCount = Math.max(
+      0,
+      Number(state.coverLookup.modal.manualPendingCount || 0) - candidates.length,
+    );
+    renderCoverLookupModal();
   }
   return added;
 }
@@ -481,9 +522,21 @@ function applyCoverLookupCandidateSource(candidateSource) {
       ? normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === overrideUrl
       : String(candidate?.id || '') === overrideCandidateId
   );
-  const retainedOverride = (modal.possibleMatches || []).find(candidateMatchesOverride);
+  const previousGeneration = coverLookupCandidateGenerationKey(modal.candidateGeneration);
+  const previousMatches = sanitizeCoverLookupPossibleMatches(modal.possibleMatches);
+  const retainedOverride = previousMatches.find(candidateMatchesOverride);
   modal.candidateGeneration = generation;
   let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
+  let retainedPreviousMatches = false;
+  if (
+    possibleMatches.length === 0
+    && previousGeneration
+    && previousGeneration !== generation
+    && ['pending', 'running'].includes(String(candidateSource.status || '').trim())
+  ) {
+    possibleMatches = previousMatches;
+    retainedPreviousMatches = true;
+  }
   const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
   if (hasExplicitRemoteSelection) {
     const incomingOverride = possibleMatches.find(candidateMatchesOverride);
@@ -512,6 +565,10 @@ function applyCoverLookupCandidateSource(candidateSource) {
     return;
   }
   modal.possibleMatches = possibleMatches;
+  if (retainedPreviousMatches) {
+    modal.selectedRemoteId = '';
+    return;
+  }
   const hasPendingNonRemoteSelection = Boolean(
     String(modal.pendingLocalPath || '')
     || String(modal.pendingPastedImageId || '')
@@ -1454,13 +1511,10 @@ function hasPendingCoverLookupDrawerTerminalPublication(tasks) {
 
 const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
 const COVER_LOOKUP_TASK_OVERSCAN = 10;
-const COVER_LOOKUP_TASK_ESTIMATED_HEIGHT = 74;
+const COVER_LOOKUP_TASK_ROW_HEIGHT = 70;
 
 function getCoverLookupTaskRenderWindow(tasks, body) {
-  const rowHeight = Math.max(
-    1,
-    Number(state.coverLookup.taskEstimatedHeight || COVER_LOOKUP_TASK_ESTIMATED_HEIGHT),
-  );
+  const rowHeight = COVER_LOOKUP_TASK_ROW_HEIGHT;
   const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
   const scrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
@@ -1472,9 +1526,12 @@ function getCoverLookupTaskRenderWindow(tasks, body) {
 }
 
 function replaceCoverLookupDrawerMarkup(body, markup) {
+  const retainedTasks = new Map();
   const retainedImages = new Map();
   body.querySelectorAll?.('[data-open-cover-lookup-task]').forEach((taskElement) => {
     const taskId = String(taskElement.getAttribute?.('data-open-cover-lookup-task') || '');
+    const taskMarkup = String(taskElement.outerHTML || '');
+    if (taskId && taskMarkup) retainedTasks.set(taskId, { element: taskElement, markup: taskMarkup });
     const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
     const src = String(image?.getAttribute?.('src') || '');
     const failed = image?.complete === true && Number(image?.naturalWidth || 0) <= 0;
@@ -1483,6 +1540,11 @@ function replaceCoverLookupDrawerMarkup(body, markup) {
   body.innerHTML = markup;
   body.querySelectorAll?.('[data-open-cover-lookup-task]').forEach((taskElement) => {
     const taskId = String(taskElement.getAttribute?.('data-open-cover-lookup-task') || '');
+    const retainedTask = retainedTasks.get(taskId);
+    if (retainedTask?.markup === String(taskElement.outerHTML || '')) {
+      taskElement.replaceWith(retainedTask.element);
+      return;
+    }
     const retained = retainedImages.get(taskId);
     const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
     if (!retained || !image) return;
@@ -1582,9 +1644,14 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   if (badgeCount > 0) loadCoverLookupDrawerHoverIcon(button);
   button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
+    const clearInProgress = state.coverLookup.clearingCompleted === true;
     clearButton.hidden = false;
-    clearButton.disabled = loadedActionedCount <= 0;
-    clearButton.setAttribute?.('aria-disabled', String(loadedActionedCount <= 0));
+    clearButton.disabled = loadedActionedCount <= 0 || clearInProgress;
+    clearButton.setAttribute?.('aria-disabled', String(clearButton.disabled));
+    clearButton.setAttribute?.('aria-busy', String(clearInProgress));
+    body.classList?.toggle('is-clearing', clearInProgress);
+    body.setAttribute?.('aria-busy', String(clearInProgress));
+    body.inert = clearInProgress;
   }
   if (!state.coverLookup.drawerOpen) {
     if (body.innerHTML) {
@@ -1769,16 +1836,13 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
     `);
     body.scrollTop = Math.max(0, restoreScrollTop);
-    const measuredCard = body.querySelector?.('.cover-lookup-task-card');
-    const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
-    const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;
-    if (measuredHeight > 0) state.coverLookup.taskEstimatedHeight = measuredHeight + measuredGap;
     state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
   }
   syncCoverLookupElapsedTimer();
 }
 
 async function clearCompletedCoverLookupTasks() {
+  if (state.coverLookup.clearingCompleted === true) return;
   const previousTasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks.slice() : [];
   const terminalTaskIds = previousTasks
     .filter((task) => isActionedCoverLookupNotification(task))
@@ -1787,10 +1851,7 @@ async function clearCompletedCoverLookupTasks() {
   if (!terminalTaskIds.length) {
     return;
   }
-  const terminalTaskIdSet = new Set(terminalTaskIds);
-  state.coverLookup.tasks = previousTasks.filter(
-    (task) => !terminalTaskIdSet.has(String(task?.id || '').trim()),
-  );
+  state.coverLookup.clearingCompleted = true;
   renderCoverLookupDrawer({ preserveInteraction: false });
   stopCoverLookupPollingIfIdle();
   try {
@@ -1816,6 +1877,9 @@ async function clearCompletedCoverLookupTasks() {
     renderCoverLookupDrawer({ preserveInteraction: false });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear completed cover lookups.', 'error', 2800);
+  } finally {
+    state.coverLookup.clearingCompleted = false;
+    renderCoverLookupDrawer({ preserveInteraction: false });
   }
 }
 
@@ -2320,7 +2384,15 @@ function renderCoverLookupModal() {
     els.pastedUrls.focus({ preventScroll: true });
     els.pastedUrls.setSelectionRange(manualSelectionStart, manualSelectionEnd);
   }
-  restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
+  if (compact && modalState.initialScrollPending === true && !modalState.loading) {
+    const selectedCard = els.body.querySelector?.('.cover-lookup-art-card.is-active');
+    els.body.scrollTop = selectedCard
+      ? Math.max(0, Number(selectedCard.offsetTop || 0) - (Number(els.body.clientHeight || 0) - Number(selectedCard.offsetHeight || 0)) / 2)
+      : 0;
+    modalState.initialScrollPending = false;
+  } else {
+    restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
+  }
   scheduleDeferredCoverLookupPreviews(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
@@ -2369,8 +2441,8 @@ function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
     const incomingById = new Map(incoming.map((task) => [String(task?.id || ''), task]));
     const newTasks = incoming.filter((task) => !currentIds.has(String(task?.id || '')));
     return [
-      ...newTasks,
       ...current.map((task) => incomingById.get(String(task?.id || '')) || task),
+      ...newTasks,
     ];
   }
   return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
@@ -2522,6 +2594,7 @@ let coverLookupPollingRequest = null;
 let coverLookupBackgroundPollTicks = 0;
 let coverLookupPollInFlight = false;
 let coverLookupHistoryRequest = null;
+let coverLookupDrawerScrollRenderTimer = 0;
 
 async function loadNextCoverLookupTaskPage(options = {}) {
   if (!state.coverLookup.tasksNextCursor) return;
@@ -2540,8 +2613,20 @@ function handleCoverLookupDrawerScroll(event) {
   if (!body || !state.coverLookup.drawerOpen) return Promise.resolve();
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const nextWindow = getCoverLookupTaskRenderWindow(tasks, body);
-  if (nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)) {
-    renderCoverLookupDrawer({ preserveInteraction: false });
+  if (coverLookupDrawerScrollRenderTimer && typeof window.clearTimeout === 'function') {
+    window.clearTimeout(coverLookupDrawerScrollRenderTimer);
+    coverLookupDrawerScrollRenderTimer = 0;
+  }
+  if (
+    nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)
+    && typeof window.setTimeout === 'function'
+  ) {
+    coverLookupDrawerScrollRenderTimer = window.setTimeout(() => {
+      coverLookupDrawerScrollRenderTimer = 0;
+      if (state.coverLookup.drawerOpen) {
+        renderCoverLookupDrawer({ preserveInteraction: false });
+      }
+    }, 120);
   }
   const remaining = Number(body.scrollHeight || 0)
     - Number(body.scrollTop || 0)
@@ -2790,6 +2875,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.manualPendingCount = 0;
   state.coverLookup.modal.manualStatusText = '';
   state.coverLookup.modal.manualStatusTone = 'neutral';
+  state.coverLookup.modal.initialScrollPending = true;
   state.coverLookup.modal.loading = true;
   state.coverLookup.modal.saving = false;
   els.overlay.hidden = false;
@@ -3242,7 +3328,6 @@ async function saveRemoteCoverFromLookup() {
       state.coverLookup.modal.selectedRemoteId = '';
       closeCoverLookupModal();
     }
-    await loadCoverLookupTasks({ toast: false });
     ensureCoverLookupPolling();
     renderCoverLookupDrawer();
   } catch (error) {
@@ -3271,7 +3356,8 @@ async function addRemoteCoverLinksFromLookup() {
   }
   try {
     state.coverLookup.modal.manualBusy = true;
-    state.coverLookup.modal.manualPendingCount = urls.length ? 1 : 0;
+    state.coverLookup.modal.manualPendingCount =
+      Math.max(0, Number(state.coverLookup.modal.manualPendingCount || 0)) + 1;
     state.coverLookup.modal.manualStatusText = '';
     state.coverLookup.modal.manualStatusTone = 'neutral';
     renderCoverLookupModal();
@@ -3309,7 +3395,10 @@ async function addRemoteCoverLinksFromLookup() {
     console.error('[AlbumHaven][CoverLookup] Failed to add remote links.', error);
   } finally {
     state.coverLookup.modal.manualBusy = false;
-    state.coverLookup.modal.manualPendingCount = 0;
+    state.coverLookup.modal.manualPendingCount = Math.max(
+      0,
+      Number(state.coverLookup.modal.manualPendingCount || 0) - 1,
+    );
     renderCoverLookupModal();
   }
 }

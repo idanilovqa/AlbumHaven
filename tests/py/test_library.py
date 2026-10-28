@@ -153,6 +153,27 @@ def test_disc_total_and_title_survive_album_projection(tmp_path):
     assert payload_track["disc_subtitle"] == "Bonus"
 
 
+def test_album_type_survives_album_rebuild_and_serialization(tmp_path):
+    track_path = str(tmp_path / "Artist" / "Single" / "01 Song.mp3")
+    entry = {
+        **_entry(
+            path=track_path,
+            title="Song",
+            artist="Artist",
+            album_artist="Artist",
+            album="Single",
+            track_number=1,
+        ),
+        "album_type": "Single",
+    }
+
+    album = build_albums_from_file_cache({track_path: entry})[0]
+
+    assert album.release_type == "Single"
+    assert album.tracks[0].album_type == "Single"
+    assert album_to_dict(album)["release_type"] == "Single"
+
+
 def test_partial_orphan_album_source_is_excluded_but_complete_copies_and_editions_remain(tmp_path):
     entries = {}
     expected_primary = set()

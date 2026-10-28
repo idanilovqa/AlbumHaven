@@ -1674,6 +1674,107 @@ function compactCurrentViewForIdle() {
   return compactedView;
 }
 
+const RUNTIME_ALBUM_COVER_AUTHORITY_FIELDS = [
+  'cover_path',
+  'cover_preview_url',
+  'cover_revision',
+  'cover_selection_origin',
+  'cover_selection_provenance',
+  'remote_cover_url',
+  'remote_cover_thumbnail_url',
+  'remote_cover_source',
+  'remote_cover_source_label',
+  'remote_cover_album_url',
+  'remote_cover_width',
+  'remote_cover_height',
+];
+
+function preserveMissingRuntimeAlbumCoverFields(album, previousAlbum) {
+  if (!previousAlbum) return album;
+  const preservedAlbum = { ...album };
+  RUNTIME_ALBUM_COVER_AUTHORITY_FIELDS.forEach((field) => {
+    if (
+      (preservedAlbum[field] == null || preservedAlbum[field] === '')
+      && previousAlbum[field] != null
+      && previousAlbum[field] !== ''
+    ) {
+      preservedAlbum[field] = previousAlbum[field];
+    }
+  });
+  return preservedAlbum;
+}
+
+function runtimeAlbumCoverAuthorityByKey(view, previousAlbumsByKey = null) {
+  const albumsByKey = previousAlbumsByKey instanceof Map
+    ? new Map(previousAlbumsByKey)
+    : new Map();
+  ['artist_groups', 'primary_artist_groups', 'family_artist_groups'].forEach((groupKey) => {
+    (view?.[groupKey] || []).forEach((group) => {
+      (group?.albums || []).forEach((album) => {
+        [album?.key, album?.album_ref, album?.request_key, album?.identity_key]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+          .forEach((key) => {
+            albumsByKey.set(
+              key,
+              preserveMissingRuntimeAlbumCoverFields(album, albumsByKey.get(key)),
+            );
+          });
+      });
+    });
+  });
+  return albumsByKey;
+}
+
+function preserveMissingRuntimeAlbumCoverAuthority(nextView, albumsByKey) {
+  if (!(albumsByKey instanceof Map) || !albumsByKey.size) return nextView;
+
+  ['artist_groups', 'primary_artist_groups', 'family_artist_groups'].forEach((groupKey) => {
+    if (!Array.isArray(nextView?.[groupKey])) return;
+    nextView[groupKey] = nextView[groupKey].map((group) => ({
+      ...group,
+      albums: (group?.albums || []).map((album) => {
+        const previousAlbum = [album?.key, album?.album_ref, album?.request_key, album?.identity_key]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+          .map((key) => albumsByKey.get(key))
+          .find(Boolean);
+        return preserveMissingRuntimeAlbumCoverFields(album, previousAlbum);
+      }),
+    }));
+  });
+  return nextView;
+}
+
+function rememberCurrentRuntimeAlbumCoverAuthority(view = state.view) {
+  const coverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0);
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  state.ui.tagEditAlbumCoverAuthority = {
+    coverMutationRevision,
+    albumsByKey: runtimeAlbumCoverAuthorityByKey(
+      view,
+      retainedCoverAuthority?.coverMutationRevision === coverMutationRevision
+        ? retainedCoverAuthority.albumsByKey
+        : null,
+    ),
+  };
+  return state.ui.tagEditAlbumCoverAuthority;
+}
+
+function findRememberedRuntimeAlbumCoverAuthority(album) {
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (
+    !retainedCoverAuthority
+    || retainedCoverAuthority.coverMutationRevision
+      !== Number(state.ui.albumCoverMutationRevision || 0)
+  ) return null;
+  return [album?.key, album?.album_ref, album?.request_key, album?.identity_key]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .map((key) => retainedCoverAuthority.albumsByKey.get(key))
+    .find(Boolean) || null;
+}
+
 function applyViewPayload(payload, options = {}) {
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
@@ -1702,6 +1803,19 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  let retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (options.preserveMissingAlbumCoverAuthority === true) {
+    retainedCoverAuthority = rememberCurrentRuntimeAlbumCoverAuthority(mountedPreviousView);
+  }
+  if (
+    retainedCoverAuthority
+    && retainedCoverAuthority.coverMutationRevision
+      === Number(state.ui.albumCoverMutationRevision || 0)
+  ) {
+    preserveMissingRuntimeAlbumCoverAuthority(nextView, retainedCoverAuthority.albumsByKey);
+  } else if (retainedCoverAuthority) {
+    delete state.ui.tagEditAlbumCoverAuthority;
+  }
   // Sidebar counts retain the source scope of their own response when album-only
   // hydration preserves the navigation tree.
   const sidebarCategories = options.preserveSidebarState
@@ -11904,6 +12018,10 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
   imageElement.setAttribute('data-cover-visual-state', 'ready');
   imageElement.removeAttribute('data-gallery-cover-object-retry');
   imageElement.removeAttribute('aria-hidden');
+  const loadedCoverPath = imageElement.getAttribute('data-cover-path') || '';
+  if (coverPreviewUrlMatchesAlbum(imageElement.currentSrc || imageElement.src, loadedCoverPath)) {
+    clearFailedLocalDisplayCoverPath(loadedCoverPath);
+  }
   const releaseObjectUrl = () => {
     if (
       typeof galleryCoverPreviewCache !== 'undefined'
@@ -12086,6 +12204,7 @@ function albumHasDisplayCover(album) {
   const localCoverPath = String(album?.cover_path || '').trim();
   return Boolean(
     (optimistic && optimistic.src)
+    || String(album?.cover_preview_url || '').trim()
     || (localCoverPath && !isKnownFailedLocalDisplayCoverPath(localCoverPath))
     || String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim()
   );
@@ -12988,16 +13107,32 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const albumIdQuery = Number.isInteger(albumId) && albumId > 0
     ? `&album_id=${encodeURIComponent(String(albumId))}`
     : '';
-  const response = await fetch(`/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}${albumIdQuery}`, {
+  const albumKeyUrl = `/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`;
+  const requestOptions = {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
-  });
+  };
+  let response = await fetch(`${albumKeyUrl}${albumIdQuery}`, requestOptions);
   let payload = null;
   try {
     payload = await response.json();
   } catch (_error) {
     payload = null;
+  }
+  if (
+    albumIdQuery
+    && response.status === 400
+    && payload?.error === 'Unsupported album-details query parameter'
+    && Array.isArray(payload.unsupported_parameters)
+    && payload.unsupported_parameters.includes('album_id')
+  ) {
+    response = await fetch(albumKeyUrl, requestOptions);
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = null;
+    }
   }
   if (!response.ok || !payload?.ok || !payload?.album) {
     const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
@@ -19342,11 +19477,19 @@ function findVisibleAlbumByTrackPaths(trackPaths) {
       && Object.values(preference).some((value) => value != null && value !== ''),
     );
   });
-  return preferenceRatingMatch
+  const selectedMatch = preferenceRatingMatch
     || legacyRatingMatch
     || preferenceDataMatch
     || matches[0]
     || null;
+  if (!selectedMatch) return null;
+  const coveredMatch = matches.reduce(
+    (album, fallbackAlbum) => preserveMissingAlbumCoverFields(album, fallbackAlbum),
+    selectedMatch,
+  );
+  return VISIBLE_ALBUM_COVER_FIELDS.some((field) => (
+    coveredMatch[field] !== selectedMatch[field]
+  )) ? coveredMatch : selectedMatch;
 }
 
 function findVisibleAlbumByTrackPath(trackPath) {
@@ -19427,20 +19570,49 @@ function getAlbumPathSignature(album) {
   return Array.from(getAlbumTrackPaths(album)).sort().join('|');
 }
 
+const VISIBLE_ALBUM_COVER_FIELDS = [
+  'cover_path',
+  'cover_preview_url',
+  'remote_cover_url',
+  'remote_cover_thumbnail_url',
+  'remote_cover_source',
+  'remote_cover_source_label',
+  'remote_cover_album_url',
+  'remote_cover_width',
+  'remote_cover_height',
+];
+
+function preserveMissingAlbumCoverFields(album, fallbackAlbum) {
+  const preservedAlbum = { ...album };
+  VISIBLE_ALBUM_COVER_FIELDS.forEach((field) => {
+    if ((album?.[field] == null || album[field] === '') && fallbackAlbum?.[field] != null) {
+      preservedAlbum[field] = fallbackAlbum[field];
+    }
+  });
+  return preservedAlbum;
+}
+
 function collectVisibleAlbumsUnique() {
   const sources = [state.view.primary_artist_groups, state.view.family_artist_groups, state.view.artist_groups];
-  const seen = new Set();
-  const seenRuntimeAliases = new Set();
+  const albumIndexBySignature = new Map();
+  const albumIndexByRuntimeAlias = new Map();
   const albums = [];
   sources.forEach((groups) => {
     (groups || []).forEach((group) => {
       (group.albums || []).forEach((album) => {
         const runtimeAliases = getAlbumRuntimeIdentityAliases(album);
-        if (Array.from(runtimeAliases).some((alias) => seenRuntimeAliases.has(alias))) return;
         const signature = getAlbumPathSignature(album) || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
-        if (!signature || seen.has(signature)) return;
-        seen.add(signature);
-        runtimeAliases.forEach((alias) => seenRuntimeAliases.add(alias));
+        const duplicateIndex = Array.from(runtimeAliases)
+          .map((alias) => albumIndexByRuntimeAlias.get(alias))
+          .find((index) => index != null) ?? albumIndexBySignature.get(signature);
+        if (duplicateIndex != null) {
+          albums[duplicateIndex] = preserveMissingAlbumCoverFields(albums[duplicateIndex], album);
+          return;
+        }
+        if (!signature) return;
+        const albumIndex = albums.length;
+        albumIndexBySignature.set(signature, albumIndex);
+        runtimeAliases.forEach((alias) => albumIndexByRuntimeAlias.set(alias, albumIndex));
         albums.push(album);
       });
     });
@@ -19719,7 +19891,7 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
 }
 
 function preserveVisibleAlbumRuntimeIdentity(visibleAlbum, candidate) {
-  const reconciledAlbum = {
+  let reconciledAlbum = {
     ...visibleAlbum,
     ...candidate,
   };
@@ -19727,6 +19899,7 @@ function preserveVisibleAlbumRuntimeIdentity(visibleAlbum, candidate) {
     const stableValue = String(visibleAlbum?.[field] || '').trim();
     if (stableValue) reconciledAlbum[field] = visibleAlbum[field];
   });
+  reconciledAlbum = preserveMissingAlbumCoverFields(reconciledAlbum, visibleAlbum);
   return reconciledAlbum;
 }
 
@@ -21083,12 +21256,14 @@ async function watchSaveTask(taskId, context = {}) {
               if (restoresAllSearchResults) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
+              rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
                   preserveMountedGalleryChildren: true,
+                  preserveMissingAlbumCoverAuthority: true,
                   ...(!structuralTagEditRequiresCanonicalView
                     ? { retainMountedGalleryIfEquivalent: true }
                     : {}),
@@ -27728,6 +27903,7 @@ function getTrackTagInitialValues(track, album) {
     exception_type: String(track?.exception_type || ''),
     custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
+    album_type: String(track?.album_type || ''),
     album_rating: String(track?.album_rating ?? album?.album_rating ?? ''),
   };
 }
@@ -28109,7 +28285,11 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   const sourceTrackPaths = new Set(
     sourceTracks.map((track) => String(track?.path || '')).filter(Boolean),
   );
-  const visibleSourceAlbum = findVisibleAlbumByTrackPaths(sourceTrackPaths);
+  const rememberedSourceAlbum = typeof findRememberedRuntimeAlbumCoverAuthority === 'function'
+    ? findRememberedRuntimeAlbumCoverAuthority(album)
+    : null;
+  const visibleSourceAlbum = findVisibleAlbumByTrackPaths(sourceTrackPaths) || album;
+  const coverSourceAlbum = rememberedSourceAlbum || visibleSourceAlbum;
   const sourceAlbumPreference = album?.album_preference
     || visibleSourceAlbum?.album_preference
     || null;
@@ -28145,6 +28325,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       total_discs: totalDiscs,
       disc_subtitle: Object.prototype.hasOwnProperty.call(edits, 'disc_subtitle') ? String(edits.disc_subtitle || '').trim() : track.disc_subtitle,
       album_rating: Object.prototype.hasOwnProperty.call(edits, 'album_rating') ? parseOptionalInteger(edits.album_rating) : track.album_rating,
+      album_type: Object.prototype.hasOwnProperty.call(edits, 'album_type')
+        ? String(edits.album_type || '').trim()
+        : String(track?.album_type || '').trim(),
       edition: Object.prototype.hasOwnProperty.call(edits, 'edition')
         ? String(edits.edition || '').trim()
         : (inheritedEdition || null),
@@ -28210,16 +28393,18 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         key: canonicalKeyParts.join('::'),
         name: albumName,
         album_artist: albumArtist,
-        cover_path: track?.cover_path || album?.cover_path || null,
-        remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || null,
-        remote_cover_thumbnail_url: track?.remote_cover_thumbnail_url || album?.remote_cover_thumbnail_url || null,
-        remote_cover_source: track?.remote_cover_source || album?.remote_cover_source || null,
-        remote_cover_source_label: track?.remote_cover_source_label || album?.remote_cover_source_label || null,
-        remote_cover_album_url: track?.remote_cover_album_url || album?.remote_cover_album_url || null,
-        remote_cover_width: track?.remote_cover_width || album?.remote_cover_width || null,
-        remote_cover_height: track?.remote_cover_height || album?.remote_cover_height || null,
+        cover_path: track?.cover_path || album?.cover_path || coverSourceAlbum?.cover_path || null,
+        cover_preview_url: track?.cover_preview_url || album?.cover_preview_url || coverSourceAlbum?.cover_preview_url || null,
+        remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || coverSourceAlbum?.remote_cover_url || null,
+        remote_cover_thumbnail_url: track?.remote_cover_thumbnail_url || album?.remote_cover_thumbnail_url || coverSourceAlbum?.remote_cover_thumbnail_url || null,
+        remote_cover_source: track?.remote_cover_source || album?.remote_cover_source || coverSourceAlbum?.remote_cover_source || null,
+        remote_cover_source_label: track?.remote_cover_source_label || album?.remote_cover_source_label || coverSourceAlbum?.remote_cover_source_label || null,
+        remote_cover_album_url: track?.remote_cover_album_url || album?.remote_cover_album_url || coverSourceAlbum?.remote_cover_album_url || null,
+        remote_cover_width: track?.remote_cover_width || album?.remote_cover_width || coverSourceAlbum?.remote_cover_width || null,
+        remote_cover_height: track?.remote_cover_height || album?.remote_cover_height || coverSourceAlbum?.remote_cover_height || null,
         year,
         release_date: String(album?.release_date || '').trim(),
+        release_type: String(track?.album_type || album?.release_type || 'ALBUM').trim() || 'ALBUM',
         edition: edition || null,
         album_rating: normalizedRating ?? 0,
         album_preference: albumPreference,
@@ -28702,39 +28887,53 @@ function isCoverLookupMobileSheet(overlay) {
 
 function bindCoverLookupMobileSheetSwipe(overlay) {
   const header = overlay?.querySelector?.('.cover-lookup-modal-header');
-  if (!header || header.dataset.coverLookupSheetSwipeBound === '1') return;
-  header.dataset.coverLookupSheetSwipeBound = '1';
-  let startX = 0;
-  let startY = 0;
-  let dragY = 0;
-  const reset = () => {
-    dragY = 0;
-    overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
-  };
-  header.addEventListener('touchstart', (event) => {
-    if (!isCoverLookupMobileSheet(overlay) || event.touches.length !== 1) return;
-    startX = event.touches[0].clientX;
-    startY = event.touches[0].clientY;
-    dragY = 0;
-  }, { passive: true });
-  header.addEventListener('touchmove', (event) => {
-    if (!isCoverLookupMobileSheet(overlay) || event.touches.length !== 1) return;
-    const dx = event.touches[0].clientX - startX;
-    const dy = Math.max(0, event.touches[0].clientY - startY);
-    if (dy <= Math.abs(dx)) {
+  const body = overlay?.querySelector?.('.cover-lookup-modal-body');
+  const bindTarget = (target, canStart) => {
+    if (!target || target.dataset.coverLookupSheetSwipeBound === '1') return;
+    target.dataset.coverLookupSheetSwipeBound = '1';
+    let startX = 0;
+    let startY = 0;
+    let dragY = 0;
+    let dragging = false;
+    const reset = () => {
+      dragY = 0;
+      dragging = false;
+      overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
+    };
+    target.addEventListener('touchstart', (event) => {
+      if (
+        !isCoverLookupMobileSheet(overlay)
+        || event.touches.length !== 1
+        || !canStart()
+      ) return;
+      startX = event.touches[0].clientX;
+      startY = event.touches[0].clientY;
+      dragY = 0;
+      dragging = true;
+    }, { passive: true });
+    target.addEventListener('touchmove', (event) => {
+      if (!dragging || !isCoverLookupMobileSheet(overlay) || event.touches.length !== 1) return;
+      const dx = event.touches[0].clientX - startX;
+      const dy = Math.max(0, event.touches[0].clientY - startY);
+      if (dy <= Math.abs(dx)) {
+        reset();
+        return;
+      }
+      dragY = dy;
+      overlay.style?.setProperty?.('--cover-lookup-sheet-drag-y', `${dy}px`);
+      event.preventDefault();
+    }, { passive: false });
+    target.addEventListener('touchend', () => {
+      const dismiss = dragging
+        && isCoverLookupMobileSheet(overlay)
+        && dragY >= COVER_LOOKUP_SHEET_DISMISS_DISTANCE;
       reset();
-      return;
-    }
-    dragY = dy;
-    overlay.style?.setProperty?.('--cover-lookup-sheet-drag-y', `${dy}px`);
-    event.preventDefault();
-  }, { passive: false });
-  header.addEventListener('touchend', () => {
-    const dismiss = isCoverLookupMobileSheet(overlay) && dragY >= COVER_LOOKUP_SHEET_DISMISS_DISTANCE;
-    reset();
-    if (dismiss) closeCoverLookupModal();
-  });
-  header.addEventListener('touchcancel', reset);
+      if (dismiss) closeCoverLookupModal();
+    });
+    target.addEventListener('touchcancel', reset);
+  };
+  bindTarget(header, () => true);
+  bindTarget(body, () => Number(body.scrollTop || 0) <= 0);
 }
 
 function revokeCoverLookupPastedImageUrls() {
@@ -28787,13 +28986,27 @@ async function addPastedImageToCoverLookup(file) {
     throw new Error('Failed to read pasted image.');
   }
   const objectUrl = URL.createObjectURL(file);
+  let width = 0;
+  let height = 0;
+  if (typeof createImageBitmap === 'function') {
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+      width = Number(bitmap?.width || 0) || 0;
+      height = Number(bitmap?.height || 0) || 0;
+    } catch (_error) {
+      // The preview remains usable when this browser cannot decode dimensions here.
+    } finally {
+      bitmap?.close?.();
+    }
+  }
   const nextItem = {
     id: buildCoverLookupPastedImageId(),
     filename: String(file.name || 'Pasted image').trim() || 'Pasted image',
     album: 'Pasted image',
-    resolution: 'Clipboard image',
-    width: 0,
-    height: 0,
+    resolution: '',
+    width,
+    height,
     object_url: objectUrl,
     data_url: dataUrl,
     mime_type: String(file.type || 'image/png').trim() || 'image/png',
@@ -28812,10 +29025,23 @@ async function addPastedImageToCoverLookup(file) {
 
 async function addCoverLookupFiles(files) {
   const candidates = Array.from(files || []);
+  if (!candidates.length) return 0;
+
+  state.coverLookup.modal.manualPendingCount =
+    Math.max(0, Number(state.coverLookup.modal.manualPendingCount || 0)) + candidates.length;
+  renderCoverLookupModal();
   let added = 0;
-  for (const file of candidates) {
-    await addPastedImageToCoverLookup(file);
-    added += 1;
+  try {
+    for (const file of candidates) {
+      await addPastedImageToCoverLookup(file);
+      added += 1;
+    }
+  } finally {
+    state.coverLookup.modal.manualPendingCount = Math.max(
+      0,
+      Number(state.coverLookup.modal.manualPendingCount || 0) - candidates.length,
+    );
+    renderCoverLookupModal();
   }
   return added;
 }
@@ -29104,9 +29330,21 @@ function applyCoverLookupCandidateSource(candidateSource) {
       ? normalizeCoverLookupCandidateUrl(candidate?.url).toLowerCase() === overrideUrl
       : String(candidate?.id || '') === overrideCandidateId
   );
-  const retainedOverride = (modal.possibleMatches || []).find(candidateMatchesOverride);
+  const previousGeneration = coverLookupCandidateGenerationKey(modal.candidateGeneration);
+  const previousMatches = sanitizeCoverLookupPossibleMatches(modal.possibleMatches);
+  const retainedOverride = previousMatches.find(candidateMatchesOverride);
   modal.candidateGeneration = generation;
   let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
+  let retainedPreviousMatches = false;
+  if (
+    possibleMatches.length === 0
+    && previousGeneration
+    && previousGeneration !== generation
+    && ['pending', 'running'].includes(String(candidateSource.status || '').trim())
+  ) {
+    possibleMatches = previousMatches;
+    retainedPreviousMatches = true;
+  }
   const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
   if (hasExplicitRemoteSelection) {
     const incomingOverride = possibleMatches.find(candidateMatchesOverride);
@@ -29135,6 +29373,10 @@ function applyCoverLookupCandidateSource(candidateSource) {
     return;
   }
   modal.possibleMatches = possibleMatches;
+  if (retainedPreviousMatches) {
+    modal.selectedRemoteId = '';
+    return;
+  }
   const hasPendingNonRemoteSelection = Boolean(
     String(modal.pendingLocalPath || '')
     || String(modal.pendingPastedImageId || '')
@@ -30077,13 +30319,10 @@ function hasPendingCoverLookupDrawerTerminalPublication(tasks) {
 
 const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
 const COVER_LOOKUP_TASK_OVERSCAN = 10;
-const COVER_LOOKUP_TASK_ESTIMATED_HEIGHT = 74;
+const COVER_LOOKUP_TASK_ROW_HEIGHT = 70;
 
 function getCoverLookupTaskRenderWindow(tasks, body) {
-  const rowHeight = Math.max(
-    1,
-    Number(state.coverLookup.taskEstimatedHeight || COVER_LOOKUP_TASK_ESTIMATED_HEIGHT),
-  );
+  const rowHeight = COVER_LOOKUP_TASK_ROW_HEIGHT;
   const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
   const scrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
@@ -30095,9 +30334,12 @@ function getCoverLookupTaskRenderWindow(tasks, body) {
 }
 
 function replaceCoverLookupDrawerMarkup(body, markup) {
+  const retainedTasks = new Map();
   const retainedImages = new Map();
   body.querySelectorAll?.('[data-open-cover-lookup-task]').forEach((taskElement) => {
     const taskId = String(taskElement.getAttribute?.('data-open-cover-lookup-task') || '');
+    const taskMarkup = String(taskElement.outerHTML || '');
+    if (taskId && taskMarkup) retainedTasks.set(taskId, { element: taskElement, markup: taskMarkup });
     const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
     const src = String(image?.getAttribute?.('src') || '');
     const failed = image?.complete === true && Number(image?.naturalWidth || 0) <= 0;
@@ -30106,6 +30348,11 @@ function replaceCoverLookupDrawerMarkup(body, markup) {
   body.innerHTML = markup;
   body.querySelectorAll?.('[data-open-cover-lookup-task]').forEach((taskElement) => {
     const taskId = String(taskElement.getAttribute?.('data-open-cover-lookup-task') || '');
+    const retainedTask = retainedTasks.get(taskId);
+    if (retainedTask?.markup === String(taskElement.outerHTML || '')) {
+      taskElement.replaceWith(retainedTask.element);
+      return;
+    }
     const retained = retainedImages.get(taskId);
     const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
     if (!retained || !image) return;
@@ -30205,9 +30452,14 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   if (badgeCount > 0) loadCoverLookupDrawerHoverIcon(button);
   button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
+    const clearInProgress = state.coverLookup.clearingCompleted === true;
     clearButton.hidden = false;
-    clearButton.disabled = loadedActionedCount <= 0;
-    clearButton.setAttribute?.('aria-disabled', String(loadedActionedCount <= 0));
+    clearButton.disabled = loadedActionedCount <= 0 || clearInProgress;
+    clearButton.setAttribute?.('aria-disabled', String(clearButton.disabled));
+    clearButton.setAttribute?.('aria-busy', String(clearInProgress));
+    body.classList?.toggle('is-clearing', clearInProgress);
+    body.setAttribute?.('aria-busy', String(clearInProgress));
+    body.inert = clearInProgress;
   }
   if (!state.coverLookup.drawerOpen) {
     if (body.innerHTML) {
@@ -30392,16 +30644,13 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
     `);
     body.scrollTop = Math.max(0, restoreScrollTop);
-    const measuredCard = body.querySelector?.('.cover-lookup-task-card');
-    const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
-    const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;
-    if (measuredHeight > 0) state.coverLookup.taskEstimatedHeight = measuredHeight + measuredGap;
     state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
   }
   syncCoverLookupElapsedTimer();
 }
 
 async function clearCompletedCoverLookupTasks() {
+  if (state.coverLookup.clearingCompleted === true) return;
   const previousTasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks.slice() : [];
   const terminalTaskIds = previousTasks
     .filter((task) => isActionedCoverLookupNotification(task))
@@ -30410,10 +30659,7 @@ async function clearCompletedCoverLookupTasks() {
   if (!terminalTaskIds.length) {
     return;
   }
-  const terminalTaskIdSet = new Set(terminalTaskIds);
-  state.coverLookup.tasks = previousTasks.filter(
-    (task) => !terminalTaskIdSet.has(String(task?.id || '').trim()),
-  );
+  state.coverLookup.clearingCompleted = true;
   renderCoverLookupDrawer({ preserveInteraction: false });
   stopCoverLookupPollingIfIdle();
   try {
@@ -30439,6 +30685,9 @@ async function clearCompletedCoverLookupTasks() {
     renderCoverLookupDrawer({ preserveInteraction: false });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear completed cover lookups.', 'error', 2800);
+  } finally {
+    state.coverLookup.clearingCompleted = false;
+    renderCoverLookupDrawer({ preserveInteraction: false });
   }
 }
 
@@ -30943,7 +31192,15 @@ function renderCoverLookupModal() {
     els.pastedUrls.focus({ preventScroll: true });
     els.pastedUrls.setSelectionRange(manualSelectionStart, manualSelectionEnd);
   }
-  restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
+  if (compact && modalState.initialScrollPending === true && !modalState.loading) {
+    const selectedCard = els.body.querySelector?.('.cover-lookup-art-card.is-active');
+    els.body.scrollTop = selectedCard
+      ? Math.max(0, Number(selectedCard.offsetTop || 0) - (Number(els.body.clientHeight || 0) - Number(selectedCard.offsetHeight || 0)) / 2)
+      : 0;
+    modalState.initialScrollPending = false;
+  } else {
+    restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
+  }
   scheduleDeferredCoverLookupPreviews(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
@@ -30992,8 +31249,8 @@ function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
     const incomingById = new Map(incoming.map((task) => [String(task?.id || ''), task]));
     const newTasks = incoming.filter((task) => !currentIds.has(String(task?.id || '')));
     return [
-      ...newTasks,
       ...current.map((task) => incomingById.get(String(task?.id || '')) || task),
+      ...newTasks,
     ];
   }
   return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
@@ -31145,6 +31402,7 @@ let coverLookupPollingRequest = null;
 let coverLookupBackgroundPollTicks = 0;
 let coverLookupPollInFlight = false;
 let coverLookupHistoryRequest = null;
+let coverLookupDrawerScrollRenderTimer = 0;
 
 async function loadNextCoverLookupTaskPage(options = {}) {
   if (!state.coverLookup.tasksNextCursor) return;
@@ -31163,8 +31421,20 @@ function handleCoverLookupDrawerScroll(event) {
   if (!body || !state.coverLookup.drawerOpen) return Promise.resolve();
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const nextWindow = getCoverLookupTaskRenderWindow(tasks, body);
-  if (nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)) {
-    renderCoverLookupDrawer({ preserveInteraction: false });
+  if (coverLookupDrawerScrollRenderTimer && typeof window.clearTimeout === 'function') {
+    window.clearTimeout(coverLookupDrawerScrollRenderTimer);
+    coverLookupDrawerScrollRenderTimer = 0;
+  }
+  if (
+    nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)
+    && typeof window.setTimeout === 'function'
+  ) {
+    coverLookupDrawerScrollRenderTimer = window.setTimeout(() => {
+      coverLookupDrawerScrollRenderTimer = 0;
+      if (state.coverLookup.drawerOpen) {
+        renderCoverLookupDrawer({ preserveInteraction: false });
+      }
+    }, 120);
   }
   const remaining = Number(body.scrollHeight || 0)
     - Number(body.scrollTop || 0)
@@ -31413,6 +31683,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.manualPendingCount = 0;
   state.coverLookup.modal.manualStatusText = '';
   state.coverLookup.modal.manualStatusTone = 'neutral';
+  state.coverLookup.modal.initialScrollPending = true;
   state.coverLookup.modal.loading = true;
   state.coverLookup.modal.saving = false;
   els.overlay.hidden = false;
@@ -31865,7 +32136,6 @@ async function saveRemoteCoverFromLookup() {
       state.coverLookup.modal.selectedRemoteId = '';
       closeCoverLookupModal();
     }
-    await loadCoverLookupTasks({ toast: false });
     ensureCoverLookupPolling();
     renderCoverLookupDrawer();
   } catch (error) {
@@ -31894,7 +32164,8 @@ async function addRemoteCoverLinksFromLookup() {
   }
   try {
     state.coverLookup.modal.manualBusy = true;
-    state.coverLookup.modal.manualPendingCount = urls.length ? 1 : 0;
+    state.coverLookup.modal.manualPendingCount =
+      Math.max(0, Number(state.coverLookup.modal.manualPendingCount || 0)) + 1;
     state.coverLookup.modal.manualStatusText = '';
     state.coverLookup.modal.manualStatusTone = 'neutral';
     renderCoverLookupModal();
@@ -31932,7 +32203,10 @@ async function addRemoteCoverLinksFromLookup() {
     console.error('[AlbumHaven][CoverLookup] Failed to add remote links.', error);
   } finally {
     state.coverLookup.modal.manualBusy = false;
-    state.coverLookup.modal.manualPendingCount = 0;
+    state.coverLookup.modal.manualPendingCount = Math.max(
+      0,
+      Number(state.coverLookup.modal.manualPendingCount || 0) - 1,
+    );
     renderCoverLookupModal();
   }
 }
@@ -36984,6 +37258,7 @@ function albumCardHtml(album, options = {}) {
     total_duration_seconds: Number(album?.total_duration_seconds || 0),
     total_duration_display: String(album?.total_duration_display || ''),
     cover_path: String(album?.cover_path || ''),
+    cover_preview_url: String(album?.cover_preview_url || ''),
     cover_revision: String(album?.cover_revision || ''),
     remote_cover_url: String(album?.remote_cover_url || ''),
     remote_cover_thumbnail_url: String(album?.remote_cover_thumbnail_url || ''),

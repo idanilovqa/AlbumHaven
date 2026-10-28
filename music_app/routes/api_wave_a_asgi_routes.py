@@ -209,6 +209,7 @@ _MEDIA_TAG_EDIT_FIELDS = {
     "total_discs",
     "disc_subtitle",
     "edition",
+    "album_type",
     "album_rating",
 }
 _TARGETED_INVENTORY_EDIT_FIELDS = {

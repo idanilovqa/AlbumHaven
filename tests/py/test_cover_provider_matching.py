@@ -116,10 +116,15 @@ def test_extract_album_part_marker_parses_numeric_roman_and_simple_word_markers(
     assert matching.extract_album_part_marker("Songs, Pt. 2") == 2
     assert matching.extract_album_part_marker("Songs Part IV") == 4
     assert matching.extract_album_part_marker("Songs Volume Three") == 3
+    assert matching.extract_album_part_marker("Chronicles of Father Robin Book III") == 3
 
 
 def test_canonical_album_title_without_part_marker_keeps_base_title_only():
     assert matching.canonical_album_title_without_part_marker("Songs, Pt. II (Deluxe Edition)") == "songs"
+    assert (
+        matching.canonical_album_title_without_part_marker("Chronicles of Father Robin Book III")
+        == "chronicles of father robin"
+    )
 
 
 def test_build_query_variants_expands_symbols_and_dedupes_results():
@@ -263,6 +268,14 @@ def test_match_score_accepts_equivalent_terminal_album_sequences(candidate_album
     [
         ("Test Artist", "Songs Pt. 1", 2001, "Test Artist", "Songs Pt. 2", 2001),
         ("Test Artist", "Songs Pt. 1", 2001, "Test Artist", "Songs", 2001),
+        (
+            "Magenta",
+            "The White Witch: A Symphonic Trilogy, Book III",
+            2023,
+            "Magenta",
+            "The White Witch: A Symphonic Trilogy, Book II",
+            2023,
+        ),
         ("Test Artist", "II", 2001, "Test Artist", "III", 2001),
         ("Jordsjø", "Jordsjø II", None, "Jordsjø", "Jordsjø", None),
         ("Robert Reed", "Sanctuary II", 2016, "Robert Reed", "Sanctuary I", 2014),
@@ -370,6 +383,40 @@ def test_match_score_rejects_false_single_remix_and_feature_variants_but_keeps_l
     assert false_variant_scores == [0.0, 0.0, 0.0, 0.0]
     assert all(score > 0.0 for score in legitimate_edition_scores)
     assert other_band_score == 0.0
+
+
+def test_match_score_accepts_provider_leading_article_artist_alias_for_self_titled_album():
+    assert matching.match_score(
+        "Soft Machine",
+        "Soft Machine",
+        None,
+        1968,
+        "The Soft Machine*",
+        "The Soft Machine",
+        1968,
+    ) > 0.7
+
+
+def test_match_score_accepts_provider_collaborator_subset_for_same_release():
+    assert matching.match_score(
+        "Skruk, Mahsa Vahdat & Ellen Bødtker",
+        "Braids Of Innocence",
+        None,
+        2022,
+        "Mahsa Vahdat & Skruk",
+        "Braids Of Innocence",
+        2022,
+    ) > 0.7
+
+
+def test_swedish_language_qualifier_is_an_edition_variant_and_gets_plain_query():
+    assert matching.canonical_album_title("Carolus Rex (Svenska)") == "carolus rex"
+    assert ("Sabaton", "Carolus Rex", "", 2012) in matching.build_query_variants(
+        "Sabaton",
+        "Carolus Rex (Svenska)",
+        None,
+        2012,
+    )
 
 
 def test_match_score_rejects_prefixed_and_suffixed_tribute_artist_identities():

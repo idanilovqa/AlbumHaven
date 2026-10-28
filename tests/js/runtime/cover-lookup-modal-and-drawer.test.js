@@ -55,6 +55,48 @@ require('node:test')('Cover Lookup subtitle makes only the album name interactiv
   assert.equal((markup.match(/data-open-cover-lookup-album-details/g) || []).length, 1);
 });
 
+require('node:test')('mobile Cover Lookup sheet dismisses from body only when gallery is at top', () => {
+  const eventTarget = (extra = {}) => {
+    const listeners = {};
+    return {
+      ...extra,
+      dataset: {},
+      addEventListener(type, listener) { listeners[type] = listener; },
+      dispatch(type, event = {}) { listeners[type]?.(event); },
+    };
+  };
+  const header = eventTarget();
+  const body = eventTarget({ scrollTop: 0 });
+  const overlay = {
+    classList: { contains: (name) => name === 'is-mobile-sheet' },
+    style: { setProperty() {}, removeProperty() {} },
+    querySelector(selector) {
+      return selector === '.cover-lookup-modal-header' ? header : body;
+    },
+  };
+  const context = loadHelper();
+  let closeCount = 0;
+  context.closeCoverLookupModal = () => { closeCount += 1; };
+
+  context.bindCoverLookupMobileSheetSwipe(overlay);
+  body.dispatch('touchstart', { touches: [{ clientX: 20, clientY: 20 }] });
+  body.dispatch('touchmove', {
+    touches: [{ clientX: 20, clientY: 100 }],
+    preventDefault() {},
+  });
+  body.dispatch('touchend');
+  assert.equal(closeCount, 1);
+
+  body.scrollTop = 10;
+  body.dispatch('touchstart', { touches: [{ clientX: 20, clientY: 20 }] });
+  body.dispatch('touchmove', {
+    touches: [{ clientX: 20, clientY: 100 }],
+    preventDefault() {},
+  });
+  body.dispatch('touchend');
+  assert.equal(closeCount, 1, 'normal body scrolling must not dismiss the sheet');
+});
+
 require('node:test')('desktop Cover Lookup album link keeps Notifications open and hydrates partial album details', () => {
   const album = { key: 'current::album', album_artist: 'Current Artist', name: 'Current Album', year: 2026 };
   const calls = [];
@@ -148,6 +190,33 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
     bodyElement.innerHTML,
     /class="cover-lookup-task-cover"[^>]*loading="lazy"[^>]*decoding="async"/,
   );
+});
+
+require('node:test')('notification rerenders keep unchanged card nodes mounted', () => {
+  const retained = {
+    outerHTML: '<article data-open-cover-lookup-task="stable-task">Stable</article>',
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'stable-task' : '',
+    querySelector: () => null,
+  };
+  const replacement = {
+    outerHTML: retained.outerHTML,
+    getAttribute: retained.getAttribute,
+    querySelector: () => null,
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  let rendered = false;
+  const body = {
+    querySelectorAll: () => [rendered ? replacement : retained],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '',
+    set: () => { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<article data-open-cover-lookup-task="stable-task">Stable</article>');
+
+  assert.strictEqual(replacement.replacedWith, retained);
 });
 
 require('node:test')('notification rerenders retain only each task\'s own unchanged image node', () => {
@@ -599,6 +668,40 @@ require('node:test')('open drawer preserves its exact scroll position across tas
   assert.equal(bodyElement.scrollTop, 71);
 });
 
+require('node:test')('mobile notification scrolling defers virtual-window rerender until scrolling settles', async () => {
+  const scheduled = [];
+  const { context, bodyElement } = createDrawerHarness({
+    window: {
+      setTimeout(callback, delay) {
+        scheduled.push({ callback, delay });
+        return scheduled.length;
+      },
+      clearTimeout() {},
+      setInterval() { return 1; },
+      clearInterval() {},
+    },
+  });
+  context.state.coverLookup.tasks = Array.from({ length: 120 }, (_, index) => ({
+    id: `task-${index}`,
+    status: 'completed',
+  }));
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  bodyElement.innerHTML = '<div>rendered cards</div>';
+  bodyElement.scrollTop = 4000;
+  bodyElement.scrollHeight = 12000;
+  bodyElement.clientHeight = 600;
+  let renderCount = 0;
+  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+
+  await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+
+  assert.equal(renderCount, 0, 'active swipe must not replace the scrolling DOM');
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].delay, 120);
+  scheduled[0].callback();
+  assert.equal(renderCount, 1);
+});
+
 require('node:test')('accepted remote save keeps its finished card in place without looking like another search', () => {
   const { context, bodyElement } = createDrawerHarness();
   const before = [
@@ -743,7 +846,18 @@ function createDrawerHarness(overrides = {}) {
     classList: { contains: name => drawerClasses.has(name),
       toggle: (name, enabled) => enabled ? drawerClasses.add(name) : drawerClasses.delete(name) },
   };
-  const bodyElement = { innerHTML: '' };
+  const bodyClasses = new Set();
+  const bodyElement = {
+    innerHTML: '',
+    attributes: {},
+    classList: {
+      contains: (name) => bodyClasses.has(name),
+      toggle: (name, enabled) => enabled ? bodyClasses.add(name) : bodyClasses.delete(name),
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+  };
   const badgeElement = { hidden: false, textContent: '' };
   const summaryElement = { textContent: '' };
   const buttonClasses = new Set();
@@ -1102,7 +1216,7 @@ require('node:test')('first-page refresh retains its next cursor for drawer pagi
   assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
 });
 
-require('node:test')('active-only polling merges updates without replacing loaded history', async () => {
+require('node:test')('active-only polling appends new tasks without moving loaded history', async () => {
   const requestedUrls = [];
   const { context } = createDrawerHarness({
     fetch: async (url) => {
@@ -1127,7 +1241,7 @@ require('node:test')('active-only polling merges updates without replacing loade
   assert.equal(requestedUrls[0], '/utilities/cover-lookup/tasks?limit=50&active_only=true');
   assert.deepEqual(
     Array.from(context.state.coverLookup.tasks, task => task.id),
-    ['active', 'history'],
+    ['history', 'active'],
   );
 });
 
@@ -1297,6 +1411,24 @@ require('node:test')('notification history mounts no more than 60 cards with two
   }
 });
 
+require('node:test')('notification virtualization keeps one fixed row geometry while swiping', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  context.state.coverLookup.tasks = Array.from({ length: 120 }, (_, index) => ({
+    id: `task-${index}`,
+    status: 'completed',
+    artist: 'Artist',
+    album: `Album ${index}`,
+  }));
+  context.state.coverLookup.taskEstimatedHeight = 140;
+  bodyElement.innerHTML = '<div>previous cards</div>';
+  bodyElement.scrollTop = 4000;
+
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+
+  assert.match(bodyElement.innerHTML, /cover-lookup-task-spacer[^>]+height:3290px/);
+  assert.equal(context.state.coverLookup.taskEstimatedHeight, 140);
+});
+
 require('node:test')('closing the notification drawer unmounts cards while retaining task summaries', () => {
   const { context, bodyElement } = createDrawerHarness();
   Object.assign(context.state.coverLookup, {
@@ -1435,7 +1567,10 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     const pending = clearAll
       ? context.clearCompletedCoverLookupTasks()
       : context.clearCoverLookupTaskNotification('rollback-task');
-    assert.match(bodyElement.innerHTML, /not looking for anything at the moment/i);
+    assert.match(
+      bodyElement.innerHTML,
+      clearAll ? /Restored Album/ : /not looking for anything at the moment/i,
+    );
     resolveFetch({ ok: false, json: async () => ({ ok: false, error: 'Delete failed' }) });
     await pending;
     assert.equal(context.state.coverLookup.tasks[0].id, 'rollback-task');
@@ -1931,6 +2066,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.stopCoverLookupPollingIfIdle = () => {};
 
   await context.saveRemoteCoverFromLookup();
+  await context.loadCoverLookupTasks({ activeOnly: true, toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
   assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbums)), [[album]]);
@@ -1944,6 +2080,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     display_only: false,
   }];
   await context.saveRemoteCoverFromLookup();
+  await context.loadCoverLookupTasks({ activeOnly: true, toast: false });
 
   assert.equal(restoredAlbums.length, 2);
   assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbums.at(-1))), [album]);
@@ -2167,7 +2304,11 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       display_only: false,
     }],
   };
-  context.state.coverLookup.tasks = [];
+  context.state.coverLookup.tasks = [
+    { id: 'newer-task', status: 'completed' },
+    { id: 'remote-save-task', status: 'completed', notification_action_taken: false },
+    { id: 'older-task', status: 'completed' },
+  ];
   context.applyOptimisticRemoteCoverSelection = () => {};
   context.closeCoverLookupModal = () => {};
   context.fetch = async (url, options) => {
@@ -2177,15 +2318,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       json: async () => ({ ok: true, queued: true }),
     };
   };
-  context.loadCoverLookupTasks = async () => {
-    context.state.coverLookup.tasks = [{
-      id: 'remote-save-task',
-      status: 'failed',
-      progress_label: 'Save failed',
-      notification_action_taken: false,
-    }];
-    lifecycleCalls.push('reload');
-  };
+  context.loadCoverLookupTasks = async () => lifecycleCalls.push('reload');
   context.markCoverLookupTaskActionTaken = (taskId) => {
     markCalls.push(taskId);
     const task = context.state.coverLookup.tasks.find((item) => item.id === taskId);
@@ -2204,9 +2337,14 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     candidate_id: 'candidate-1',
   });
   assert.deepEqual(markCalls, []);
-  assert.equal(context.state.coverLookup.tasks[0].status, 'failed');
-  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
-  assert.deepEqual(lifecycleCalls, ['reload', 'poll', 'render']);
+  assert.deepEqual(context.state.coverLookup.tasks.map((task) => task.id), [
+    'newer-task',
+    'remote-save-task',
+    'older-task',
+  ]);
+  assert.equal(context.state.coverLookup.tasks[1].status, 'completed');
+  assert.equal(context.state.coverLookup.tasks[1].notification_action_taken, false);
+  assert.deepEqual(lifecycleCalls, ['poll', 'render']);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -3667,13 +3805,20 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   const pending = context.clearCompletedCoverLookupTasks();
 
   assert.equal(fetchCalls.length, 1);
+  assert.equal(clearElement.disabled, true);
+  assert.equal(clearElement.attributes['aria-busy'], 'true');
+  assert.equal(bodyElement.attributes['aria-busy'], 'true');
+  assert.equal(bodyElement.classList.contains('is-clearing'), true);
+  assert.equal(bodyElement.inert, true);
+  await context.clearCompletedCoverLookupTasks();
+  assert.equal(fetchCalls.length, 1, 'a second clear tap must not start another request');
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/tasks/clear-completed');
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {});
   assert.deepEqual(
     context.state.coverLookup.tasks.map((task) => task.id),
-    ['completed-no-result-task', 'canceled-task', 'active-provider-task', 'pending-provider-task'],
+    ['completed-no-result-task', 'selected-cover-task', 'canceled-task', 'active-provider-task', 'pending-provider-task'],
   );
-  assert.doesNotMatch(bodyElement.innerHTML, /Selected Album/);
+  assert.match(bodyElement.innerHTML, /Selected Album/);
   assert.match(bodyElement.innerHTML, /No Result Album/);
   assert.match(bodyElement.innerHTML, /Canceled Album/);
   assert.match(bodyElement.innerHTML, /Still Searching/);
@@ -3688,6 +3833,15 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     }),
   });
   await pending;
+  assert.deepEqual(
+    context.state.coverLookup.tasks.map((task) => task.id),
+    ['completed-no-result-task', 'canceled-task', 'active-provider-task', 'pending-provider-task'],
+  );
+  assert.doesNotMatch(bodyElement.innerHTML, /Selected Album/);
+  assert.equal(clearElement.attributes['aria-busy'], 'false');
+  assert.equal(bodyElement.attributes['aria-busy'], 'false');
+  assert.equal(bodyElement.classList.contains('is-clearing'), false);
+  assert.equal(bodyElement.inert, false);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -4072,7 +4226,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   assert.deepEqual(
     context.state.coverLookup.tasks.map((task) => task.id),
-    ['active-provider-task', 'pending-provider-task'],
+    originalTasks.map((task) => task.id),
   );
 
   resolveFetch({
@@ -4717,6 +4871,174 @@ require('node:test')('visible service cover previews receive eager browser prior
   const deferredImage = deferred.match(/<img class="cover-lookup-art-preview-image"[^>]*>/)?.[0] || '';
   assert.match(deferredImage, /data-cover-lookup-deferred-src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages\.example%2Fthumbnail\.jpg/);
   assert.doesNotMatch(deferredImage, /\ssrc=/);
+});
+
+require('node:test')('mobile Cover Lookup initially centers the selected cover without fighting later scrolling', () => {
+  const selectedCard = { offsetTop: 820, offsetHeight: 180 };
+  const bodyElement = {
+    innerHTML: '',
+    scrollTop: 0,
+    clientHeight: 500,
+    querySelector: (selector) => selector === '.cover-lookup-art-card.is-active' ? selectedCard : null,
+  };
+  const context = loadHelper({
+    escapeHtml: (value) => String(value || ''),
+    usesMobilePageLayout: () => true,
+    document: {
+      activeElement: null,
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-modal-body': bodyElement,
+        'cover-lookup-modal-subtitle': { innerHTML: '' },
+        'cover-lookup-modal-status': { textContent: '', classList: { toggle() {} } },
+      }[id] || null),
+    },
+  });
+  context.captureCoverLookupModalScrollAnchor = () => null;
+  context.restoreCoverLookupModalScrollAnchor = () => {};
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Selected Album' },
+    loading: false,
+    initialScrollPending: true,
+    selectedRemoteId: 'selected-cover',
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: [{
+      id: 'selected-cover',
+      source: 'discogs',
+      source_label: 'Discogs',
+      lookup_group: 'services',
+      art_kind: 'cover',
+      url: 'https://images.example/selected.jpg',
+    }],
+  };
+
+  context.renderCoverLookupModal();
+
+  assert.equal(bodyElement.scrollTop, 660);
+  assert.equal(context.state.coverLookup.modal.initialScrollPending, false);
+  bodyElement.scrollTop = 120;
+  context.renderCoverLookupModal();
+  assert.equal(bodyElement.scrollTop, 120, 'later renders preserve the user position');
+});
+
+require('node:test')('staged extracted images retain decoded resolution on their cover card', async () => {
+  let bitmapClosed = false;
+  class TestBlob {
+    constructor() {
+      this.name = 'front.jpg';
+      this.type = 'image/jpeg';
+      this.size = 1234;
+    }
+  }
+  class TestFileReader {
+    readAsDataURL() {
+      this.result = 'data:image/jpeg;base64,AAAA';
+      this.onload();
+    }
+  }
+  const context = loadHelper({
+    Blob: TestBlob,
+    escapeHtml: (value) => String(value || ''),
+    FileReader: TestFileReader,
+    createImageBitmap: async () => ({
+      width: 1200,
+      height: 800,
+      close() { bitmapClosed = true; },
+    }),
+    URL: {
+      createObjectURL: () => 'blob:staged-cover',
+      revokeObjectURL() {},
+    },
+  });
+  context.renderCoverLookupModal = () => {};
+  context.state.coverLookup.modal.pastedImages = [];
+  context.state.coverLookup.modal.manualImageAttachments = [];
+
+  await context.addPastedImageToCoverLookup(new TestBlob());
+
+  const [image] = context.state.coverLookup.modal.manualImageAttachments;
+  assert.equal(image.width, 1200);
+  assert.equal(image.height, 800);
+  assert.equal(bitmapClosed, true);
+  assert.match(context.buildCoverLookupCard(image, 'pasted'), /1200x800/);
+});
+
+require('node:test')('adding files renders a pending image card before file decoding finishes', async () => {
+  let pendingReader = null;
+  class TestBlob {
+    constructor() {
+      this.name = 'slow-front.jpg';
+      this.type = 'image/jpeg';
+      this.size = 1234;
+    }
+  }
+  class TestFileReader {
+    constructor() {
+      pendingReader = this;
+    }
+
+    readAsDataURL() {}
+  }
+  const renderStates = [];
+  const context = loadHelper({
+    Blob: TestBlob,
+    FileReader: TestFileReader,
+    createImageBitmap: async () => ({ width: 1200, height: 800, close() {} }),
+    URL: { createObjectURL: () => 'blob:slow-cover', revokeObjectURL() {} },
+  });
+  context.renderCoverLookupModal = () => {
+    renderStates.push(context.state.coverLookup.modal.manualPendingCount || 0);
+  };
+  context.state.coverLookup.modal.pastedImages = [];
+  context.state.coverLookup.modal.manualImageAttachments = [];
+
+  const addPromise = context.addCoverLookupFiles([new TestBlob()]);
+  await Promise.resolve();
+
+  assert.equal(renderStates[0], 1);
+  assert.equal(context.state.coverLookup.modal.manualImageAttachments.length, 0);
+
+  pendingReader.result = 'data:image/jpeg;base64,AAAA';
+  pendingReader.onload();
+  await addPromise;
+
+  assert.equal(renderStates.at(-1), 0);
+  assert.equal(context.state.coverLookup.modal.manualImageAttachments.length, 1);
+});
+
+require('node:test')('a new running lookup keeps cached candidates until replacement results settle', () => {
+  const { context } = createDrawerHarness();
+  Object.assign(context.state.coverLookup.modal, {
+    candidateGeneration: 'previous-lookup',
+    possibleMatches: [{
+      id: 'cached-discogs',
+      url: 'https://images.example/cached-discogs.jpg',
+      source: 'discogs',
+      art_kind: 'cover',
+    }],
+    selectedRemoteId: '',
+    remoteSelectionOverrideGeneration: '',
+    remoteSelectionOverrideCandidateId: '',
+    remoteSelectionOverrideUrl: '',
+  });
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'replacement-lookup',
+    status: 'running',
+    revision: 1,
+    bestCandidateId: '',
+    candidates: [],
+  });
+
+  assert.equal(context.state.coverLookup.modal.possibleMatches.length, 1);
+  assert.equal(context.state.coverLookup.modal.possibleMatches[0].id, 'cached-discogs');
+  assert.equal(
+    context.state.coverLookup.modal.selectedRemoteId,
+    '',
+    'a retained card must not become the new lookup generation selection without a click',
+  );
 });
 
 require('node:test')('UUID generation formatting retains a progressive remote override', () => {

@@ -364,7 +364,7 @@ def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_can
     page_sql = connection.operations[-1][0]
     assert "left join library.local_albums as current_album_by_id" in page_sql
     assert "current_album_by_id.id = identity.album_id" in page_sql
-    assert "identity.album_key is null or current_album_by_id.album_key = identity.album_key" not in page_sql
+    assert "identity.album_key is null or current_album_by_id.album_key = identity.album_key" in page_sql
     assert "left join library.local_albums as current_album_by_key" in page_sql
     assert "current_album_by_key.album_key = identity.album_key" in page_sql
     assert "current_album_by_id.id is null" in page_sql

@@ -136,3 +136,35 @@ def test_resolve_fails_closed_for_cycles_and_missing_or_cross_library_targets():
     assert cycle_repository.resolve(album_id=4)["status"] == "invalid"
     assert missing_repository.resolve(album_id=4)["status"] == "unresolved"
 
+
+def test_resolve_rejects_synthetic_unknown_successors():
+    unknown = {
+        **_candidate(417655, "unknown artist::"),
+        "title": "Unknown Album",
+        "album_artist": "Unknown Artist",
+    }
+    repository, _connection = _repository([unknown])
+
+    assert repository.resolve(album_id=4, album_key="artist::old") == {
+        "status": "unresolved",
+        "album": None,
+        "choices": [],
+    }
+
+
+def test_resolve_keeps_named_various_artist_and_known_artist_loose_track_albums():
+    named_various_artist = {
+        **_candidate(12, "various artists::soundtrack", depth=0),
+        "title": "Soundtrack",
+        "album_artist": "",
+    }
+    known_artist_loose_tracks = {
+        **_candidate(13, "ddt::", depth=0),
+        "title": "Unknown Album",
+        "album_artist": "DDT",
+    }
+
+    for candidate in (named_various_artist, known_artist_loose_tracks):
+        repository, _connection = _repository([candidate])
+        assert repository.resolve(album_id=candidate["album_id"])["status"] == "current"
+

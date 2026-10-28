@@ -569,6 +569,7 @@ def _track_to_dict(track: Track) -> dict[str, object]:
         "year": track.year,
         "release_date": getattr(track, "release_date", None),
         "edition": track.edition,
+        "album_type": getattr(track, "album_type", None),
         "album_rating": int(track.album_rating or 0),
         "exception_type": track.exception_type,
         "custom_collection_name": getattr(track, "custom_collection_name", ""),
@@ -1059,6 +1060,7 @@ def _build_album_base_payload(
         "release_date": getattr(album, "release_date", None),
         "display_year": album_display_year(album),
         "edition": album.edition,
+        "release_type": getattr(album, "release_type", None) or "ALBUM",
         "album_rating": int(album.album_rating or 0),
         "album_preference": album_preference,
         "top_viewer_overlay": _top_viewer_overlay_to_dict(),
@@ -1981,6 +1983,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                         else str(entry.get("release_date") or "").strip() or None
                     ),
                     edition=edition,
+                    release_type=str(entry.get("album_type") or "").strip() or None,
                     album_rating=safe_int(entry.get("album_rating")),
                     library_root_id=str(entry.get("library_root_id") or "").strip() or None,
                     library_root_category=str(entry.get("library_root_category") or "").strip() or None,
@@ -2006,6 +2009,8 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                 album.release_date = str(entry.get("release_date")).strip() or None
             if album.edition is None and entry.get('edition'):
                 album.edition = str(entry.get('edition')).strip() or None
+            if album.release_type is None and entry.get("album_type"):
+                album.release_type = str(entry.get("album_type")).strip() or None
             if album.album_rating is None:
                 album.album_rating = safe_int(entry.get("album_rating"))
             if album.cover_path is None and entry.get("cover_path"):
@@ -2058,6 +2063,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                 year=safe_int(entry.get("year")),
                 release_date=str(entry.get("release_date") or "").strip() or None,
                 edition=str(entry.get("edition")).strip() if entry.get("edition") else None,
+                album_type=str(entry.get("album_type")).strip() if entry.get("album_type") else None,
                 album_rating=safe_int(entry.get("album_rating")),
                 exception_type=normalize_exception_value(entry.get("exception_type")) or None,
                 custom_collection_name=str(entry.get("custom_collection_name") or "").strip() or None,

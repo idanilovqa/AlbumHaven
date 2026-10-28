@@ -180,3 +180,68 @@ def test_same_album_folder_keeps_art_across_track_artist_and_year_variation(tmp_
     }
 
     assert clear_ambiguous_folder_covers(cache) == {}
+
+
+def test_shared_inferred_cover_is_cleared_only_from_foreign_release(tmp_path):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    owner_track = tmp_path / "Owner" / "Album" / "song.mp3"
+    foreign_track = tmp_path / "Other" / "Album" / "song.mp3"
+    shared_cover = owner_track.parent / "cover.jpg"
+    cache = {
+        str(owner_track): {
+            "path": str(owner_track),
+            "album": "Album",
+            "cover_path": str(shared_cover),
+            "cover_revision": "shared",
+        },
+        str(foreign_track): {
+            "path": str(foreign_track),
+            "album": "Other Album",
+            "cover_path": str(shared_cover),
+            "cover_revision": "shared",
+            "cover_selection_origin": "automatic",
+            "local_cover_width": 800,
+            "local_cover_height": 800,
+        }
+    }
+
+    changed = clear_ambiguous_folder_covers(cache)
+
+    assert str(owner_track) not in changed
+    assert changed[str(foreign_track)]["cover_path"] is None
+    assert cache[str(owner_track)]["cover_path"] == str(shared_cover)
+
+
+def test_shared_legacy_cover_without_provenance_is_not_inferred_as_automatic(tmp_path):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    owner_track = tmp_path / "Owner" / "Album" / "song.mp3"
+    foreign_track = tmp_path / "Other" / "Album" / "song.mp3"
+    shared_cover = owner_track.parent / "cover.jpg"
+    cache = {
+        str(owner_track): {
+            "path": str(owner_track),
+            "album": "Album",
+            "cover_path": str(shared_cover),
+        },
+        str(foreign_track): {
+            "path": str(foreign_track),
+            "album": "Other Album",
+            "cover_path": str(shared_cover),
+        },
+    }
+
+    assert clear_ambiguous_folder_covers(cache) == {}
+    assert cache[str(foreign_track)]["cover_path"] == str(shared_cover)
+
+
+def test_single_legacy_foreign_cover_without_provenance_is_preserved(tmp_path):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    track = tmp_path / "Artist" / "Album" / "song.mp3"
+    legacy_cover = tmp_path / "Legacy choices" / "cover.jpg"
+    cache = {str(track): {"path": str(track), "album": "Album", "cover_path": str(legacy_cover)}}
+
+    assert clear_ambiguous_folder_covers(cache) == {}
+    assert cache[str(track)]["cover_path"] == str(legacy_cover)

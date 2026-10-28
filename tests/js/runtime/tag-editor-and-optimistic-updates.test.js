@@ -114,6 +114,11 @@ test('Edit Tags exposes separate total-disc and disc-title fields', () => {
   assert.match(primaryModalsTemplate, /data-tag-field="disc_subtitle"/);
 });
 
+test('Edit Tags exposes Album Type separately from Edition', () => {
+  assert.match(primaryModalsTemplate, /<label>Album Type<input[^>]+data-tag-field="album_type"/);
+  assert.match(primaryModalsTemplate, /<label>Edition<input[^>]+data-tag-field="edition"/);
+});
+
 function loadHelper(albums, overrides = {}) {
   const context = {
     console,

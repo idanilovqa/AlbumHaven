@@ -1424,6 +1424,10 @@ require('node:test')('notification history mounts no more than 60 cards with two
 
 require('node:test')('notification virtualization keeps one fixed row geometry while swiping', () => {
   const { context, bodyElement } = createDrawerHarness();
+  const drawerCss = fs.readFileSync(path.join(
+    __dirname,
+    '../../../music_app/static/css/runtime/cover-lookup-drawer-and-related.css',
+  ), 'utf8');
   context.state.coverLookup.tasks = Array.from({ length: 120 }, (_, index) => ({
     id: `task-${index}`,
     status: 'completed',
@@ -1436,7 +1440,9 @@ require('node:test')('notification virtualization keeps one fixed row geometry w
 
   context.renderCoverLookupDrawer({ preserveInteraction: false });
 
-  assert.match(bodyElement.innerHTML, /cover-lookup-task-spacer[^>]+height:3290px/);
+  assert.match(bodyElement.innerHTML, /cover-lookup-task-spacer[^>]+height:3192px/);
+  assert.match(drawerCss, /\.cover-lookup-drawer-body\s*\{[^}]*gap:\s*0;/s);
+  assert.match(drawerCss, /\.cover-lookup-task-card\s*\{[^}]*margin-bottom:\s*10px;/s);
   assert.equal(context.state.coverLookup.taskEstimatedHeight, 140);
 });
 

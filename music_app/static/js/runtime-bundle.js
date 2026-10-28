@@ -30319,7 +30319,7 @@ function hasPendingCoverLookupDrawerTerminalPublication(tasks) {
 
 const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
 const COVER_LOOKUP_TASK_OVERSCAN = 10;
-const COVER_LOOKUP_TASK_ROW_HEIGHT = 70;
+const COVER_LOOKUP_TASK_ROW_HEIGHT = 76;
 
 function getCoverLookupTaskRenderWindow(tasks, body) {
   const rowHeight = COVER_LOOKUP_TASK_ROW_HEIGHT;

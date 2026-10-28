@@ -121,7 +121,7 @@
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  gap: 10px;
+  gap: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -248,6 +248,7 @@
 .cover-lookup-task-card {
   position: relative;
   flex: 0 0 auto;
+  margin-bottom: 10px;
   gap: 4px;
   overflow: hidden;
   padding: 0;

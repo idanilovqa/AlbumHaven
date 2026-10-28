@@ -145,8 +145,8 @@ test('manual link extraction renders request-owned loading and feedback beside i
   assert.match(source, /buildCoverLookupGalleryLoadingCards\('pasted',\s*manualPendingCount\)/);
   assert.match(source, /class="cover-lookup-manual-status/);
   assert.match(source, /manualStatusText/);
-  assert.match(source, /manualPendingCount\s*=\s*urls\.length\s*\?\s*1\s*:\s*0/);
-  assert.match(source, /manualPendingCount\s*=\s*0/);
+  assert.match(source, /manualPendingCount\s*=\s*[\s\S]*manualPendingCount[^]*\+\s*1/);
+  assert.match(source, /manualPendingCount\s*=\s*Math\.max\([^]*manualPendingCount[^]*-\s*1/);
   assert.doesNotMatch(source, /showToast\([\s\S]*?Extracted \$\{extractedImageCount\}/);
 
   const actions = cssRule('.cover-lookup-manual-actions');

@@ -124,7 +124,7 @@ test('FTC-COVERS-007 settles its held provider before clearing the active task',
     'utf8',
   );
   const scenario = source.split(
-    "test('FTC-COVERS-007 notification states and bulk clear preserve active work'",
+    "test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work'",
     2,
   )[1]
     .split("test('FTC-COVERS-036", 1)[0];

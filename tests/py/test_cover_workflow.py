@@ -898,6 +898,34 @@ def test_resolve_album_root_accepts_album_at_root_direct_album_folder(config, tm
     assert resolve_album_context(config, {"tracks": [{"path": str(track_path)}]}).album_root == album_root
 
 
+def test_resolve_album_root_keeps_single_tagged_release_inside_cd_named_collection_folder(
+    config,
+    tmp_path: Path,
+):
+    library_root = (tmp_path / "Library").resolve()
+    collection_root = (library_root / "Astor Piazzolla").resolve()
+    album_root = (collection_root / "CD01").resolve()
+    track_path = (album_root / "01.mp3").resolve()
+    sibling_cover = (collection_root / "CD02" / "cover.jpg").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    sibling_cover.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    sibling_cover.write_bytes(b"unrelated")
+
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    assert resolve_album_root_from_track_paths(config, {str(track_path)}) == album_root
+
+
 def test_resolve_album_root_accepts_non_numeric_album_subfolders(config, tmp_path: Path):
     library_root = (tmp_path / "Library").resolve()
     album_root = (library_root / "Artist" / "Album").resolve()

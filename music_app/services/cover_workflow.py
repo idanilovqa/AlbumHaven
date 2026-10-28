@@ -106,10 +106,7 @@ def resolve_album_root_from_track_paths(
                 return None
         else:
             has_existing_track = True
-        parent = resolved.parent
-        if is_disc_like_folder(parent) and parent.parent != parent:
-            parent = parent.parent
-        resolved_dirs.append(parent)
+        resolved_dirs.append(resolved.parent)
     if not resolved_dirs or not has_existing_track:
         return None
     resolved_album_roots = [path.resolve(strict=False) for path in resolved_dirs]
@@ -134,6 +131,17 @@ def resolve_album_root_from_track_paths(
                 return None
             album_root = common_root
             enforce_layout_depth = True
+    if len(resolved_album_roots) == 1 and is_disc_like_folder(album_root):
+        parent_roots = _matching_library_roots(
+            config,
+            album_root.parent,
+            configured_roots=configured_roots,
+        )
+        if len(parent_roots) == 1:
+            parent_config, parent_root = parent_roots[0]
+            parent_depth = len(album_root.parent.relative_to(parent_root).parts)
+            if parent_depth == _minimum_album_folder_depth(parent_config):
+                album_root = album_root.parent
     if not _is_valid_album_root(
         config,
         album_root,

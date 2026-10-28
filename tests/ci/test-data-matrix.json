@@ -19,6 +19,33 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/albumTagRename.spec.js",
+    "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "album-identity-lineage",
+    "appProcessScope": "isolated",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "album-identity:split-selector-and-merge-follow"
+    ],
+    "filesystemScenarios": [
+      "media-copy:album-identity-lineage"
+    ],
+    "expectedContracts": [
+      "stale-split-reference-requires-current-release",
+      "stale-merge-reference-follows-current-release"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:album-identity-lineage",
+      "filesystemCopy": "media/cases/album-identity-lineage"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity",
     "profile": "functional-core",

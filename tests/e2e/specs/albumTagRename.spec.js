@@ -20,6 +20,9 @@ const FIXTURE_YEAR = '2026';
 const RENAMED_YEAR = '2027';
 const FAILURE_FIXTURE_ALBUM = 'Two Track Rarity Fixture';
 const FAILURE_FIXTURE_TRACK = '01 - Apply Rarity Here.mp3';
+const FAILURE_FIXTURE_SECOND_TRACK = '02 - Remain Editable.mp3';
+const LINEAGE_SPLIT_ALBUM_A = 'Current Release A';
+const LINEAGE_SPLIT_ALBUM_B = 'Current Release B';
 const FIXTURE_TRACK_COUNT = 18;
 const EXPECTED_FIXTURE_FILENAMES = Array.from(
   { length: FIXTURE_TRACK_COUNT },
@@ -59,6 +62,134 @@ const POST_EDIT_DEGRADATION_GRACE_MS = 400;
 const POST_EDIT_DEGRADATION_BUDGET = defineTimingBudget({
   targetMaximum: 0,
   graceMs: POST_EDIT_DEGRADATION_GRACE_MS,
+});
+
+test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits', { tag: '@area:tag-edit' }, async ({
+  freshBrowserSession,
+  galleryActions,
+  stepLogger,
+  tagEditorActions,
+  trackModalActions,
+}) => {
+  test.setTimeout(180_000);
+
+  const staleSplitSession = await freshBrowserSession.create();
+  await stepLogger.step('Keep the original album card open in a second client', async () => {
+    await staleSplitSession.galleryActions.goto(ARTIST_VIEW_URL);
+    await staleSplitSession.galleryActions.waitForGalleryReady();
+    await staleSplitSession.galleryActions.waitForAlbumVisibleUnderHeading(
+      FIXTURE_ARTIST,
+      FAILURE_FIXTURE_ALBUM,
+    );
+  });
+
+  await stepLogger.step('Split both tracks into distinct current releases', async () => {
+    await galleryActions.goto(ARTIST_VIEW_URL);
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: FAILURE_FIXTURE_ALBUM,
+      year: FIXTURE_YEAR,
+    });
+    await trackModalActions.waitForInteractiveSummary();
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+    await tagEditorActions.selectTrackByFilename(FAILURE_FIXTURE_TRACK);
+    await tagEditorActions.setAlbumName(LINEAGE_SPLIT_ALBUM_A);
+    expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
+    await trackModalActions.closeIfOpen();
+
+    await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FAILURE_FIXTURE_ALBUM);
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: FAILURE_FIXTURE_ALBUM,
+      year: FIXTURE_YEAR,
+    });
+    await trackModalActions.waitForInteractiveSummary();
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+    await tagEditorActions.selectTrackByFilename(FAILURE_FIXTURE_SECOND_TRACK);
+    await tagEditorActions.setAlbumName(LINEAGE_SPLIT_ALBUM_B);
+    expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
+    await trackModalActions.closeIfOpen();
+    await galleryActions.waitForAlbumHidden(FAILURE_FIXTURE_ALBUM);
+  });
+
+  await stepLogger.step('Resolve the stale source card through the visible split selector', async () => {
+    await staleSplitSession.galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: FAILURE_FIXTURE_ALBUM,
+      year: FIXTURE_YEAR,
+    });
+    await staleSplitSession.trackModalActions.waitForIdentitySplitChoices([
+      LINEAGE_SPLIT_ALBUM_A,
+      LINEAGE_SPLIT_ALBUM_B,
+    ]);
+    const summary = await staleSplitSession.trackModalActions.chooseCurrentRelease(
+      LINEAGE_SPLIT_ALBUM_A,
+    );
+    expect(summary.title).toBe(albumDetailsTitle(LINEAGE_SPLIT_ALBUM_A));
+    expect(summary.trackRows).toBe(1);
+    await staleSplitSession.trackModalActions.close();
+  });
+
+  const staleMergeSession = await freshBrowserSession.create();
+  await stepLogger.step('Keep one split-release card stale before it merges', async () => {
+    await staleMergeSession.galleryActions.goto(ARTIST_VIEW_URL);
+    await staleMergeSession.galleryActions.waitForGalleryReady();
+    await staleMergeSession.galleryActions.waitForAlbumVisibleUnderHeading(
+      FIXTURE_ARTIST,
+      LINEAGE_SPLIT_ALBUM_A,
+    );
+  });
+
+  await stepLogger.step('Merge both descendants back and follow the stale child card', async () => {
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: LINEAGE_SPLIT_ALBUM_A,
+      year: FIXTURE_YEAR,
+    });
+    await trackModalActions.waitForInteractiveSummary();
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+    await tagEditorActions.selectAllTracks();
+    await tagEditorActions.setAlbumName(FAILURE_FIXTURE_ALBUM);
+    expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
+    await trackModalActions.closeIfOpen();
+
+    await staleMergeSession.galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: LINEAGE_SPLIT_ALBUM_A,
+      year: FIXTURE_YEAR,
+    });
+    const mergedSummary = await staleMergeSession.trackModalActions.waitForInteractiveSummary();
+    expect(mergedSummary.title).toBe(albumDetailsTitle(FAILURE_FIXTURE_ALBUM));
+    expect(mergedSummary.trackRows).toBe(1);
+    await staleMergeSession.trackModalActions.close();
+
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: LINEAGE_SPLIT_ALBUM_B,
+      year: FIXTURE_YEAR,
+    });
+    await trackModalActions.waitForInteractiveSummary();
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+    await tagEditorActions.selectAllTracks();
+    await tagEditorActions.setAlbumName(FAILURE_FIXTURE_ALBUM);
+    expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
+    await trackModalActions.closeIfOpen();
+
+    await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FAILURE_FIXTURE_ALBUM);
+    await galleryActions.waitForAlbumHidden(LINEAGE_SPLIT_ALBUM_A);
+    await galleryActions.waitForAlbumHidden(LINEAGE_SPLIT_ALBUM_B);
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: FAILURE_FIXTURE_ALBUM,
+      year: FIXTURE_YEAR,
+    });
+    expect((await trackModalActions.waitForInteractiveSummary()).trackRows).toBe(2);
+  });
 });
 
 const median = (values) => {

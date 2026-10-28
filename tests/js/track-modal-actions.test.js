@@ -2,6 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 
+test('TrackModalActions exposes the current-release split choice journey', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+
+  assert.equal(typeof TrackModalActions.prototype.waitForIdentitySplitChoices, 'function');
+  assert.equal(typeof TrackModalActions.prototype.chooseCurrentRelease, 'function');
+});
+
 function createLocator({ text = '', visible = true, count = 0, evaluateAll = null, attributes = {} } = {}) {
   return {
     async textContent() {

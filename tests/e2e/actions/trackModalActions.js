@@ -162,6 +162,27 @@ export class TrackModalActions {
     await this.trackModal.waitForHidden(this.trackModal.dialog, { timeout: options.timeout || 60000 });
   }
 
+  async waitForIdentitySplitChoices(albumNames, options = {}) {
+    const expectedNames = Array.isArray(albumNames) ? albumNames : [];
+    await expect(this.trackModal.subtitle).toHaveText(
+      'This album was split—choose the current release',
+      { timeout: options.timeout || 60000 },
+    );
+    await expect(this.trackModal.currentReleaseChoices).toHaveCount(expectedNames.length);
+    const labels = await this.trackModal.currentReleaseChoices.allTextContents();
+    expectedNames.forEach((albumName) => {
+      expect(labels.filter((label) => label.includes(albumName))).toHaveLength(1);
+    });
+    return labels;
+  }
+
+  async chooseCurrentRelease(albumName) {
+    const choice = this.trackModal.currentReleaseChoices.filter({ hasText: albumName });
+    await expect(choice).toHaveCount(1);
+    await choice.click();
+    return this.waitForInteractiveSummary();
+  }
+
   async clickClose(options = {}) {
     await this.trackModal.closeButton.click(options);
   }

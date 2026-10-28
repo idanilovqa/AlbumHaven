@@ -26,6 +26,7 @@ export class TrackModal extends BasePage {
     this.mobileBackButton = page.locator('#mobile-back-button');
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);
+    this.currentReleaseChoices = this.dialog.locator('[data-track-modal-current-release]');
     this.footer = page.locator(this.footerSelector);
     this.discHeaders = this.dialog.locator('.album-track-table__disc-heading');
     this.discTotals = this.dialog.locator('.album-track-table__disc-total');

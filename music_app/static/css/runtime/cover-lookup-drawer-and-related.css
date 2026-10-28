@@ -58,7 +58,7 @@
   position: fixed;
   top: 0;
   right: 0;
-  z-index: 135;
+  z-index: 107;
   width: min(370px, calc(100vw - 18px));
   height: 100vh;
   height: 100dvh;

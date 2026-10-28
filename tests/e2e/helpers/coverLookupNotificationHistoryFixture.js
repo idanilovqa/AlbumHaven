@@ -109,19 +109,16 @@ export async function seedCoverLookupNotificationHistory() {
               when series.value = 1 then actionable_album.release_year
               else 2000 + (series.value % 25)
             end,
-            'album_payload', case
-              when series.value = 1 then jsonb_build_object(
-                'album_id', actionable_album.id,
-                'key', actionable_album.album_key,
-                'album_key', actionable_album.album_key,
-                'name', actionable_album.title,
-                'album', actionable_album.title,
-                'album_artist', actionable_album.artist_name,
-                'artist', actionable_album.artist_name,
-                'year', actionable_album.release_year
-              )
-              else null
-            end,
+          'album_payload', jsonb_build_object(
+            'album_id', actionable_album.id,
+            'key', actionable_album.album_key,
+            'album_key', actionable_album.album_key,
+            'name', actionable_album.title,
+            'album', actionable_album.title,
+            'album_artist', actionable_album.artist_name,
+            'artist', actionable_album.artist_name,
+            'year', actionable_album.release_year
+          ),
             'progress', 100,
             'progress_label', 'Complete',
             'message', 'No better cover art was found.',

@@ -538,6 +538,50 @@ export class CoverLookup extends BasePage {
     ).first();
   }
 
+  async startRemoteCandidateContinuityObservation(expectedIds) {
+    // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns candidate-card continuity evidence
+    return this.modalBody.evaluateHandle((body, expectedCandidateIds) => {
+      const cards = () => Array.from(body.querySelectorAll('[data-select-remote-cover]'));
+      const readIds = () => cards().map(
+        (card) => String(card.getAttribute('data-select-remote-cover') || '').trim(),
+      );
+      const observation = {
+        body,
+        expectedIds: expectedCandidateIds,
+        originalCards: new Map(cards().map(
+          (card) => [String(card.getAttribute('data-select-remote-cover') || '').trim(), card],
+        )),
+        samples: [],
+      };
+      const sample = () => observation.samples.push(readIds());
+      observation.observer = new MutationObserver(sample);
+      observation.observer.observe(body, { childList: true, subtree: true });
+      sample();
+      return observation;
+    }, expectedIds);
+  }
+
+  async finishRemoteCandidateContinuityObservation(observationHandle) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns candidate-card continuity evidence
+      return await observationHandle.evaluate((observation) => {
+        observation?.observer?.disconnect();
+        const currentCards = new Map(Array.from(
+          observation.body.querySelectorAll('[data-select-remote-cover]'),
+          (card) => [String(card.getAttribute('data-select-remote-cover') || '').trim(), card],
+        ));
+        return {
+          samples: observation.samples,
+          retainedNodes: observation.expectedIds.every(
+            (id) => observation.originalCards.get(id) === currentCards.get(id),
+          ),
+        };
+      });
+    } finally {
+      await observationHandle.dispose();
+    }
+  }
+
   taskCardByTitle(taskTitle) {
     return this.page.locator(this.taskCardSelector).filter({
       has: this.page.locator(this.taskTitleWithinCardSelector).filter({ hasText: taskTitle }),

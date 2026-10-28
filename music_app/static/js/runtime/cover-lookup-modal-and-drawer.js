@@ -1545,6 +1545,19 @@ function replaceCoverLookupDrawerMarkup(body, markup) {
       taskElement.replaceWith(retainedTask.element);
       return;
     }
+    if (retainedTask?.element) {
+      const incomingElement = taskElement;
+      const retainedElement = retainedTask.element;
+      retainedElement.getAttributeNames?.().forEach((name) => {
+        if (!incomingElement.hasAttribute?.(name)) retainedElement.removeAttribute?.(name);
+      });
+      incomingElement.getAttributeNames?.().forEach((name) => {
+        retainedElement.setAttribute?.(name, incomingElement.getAttribute?.(name) || '');
+      });
+      retainedElement.innerHTML = incomingElement.innerHTML;
+      incomingElement.replaceWith(retainedElement);
+      taskElement = retainedElement;
+    }
     const retained = retainedImages.get(taskId);
     const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
     if (!retained || !image) return;
@@ -3025,7 +3038,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
           }
           : task
       ));
-      renderCoverLookupDrawer();
+      renderCoverLookupDrawer({ preserveInteraction: false });
     }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = true;

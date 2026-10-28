@@ -5264,3 +5264,104 @@ require('node:test')('notification polling rerenders when the selected user cove
   assert.equal(context.state.coverLookup.tasks[0].current_user_cover_preview_url, previewUrl);
   assert.equal(renderCount, initialRenderCount + 1);
 });
+
+require('node:test')('changed notification card keeps its keyed outer node mounted', () => {
+  const attributes = new Map([
+    ['data-open-cover-lookup-task', 'stable-task'],
+    ['class', 'cover-lookup-task-card is-failed'],
+  ]);
+  const retained = {
+    outerHTML: '<article data-open-cover-lookup-task="stable-task" class="cover-lookup-task-card is-failed">Failed</article>',
+    innerHTML: 'Failed',
+    getAttribute: (name) => attributes.get(name) || '',
+    getAttributeNames: () => Array.from(attributes.keys()),
+    hasAttribute: (name) => attributes.has(name),
+    removeAttribute: (name) => attributes.delete(name),
+    setAttribute: (name, value) => attributes.set(name, value),
+    querySelector: () => null,
+  };
+  const replacementAttributes = new Map([
+    ['data-open-cover-lookup-task', 'stable-task'],
+    ['class', 'cover-lookup-task-card is-completed'],
+  ]);
+  const replacement = {
+    outerHTML: '<article data-open-cover-lookup-task="stable-task" class="cover-lookup-task-card is-completed">Art chosen</article>',
+    innerHTML: 'Art chosen',
+    getAttribute: (name) => replacementAttributes.get(name) || '',
+    getAttributeNames: () => Array.from(replacementAttributes.keys()),
+    hasAttribute: (name) => replacementAttributes.has(name),
+    querySelector: () => null,
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  let rendered = false;
+  const body = {
+    querySelectorAll: () => [rendered ? replacement : retained],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '',
+    set: () => { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, replacement.outerHTML);
+
+  assert.strictEqual(replacement.replacedWith, retained);
+  assert.equal(retained.innerHTML, 'Art chosen');
+  assert.equal(attributes.get('class'), 'cover-lookup-task-card is-completed');
+});
+
+require('node:test')('retry immediately resets the existing card label tone and progress', async () => {
+  const album = { album_artist: 'Eden', name: 'Eden', year: 2020 };
+  let resolveFetch;
+  const context = loadHelper({
+    fetch: () => new Promise((resolve) => { resolveFetch = resolve; }),
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'eden-task',
+    status: 'failed',
+    progress: 100,
+    progress_label: 'Lookup failed',
+    message: 'Lookup failed',
+    album_payload: album,
+  }];
+  const renderOptions = [];
+  context.renderCoverLookupDrawer = (options) => renderOptions.push(options);
+  context.loadCoverLookupTasks = async () => {};
+
+  const retryRequest = context.startCoverLookupForAlbum(album, {
+    backgroundOnly: true,
+    taskId: 'eden-task',
+  });
+  await Promise.resolve();
+
+  assert.equal(context.state.coverLookup.tasks.length, 1);
+  assert.equal(context.state.coverLookup.tasks[0].status, 'pending');
+  assert.equal(context.state.coverLookup.tasks[0].progress, 0);
+  assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Queued');
+  assert.equal(context.state.coverLookup.tasks[0].message, '');
+  assert.equal(renderOptions[0]?.preserveInteraction, false);
+  const { context: drawerContext, bodyElement } = createDrawerHarness();
+  drawerContext.state.coverLookup.tasks = [
+    JSON.parse(JSON.stringify(context.state.coverLookup.tasks[0])),
+  ];
+  drawerContext.renderCoverLookupDrawer({ preserveInteraction: false });
+  assert.match(bodyElement.innerHTML, /is-running[^>]*>Queued</);
+  assert.match(bodyElement.innerHTML, /width:\s*0%/);
+  assert.doesNotMatch(bodyElement.innerHTML, /is-failed/);
+  resolveFetch({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      task: {
+        id: 'eden-task',
+        status: 'pending',
+        progress: 0,
+        progress_label: 'Queued',
+        message: '',
+      },
+    }),
+  });
+  await retryRequest;
+});

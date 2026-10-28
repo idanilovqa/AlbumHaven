@@ -172,10 +172,11 @@ test(refreshWhilePressed
  }).toBe(selectedText.replaceAll('\r\n', '\n'));
 await expect.poll(() => page.evaluate(() => state.coverLookup.drawerOpen)).toBe(true);
 
-await page.evaluate(() => {
+const mutation = await page.evaluate(() => {
   window.getSelection()?.removeAllRanges();
+  const original = document.querySelector('[data-open-cover-lookup-task]');
   state.coverLookup.tasks = [{
-    id: 'running-cover-lookup',
+    id: 'metallica-cover-lookup',
     status: 'running',
     artist: 'Metallica',
     album: "Kill 'Em All",
@@ -183,7 +184,13 @@ await page.evaluate(() => {
     progress: 50,
   }];
   renderCoverLookupDrawer();
+  const updated = document.querySelector('[data-open-cover-lookup-task]');
+  return {
+    preserved: original === updated,
+    status: updated?.querySelector('.cover-lookup-task-status-label')?.textContent?.trim(),
+  };
 });
+expect(mutation).toEqual({ preserved: true, status: 'Searching' });
 
 const stopButton = page.getByRole('button', { name: 'Stop lookup', exact: true });
 const stopIcon = stopButton.locator('svg');

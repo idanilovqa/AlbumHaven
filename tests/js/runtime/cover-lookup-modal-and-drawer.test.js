@@ -806,6 +806,11 @@ require('node:test')('mobile notification scrolling defers virtual-window rerend
   bodyElement.scrollTop = 4000;
   bodyElement.scrollHeight = 12000;
   bodyElement.clientHeight = 600;
+  bodyElement.getBoundingClientRect = () => ({ top: 0, bottom: 600 });
+  bodyElement.querySelectorAll = () => [{
+    getAttribute: () => 'task-40',
+    getBoundingClientRect: () => ({ top: 100, bottom: 196 }),
+  }];
   let renderCount = 0;
   context.renderCoverLookupDrawer = () => { renderCount += 1; };
 
@@ -816,6 +821,42 @@ require('node:test')('mobile notification scrolling defers virtual-window rerend
   assert.equal(scheduled[0].delay, 120);
   scheduled[0].callback();
   assert.equal(renderCount, 1);
+});
+
+require('node:test')('mobile notification scrolling immediately replaces an uncovered virtual window', async () => {
+  const scheduled = [];
+  const { context, bodyElement } = createDrawerHarness({
+    window: {
+      setTimeout(callback, delay) {
+        scheduled.push({ callback, delay });
+        return scheduled.length;
+      },
+      clearTimeout() {},
+      setInterval() { return 1; },
+      clearInterval() {},
+    },
+  });
+  context.state.coverLookup.tasks = Array.from({ length: 120 }, (_, index) => ({
+    id: `task-${index}`,
+    status: 'completed',
+  }));
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  bodyElement.innerHTML = '<div>rendered cards</div>';
+  bodyElement.scrollTop = 4000;
+  bodyElement.scrollHeight = 12000;
+  bodyElement.clientHeight = 600;
+  bodyElement.getBoundingClientRect = () => ({ top: 0, bottom: 600 });
+  bodyElement.querySelectorAll = () => [{
+    getAttribute: () => 'task-0',
+    getBoundingClientRect: () => ({ top: -196, bottom: -100 }),
+  }];
+  let renderCount = 0;
+  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+
+  await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+
+  assert.equal(renderCount, 1, 'a blank viewport must render its replacement window immediately');
+  assert.equal(scheduled.length, 0);
 });
 
 require('node:test')('accepted remote save keeps its finished card in place without looking like another search', () => {

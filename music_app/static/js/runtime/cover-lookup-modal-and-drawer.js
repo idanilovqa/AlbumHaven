@@ -2736,10 +2736,10 @@ function handleCoverLookupDrawerScroll(event) {
     window.clearTimeout(coverLookupDrawerScrollRenderTimer);
     coverLookupDrawerScrollRenderTimer = 0;
   }
-  if (
-    nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)
-    && typeof window.setTimeout === 'function'
-  ) {
+  const renderWindowChanged = nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0);
+  if (renderWindowChanged && !captureCoverLookupDrawerScrollAnchor(body)) {
+    renderCoverLookupDrawer({ preserveInteraction: false });
+  } else if (renderWindowChanged && typeof window.setTimeout === 'function') {
     coverLookupDrawerScrollRenderTimer = window.setTimeout(() => {
       coverLookupDrawerScrollRenderTimer = 0;
       if (state.coverLookup.drawerOpen) {

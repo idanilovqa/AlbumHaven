@@ -29331,10 +29331,42 @@ function applyCoverLookupCandidateSource(candidateSource) {
       : String(candidate?.id || '') === overrideCandidateId
   );
   const previousGeneration = coverLookupCandidateGenerationKey(modal.candidateGeneration);
+  const previousRevision = Math.max(0, Number(modal.candidateRevision || 0) || 0);
   const previousMatches = sanitizeCoverLookupPossibleMatches(modal.possibleMatches);
   const retainedOverride = previousMatches.find(candidateMatchesOverride);
+  const incomingRevision = Math.max(0, Number(candidateSource.revision || 0) || 0);
+  if (
+    previousGeneration === generation
+    && incomingRevision > 0
+    && previousRevision > 0
+    && incomingRevision < previousRevision
+  ) return;
   modal.candidateGeneration = generation;
+  modal.candidateRevision = previousGeneration === generation
+    ? Math.max(previousRevision, incomingRevision)
+    : incomingRevision;
   let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
+  if (previousGeneration && previousGeneration === generation) {
+    const sameCandidate = (previous, candidate) => (
+      (previous.id && String(previous.id) === String(candidate.id || ''))
+      || (
+        normalizeCoverLookupCandidateUrl(previous.url)
+        && normalizeCoverLookupCandidateUrl(previous.url).toLowerCase()
+          === normalizeCoverLookupCandidateUrl(candidate.url).toLowerCase()
+      )
+    );
+    if (!(
+      previousMatches.length === possibleMatches.length
+      && previousMatches.every((previous, index) => sameCandidate(previous, possibleMatches[index]))
+    )) {
+      possibleMatches = sanitizeCoverLookupPossibleMatches([
+        ...previousMatches.map((previous) => possibleMatches.find((candidate) => (
+          sameCandidate(previous, candidate)
+        )) || previous),
+        ...possibleMatches,
+      ]);
+    }
+  }
   let retainedPreviousMatches = false;
   if (
     possibleMatches.length === 0
@@ -30934,6 +30966,23 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
   );
 }
 
+function replaceCoverLookupModalMarkup(body, markup) {
+  const retainedCards = new Map();
+  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
+    const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
+    const cardMarkup = String(card.outerHTML || '');
+    if (key && cardMarkup) retainedCards.set(key, { card, markup: cardMarkup });
+  });
+  body.innerHTML = markup;
+  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
+    const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
+    const retained = retainedCards.get(key);
+    if (retained?.markup === String(card.outerHTML || '')) {
+      card.replaceWith(retained.card);
+    }
+  });
+}
+
 function formatCoverLookupImageCount(count) {
   const safeCount = Math.max(0, Number(count || 0) || 0);
   return `${safeCount} ${safeCount === 1 ? 'image' : 'images'}`;
@@ -31028,54 +31077,36 @@ function renderCoverLookupModal() {
   const otherArt = Array.isArray(modalState.otherArt) ? modalState.otherArt : [];
   const remoteCover = modalState.remoteCover && typeof modalState.remoteCover === 'object' ? modalState.remoteCover : null;
   const possibleMatches = Array.isArray(modalState.possibleMatches) ? modalState.possibleMatches : [];
-  const byLargestArea = (left, right) => {
-    const leftArea = Number(left?.area || 0) || ((Number(left?.width || 0) || 0) * (Number(left?.height || 0) || 0));
-    const rightArea = Number(right?.area || 0) || ((Number(right?.width || 0) || 0) * (Number(right?.height || 0) || 0));
-    if (rightArea !== leftArea) return rightArea - leftArea;
-    return (Number(right?.score || 0) || 0) - (Number(left?.score || 0) || 0);
-  };
   const serviceMatches = possibleMatches
     .filter((item) => (
       String(item?.lookup_group || 'services') === 'services'
       && String(item?.source || '') !== 'discogs'
       && String(item?.art_kind || 'cover') === 'cover'
-    ))
-    .slice()
-    .sort(byLargestArea);
+    ));
   const discogsMatches = possibleMatches
     .filter((item) => (
       String(item?.source || '') === 'discogs'
       && String(item?.lookup_group || '') !== 'manual_links'
     ));
   const discogsCoverMatches = discogsMatches
-    .filter((item) => String(item?.art_kind || 'cover') === 'cover')
-    .slice()
-    .sort(byLargestArea);
+    .filter((item) => String(item?.art_kind || 'cover') === 'cover');
   const discogsOtherArtMatches = discogsMatches
-    .filter((item) => String(item?.art_kind || '') === 'other')
-    .slice()
-    .sort(byLargestArea);
+    .filter((item) => String(item?.art_kind || '') === 'other');
   const groupedDiscogsMatches = [...discogsCoverMatches, ...discogsOtherArtMatches];
   const manualLinkMatches = possibleMatches
-    .filter((item) => String(item?.lookup_group || '') === 'manual_links' && String(item?.art_kind || 'cover') === 'cover')
-    .slice()
-    .sort(byLargestArea);
+    .filter((item) => String(item?.lookup_group || '') === 'manual_links' && String(item?.art_kind || 'cover') === 'cover');
   const manualLinkOtherArtMatches = possibleMatches
-    .filter((item) => String(item?.lookup_group || '') === 'manual_links' && String(item?.art_kind || '') === 'other')
-    .slice()
-    .sort(byLargestArea);
+    .filter((item) => String(item?.lookup_group || '') === 'manual_links' && String(item?.art_kind || '') === 'other');
   const archiveMatches = possibleMatches.filter((item) => String(item?.lookup_group || '') === 'cover_art_archive');
-  const archiveCoverMatches = archiveMatches.filter((item) => String(item?.art_kind || 'cover') === 'cover').slice().sort(byLargestArea);
-  const archiveOtherArtMatches = archiveMatches.filter((item) => String(item?.art_kind || '') === 'other').slice().sort(byLargestArea);
+  const archiveCoverMatches = archiveMatches.filter((item) => String(item?.art_kind || 'cover') === 'cover');
+  const archiveOtherArtMatches = archiveMatches.filter((item) => String(item?.art_kind || '') === 'other');
   const groupedArchiveMatches = [...archiveCoverMatches, ...archiveOtherArtMatches];
   const remoteOtherArtMatches = possibleMatches
     .filter((item) => (
       String(item?.art_kind || '') === 'other'
       && String(item?.lookup_group || '') !== 'manual_links'
       && !['discogs', 'cover_art_archive'].includes(String(item?.source || ''))
-    ))
-    .slice()
-    .sort(byLargestArea);
+    ));
   const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(modalState.taskId || '')) || null;
   const showCaaEmptyNotice = Boolean(task?.caa_empty_notice) && !archiveMatches.length;
   const taskRunning = Boolean(task && ['pending', 'running'].includes(String(task.status || '')));
@@ -31148,7 +31179,7 @@ function renderCoverLookupModal() {
     }
     return;
   }
-  els.body.innerHTML = `
+  replaceCoverLookupModalMarkup(els.body, `
     ${galleryLoadingMarkup || `
     <section class="cover-lookup-section">
       <h4 class="cover-lookup-section-title">LOCAL · ${formatCoverLookupImageCount(localCovers.length)}</h4>
@@ -31194,7 +31225,7 @@ function renderCoverLookupModal() {
         </div>
         </div>
       </section>
-    `;
+    `);
   const renderedManualInput = document.getElementById('cover-lookup-pasted-urls');
   if (preserveManualInput && renderedManualInput && renderedManualInput !== els.pastedUrls) {
     renderedManualInput.replaceWith(els.pastedUrls);
@@ -31692,6 +31723,9 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.candidateGeneration = cachedCandidates.length
     ? String(matchingTask?.id || '')
     : '';
+  state.coverLookup.modal.candidateRevision = cachedCandidates.length
+    ? Math.max(0, Number(matchingTask?.candidate_revision || 0) || 0)
+    : 0;
   state.coverLookup.modal.expectedRemoteCount = expectedRemoteCount;
   state.coverLookup.modal.activeLocalSelectionPath = '';
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
@@ -31755,6 +31789,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = '';
+  state.coverLookup.modal.candidateRevision = 0;
   state.coverLookup.modal.expectedRemoteCount = 0;
   state.coverLookup.modal.statusText = '';
   state.coverLookup.modal.statusTone = 'neutral';

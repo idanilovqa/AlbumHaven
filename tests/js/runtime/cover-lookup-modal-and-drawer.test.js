@@ -2563,21 +2563,21 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
     ['old-best'],
     'a new task without valid candidates must retain the prior persisted snapshot',
   );
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
     ['old-best'],
     'a zero-result failed task must keep the prior persisted snapshot visible',
   );
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
     ['new-best'],
     'the new generation replaces the prior snapshot after its first valid candidate',
   );
@@ -2765,9 +2765,9 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
-    ['snapshot-newer'],
-    'the durable snapshot wins when its publication timestamp is newer',
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['task-newer', 'snapshot-newer'],
+    'a newer durable snapshot appends without removing an already displayed task candidate',
   );
 })().catch((error) => {
   console.error(error);
@@ -2876,9 +2876,9 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
-    ['candidate-b', 'candidate-a'],
-    'progressive ranking may reorder cards but must retain their stable candidate IDs',
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['candidate-a', 'candidate-b'],
+    'progressive ranking must append without reordering an already displayed card',
   );
   assert.equal(
     context.state.coverLookup.modal.selectedRemoteId,
@@ -2897,8 +2897,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   await context.refreshCoverLookupGallery(false);
   assert.equal(
     context.state.coverLookup.modal.selectedRemoteId,
-    '',
-    'a disappeared explicit override must remain empty instead of selecting another same-generation candidate',
+    'persisted-candidate-a',
+    'an explicit selection must remain mounted when an intermediate snapshot omits its card',
   );
 
   await context.refreshCoverLookupGallery(false);
@@ -3182,8 +3182,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
-    ['candidate-a', 'candidate-d'],
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['candidate-a', 'candidate-b', 'candidate-d'],
   );
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-a');
   assert.deepEqual(renderCalls, ['modal', 'modal']);
@@ -4181,9 +4181,9 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   let publicationError = null;
   try {
     assert.deepEqual(
-      context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.source),
-      ['discogs', 'cover_art_archive', 'direct_url'],
-      'a completed task must publish its final provider candidates before the gallery response arrives',
+      Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.source),
+      ['direct_url', 'discogs', 'cover_art_archive'],
+      'a completed task must append its final provider candidates without moving the existing card',
     );
     assert.equal(
       context.state.coverLookup.modal.selectedRemoteId,
@@ -5066,6 +5066,101 @@ require('node:test')('a new running lookup keeps cached candidates until replace
     context.state.coverLookup.modal.selectedRemoteId,
     '',
     'a retained card must not become the new lookup generation selection without a click',
+  );
+});
+
+require('node:test')('progressive candidates only append within the same search generation', () => {
+  const { context } = createDrawerHarness();
+  Object.assign(context.state.coverLookup.modal, {
+    candidateGeneration: 'progressive-lookup',
+    candidateRevision: 2,
+    possibleMatches: [
+      { id: 'discogs-first', url: 'https://images.example/discogs-first.jpg' },
+      { id: 'apple-second', url: 'https://images.example/apple-second.jpg' },
+    ],
+    selectedRemoteId: '',
+    remoteSelectionOverrideGeneration: '',
+    remoteSelectionOverrideCandidateId: '',
+    remoteSelectionOverrideUrl: '',
+  });
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-lookup',
+    status: 'running',
+    revision: 3,
+    bestCandidateId: '',
+    candidates: [
+      { id: 'discogs-first', url: 'https://images.example/discogs-first.jpg' },
+      { id: 'caa-third', url: 'https://images.example/caa-third.jpg' },
+    ],
+  });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['discogs-first', 'apple-second', 'caa-third'],
+    'an intermediate provider publication must not remove or reorder visible cards',
+  );
+  assert.equal(context.state.coverLookup.modal.candidateRevision, 3);
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-lookup',
+    status: 'running',
+    revision: 0,
+    bestCandidateId: '',
+    candidates: [{ id: 'spotify-fourth', url: 'https://images.example/spotify-fourth.jpg' }],
+  });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['discogs-first', 'apple-second', 'caa-third', 'spotify-fourth'],
+    'a revisionless live task publication is not proof that its new candidate is stale',
+  );
+  assert.equal(context.state.coverLookup.modal.candidateRevision, 3);
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-lookup',
+    status: 'running',
+    revision: 2,
+    bestCandidateId: '',
+    candidates: [{ id: 'discogs-first', url: 'https://images.example/discogs-first.jpg' }],
+  });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['discogs-first', 'apple-second', 'caa-third', 'spotify-fourth'],
+    'a stale poll response must not collapse a progressively populated section',
+  );
+  assert.equal(context.state.coverLookup.modal.candidateRevision, 3);
+});
+
+require('node:test')('progressive modal rendering retains existing cover card nodes', () => {
+  const retainedCard = {
+    outerHTML: '<div data-cover-lookup-item-key="remote:stable">stable</div>',
+    getAttribute: (name) => (name === 'data-cover-lookup-item-key' ? 'remote:stable' : ''),
+  };
+  const replacementCard = {
+    outerHTML: retainedCard.outerHTML,
+    getAttribute: retainedCard.getAttribute,
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  let rendered = false;
+  const body = {
+    querySelectorAll() {
+      return rendered ? [replacementCard] : [retainedCard];
+    },
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const context = loadHelper();
+
+  context.replaceCoverLookupModalMarkup(body, '<div>stable plus new card</div>');
+
+  assert.strictEqual(
+    replacementCard.replacedWith,
+    retainedCard,
+    'an unchanged decoded card must stay mounted while later results append',
   );
 });
 

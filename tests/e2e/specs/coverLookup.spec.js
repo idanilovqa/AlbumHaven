@@ -1781,6 +1781,8 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
 }) => {
   let taskTitle = '';
   let overrideCandidateId = '';
+  let partialCandidateIds = [];
+  let progressiveObservation = null;
   let completedCandidateIds = [];
   let completedProviderEvidence = null;
 
@@ -1808,6 +1810,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
   await stepLogger.step('Override the best partial candidate before later providers finish', async () => {
     await coverLookupActions.waitForRemoteCandidateCountAtLeast(2);
     const partialCandidates = await coverLookupActions.readRemoteCandidateSummaries();
+    partialCandidateIds = partialCandidates.map((candidate) => candidate.id);
     const automaticallySelected = partialCandidates.filter((candidate) => candidate.selected);
     expect(automaticallySelected).toHaveLength(1);
     overrideCandidateId = partialCandidates.find(
@@ -1816,6 +1819,28 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     expect(overrideCandidateId).not.toBe('');
     await coverLookupActions.selectRemoteCandidateById(overrideCandidateId);
     expect(await coverLookupActions.readSelectedRemoteCandidateId()).toBe(overrideCandidateId);
+
+    // parity-check: allow-read-only-measurement-evaluate -- observe rendered candidate continuity only
+    progressiveObservation = await page.evaluateHandle((expectedIds) => {
+      const body = document.querySelector('#cover-lookup-modal-body');
+      const readIds = () => Array.from(
+        body?.querySelectorAll('[data-select-remote-cover]') || [],
+        (card) => String(card.getAttribute('data-select-remote-cover') || '').trim(),
+      );
+      const observation = {
+        expectedIds,
+        originalCards: new Map(Array.from(
+          body?.querySelectorAll('[data-select-remote-cover]') || [],
+          (card) => [String(card.getAttribute('data-select-remote-cover') || '').trim(), card],
+        )),
+        samples: [],
+      };
+      const sample = () => observation.samples.push(readIds());
+      observation.observer = new MutationObserver(sample);
+      observation.observer.observe(body, { childList: true, subtree: true });
+      sample();
+      return observation;
+    }, partialCandidateIds);
   });
 
   await stepLogger.step('Release later providers and preserve the pending user override', async () => {
@@ -1825,6 +1850,27 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     await coverLookupActions.waitForSelectedRemoteCandidateId(overrideCandidateId);
     const completedCandidates = await coverLookupActions.readRemoteCandidateSummaries();
     completedCandidateIds = completedCandidates.map((candidate) => candidate.id);
+    // parity-check: allow-read-only-measurement-evaluate -- read and stop candidate continuity observation
+    const progressiveEvidence = await progressiveObservation.evaluate((observation) => {
+      observation?.observer?.disconnect();
+      const currentCards = new Map(Array.from(
+        document.querySelectorAll('#cover-lookup-modal-body [data-select-remote-cover]'),
+        (card) => [String(card.getAttribute('data-select-remote-cover') || '').trim(), card],
+      ));
+      return {
+        samples: observation.samples,
+        retainedNodes: observation.expectedIds.every(
+          (id) => observation.originalCards.get(id) === currentCards.get(id),
+        ),
+      };
+    });
+    await progressiveObservation.dispose();
+
+    expect(progressiveEvidence.samples.length).toBeGreaterThan(0);
+    for (const visibleIds of progressiveEvidence.samples) {
+      expect(visibleIds.slice(0, partialCandidateIds.length)).toEqual(partialCandidateIds);
+    }
+    expect(progressiveEvidence.retainedNodes).toBe(true);
     expect(completedCandidateIds).toContain(overrideCandidateId);
     expect(completedCandidateIds.length).toBeGreaterThanOrEqual(2);
     expect(completedCandidateIds.length).toBeLessThanOrEqual(24);

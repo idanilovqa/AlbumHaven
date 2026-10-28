@@ -321,7 +321,7 @@ test('a reopened reconciliation read cannot overwrite a subsequently admitted lo
 
 for (const [label, generation, candidates, expected] of [
   ['remapped', 'generation-1', [{ id: 'persisted-choice', url: 'https://example.test/choice.jpg' }], 'persisted-choice'],
-  ['disappeared', 'generation-1', [{ id: 'unrelated', url: 'https://example.test/other.jpg' }], ''],
+  ['temporarily omitted', 'generation-1', [{ id: 'unrelated', url: 'https://example.test/other.jpg' }], 'choice'],
   ['new generation', 'generation-2', [{ id: 'unrelated', url: 'https://example.test/other.jpg' }], 'choice'],
 ]) {
   test(`reopened authoritative read preserves the candidate owner's ${label} reconciliation`, async () => {

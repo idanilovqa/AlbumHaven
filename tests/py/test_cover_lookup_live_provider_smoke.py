@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import urllib.request
 
 import pytest
 
 from music_app.services import cover_lookup_diagnostics
+
+
+_REAL_URLLIB_URLOPEN = urllib.request.urlopen
 
 
 pytestmark = pytest.mark.skipif(
@@ -25,7 +29,9 @@ pytestmark = pytest.mark.skipif(
 def test_live_music_service_cover_lookup_smoke_logs_duration_and_returns_candidates(
     provider_name: str,
     provider_label: str,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setattr(urllib.request, "urlopen", _REAL_URLLIB_URLOPEN)
     report = cover_lookup_diagnostics.run_cover_lookup_diagnostic(
         scenarios=[
             {

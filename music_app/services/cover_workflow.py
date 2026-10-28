@@ -64,6 +64,35 @@ def is_disc_like_folder(path: Path) -> bool:
     return bool(_ALBUM_DISC_MARKER_RE.search(path.name or ""))
 
 
+def restrict_album_root_to_represented_disc(album_root: Path, track_paths: set[str]) -> Path:
+    resolved_album_root = album_root.resolve(strict=False)
+    represented_roots: dict[str, Path] = {}
+    for raw_path in track_paths:
+        if not str(raw_path or "").strip():
+            continue
+        track_root = Path(str(raw_path)).resolve(strict=False).parent
+        represented_roots[os.path.normcase(str(track_root))] = track_root
+    if len(represented_roots) != 1:
+        return resolved_album_root
+    track_root = next(iter(represented_roots.values()))
+    if (
+        track_root == resolved_album_root
+        or track_root.parent != resolved_album_root
+        or not is_disc_like_folder(track_root)
+    ):
+        return resolved_album_root
+    try:
+        has_unrepresented_disc_sibling = any(
+            child.is_dir()
+            and is_disc_like_folder(child)
+            and child.resolve(strict=False) != track_root
+            for child in resolved_album_root.iterdir()
+        )
+    except OSError:
+        return track_root
+    return track_root if has_unrepresented_disc_sibling else resolved_album_root
+
+
 def _is_explicit_release_part_layout(album_root: Path, paths: list[Path]) -> bool:
     child_paths = [path for path in paths if path != album_root]
     return bool(child_paths) and all(
@@ -141,7 +170,7 @@ def resolve_album_root_from_track_paths(
             parent_config, parent_root = parent_roots[0]
             parent_depth = len(album_root.parent.relative_to(parent_root).parts)
             if parent_depth == _minimum_album_folder_depth(parent_config):
-                album_root = album_root.parent
+                album_root = restrict_album_root_to_represented_disc(album_root.parent, track_paths)
     if not _is_valid_album_root(
         config,
         album_root,
@@ -243,8 +272,17 @@ def _minimum_album_folder_depth(root: dict[str, object]) -> int:
     return 2
 
 
-def validate_local_cover_source(config: dict[str, object], album_root: Path, source_path: str) -> Path:
-    resolved_album_root = album_root.resolve(strict=False)
+def validate_local_cover_source(
+    config: dict[str, object],
+    album_root: Path,
+    source_path: str,
+    *,
+    track_paths: set[str] | None = None,
+) -> Path:
+    resolved_album_root = restrict_album_root_to_represented_disc(
+        album_root,
+        track_paths or set(),
+    )
     if not any(_is_path_within(resolved_album_root, root) for root in iter_library_root_paths(config)):
         raise ValueError("Selected image is outside the configured library roots")
     candidate = Path(str(source_path or "").strip())

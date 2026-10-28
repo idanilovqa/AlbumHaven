@@ -654,6 +654,13 @@
               "case": "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
               "area": "cover-providers"
             },
+          {
+            "config": "playwright.config.js",
+            "project": "functional",
+            "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+            "case": "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
+            "area": "cover-providers"
+          },
             {
               "config": "playwright.config.js",
               "project": "functional",

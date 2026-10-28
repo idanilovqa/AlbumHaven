@@ -10,6 +10,7 @@ import pytest
 
 from music_app.services import cover_workflow
 from music_app.services import library_roots as library_roots_module
+from music_app.services.cover_state import serialize_cover_gallery_payload
 from music_app.services.cover_workflow import (
     delete_local_cover_and_choose_next,
     download_remote_cover_to_folder,
@@ -924,6 +925,166 @@ def test_resolve_album_root_keeps_single_tagged_release_inside_cd_named_collecti
     )
 
     assert resolve_album_root_from_track_paths(config, {str(track_path)}) == album_root
+
+
+def test_resolve_album_root_keeps_disc_folder_when_sibling_probe_fails(
+    config,
+    tmp_path: Path,
+    monkeypatch,
+):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Artist" / "Album" / "Disc 1").resolve()
+    track_path = (album_root / "01.mp3").resolve()
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+    original_iterdir = Path.iterdir
+
+    def fail_for_album_root(path):
+        if path == album_root.parent:
+            raise OSError("drive unavailable")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_for_album_root)
+
+    assert resolve_album_root_from_track_paths(config, {str(track_path)}) == album_root
+
+
+def test_single_track_cd_album_gallery_excludes_sibling_album_cover(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Genre" / "Astor Piazzolla" / "Wallet Box" / "CD01").resolve()
+    track_path = (album_root / "01.mp3").resolve()
+    album_cover = (album_root / "front.jpg").resolve()
+    sibling_cover = (album_root.parent / "CD02" / "front.jpg").resolve()
+    track_path.parent.mkdir(parents=True)
+    sibling_cover.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    album_cover.write_bytes(_image_bytes((220, 40, 40), image_format="JPEG"))
+    sibling_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "genre/artist",
+            }],
+        },
+    )
+
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+    payload = serialize_cover_gallery_payload(
+        album_root=context.album_root,
+        track_paths=context.track_paths,
+        file_cache={},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert [candidate["path"] for candidate in payload["local_covers"]] == [str(album_cover)]
+
+
+def test_single_track_cd_album_rejects_sibling_album_cover_selection(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Genre" / "Astor Piazzolla" / "Wallet Box" / "CD01").resolve()
+    track_path = (album_root / "01.mp3").resolve()
+    sibling_cover = (album_root.parent / "CD02" / "front.jpg").resolve()
+    track_path.parent.mkdir(parents=True)
+    sibling_cover.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    sibling_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "genre/artist",
+            }],
+        },
+    )
+
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(config, context.album_root, str(sibling_cover))
+
+
+def test_late_cd_sibling_is_excluded_when_gallery_serializes(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    track_root = (library_root / "Artist" / "Album" / "CD01").resolve()
+    track_path = (track_root / "01.mp3").resolve()
+    album_cover = (track_root / "front.jpg").resolve()
+    sibling_cover = (track_root.parent / "CD02" / "front.jpg").resolve()
+    track_root.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    album_cover.write_bytes(_image_bytes((220, 40, 40), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+    assert context.album_root == track_root.parent
+    sibling_cover.parent.mkdir()
+    sibling_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=context.album_root,
+        track_paths=context.track_paths,
+        file_cache={},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert [candidate["path"] for candidate in payload["local_covers"]] == [str(album_cover)]
+
+
+def test_late_cd_sibling_cannot_be_selected(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    track_root = (library_root / "Artist" / "Album" / "CD01").resolve()
+    track_path = (track_root / "01.mp3").resolve()
+    sibling_cover = (track_root.parent / "CD02" / "front.jpg").resolve()
+    track_root.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+    assert context.album_root == track_root.parent
+    sibling_cover.parent.mkdir()
+    sibling_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(
+            config,
+            context.album_root,
+            str(sibling_cover),
+            track_paths=context.track_paths,
+        )
 
 
 def test_resolve_album_root_accepts_non_numeric_album_subfolders(config, tmp_path: Path):

@@ -11,6 +11,7 @@ from music_app.services.generated_preview_storage import (
     is_managed_preview_path,
 )
 from music_app.services.library import album_to_dict
+from music_app.services.cover_workflow import restrict_album_root_to_represented_disc
 
 
 def _active_cover_state_for_track_paths(
@@ -265,6 +266,7 @@ def serialize_cover_gallery_payload(
     task_payload: dict[str, object] | None = None,
     candidate_snapshot: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
     active_cover_path, active_cover_revision = _active_cover_state_for_track_paths(
         file_cache,
         track_paths,

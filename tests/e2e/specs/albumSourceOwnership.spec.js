@@ -276,6 +276,33 @@ test('FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cove
   });
 });
 
+test('FTC-COVERS-043 differently tagged CD siblings expose only their own local cover', { tag: '@area:cover-providers' }, async ({
+  galleryActions, trackModalActions, coverLookupActions, stepLogger,
+}) => {
+  const fixture = ownedFixture;
+
+  await stepLogger.step('Open the first separately tagged album inside the CD-named collection', async () => {
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(fixture.artist)}`);
+    await galleryActions.waitForGalleryReady();
+    const { album } = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload({
+      artist: fixture.artist,
+      album: 'Wallet Album One',
+      year: '2026',
+    });
+    expect(album.tracks).toHaveLength(1);
+    expect(album.tracks[0].path).toBe(path.join(fixture.owner, 'Wallet Box', 'CD01', '01.mp3'));
+    await trackModalActions.waitForLoadedSummary();
+  });
+
+  await stepLogger.step('Render only the selected album cover and exclude its CD sibling', async () => {
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    const cards = coverLookupActions.coverLookup.localCoverCards;
+    await expect(cards).toHaveCount(1);
+    await expect(cards.first()).toHaveAttribute('data-select-local-cover', fixture.walletOneCover);
+  });
+});
+
 test('FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan', { tag: '@area:cover-providers' }, async ({
   galleryActions, trackModalActions, coverLookupActions, page, appBarActions, stepLogger, thirdPartyRequestEvidence,
 }) => {

@@ -30,7 +30,9 @@ for folder, edition, discs in [("Real Album", "", [1, 2]), ("Complete copy", "",
             records.append((f"{folder}/CD{disc}/{number}.mp3", "Real Album", f"Disc {disc} Song {number}", disc, number, edition))
 records += [("Random songs/copied-song.mp3", "Real Album", "Disc 1 Song 1", 1, 1, ""),
             ("Random songs/unrelated.mp3", "Unrelated Album", "Unrelated song", 1, 8, ""),
-            ("Orphan/copied-song.mp3", "Real Album", "Disc 1 Song 1", 1, 1, "")]
+            ("Orphan/copied-song.mp3", "Real Album", "Disc 1 Song 1", 1, 1, ""),
+            ("Wallet Box/CD01/01.mp3", "Wallet Album One", "Wallet Song One", 1, 1, ""),
+            ("Wallet Box/CD02/01.mp3", "Wallet Album Two", "Wallet Song Two", 1, 1, "")]
 for relative, album, title, disc, number, edition in records:
     destination = owner / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +51,11 @@ for folder, size, color in [("Real Album",1600,"red"),("Complete copy",1600,"red
     Image.new("RGB",(size,size),color).save(owner/folder/"cover.png")
 for folder in ["Real Album", "Complete copy"]:
     Image.new("RGB",(1600,1600),"green").save(owner/folder/"manual-choice.png")
+Image.new("RGB",(1200,1200),"orange").save(owner/"Wallet Box"/"CD01"/"front.png")
+Image.new("RGB",(1200,1200),"blue").save(owner/"Wallet Box"/"CD02"/"front.png")
 print(json.dumps({"owner": str(owner), "primaryCover": str(owner/"Real Album"/"cover.png"),
+                  "walletOneCover": str(owner/"Wallet Box"/"CD01"/"front.png"),
+                  "walletTwoCover": str(owner/"Wallet Box"/"CD02"/"front.png"),
                   "excludedPaths": [str(owner/r[0]) for r in records if r[0].startswith(("Random songs/","Orphan/"))]}))
 `;
 

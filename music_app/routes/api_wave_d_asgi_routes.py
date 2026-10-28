@@ -1130,7 +1130,12 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 409))
     try:
-        resolved = validate_local_cover_source(config, album_context.album_root, source_path)
+        resolved = validate_local_cover_source(
+            config,
+            album_context.album_root,
+            source_path,
+            track_paths=album_context.track_paths,
+        )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:
@@ -1398,7 +1403,12 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
     try:
-        resolved = validate_local_cover_source(config, album_context.album_root, source_path)
+        resolved = validate_local_cover_source(
+            config,
+            album_context.album_root,
+            source_path,
+            track_paths=album_context.track_paths,
+        )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:

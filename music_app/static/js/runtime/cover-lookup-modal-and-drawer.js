@@ -2818,6 +2818,16 @@ async function chooseCoverLookupCurrentRelease(albumId) {
   });
 }
 
+function restoreCoverLookupDrawerScroll() {
+  if (!state.coverLookup.drawerOpen) return;
+  const restore = () => {
+    const drawerBody = document.getElementById('cover-lookup-drawer-body');
+    if (drawerBody) drawerBody.scrollTop = Math.max(0, Number(state.coverLookup.drawerScrollTop || 0));
+  };
+  restore();
+  window.requestAnimationFrame?.(restore);
+}
+
 async function openCoverLookupModal(album, options = {}) {
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.lookup')) return;
   coverLookupModalSession += 1;
@@ -2885,8 +2895,12 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.disabled = true;
   }
   renderCoverLookupModal();
+  restoreCoverLookupDrawerScroll();
   await refreshCoverLookupGallery(false);
-  if (!els.overlay.hidden) ensureCoverLookupPolling();
+  if (!els.overlay.hidden) {
+    restoreCoverLookupDrawerScroll();
+    ensureCoverLookupPolling();
+  }
 }
 
 function closeCoverLookupModal() {
@@ -2935,13 +2949,7 @@ function closeCoverLookupModal() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
-  const restoreDrawerScroll = () => {
-    if (!state.coverLookup.drawerOpen) return;
-    const drawerBody = document.getElementById('cover-lookup-drawer-body');
-    if (drawerBody) drawerBody.scrollTop = Math.max(0, Number(state.coverLookup.drawerScrollTop || 0));
-  };
-  restoreDrawerScroll();
-  window.requestAnimationFrame?.(restoreDrawerScroll);
+  restoreCoverLookupDrawerScroll();
   stopCoverLookupPollingIfIdle();
 }
 

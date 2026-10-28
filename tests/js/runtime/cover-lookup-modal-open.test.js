@@ -211,6 +211,7 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
 test('notification Cover Lookup uses a sheet on mobile without presenting a mobile page', async () => {
   class TestButton {}
   const classes = new Set();
+  const drawerBody = { scrollTop: 71 };
   const overlay = {
     hidden: true,
     classList: {
@@ -223,8 +224,15 @@ test('notification Cover Lookup uses a sheet on mobile without presenting a mobi
   };
   let mobilePagePresentations = 0;
   const context = {
-    window: { innerWidth: 390 },
-    state: { coverLookup: { tasks: [], modal: { pastedImages: [] } } },
+    window: { innerWidth: 390, requestAnimationFrame: (callback) => callback() },
+    state: {
+      coverLookup: {
+        drawerOpen: true,
+        drawerScrollTop: 71,
+        tasks: [],
+        modal: { pastedImages: [] },
+      },
+    },
     HTMLButtonElement: TestButton,
     URLSearchParams,
     console,
@@ -232,7 +240,10 @@ test('notification Cover Lookup uses a sheet on mobile without presenting a mobi
     sanitizeCoverLookupPossibleMatches: () => [],
     document: {
       body: { classList: { add() {}, remove() {} } },
-      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+      getElementById: id => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-drawer-body': drawerBody,
+      }[id] || null),
     },
   };
   vm.createContext(context);
@@ -240,12 +251,13 @@ test('notification Cover Lookup uses a sheet on mobile without presenting a mobi
   context.presentMobileCoverLookupPage = () => { mobilePagePresentations += 1; };
   context.renderCoverLookupModal = () => {};
   context.ensureCoverLookupPolling = () => {};
-  context.refreshCoverLookupGallery = async () => {};
+  context.refreshCoverLookupGallery = async () => { drawerBody.scrollTop = 0; };
 
   await context.openCoverLookupModal({ name: 'Album' }, { mobileSheet: true });
 
   assert.equal(mobilePagePresentations, 0);
   assert.equal(classes.has('is-mobile-sheet'), true);
+  assert.equal(drawerBody.scrollTop, 71);
   context.closeCoverLookupModal();
   assert.equal(classes.has('is-mobile-sheet'), false);
 });

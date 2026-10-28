@@ -14,6 +14,7 @@
 .album-track-table__disc--collapsible > summary::-webkit-details-marker { display: none; }
 .album-track-table__disc--collapsible > summary::before { content: '\203A'; display: inline-block; margin-right: 7px; transition: transform 120ms ease; }
 .album-track-table__disc--collapsible[open] > summary::before { transform: rotate(90deg); }
+.album-track-table:has(.album-track-table__disc--collapsible:not([open])) .album-track-table__total { display: none; }
 .album-track-table .compact-data-table,
 :root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table {
   border-color: color-mix(in srgb, var(--appearance-line, var(--border)) 72%, transparent);

@@ -500,7 +500,9 @@ function selectTrackModalCurrentRelease(albumId) {
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return Promise.resolve(null);
-  const cachedAlbum = getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
+  const cachedAlbum = options.canonicalRefresh === true
+    ? null
+    : getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
   if (cachedAlbum) return Promise.resolve(cachedAlbum);
   const requestAliases = getTrackModalAlbumKeyAliases(normalizedAlbumKey);
   const existingLoad = requestAliases
@@ -568,6 +570,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   try {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
+      canonicalRefresh: true,
     });
   } catch (error) {
     loadError = error;

@@ -918,6 +918,54 @@ test('inventory mutation refresh rehydrates the album that is still open', async
   assert.deepEqual(refreshed, [{ albumKey: 'watcher-album', album: fresh }]);
 });
 
+test('inventory mutation refresh follows a cached stale child to its merged release', async () => {
+  const staleChild = {
+    album_id: 17,
+    key: 'artist::current-release-a',
+    request_key: 'artist::current-release-a',
+    name: 'Current Release A',
+    album_artist: 'Artist',
+    year: 2026,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Track One' }],
+  };
+  const mergedRelease = {
+    album_id: 9,
+    key: 'artist::two-track-rarity-fixture',
+    request_key: 'artist::two-track-rarity-fixture',
+    name: 'Two Track Rarity Fixture',
+    album_artist: 'Artist',
+    year: 2026,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Track One' }],
+  };
+  const { context } = loadHelper({
+    initialAlbums: [staleChild],
+    inventoryMutationRevision: 13,
+    onFetchAlbumDetails: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, album: mergedRelease }),
+    }),
+  });
+  context.cacheHydratedTrackModalAlbum(staleChild.key, staleChild);
+  context.state.modalReleases = [staleChild];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+  const refreshed = [];
+  context.refreshOpenTrackModalVersionState = (albumKey, album) => {
+    refreshed.push({ albumKey, album });
+  };
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
+  assert.equal(context.fetchCalls.length, 1, 'canonical refresh must bypass stale hydrated details');
+  assert.match(
+    context.fetchCalls[0].url,
+    /album_key=artist%3A%3Acurrent-release-a&album_id=17/,
+  );
+  assert.deepEqual(refreshed, [{ albumKey: staleChild.key, album: mergedRelease }]);
+});
+
 test('inventory mutation refresh renders current releases when the open album split', async () => {
   const stale = {
     album_id: 17,
@@ -945,6 +993,7 @@ test('inventory mutation refresh renders current releases when the open album sp
       }),
     }),
   });
+  context.cacheHydratedTrackModalAlbum(stale.key, stale);
   context.state.modalReleases = [stale];
   context.state.modalReleaseIndex = 0;
   context.getTrackModalElements().overlay.hidden = false;

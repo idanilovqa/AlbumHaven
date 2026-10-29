@@ -1104,6 +1104,66 @@ require('node:test')('accepted remote save keeps its finished card in place with
   assert.equal(context.document.getElementById('cover-lookup-drawer-summary').textContent, '3 finished');
 });
 
+require('node:test')('poll refreshes mounted terminal notification metadata without reordering the drawer', async () => {
+  const requestedUrls = [];
+  const mountedTerminal = {
+    id: 'mounted-terminal',
+    status: 'completed',
+    artist: 'Mastodon',
+    album: 'Crack The Skye',
+    notification_action_taken: false,
+  };
+  const untouchedTerminal = {
+    id: 'untouched-terminal',
+    status: 'completed',
+    artist: 'Artist',
+    album: 'Older',
+    notification_action_taken: false,
+  };
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      const requestedUrl = String(url);
+      requestedUrls.push(requestedUrl);
+      const trackedTaskIds = new URL(
+        requestedUrl,
+        'http://album-haven.test',
+      ).searchParams.get('task_ids')?.split(',') || [];
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: trackedTaskIds.includes('mounted-terminal')
+            ? [{ ...mountedTerminal, notification_action_taken: true }]
+            : [],
+          next_cursor: null,
+          total_count: 2,
+          active_count: 0,
+          finished_count: 2,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [mountedTerminal, untouchedTerminal];
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  context.state.coverLookup.drawerOpen = true;
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=mounted-terminal%2Cuntouched-terminal',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['mounted-terminal', 'untouched-terminal'],
+  );
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
+  assert.strictEqual(
+    context.state.coverLookup.tasks[1],
+    untouchedTerminal,
+    'an unaffected notification must keep its existing object and image-node owner',
+  );
+});
+
 for (const interaction of ['focus', 'hover']) {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'cancel-transition', status: 'running', artist: 'Artist', album: 'Album' };
@@ -1639,7 +1699,10 @@ require('node:test')('active-only polling appends new tasks without moving loade
 
   await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
 
-  assert.equal(requestedUrls[0], '/utilities/cover-lookup/tasks?limit=50&active_only=true');
+  assert.equal(
+    requestedUrls[0],
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=history',
+  );
   assert.deepEqual(
     Array.from(context.state.coverLookup.tasks, task => task.id),
     ['history', 'active'],
@@ -1678,7 +1741,7 @@ require('node:test')('active-only polling drops completed cards cleared by anoth
   await context.loadCoverLookupTasksForPolling({ toast: false });
 
   assert.deepEqual(requestedUrls, [
-    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=cleared-in-another-client',
     '/utilities/cover-lookup/tasks?limit=50',
   ]);
   assert.deepEqual(Array.from(context.state.coverLookup.tasks), []);
@@ -2020,7 +2083,7 @@ require('node:test')('membership revision reconciles an equal-count completed no
   await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
 
   assert.deepEqual(requestedUrls, [
-    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=deleted-completed%2Cretained-completed',
     '/utilities/cover-lookup/tasks?limit=50',
   ]);
   assert.deepEqual(
@@ -2076,7 +2139,7 @@ require('node:test')('count hydration preserves the membership baseline for a co
 
   assert.deepEqual(requestedUrls, [
     '/utilities/cover-lookup/tasks/counts',
-    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=deleted-completed%2Cretained-completed',
     '/utilities/cover-lookup/tasks?limit=50',
   ]);
   assert.deepEqual(
@@ -2132,7 +2195,7 @@ require('node:test')('positive-net notification additions cannot conceal a delet
 
   assert.deepEqual(requestedUrls, [
     '/utilities/cover-lookup/tasks/counts',
-    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=deleted-completed%2Cretained-completed',
     '/utilities/cover-lookup/tasks?limit=50',
   ]);
   assert.deepEqual(
@@ -2309,7 +2372,9 @@ require('node:test')('count-only polling preserves loaded history after a known 
   await context.loadCoverLookupTasksForPolling({ toast: false });
 
   assert.deepEqual(requestedUrls, [
-    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    `/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=${encodeURIComponent(
+      history.slice(0, 60).map((task) => task.id).join(','),
+    )}`,
     '/utilities/cover-lookup/tasks?limit=50',
   ]);
   assert.equal(context.state.coverLookup.tasks.length, 528);
@@ -2596,7 +2661,7 @@ require('node:test')('active-only polling refreshes the first page when a runnin
   await context.loadCoverLookupTasksForPolling({ toast: false });
 
   assert.deepEqual(requestedUrls, [
-    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=history',
     '/utilities/cover-lookup/tasks?limit=50',
   ]);
   assert.equal(context.state.coverLookup.tasks[0].status, 'completed');
@@ -2658,7 +2723,10 @@ require('node:test')('authoritative refresh removes a deleted active task withou
   await context.loadCoverLookupTasksForPolling({ toast: false });
 
   assert.deepEqual(requestedUrls, [
-    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    `/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=${encodeURIComponent([
+      firstPageSurvivor.id,
+      ...loadedHistory.slice(0, 58).map((task) => task.id),
+    ].join(','))}`,
     '/utilities/cover-lookup/tasks?limit=50',
   ]);
   assert.deepEqual(

@@ -2722,6 +2722,21 @@ function mergeCoverLookupTaskSummaries(
   return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
 }
 
+function getMountedTerminalCoverLookupTaskIds() {
+  if (!state.coverLookup.drawerOpen) return [];
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
+  const start = Math.min(
+    maximumStart,
+    Math.max(0, Number(state.coverLookup.taskRenderWindowStart || 0)),
+  );
+  return tasks
+    .slice(start, start + COVER_LOOKUP_TASK_RENDER_LIMIT)
+    .filter((task) => !['pending', 'running'].includes(String(task?.status || '')))
+    .map((task) => String(task?.id || '').trim())
+    .filter(Boolean);
+}
+
 function buildCoverLookupDrawerTaskSnapshot(task) {
   return {
     id: task.id,
@@ -2771,7 +2786,13 @@ async function loadCoverLookupTasks(options = {}) {
     : new Set();
   try {
     const params = new URLSearchParams({ limit: '50' });
-    if (activeOnly) params.set('active_only', 'true');
+    if (activeOnly) {
+      params.set('active_only', 'true');
+      const mountedTerminalTaskIds = getMountedTerminalCoverLookupTaskIds();
+      if (mountedTerminalTaskIds.length) {
+        params.set('task_ids', mountedTerminalTaskIds.join(','));
+      }
+    }
     if (append && state.coverLookup.tasksNextCursor) {
       params.set('cursor', state.coverLookup.tasksNextCursor);
     }

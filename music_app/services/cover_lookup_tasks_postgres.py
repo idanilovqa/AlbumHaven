@@ -25,6 +25,7 @@ _SOURCE_FAMILIES = ("cover_lookup_notifications", _SOURCE)
 _ACTIVE_STATUSES = ("pending", "running")
 _FINISHED_STATUSES = ("completed", "failed", "canceled")
 _MAX_NOTIFICATION_PAGE_SIZE = 50
+_MAX_TRACKED_NOTIFICATION_TASK_IDS = 60
 _PROVIDER_PAYLOAD_KEYS = (
     "possible_matches",
     "manual_urls",
@@ -127,8 +128,16 @@ class CoverLookupTasksPostgresAdapter:
         limit: int,
         cursor: str | None,
         active_only: bool,
+        task_ids: tuple[str, ...] = (),
     ) -> dict[str, object]:
+        normalized_task_ids = tuple(dict.fromkeys(
+            _text(task_id) for task_id in task_ids if _text(task_id)
+        ))
+        if len(normalized_task_ids) > _MAX_TRACKED_NOTIFICATION_TASK_IDS:
+            raise ValueError("too many tracked cover lookup notification task ids")
         page_size = max(1, min(int(limit), _MAX_NOTIFICATION_PAGE_SIZE))
+        if active_only:
+            page_size += len(normalized_task_ids)
         cursor_values = _decode_notification_cursor(cursor) if cursor else None
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
@@ -136,6 +145,8 @@ class CoverLookupTasksPostgresAdapter:
             params: list[object] = [list(_SOURCE_FAMILIES)]
             if active_only:
                 params.append(list(_ACTIVE_STATUSES))
+            if normalized_task_ids:
+                params.append(list(normalized_task_ids))
             if cursor_values is not None:
                 params.extend(cursor_values)
             params.append(page_size + 1)
@@ -144,6 +155,7 @@ class CoverLookupTasksPostgresAdapter:
                     _load_notification_summary_page_sql(
                         has_cursor=cursor_values is not None,
                         active_only=active_only,
+                        has_task_ids=bool(normalized_task_ids),
                     ),
                     tuple(params),
                 ).fetchall()
@@ -865,13 +877,25 @@ def _count_notifications_sql() -> str:
     )
 
 
-def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) -> str:
+def _load_notification_summary_page_sql(
+    *,
+    has_cursor: bool,
+    active_only: bool,
+    has_task_ids: bool = False,
+) -> str:
     filters = [
         "ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])",
         _actionable_notification_predicate_sql(),
     ]
-    if active_only:
+    if active_only and has_task_ids:
+        filters.append(
+            "(ops.cover_lookup_tasks.status = any(%s::text[]) "
+            "or ops.cover_lookup_tasks.task_key = any(%s::text[]))"
+        )
+    elif active_only:
         filters.append("ops.cover_lookup_tasks.status = any(%s::text[])")
+    elif has_task_ids:
+        filters.append("ops.cover_lookup_tasks.task_key = any(%s::text[])")
     if has_cursor:
         filters.append(
             "(coalesce(ops.cover_lookup_tasks.completed_at, "

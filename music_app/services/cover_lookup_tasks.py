@@ -532,6 +532,7 @@ def load_cover_lookup_task_summary_page(
     limit: int,
     cursor: str | None,
     active_only: bool,
+    task_ids: tuple[str, ...] = (),
 ) -> dict[str, object]:
     _reconcile_stale_cover_lookup_tasks(config=config)
     return load_cover_lookup_notification_summary_page(
@@ -539,6 +540,7 @@ def load_cover_lookup_task_summary_page(
         limit=limit,
         cursor=cursor,
         active_only=active_only,
+        task_ids=task_ids,
     )
 
 

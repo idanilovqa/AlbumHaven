@@ -290,6 +290,32 @@ def test_active_only_page_filters_pending_and_running_and_caps_limit_at_50():
     assert page_params[-1] == 51
 
 
+def test_active_page_also_returns_requested_mounted_terminal_tasks():
+    connection = _Connection(
+        count_rows=[{"total_count": 3, "active_count": 1, "finished_count": 2}],
+        page_rows=[
+            _row("running", "2026-10-17T18:00:02+00:00", status="running"),
+            _row("mounted-terminal", "2026-10-17T18:00:01+00:00"),
+        ],
+    )
+
+    page = _adapter(connection).load_notification_summary_page(
+        limit=50,
+        cursor=None,
+        active_only=True,
+        task_ids=("mounted-terminal",),
+    )
+
+    assert [item["id"] for item in page["items"]] == ["running", "mounted-terminal"]
+    page_sql, page_params = connection.operations[-1]
+    assert "ops.cover_lookup_tasks.status = any(%s::text[])" in page_sql
+    assert "ops.cover_lookup_tasks.task_key = any(%s::text[])" in page_sql
+    assert " or " in page_sql
+    assert page_params[-3] == ["pending", "running"]
+    assert page_params[-2] == ["mounted-terminal"]
+    assert page_params[-1] == 52
+
+
 @pytest.mark.parametrize(
     "cursor",
     [

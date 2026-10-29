@@ -740,18 +740,32 @@ async def utilities_cover_lookup_tasks(
     limit: int | None = None,
     cursor: str | None = None,
     active_only: bool | None = None,
+    task_ids: str | None = None,
 ) -> JSONResponse:
     config = _app_config(request)
-    if limit is None and cursor is None and active_only is None:
+    if limit is None and cursor is None and active_only is None and task_ids is None:
         tasks = await run_in_threadpool(list_cover_lookup_task_summaries, config=config)
         return JSONResponse({"ok": True, "tasks": tasks})
+    tracked_task_ids = tuple(dict.fromkeys(
+        item.strip() for item in str(task_ids or "").split(",") if item.strip()
+    ))
+    if len(tracked_task_ids) > 60 or any(len(task_id) > 200 for task_id in tracked_task_ids):
+        return JSONResponse(
+            {"ok": False, "error": "Invalid cover lookup notification task IDs"},
+            status_code=400,
+        )
     try:
+        page_kwargs = {
+            "config": config,
+            "limit": max(1, min(limit or 50, 50)),
+            "cursor": cursor,
+            "active_only": active_only is True,
+        }
+        if tracked_task_ids:
+            page_kwargs["task_ids"] = tracked_task_ids
         page = await run_in_threadpool(
             load_cover_lookup_task_summary_page,
-            config=config,
-            limit=max(1, min(limit or 50, 50)),
-            cursor=cursor,
-            active_only=active_only is True,
+            **page_kwargs,
         )
     except ValueError:
         return JSONResponse(

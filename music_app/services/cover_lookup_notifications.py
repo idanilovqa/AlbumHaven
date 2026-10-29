@@ -61,11 +61,17 @@ def load_cover_lookup_notification_summary_page(
     limit: int,
     cursor: str | None,
     active_only: bool,
+    task_ids: tuple[str, ...] = (),
 ) -> dict[str, object]:
+    kwargs = {
+        "limit": limit,
+        "cursor": cursor,
+        "active_only": active_only,
+    }
+    if task_ids:
+        kwargs["task_ids"] = task_ids
     return _cover_lookup_notifications_adapter(config).load_notification_summary_page(
-        limit=limit,
-        cursor=cursor,
-        active_only=active_only,
+        **kwargs,
     )
 
 

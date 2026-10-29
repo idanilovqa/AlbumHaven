@@ -464,6 +464,56 @@ def test_cover_lookup_notification_reads_use_threadpool_boundary(app, monkeypatc
     ]
 
 
+def test_cover_lookup_active_poll_includes_bounded_mounted_terminal_task_ids(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    page_calls = []
+
+    def fake_page(*, limit, cursor, active_only, task_ids, config):
+        page_calls.append((limit, cursor, active_only, task_ids, config))
+        return {
+            "items": [
+                {"id": "running", "status": "running"},
+                {
+                    "id": "mounted-terminal",
+                    "status": "completed",
+                    "notification_action_taken": True,
+                },
+            ],
+            "next_cursor": None,
+            "counts": {
+                "total_count": 2,
+                "active_count": 1,
+                "finished_count": 1,
+                "membership_revision": "membership-v1",
+            },
+        }
+
+    monkeypatch.setattr(asgi_routes, "load_cover_lookup_task_summary_page", fake_page)
+    asgi_app = _make_wave_d_app(app)
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks",
+        query={
+            "limit": 50,
+            "active_only": "true",
+            "task_ids": "mounted-terminal,older-mounted-terminal",
+        },
+    )
+
+    assert status == 200
+    assert [task["id"] for task in _decode_json(body)["tasks"]] == [
+        "running",
+        "mounted-terminal",
+    ]
+    assert page_calls[0][2:4] == (
+        True,
+        ("mounted-terminal", "older-mounted-terminal"),
+    )
+
+
 def test_asgi_cover_lookup_notification_page_preserves_each_album_payload(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 

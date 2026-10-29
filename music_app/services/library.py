@@ -1943,10 +1943,10 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
     ) in classified_buckets:
         for entry in bucket_entries:
             construction_count += 1
-            if bucket_has_conflicting_years:
-                key = f"{base_key}::year::unresolved"
-            elif base_key in separate_release_keys:
+            if base_key in separate_release_keys:
                 key = _album_key(identity_album_artist, album_name, edition, entry.get("year"))
+            elif bucket_has_conflicting_years:
+                key = f"{base_key}::year::unresolved"
             elif base_key in year_distinct_release_keys and bucket_release_year is not None:
                 key = _album_key(identity_album_artist, album_name, edition, bucket_release_year)
             else:
@@ -1981,10 +1981,14 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                     remote_cover_album_url=str(entry.get("remote_cover_album_url") or "").strip() or None,
                     remote_cover_width=safe_int(entry.get("remote_cover_width")),
                     remote_cover_height=safe_int(entry.get("remote_cover_height")),
-                    year=None if bucket_has_conflicting_years else safe_int(entry.get("year")),
+                    year=(
+                        None
+                        if bucket_has_conflicting_years and base_key not in separate_release_keys
+                        else safe_int(entry.get("year"))
+                    ),
                     release_date=(
                         None
-                        if bucket_has_conflicting_years
+                        if bucket_has_conflicting_years and base_key not in separate_release_keys
                         else str(entry.get("release_date") or "").strip() or None
                     ),
                     edition=edition,

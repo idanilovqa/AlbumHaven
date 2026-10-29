@@ -2283,3 +2283,33 @@ def test_album_preview_to_dict_normalizes_viewer_scoped_listen_through_contract(
         "can_edit_viewer_filters": False,
     }
     assert payload["gallery_list_block"]["summary"]["album_preference"] == payload["album_preference"]
+
+
+def test_explicit_separate_release_splits_conflicting_file_years():
+    entries = {
+        "C:/Music/Artist/Album/01.flac": {
+            "path": "C:/Music/Artist/Album/01.flac",
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "First",
+            "track_number": 1,
+            "year": 2004,
+        },
+        "C:/Music/Artist/Album/02.flac": {
+            "path": "C:/Music/Artist/Album/02.flac",
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "Second",
+            "track_number": 2,
+            "year": 2014,
+        },
+    }
+
+    albums = build_albums_from_file_cache(entries, {"artist::album"})
+
+    assert [(album.key, [track.title for track in album.tracks]) for album in albums] == [
+        ("artist::album::year::2004", ["First"]),
+        ("artist::album::year::2014", ["Second"]),
+    ]

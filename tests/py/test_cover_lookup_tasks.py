@@ -687,7 +687,8 @@ def _install_fake_notification_adapter(monkeypatch, config, initial_tasks=None):
     return persisted_tasks
 
 
-def test_repeated_lookup_reuses_completed_notification_for_same_files(config, monkeypatch):
+@pytest.mark.parametrize("preferred_task_id", ["", "  "])
+def test_fresh_lookup_allocates_new_task_for_same_files(config, monkeypatch, preferred_task_id):
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     other_track_path = track_path.with_name("different.mp3")
     completed_id = "completed-same-album"
@@ -716,11 +717,13 @@ def test_repeated_lookup_reuses_completed_notification_for_same_files(config, mo
         _album_payload(track_path),
         {str(track_path)},
         config=config,
+        preferred_task_id=preferred_task_id,
     )
 
-    assert task_id == completed_id
+    assert task_id != completed_id
     assert cover_lookup_result(task_id)["status"] == "pending"
     assert {task["id"] for task in list_cover_lookup_tasks(config=config)} == {
+        task_id,
         completed_id,
         "different-files-same-labels",
     }

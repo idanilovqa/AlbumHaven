@@ -714,7 +714,7 @@ def _reusable_cover_lookup_task_id(
         task_id = str(task.get("id") or "")
         if (
             task_id not in busy_ids
-            and (not preferred_task_id or task_id == preferred_task_id)
+            and task_id == preferred_task_id
             and not bool(task.get("internal"))
             and is_terminal_cover_lookup_task(task)
             and (
@@ -736,13 +736,14 @@ def create_cover_lookup_task(
     preferred_task_id: str = "",
     allow_preferred_path_rebind: bool = False,
 ) -> tuple[str, Event]:
+    preferred_task_id = str(preferred_task_id or "").strip()
     reusable_task_id = (
         ""
-        if internal and not preferred_task_id
+        if not preferred_task_id
         else _reusable_cover_lookup_task_id(
             requested_track_paths,
             config=config,
-            preferred_task_id=str(preferred_task_id or "").strip(),
+            preferred_task_id=preferred_task_id,
             allow_preferred_path_rebind=allow_preferred_path_rebind,
         )
     )

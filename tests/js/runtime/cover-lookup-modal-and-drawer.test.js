@@ -257,6 +257,39 @@ require('node:test')('notification rerenders keep unchanged card nodes mounted',
   assert.strictEqual(replacement.replacedWith, retained);
 });
 
+require('node:test')('targeted notification update falls back to a full render when its card is not mounted', () => {
+  const incomingTarget = {
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'prior-generation' : '',
+    closest: () => ({ id: 'incoming-card' }),
+  };
+  const detached = {
+    innerHTML: '',
+    querySelectorAll: () => [incomingTarget],
+  };
+  let renderedMarkup = '';
+  const body = {
+    querySelectorAll: () => [],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => renderedMarkup,
+    set: (value) => { renderedMarkup = value; },
+  });
+  const context = loadHelper({
+    document: {
+      createElement: () => detached,
+      getElementById: () => null,
+    },
+  });
+
+  context.replaceCoverLookupDrawerMarkup(
+    body,
+    '<article data-open-cover-lookup-task="prior-generation">Art chosen</article>',
+    ['prior-generation'],
+  );
+
+  assert.match(renderedMarkup, /prior-generation/);
+});
+
 require('node:test')('notification rerenders retain only each task\'s own unchanged image node', () => {
   const retainedFirst = {
     getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=1' : '',
@@ -1663,6 +1696,70 @@ require('node:test')('repeated explicit manual lookup reuses its terminal task w
   assert.equal(requestBodies[1].task_id, '');
 });
 
+require('node:test')('repeated explicit manual lookup finds the matching terminal album task after another album opens', async () => {
+  class TestButton {
+    constructor() {
+      this.hidden = false;
+      this.disabled = false;
+    }
+  }
+  const album = {
+    album_artist: 'Synthetic Cover Artist',
+    name: 'Manual Lookup Album',
+    year: 2026,
+    tracks: [{ path: 'C:/music/manual/01.flac' }],
+  };
+  const manualUrls = ['https://covers.example/manual-front.jpg'];
+  let requestBody;
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async (_url, options = {}) => {
+      requestBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () => ({ ok: true, task: { id: requestBody.task_id, status: 'pending' } }),
+      };
+    },
+    document: {
+      body: { classList: { add: () => {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-save-remote-button': new TestButton(),
+        'cover-lookup-pasted-urls': { value: manualUrls[0] },
+      }[id] || null),
+    },
+  });
+  context.state.coverLookup.tasks = [
+    {
+      id: 'matching-terminal-generation',
+      status: 'completed',
+      manual_urls: manualUrls,
+      album_payload: album,
+    },
+    {
+      id: 'other-album-generation',
+      status: 'completed',
+      manual_urls: manualUrls,
+      album_payload: {
+        album_artist: 'Other Artist',
+        name: 'Other Album',
+        tracks: [{ path: 'C:/music/other/01.flac' }],
+      },
+    },
+  ];
+  context.state.coverLookup.modal.album = album;
+  context.state.coverLookup.modal.taskId = 'other-album-generation';
+  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  await context.startCoverLookupForAlbum(album);
+
+  assert.equal(requestBody.task_id, 'matching-terminal-generation');
+});
+
 require('node:test')('active-only polling refreshes the first page when a running task disappears', async () => {
   const requestedUrls = [];
   let statusAtGalleryRefresh = '';
@@ -1721,6 +1818,67 @@ require('node:test')('active-only polling refreshes the first page when a runnin
     statusAtGalleryRefresh,
     'Searching...',
     'terminal summary must not publish completion before its counted candidates hydrate',
+  );
+});
+
+require('node:test')('terminal gallery payload waits for its counted candidates before publishing completion', () => {
+  const context = loadHelper();
+  context.renderCoverLookupModal = () => {};
+  context.state.coverLookup.modal = {
+    album: { tracks: [{ path: 'C:/music/terminal/01.flac' }] },
+    taskId: 'terminal-generation',
+    statusText: 'Searching...',
+    statusTone: 'neutral',
+    possibleMatches: [],
+    selectedRemoteId: '',
+  };
+
+  context.applyCoverLookupGalleryPayload({
+    local_covers: [],
+    other_art: [],
+    task: {
+      id: 'terminal-generation',
+      status: 'completed',
+      progress_label: 'Completed',
+      possible_match_count: 2,
+      possible_matches: [],
+    },
+    candidate_snapshot: {
+      search_generation: 'terminal-generation',
+      status: 'completed',
+      candidates: [],
+    },
+  });
+
+  assert.equal(context.state.coverLookup.modal.statusText, 'Searching...');
+
+  context.applyCoverLookupGalleryPayload({
+    local_covers: [],
+    other_art: [],
+    task: {
+      id: 'terminal-generation',
+      status: 'completed',
+      progress_label: 'Completed',
+      possible_match_count: 2,
+      possible_matches: [
+        { id: 'accepted-a', art_kind: 'cover', url: 'https://images.example/a.jpg' },
+        { id: 'accepted-b', art_kind: 'cover', url: 'https://images.example/b.jpg' },
+      ],
+    },
+    candidate_snapshot: {
+      search_generation: 'terminal-generation',
+      status: 'completed',
+      candidates: [
+        { id: 'accepted-a', art_kind: 'cover', url: 'https://images.example/a.jpg' },
+        { id: 'accepted-b', art_kind: 'cover', url: 'https://images.example/b.jpg' },
+      ],
+    },
+  });
+
+  assert.equal(context.state.coverLookup.modal.statusText, 'Completed');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, ({ id }) => id),
+    ['accepted-a', 'accepted-b'],
   );
 });
 
@@ -5797,11 +5955,11 @@ require('node:test')('progressive candidates only append within the same search 
 
 require('node:test')('progressive modal rendering retains existing cover card nodes', () => {
   const retainedCard = {
-    outerHTML: '<div data-cover-lookup-item-key="remote:stable">stable</div>',
+    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img src="loaded.jpg" style="display:block"></div>',
     getAttribute: (name) => (name === 'data-cover-lookup-item-key' ? 'remote:stable' : ''),
   };
   const replacementCard = {
-    outerHTML: retainedCard.outerHTML,
+    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img data-cover-lookup-deferred-src="loaded.jpg"></div>',
     getAttribute: retainedCard.getAttribute,
     replaceWith(value) { this.replacedWith = value; },
   };

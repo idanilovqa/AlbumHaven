@@ -415,6 +415,8 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.routes.friends_asgi import router as friends_asgi_router
 
     app.include_router(friends_asgi_router)
+    from music_app.routes.recommendations_asgi import router as recommendations_router
+    app.include_router(recommendations_router)
     app.include_router(account_asgi_router)
     from music_app.routes.album_top_listening_settings_asgi import router as album_top_listening_settings_router
     app.include_router(album_top_listening_settings_router)

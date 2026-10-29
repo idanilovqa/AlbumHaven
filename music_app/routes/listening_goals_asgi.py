@@ -15,7 +15,9 @@ from music_app.services.account_goals_context import (
 )
 from music_app.services.listening_goals_commands import GoalsError, normalize_goal_command
 from music_app.services.listening_goal_bonus_settings import normalize_bonus_settings
+from music_app.services.listening_goal_weekly_settings import normalize_weekly_settings, normalize_weekly_settings_command
 from music_app.services.listening_goal_bonus import normalize_bonus_draw
+from music_app.services.listening_goal_weekly_draw import normalize_weekly_draw
 from music_app.services.listening_goal_transition import normalize_goal_transition
 from music_app.services.listening_goal_attention import normalize_goal_attention
 from music_app.services.listening_goals_postgres import PostgresListeningGoalsService, READ, WRITE
@@ -303,6 +305,53 @@ async def acknowledge_goal_attention(request: Request):
         context, constraints = _context(request, WRITE)
         value = await run_in_threadpool(_service(request).acknowledge_attention,
                                        context, command, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)
+
+
+@router.get('/account/goals/weekly-settings')
+async def read_weekly_goal_settings(request: Request):
+    try:
+        _query(request)
+        context, constraints = _context(request, READ)
+        value = await run_in_threadpool(_service(request).read_weekly_settings, context, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)
+
+
+@router.post('/account/goals/weekly-settings')
+async def save_weekly_goal_settings(request: Request):
+    try:
+        command = normalize_weekly_settings_command(await _body(request))
+        context, constraints = _context(request, WRITE)
+        value = await run_in_threadpool(_service(request).save_weekly_settings, context, command, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)
+
+
+@router.post('/account/goals/weekly-preview')
+async def preview_weekly_goal_settings(request: Request):
+    try:
+        payload = await _body(request)
+        if type(payload) is not dict or set(payload) != {'settings'}:
+            raise GoalsError('invalid_command')
+        settings = normalize_weekly_settings(payload['settings'])
+        context, constraints = _context(request, READ)
+        value = await run_in_threadpool(_service(request).preview_weekly_settings, context, settings, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)
+
+
+@router.post('/account/goals/weekly-draw')
+async def draw_weekly_goal_suggestions(request: Request):
+    try:
+        command = normalize_weekly_draw(await _body(request))
+        context, constraints = _context(request, WRITE)
+        value = await run_in_threadpool(_service(request).draw_weekly_suggestions, context, command, constraints=constraints)
         return _response(request, value)
     except GoalsError as error:
         return _error(error)

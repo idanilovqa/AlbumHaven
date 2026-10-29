@@ -10,6 +10,7 @@ from music_app.services.album_preferences import (
 )
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
 from music_app.services.album_top_rating_intent import rating_intent_storage_ready
+from music_app.services.listening_goals_commands import GoalsError
 from music_app.services.policy import ResourceScope
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.private_library_authority import (
@@ -224,6 +225,23 @@ class PostgresAlbumPreferencesStore:
                 if result is None or result['preference_id'] != preference_id:
                     raise AlbumPreferenceError('album_preference_conflict', 409)
                 _require_manage(live, command.album_id, constraints)
+                goal_progress_changed = False
+                if 'rating' in patch and patch['rating'] is not None:
+                    from music_app.services.listening_goal_rating_progress import record_rating
+                    try:
+                        goal_progress_changed = record_rating(connection, live, command.album_id, preference_id,
+                            result['preference_revision'], constraints=constraints)
+                    except GoalsError as error:
+                        raise AlbumPreferenceError(error.code, error.status) from None
+                # The hook may wait/read/write after the earlier rating fence.
+                # Recheck both mutation authorities on the final locked state.
+                _require_manage(live, command.album_id, constraints)
+                if goal_progress_changed:
+                    from music_app.services.listening_goal_top_authority import require_goal_write
+                    from music_app.services.owned_album_tops import AlbumTopError
+                    try:require_goal_write(live, constraints)
+                    except AlbumTopError as error:
+                        raise AlbumPreferenceError(error.code, error.status_code) from None
                 lock_current_actor_session(connection, actor_account_id=account_id,
                     actor_session_id=live.actor.session_id, clock=self._clock)
             return result

@@ -1059,9 +1059,11 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     assert snapshot_reads == [41, 41]
 
 
-def test_asgi_cover_lookup_gallery_uses_current_snapshot_for_exact_notification_album(
+@pytest.mark.parametrize("snapshot_matches_task", [True, False])
+def test_asgi_cover_lookup_gallery_uses_only_matching_snapshot_for_exact_notification_album(
     app,
     monkeypatch,
+    snapshot_matches_task,
 ):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import cover_lookup_tasks
@@ -1113,7 +1115,7 @@ def test_asgi_cover_lookup_gallery_uses_current_snapshot_for_exact_notification_
             assert album_id == 41
             return {
                 "album_id": 41,
-                "search_generation": task_id,
+                "search_generation": task_id if snapshot_matches_task else "other-generation",
                 "search_kind": "automatic",
                 "status": "completed",
                 "revision": 1,
@@ -1159,7 +1161,11 @@ def test_asgi_cover_lookup_gallery_uses_current_snapshot_for_exact_notification_
 
     assert status == 200
     payload = _decode_json(body)
-    assert payload["candidate_snapshot"]["candidates"] == [candidate]
+    snapshot_candidates = (payload.get("candidate_snapshot") or {}).get("candidates", [])
+    if snapshot_matches_task:
+        assert snapshot_candidates == [candidate]
+    else:
+        assert candidate not in snapshot_candidates
 
 
 def test_asgi_cover_lookup_gallery_keeps_persisted_task_scope_out_of_any_superset(

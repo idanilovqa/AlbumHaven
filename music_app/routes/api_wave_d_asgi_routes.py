@@ -914,6 +914,13 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
             candidate_snapshot = _candidate_snapshot_read_failure(
                 "candidate_snapshot_read_failed"
             )
+        if (
+            task_id
+            and isinstance(candidate_snapshot, Mapping)
+            and str(candidate_snapshot.get("search_generation") or "").strip()
+            != task_id
+        ):
+            candidate_snapshot = None
     return JSONResponse(
         await _serialize_cover_gallery_from_asgi(
             request,

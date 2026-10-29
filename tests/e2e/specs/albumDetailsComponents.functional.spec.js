@@ -51,6 +51,23 @@ test.describe('touch artwork actions', () => {
       await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
       await trackModalActions.openCoverLightbox({ touch: true });
       await expect(trackModalActions.trackModal.lightboxImage).toBeVisible();
+      await trackModalActions.doubleTapCoverLightboxAt({ xRatio: 0.25, yRatio: 0.25 });
+      await expect.poll(() => trackModalActions.readCoverLightboxZoomState()).toMatchObject({
+        touchAction: 'none',
+        transform: 'translate(0px, 0px) scale(2)',
+        zoom: 2,
+      });
+      const zoomedState = await trackModalActions.readCoverLightboxZoomState();
+      expect(zoomedState.originX).toBeCloseTo(25, 0);
+      expect(zoomedState.originY).toBeCloseTo(25, 0);
+      await trackModalActions.doubleTapCoverLightboxAt({ xRatio: 0.25, yRatio: 0.25 });
+      await expect.poll(() => trackModalActions.readCoverLightboxZoomState()).toMatchObject({
+        originX: 50,
+        originY: 50,
+        touchAction: 'manipulation',
+        transform: 'translate(0px, 0px) scale(1)',
+        zoom: 1,
+      });
       await trackModalActions.closeCoverLightbox({ touch: true });
       await expect(trackModalActions.trackModal.dialog).toBeVisible();
       await trackModalActions.openCoverLookup({ touch: true });

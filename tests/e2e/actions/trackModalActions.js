@@ -847,6 +847,33 @@ export class TrackModalActions {
     });
   }
 
+  async doubleTapCoverLightboxAt(options = {}) {
+    const box = await this.trackModal.lightboxImage.boundingBox();
+    if (!box) throw new Error('Full-size cover art is not visible');
+    const xRatio = Number(options.xRatio ?? 0.5);
+    const yRatio = Number(options.yRatio ?? 0.5);
+    const position = {
+      x: Math.max(1, Math.min(box.width - 1, box.width * xRatio)),
+      y: Math.max(1, Math.min(box.height - 1, box.height * yRatio)),
+    };
+    await this.trackModal.lightboxImage.tap({ position });
+    await this.trackModal.lightboxImage.tap({ position });
+  }
+
+  async readCoverLightboxZoomState() {
+    // parity-check: allow-read-only-measurement-evaluate -- reads rendered production zoom state only
+    return this.trackModal.lightboxImage.evaluate((image) => {
+      const [originX, originY] = image.style.transformOrigin.split(' ').map(value => Number.parseFloat(value));
+      return {
+        originX,
+        originY,
+        touchAction: getComputedStyle(image).touchAction,
+        transform: image.style.transform,
+        zoom: Number(image.dataset.lightboxZoom || 1),
+      };
+    });
+  }
+
   async closeCoverLightbox(options = {}) {
     if (options.touch) await this.trackModal.lightboxCloseButton.tap();
     else await this.trackModal.lightboxCloseButton.click();

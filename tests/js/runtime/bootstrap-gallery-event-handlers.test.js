@@ -792,6 +792,120 @@ test('rapid lightbox wheel input keeps one stable untransformed zoom origin', ()
   assert.equal(rectReads, 1);
 });
 
+test('lightbox double click zooms into the selected image point and toggles back out', () => {
+  const { context } = createContext();
+  let prevented = 0;
+  const image = {
+    style: {},
+    dataset: {},
+    classList: {
+      toggle() {},
+    },
+    getBoundingClientRect() {
+      return { left: 100, top: 50, width: 200, height: 100 };
+    },
+  };
+  context.state.lightbox = {
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    dragging: false,
+    zoomBasisRect: null,
+    zoomOriginX: 50,
+    zoomOriginY: 50,
+  };
+  context.document.getElementById = (id) => (
+    id === 'image-lightbox' ? { hidden: false } : null
+  );
+  vm.runInContext(modalHelperSource, context, { filename: modalHelperPath });
+  context.getLightboxElements = () => ({ image });
+  const event = {
+    target: {
+      closest(selector) {
+        return selector === '#image-lightbox-image' ? image : null;
+      },
+    },
+    clientX: 150,
+    clientY: 75,
+    preventDefault() {
+      prevented += 1;
+    },
+  };
+
+  assert.equal(context.handleGalleryBootstrapDoubleClick(event), true);
+  assert.equal(context.state.lightbox.zoom, 2);
+  assert.equal(image.style.transformOrigin, '25% 25%');
+  assert.equal(image.style.transform, 'translate(0px, 0px) scale(2)');
+
+  assert.equal(context.handleGalleryBootstrapDoubleClick(event), true);
+  assert.equal(context.state.lightbox.zoom, 1);
+  assert.equal(image.style.transformOrigin, '50% 50%');
+  assert.equal(image.style.transform, 'translate(0px, 0px) scale(1)');
+  assert.equal(prevented, 2);
+});
+
+test('lightbox touch double tap repeatedly toggles point zoom without native double-click duplication', () => {
+  const { context } = createContext();
+  const image = {
+    style: {},
+    dataset: {},
+    classList: {
+      toggle() {},
+    },
+    getBoundingClientRect() {
+      return { left: 100, top: 50, width: 200, height: 100 };
+    },
+  };
+  context.state.lightbox = {
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    dragging: false,
+    zoomBasisRect: null,
+    zoomOriginX: 50,
+    zoomOriginY: 50,
+  };
+  context.document.getElementById = (id) => (
+    id === 'image-lightbox' ? { hidden: false } : null
+  );
+  vm.runInContext(modalHelperSource, context, { filename: modalHelperPath });
+  context.getLightboxElements = () => ({ image });
+  context.startLightboxDrag = () => {};
+  const touch = (timeStamp) => ({
+    target: {
+      closest(selector) {
+        return selector === '#image-lightbox-image' ? image : null;
+      },
+    },
+    pointerId: 7,
+    pointerType: 'touch',
+    isPrimary: true,
+    clientX: 150,
+    clientY: 75,
+    timeStamp,
+    preventDefault() {},
+  });
+  const doubleTap = (firstTimeStamp) => {
+    const first = touch(firstTimeStamp);
+    context.handleGalleryBootstrapPointerDown(first);
+    context.handleGalleryBootstrapPointerUp(first);
+    const second = touch(firstTimeStamp + 120);
+    context.handleGalleryBootstrapPointerDown(second);
+    context.handleGalleryBootstrapPointerUp(second);
+    return second;
+  };
+
+  const firstDoubleTap = doubleTap(100);
+  assert.equal(context.state.lightbox.zoom, 2);
+  assert.equal(image.style.transformOrigin, '25% 25%');
+  context.handleGalleryBootstrapDoubleClick(firstDoubleTap);
+  assert.equal(context.state.lightbox.zoom, 2, 'synthetic dblclick must not undo the touch gesture');
+
+  doubleTap(700);
+  assert.equal(context.state.lightbox.zoom, 1);
+  assert.equal(image.style.transformOrigin, '50% 50%');
+});
+
 function createSidebarArtistEvent(artist = 'Broadcast') {
   const button = {
     getAttribute(name) {

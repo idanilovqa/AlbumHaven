@@ -35,6 +35,10 @@ document.addEventListener('wheel', (event) => {
   handleGalleryBootstrapWheel(event);
 }, { passive: false });
 
+document.addEventListener('dblclick', (event) => {
+  handleGalleryBootstrapDoubleClick(event);
+});
+
 document.addEventListener('pointerdown', (event) => {
   handleGalleryBootstrapPointerDown(event);
 });

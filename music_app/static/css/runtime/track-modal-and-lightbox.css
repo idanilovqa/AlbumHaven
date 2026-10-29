@@ -554,9 +554,11 @@
   will-change: transform;
   cursor: zoom-in;
   user-select: none;
+  touch-action: manipulation;
 }
 .image-lightbox-image.is-zoomed {
   cursor: grab;
+  touch-action: none;
 }
 .image-lightbox-image.is-dragging {
   cursor: grabbing;

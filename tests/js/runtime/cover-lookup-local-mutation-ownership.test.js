@@ -395,6 +395,42 @@ test('new task completion auto-selects its best candidate when the user made no 
   assert.equal(h.context.state.coverLookup.modal.selectedRemoteId, generationBChoice.id);
 });
 
+test('a retained candidate saves through the generation that published it', async () => {
+  const h = harness(), a = album('A');
+  const generationAChoice = generationChoice('generation-a');
+  await h.open(a);
+  h.context.applyCoverLookupCandidateSource({
+    generation: 'generation-a-task',
+    status: 'completed',
+    candidates: [generationAChoice],
+  });
+  h.context.state.coverLookup.tasks = [{
+    id: 'generation-b-task',
+    status: 'running',
+    album_payload: a,
+    possible_matches: [],
+  }];
+  h.context.state.coverLookup.modal.taskId = 'generation-b-task';
+  h.context.applyCoverLookupCandidateSource({
+    generation: 'generation-b-task',
+    status: 'running',
+    candidates: [],
+  });
+
+  h.context.selectRemoteCoverFromLookup(generationAChoice.id);
+  const pending = h.context.saveCoverFromLookup();
+
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual(h.requests[0].body, {
+    album: a,
+    task_id: 'generation-a-task',
+    candidate_id: generationAChoice.id,
+    snapshot_generation: 'generation-a-task',
+  });
+  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true }) });
+  await pending;
+});
+
 for (const terminalStatus of ['completed', 'failed']) {
   test(`new task ${terminalStatus} preserves and saves an explicit remote choice from the prior generation`, async () => {
     const h = harness(), a = album('A');

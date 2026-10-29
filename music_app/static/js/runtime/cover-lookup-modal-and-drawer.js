@@ -543,7 +543,10 @@ function applyCoverLookupCandidateSource(candidateSource) {
   modal.candidateRevision = previousGeneration === generation
     ? Math.max(previousRevision, incomingRevision)
     : incomingRevision;
-  let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates);
+  let possibleMatches = sanitizeCoverLookupPossibleMatches(candidateSource.candidates).map((candidate) => ({
+    ...candidate,
+    _coverLookupGeneration: generation,
+  }));
   if (previousGeneration && previousGeneration === generation) {
     const sameCandidate = (previous, candidate) => (
       (previous.id && String(previous.id) === String(candidate.id || ''))
@@ -3009,7 +3012,11 @@ async function openCoverLookupModal(album, options = {}) {
       : albumTrackSignature
         && buildTrackPathSignature(task?.album_payload) === albumTrackSignature
   ));
-  const cachedCandidates = sanitizeCoverLookupPossibleMatches(matchingTask?.possible_matches);
+  const cachedCandidateGeneration = String(matchingTask?.id || '').trim();
+  const cachedCandidates = sanitizeCoverLookupPossibleMatches(matchingTask?.possible_matches).map((candidate) => ({
+    ...candidate,
+    _coverLookupGeneration: cachedCandidateGeneration,
+  }));
   const cachedGallery = cachedCoverLookupGalleryPayload(album);
   const expectedRemoteCount = Math.max(
     Number(matchingTask?.possible_match_count || 0) || 0,
@@ -3427,7 +3434,8 @@ function selectRemoteCoverFromLookup(candidateId) {
     ))
   ))?.id || '').trim();
   state.coverLookup.modal.remoteSelectionOverrideGeneration = String(
-    selectionOwnerTaskId
+    selectedCandidate?._coverLookupGeneration
+    || selectionOwnerTaskId
     || state.coverLookup.modal.candidateGeneration
     || state.coverLookup.modal.candidateSnapshot?.search_generation
     || state.coverLookup.modal.taskId

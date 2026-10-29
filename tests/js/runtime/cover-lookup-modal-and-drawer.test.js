@@ -2191,6 +2191,54 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   assert.equal(context.hasPendingLocalCoverSelection(), true);
 }
 
+require('node:test')('remote optimistic selection reuses the selected preview until save completion', () => {
+  const album = {
+    key: 'artist::album::2001',
+    cover_path: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+  };
+  const selectedMatch = {
+    id: 'apple-candidate',
+    url: 'https://images.example/full.jpg',
+    thumbnail_url: 'https://images.example/preview.jpg',
+    source: 'apple',
+  };
+  const refreshedAlbums = [];
+  const context = loadHelper({
+    getAlbumPathSignature: (value) => (value?.tracks || [])
+      .map((track) => String(track?.path || ''))
+      .filter(Boolean)
+      .sort()
+      .join('|'),
+  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.tasks = [];
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
+    refreshedAlbums.push(...updatedAlbums);
+  };
+
+  const updatedAlbum = context.applyOptimisticRemoteCoverSelection(
+    album,
+    selectedMatch,
+    'C:/music/Remote/cover.jpg',
+  );
+
+  const expectedPreview = context.buildRemoteCoverLookupDisplayUrl(
+    selectedMatch,
+    selectedMatch.thumbnail_url,
+    selectedMatch.id,
+  );
+  assert.equal(updatedAlbum.cover_path, null);
+  assert.equal(updatedAlbum.remote_cover_url, selectedMatch.url);
+  assert.equal(refreshedAlbums[0].cover_path, null);
+  assert.equal(
+    context.state.coverLookup.optimisticAlbumCovers['C:/music/Remote/01.flac'].src,
+    expectedPreview,
+  );
+});
+
 require('node:test')('remote save closes only after the server accepts the queued mutation', async () => {
   const album = {
     key: 'artist::album::2001',

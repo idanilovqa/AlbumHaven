@@ -1307,10 +1307,20 @@ function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverPath) {
   const previewKey = String(selectedMatch?.id || selectedMatch?.url || '').trim();
   const nextCoverPath = String(coverPath || '').trim();
   invalidateCoverLookupGalleryCache(album);
-  const updatedAlbum = nextCoverPath
-    ? buildOptimisticCoverUpdatedAlbum(album, nextCoverPath)
-    : {
-      ...album,
+  const updatedAlbum = {
+    ...album,
+    cover_path: null,
+    cover_preview_url: null,
+    cover_revision: null,
+    remote_cover_url: imageUrl || null,
+    remote_cover_thumbnail_url: String(selectedMatch?.thumbnail_url || imageUrl || '').trim() || null,
+    remote_cover_source: String(selectedMatch?.source || '').trim() || null,
+    remote_cover_source_label: String(selectedMatch?.source_label || '').trim() || null,
+    remote_cover_album_url: String(selectedMatch?.album_url || '').trim() || null,
+    remote_cover_width: Number(selectedMatch?.width || 0) || null,
+    remote_cover_height: Number(selectedMatch?.height || 0) || null,
+    tracks: (Array.isArray(album?.tracks) ? album.tracks : []).map((track) => ({
+      ...track,
       cover_path: null,
       cover_preview_url: null,
       cover_revision: null,
@@ -1321,29 +1331,17 @@ function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverPath) {
       remote_cover_album_url: String(selectedMatch?.album_url || '').trim() || null,
       remote_cover_width: Number(selectedMatch?.width || 0) || null,
       remote_cover_height: Number(selectedMatch?.height || 0) || null,
-      tracks: (Array.isArray(album?.tracks) ? album.tracks : []).map((track) => ({
-        ...track,
-        cover_path: null,
-        cover_preview_url: null,
-        cover_revision: null,
-        remote_cover_url: imageUrl || null,
-        remote_cover_thumbnail_url: String(selectedMatch?.thumbnail_url || imageUrl || '').trim() || null,
-        remote_cover_source: String(selectedMatch?.source || '').trim() || null,
-        remote_cover_source_label: String(selectedMatch?.source_label || '').trim() || null,
-        remote_cover_album_url: String(selectedMatch?.album_url || '').trim() || null,
-        remote_cover_width: Number(selectedMatch?.width || 0) || null,
-        remote_cover_height: Number(selectedMatch?.height || 0) || null,
-      })),
-    };
-  if (!updatedAlbum || !imageUrl) return;
+    })),
+  };
+  if (!imageUrl) return;
   const signature = getAlbumPathSignature(updatedAlbum) || `${updatedAlbum?.key || ''}::${updatedAlbum?.name || ''}::${updatedAlbum?.album_artist || ''}`;
   state.coverLookup.optimisticAlbumCovers[signature] = {
     src: buildRemoteCoverLookupDisplayUrl(selectedMatch, previewImageUrl, previewKey),
     coverPath: nextCoverPath,
   };
-  markAlbumCoverPathsFresh([updatedAlbum]);
   syncCoverLookupAlbumReferences([updatedAlbum]);
   refreshCoverLookupAlbumArtwork(album, [updatedAlbum]);
+  return updatedAlbum;
 }
 
 function applyOptimisticPastedCoverSelection(album, pastedItem) {

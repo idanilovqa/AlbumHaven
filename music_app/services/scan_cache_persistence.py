@@ -1499,6 +1499,14 @@ class PostgresScanCacheAdapter:
                     normalized_changed_fields == frozenset({"album"})
                 ),
             )
+            cover_album_ids = sorted(
+                {source_album_id, destination_album_id} - {0}
+            )
+            if cover_album_ids:
+                connection.execute(
+                    _synchronize_album_cover_file_entries_sql(by_album_ids=True),
+                    {"album_ids": cover_album_ids},
+                )
             committed_relation_state = (
                 _patch_structural_relation_projection(
                     connection,
@@ -1885,7 +1893,7 @@ class PostgresScanCacheAdapter:
                 repaired_cover_entries = {
                     str(payload["private_path"]): _row_mapping(payload.get("file_entry"))
                     for row in connection.execute(
-                        _synchronize_repaired_cover_file_entries_sql(),
+                        _synchronize_album_cover_file_entries_sql(),
                         {"album_keys": repaired_album_keys},
                     ).fetchall()
                     if (payload := _row_mapping(row)).get("private_path")
@@ -6299,10 +6307,17 @@ def _load_targeted_album_memberships_sql() -> str:
     """
 
 
-def _synchronize_repaired_cover_file_entries_sql() -> str:
+def _synchronize_album_cover_file_entries_sql(
+    *, by_album_ids: bool = False,
+) -> str:
     selection_fields = ", ".join(
         f"'{field}', album.metadata -> '{field}'"
         for field in ("cover_revision", *_ALBUM_COVER_AUTHORITY_FIELDS)
+    )
+    album_filter = (
+        "album.id = any(%(album_ids)s::bigint[])"
+        if by_album_ids
+        else "album.album_key = any(%(album_keys)s::text[])"
     )
     return f"""
         with repaired_albums as (
@@ -6310,7 +6325,7 @@ def _synchronize_repaired_cover_file_entries_sql() -> str:
           join library.libraries lib on lib.id = album.library_id
           join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
           where owner.owner_key = 'local-bootstrap-owner' and lib.library_kind = 'local'
-            and album.album_key = any(%(album_keys)s::text[])
+            and {album_filter}
         )
         update library.local_track_files files
         set metadata = jsonb_set(files.metadata, '{{scan_cache,file_entry}}',

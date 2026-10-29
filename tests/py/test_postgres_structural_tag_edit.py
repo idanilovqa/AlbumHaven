@@ -1793,6 +1793,49 @@ def test_postgres_album_only_rename_never_overwrites_current_album_metadata(
     assert "destination_album_metadata" not in mutation_params
 
 
+def test_postgres_partial_album_move_publishes_source_and_destination_cover_authority(
+    monkeypatch,
+):
+    paths, previous, updated = _entries()
+    result_row = _successful_result(path_count=1)
+    result_row.update(
+        {
+            "source_album_track_file_count": 2,
+            "source_album_id": 17,
+            "source_album_key": "artist::old album",
+        }
+    )
+    connection = StructuralTagEditConnection(result_row)
+    adapter = _adapter(monkeypatch, connection)
+
+    adapter.persist_structural_tag_edit(
+        changed_paths={paths[0]},
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names={"album"},
+    )
+
+    cover_publications = [
+        (sql, params)
+        for sql, params in connection.executed
+        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+    ]
+    assert len(cover_publications) == 1
+    publication_sql, publication_params = cover_publications[0]
+    normalized_publication_sql = _normalized_sql(publication_sql)
+    assert publication_params == {"album_ids": [17, 41]}
+    assert "join repaired_albums album on album.id = tracks.album_id" in (
+        normalized_publication_sql
+    )
+    assert "'cover_path', album.cover_path" in normalized_publication_sql
+    assert "'cover_selection_origin', album.metadata -> 'cover_selection_origin'" in (
+        normalized_publication_sql
+    )
+    assert "'cover_selection_provenance', album.metadata -> 'cover_selection_provenance'" in (
+        normalized_publication_sql
+    )
+
+
 def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_rows(
     monkeypatch,
 ):

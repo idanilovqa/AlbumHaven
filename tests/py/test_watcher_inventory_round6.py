@@ -22,9 +22,11 @@ def test_targeted_release_year_matches_complete_surviving_members(watcher_repair
     fixture.seed(first, other)
     if explicit_date:
         with isolatedPostgres._connect(fixture.setup_url) as connection:
-            connection.execute("""update library.local_albums set release_year=2004,
-                metadata=metadata || '{"release_date":"2004-07-16"}'::jsonb
-                where album_key='owner::repair album'""")
+            connection.execute("""update library.local_albums album set release_year=2004,
+                metadata=album.metadata || '{"release_date":"2004-07-16"}'::jsonb
+                from library.local_tracks track
+                join library.local_track_files file on file.track_id=track.id
+                where album.id=track.album_id and file.private_path=%s""", (other["path"],))
     if mutation == "delete_first":
         Path(first["path"]).unlink()
         complete = {other["path"]: other}

@@ -344,11 +344,34 @@ class PostgresScanCacheAdapter:
                     (publication_guard or guard_destructive_library_publication)(connection, sorted(affected_roots))
                 )
             separate_release_keys = _load_separate_release_keys(connection)
+            mutation_paths = set(file_cache)
+            context_seed_paths = set(file_cache)
+            stale_context_paths: set[str] = set()
+            for stale_targets in stale_by_root.values():
+                context_seed_paths.update(stale_targets["paths"])
+                stale_context_paths.update(stale_targets["paths"])
+            stale_subtrees = [
+                {"root_id": stale_root_id, "subtree": subtree}
+                for stale_root_id, stale_targets in stale_by_root.items()
+                for subtree in sorted(stale_targets["subtrees"])
+            ]
+            if stale_subtrees:
+                stale_subtree_paths = {
+                    str(_row_mapping(row).get("private_path") or "")
+                    for row in connection.execute(
+                        _load_targeted_subtree_track_paths_sql(),
+                        {"subtrees": _jsonb(stale_subtrees), "source": _SOURCE},
+                    ).fetchall()
+                }
+                stale_subtree_paths.discard("")
+                context_seed_paths.update(stale_subtree_paths)
+                stale_context_paths.update(stale_subtree_paths)
+                context_seed_paths.discard("")
             existing_memberships = [
                 _row_mapping(row)
                 for row in connection.execute(
                     _load_targeted_album_memberships_sql(),
-                    {"active_paths": sorted(file_cache)},
+                    {"active_paths": sorted(context_seed_paths)},
                 ).fetchall()
             ]
             existing_track_paths = {
@@ -379,19 +402,53 @@ class PostgresScanCacheAdapter:
             # its persisted source siblings before classifying partial copies.
             from music_app.services.album_local_membership import physical_album_root, physical_album_root_sql
 
-            incoming_album_names = sorted({" ".join(str(entry.get("album") or "").casefold().split())
-                                           for entry in file_cache.values() if entry.get("album")})
-            incoming_containers = sorted({physical_album_root(entry.get("path"))
-                                          for entry in file_cache.values() if entry.get("path")})
+            incoming_album_identities = sorted(
+                {
+                    "\x1f".join(
+                        " ".join(str(value or "").lower().split())
+                        for value in (artist, album)
+                    )
+                    for artist, album in (
+                        *(
+                            (
+                                entry.get("album_artist") or entry.get("artist"),
+                                entry.get("album"),
+                            )
+                            for entry in file_cache.values()
+                        ),
+                        *(
+                            (
+                                row.get("album_artist") or row.get("artist_key"),
+                                row.get("album_title"),
+                            )
+                            for row in existing_memberships
+                        ),
+                    )
+                    if artist and album
+                }
+            )
+            incoming_containers = sorted(
+                {
+                    physical_album_root(path)
+                    for path in (
+                        *(entry.get("path") for entry in file_cache.values()),
+                        *(row.get("private_path") for row in existing_memberships),
+                    )
+                    if path
+                }
+            )
             context_sql = _load_file_entries_sql().replace(
                 "order by library.local_track_files.private_path;",
-                "and (regexp_replace(lower(btrim(coalesce(library.local_track_files.scan_file_album, ''))), '[[:space:]]+', ' ', 'g') = any(%(album_names)s::text[]) "
+                "and (concat_ws(E'\\x1f', "
+                "regexp_replace(lower(btrim(coalesce(library.local_track_files.scan_file_album_artist, ''))), '[[:space:]]+', ' ', 'g'), "
+                "regexp_replace(lower(btrim(coalesce(library.local_track_files.scan_file_album, ''))), '[[:space:]]+', ' ', 'g')) "
+                "= any(%(album_identities)s::text[]) "
                 f"or {physical_album_root_sql('library.local_track_files.private_path')} = any(%(physical_roots)s::text[])) "
                 "order by library.local_track_files.private_path;",
             )
             membership_context = {}
             for raw_row in connection.execute(context_sql, {
-                "source": _SOURCE, "album_names": incoming_album_names,
+                "source": _SOURCE, "album_identities": incoming_album_identities,
                 "physical_roots": [value.replace('\\', '/') for value in incoming_containers],
             }).fetchall():
                 context_row = _row_mapping(raw_row)
@@ -399,6 +456,13 @@ class PostgresScanCacheAdapter:
                 if isinstance(context_entry, dict) and context_entry.get("path"):
                     membership_context[str(context_entry["path"])] = dict(context_entry)
             file_cache = {**membership_context, **file_cache}
+            existing_memberships = [
+                _row_mapping(row)
+                for row in connection.execute(
+                    _load_targeted_album_memberships_sql(),
+                    {"active_paths": sorted(file_cache)},
+                ).fetchall()
+            ]
             albums = self._build_albums(
                 _file_cache_with_inferred_blank_album_memberships(file_cache),
                 separate_release_keys,
@@ -416,6 +480,8 @@ class PostgresScanCacheAdapter:
                 track_rows=track_rows,
                 existing_memberships=existing_memberships,
                 separate_release_keys=separate_release_keys,
+                preferred_paths=mutation_paths,
+                excluded_paths=stale_context_paths,
             )
             _execute_semantic_local_album_key_adoptions(connection, album_rows)
             affected_album_keys = {
@@ -2782,8 +2848,191 @@ def _remap_targeted_album_identity_rows(
     track_rows: list[dict[str, object]],
     existing_memberships: list[dict[str, object]],
     separate_release_keys: set[str],
+    preferred_paths: set[str] | None = None,
+    excluded_paths: set[str] | None = None,
 ) -> None:
     """Keep established album keys when watcher context still names that album."""
+    automatic_year_groups: dict[str, list[dict[str, object]]] = {}
+    for album_row in album_rows:
+        artist_key = str(album_row.get("artist_key") or "").strip()
+        title = str(album_row.get("title") or "").strip()
+        metadata = _jsonb_compatible(album_row.get("metadata") or {})
+        edition = str(metadata.get("edition") or "").strip()
+        release_key = album_separate_release_key(artist_key, title, edition)
+        album_key = str(album_row.get("album_key") or "").strip()
+        if album_key.startswith(f"{release_key}::year::"):
+            automatic_year_groups.setdefault(release_key, []).append(album_row)
+
+    full_date_authorities: dict[
+        str, set[tuple[str, str, int | None, str]]
+    ] = {}
+    for membership in existing_memberships:
+        release_date = str(membership.get("release_date") or "").strip()
+        album_key = str(membership.get("album_key") or "").strip()
+        if not release_date or not album_key:
+            continue
+        release_key = album_separate_release_key(
+            str(membership.get("artist_key") or "").strip(),
+            str(membership.get("album_title") or "").strip(),
+            str(membership.get("edition") or "").strip(),
+        )
+        full_date_authorities.setdefault(release_key, set()).add(
+            (
+                str(membership.get("private_path") or ""),
+                album_key,
+                safe_int(membership.get("release_year")),
+                release_date,
+            )
+        )
+
+    preferred_album_keys = {
+        str(track_row.get("album_key") or "").strip()
+        for track_row in track_rows
+        if str(track_row.get("track_key") or "") in (preferred_paths or set())
+    }
+    preferred_album_keys.discard("")
+    generated_key_by_path = {
+        str(track_row.get("track_key") or ""): str(
+            track_row.get("album_key") or ""
+        ).strip()
+        for track_row in track_rows
+        if track_row.get("track_key")
+    }
+    stable_album_keys = {
+        generated_key_by_path.get(str(membership.get("private_path") or ""), "")
+        for membership in existing_memberships
+        if str(membership.get("private_path") or "")
+        not in (excluded_paths or set())
+        and generated_key_by_path.get(
+            str(membership.get("private_path") or ""), ""
+        )
+        == str(membership.get("album_key") or "").strip()
+    }
+    stable_album_keys.discard("")
+    surviving_album_keys = {
+        str(track_row.get("album_key") or "").strip()
+        for track_row in track_rows
+        if str(track_row.get("track_key") or "") not in (excluded_paths or set())
+    }
+    surviving_album_keys.discard("")
+
+    automatic_year_remaps: dict[str, str] = {}
+    collapsed_album_row_ids: set[int] = set()
+    automatic_year_split_keys: set[str] = set()
+    existing_paths = {
+        str(membership.get("private_path") or "")
+        for membership in existing_memberships
+        if membership.get("private_path")
+    }
+    for release_key, grouped_rows in automatic_year_groups.items():
+        if release_key in separate_release_keys or len(grouped_rows) < 2:
+            continue
+        grouped_keys = {
+            str(row.get("album_key") or "").strip() for row in grouped_rows
+        }
+        grouped_track_paths = {
+            str(track_row.get("track_key") or "")
+            for track_row in track_rows
+            if str(track_row.get("album_key") or "").strip() in grouped_keys
+        }
+        if not grouped_track_paths or not grouped_track_paths.issubset(existing_paths):
+            automatic_year_split_keys.update(grouped_keys)
+            continue
+        authorities = {
+            (album_key, release_year, release_date)
+            for path, album_key, release_year, release_date in full_date_authorities.get(
+                release_key, set()
+            )
+            if path in grouped_track_paths
+        }
+        if len(authorities) > 1:
+            continue
+        if authorities:
+            canonical_key, canonical_year, canonical_release_date = next(
+                iter(authorities)
+            )
+            canonical_row = next(
+                (
+                    row
+                    for row in grouped_rows
+                    if str(row.get("album_key") or "").strip() == canonical_key
+                ),
+                grouped_rows[0],
+            )
+        else:
+            stable_rows = [
+                row
+                for row in grouped_rows
+                if str(row.get("album_key") or "").strip() in stable_album_keys
+            ]
+            stable_keys = {
+                str(row.get("album_key") or "").strip() for row in stable_rows
+            }
+            preferred_rows = [
+                row
+                for row in grouped_rows
+                if str(row.get("album_key") or "").strip()
+                in preferred_album_keys
+            ]
+            preferred_keys = {
+                str(row.get("album_key") or "").strip() for row in preferred_rows
+            }
+            surviving_rows = [
+                row
+                for row in grouped_rows
+                if str(row.get("album_key") or "").strip()
+                in surviving_album_keys
+            ]
+            surviving_keys = {
+                str(row.get("album_key") or "").strip()
+                for row in surviving_rows
+            }
+            if len(stable_keys) == 1:
+                canonical_row = stable_rows[0]
+            elif len(preferred_keys) == 1:
+                canonical_row = preferred_rows[0]
+            elif len(surviving_keys) == 1:
+                canonical_row = surviving_rows[0]
+            else:
+                canonical_row = grouped_rows[0]
+            canonical_key = str(canonical_row.get("album_key") or "").strip()
+            canonical_year = safe_int(canonical_row.get("release_year"))
+            canonical_release_date = None
+        for album_row in grouped_rows:
+            generated_key = str(album_row.get("album_key") or "").strip()
+            if not generated_key or generated_key == canonical_key:
+                if canonical_release_date is None:
+                    continue
+            else:
+                automatic_year_remaps[generated_key] = canonical_key
+            album_row["album_key"] = canonical_key
+            album_row["release_year"] = canonical_year
+            if canonical_release_date is not None:
+                original_metadata = album_row.get("metadata")
+                metadata = _jsonb_compatible(original_metadata or {})
+                metadata["release_date"] = canonical_release_date
+                album_row["metadata"] = (
+                    metadata
+                    if isinstance(original_metadata, dict)
+                    else _jsonb(metadata)
+                )
+            if album_row is not canonical_row:
+                collapsed_album_row_ids.add(id(album_row))
+
+    if collapsed_album_row_ids:
+        album_rows[:] = [
+            row for row in album_rows if id(row) not in collapsed_album_row_ids
+        ]
+
+    for featured_row in featured_artist_rows:
+        generated_key = str(featured_row.get("album_key") or "")
+        if generated_key in automatic_year_remaps:
+            featured_row["album_key"] = automatic_year_remaps[generated_key]
+    for track_row in track_rows:
+        generated_key = str(track_row.get("album_key") or "")
+        if generated_key in automatic_year_remaps:
+            track_row["album_key"] = automatic_year_remaps[generated_key]
+
     albums_by_key = {
         str(row.get("album_key") or ""): row
         for row in album_rows
@@ -2795,13 +3044,15 @@ def _remap_targeted_album_identity_rows(
         if str(row.get("private_path") or "")
     }
     candidates_by_generated_key: dict[
-        str, set[tuple[str, str, str, int | None]]
+        str, set[tuple[str, str, str, int | None, str | None]]
     ] = {}
     for track_row in track_rows:
         generated_key = str(track_row.get("album_key") or "")
         album_row = albums_by_key.get(generated_key)
         existing = existing_by_path.get(str(track_row.get("track_key") or ""))
         if album_row is None or existing is None:
+            continue
+        if generated_key in automatic_year_split_keys:
             continue
         generated_title = str(album_row.get("title") or "").strip()
         existing_title = str(existing.get("album_title") or "").strip()
@@ -2817,6 +3068,7 @@ def _remap_targeted_album_identity_rows(
             continue
         generated_release_year = safe_int(album_row.get("release_year"))
         existing_release_year = safe_int(existing.get("release_year"))
+        existing_release_date = str(existing.get("release_date") or "").strip() or None
         release_key = album_separate_release_key(
             generated_artist_key, generated_title, generated_edition,
         )
@@ -2827,6 +3079,7 @@ def _remap_targeted_album_identity_rows(
             and generated_release_year is not None
             and existing_release_year is not None
             and generated_release_year != existing_release_year
+            and existing_release_date is None
         ):
             continue
         if (
@@ -2847,6 +3100,7 @@ def _remap_targeted_album_identity_rows(
                     existing_artist_key,
                     existing_title,
                     existing_release_year,
+                    existing_release_date,
                 )
             )
 
@@ -2861,7 +3115,15 @@ def _remap_targeted_album_identity_rows(
         if target is None:
             continue
         album_row["album_key"], album_row["artist_key"], album_row["title"] = target[:3]
-        if generated_key.endswith("::year::unresolved") and target[3] is not None:
+        if target[4] is not None:
+            album_row["release_year"] = target[3]
+            original_metadata = album_row.get("metadata")
+            metadata = _jsonb_compatible(original_metadata or {})
+            metadata["release_date"] = target[4]
+            album_row["metadata"] = (
+                metadata if isinstance(original_metadata, dict) else _jsonb(metadata)
+            )
+        elif generated_key.endswith("::year::unresolved") and target[3] is not None:
             album_row["release_year"] = target[3]
     for featured_row in featured_artist_rows:
         generated_key = str(featured_row.get("album_key") or "")
@@ -5827,7 +6089,9 @@ def _load_targeted_album_memberships_sql() -> str:
             library.local_albums.album_key,
           library.local_albums.title as album_title,
           library.local_albums.release_year,
+        library.local_albums.metadata ->> 'release_date' as release_date,
           library.local_albums.metadata ->> 'edition' as edition,
+            library.local_track_files.scan_file_album_artist as album_artist,
           library.local_artists.artist_key
         from bootstrap_context
         join library.local_track_files

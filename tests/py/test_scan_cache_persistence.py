@@ -678,6 +678,274 @@ def test_targeted_album_rows_do_not_remap_a_changed_release_year_to_the_old_iden
     assert track_rows[0]["album_key"] == generated_key
 
 
+def test_targeted_album_rows_collapse_unseparated_automatic_year_members_to_complete_release():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": path,
+                "album_key": key,
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": year,
+            }
+            for path, key, year in zip(
+                paths, keys, (2000, 2003), strict=True
+            )
+        ],
+        separate_release_keys=set(),
+    )
+
+    assert {row["album_key"] for row in album_rows} == {keys[0]}
+    assert {row["release_year"] for row in album_rows} == {2000}
+    assert {row["album_key"] for row in featured_rows} == {keys[0]}
+    assert {row["album_key"] for row in track_rows} == {keys[0]}
+
+
+def test_targeted_album_rows_prefer_one_full_date_for_automatic_year_group():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+            "metadata": {},
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": paths[0],
+                "album_key": keys[0],
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2000,
+            },
+            {
+                "private_path": paths[1],
+                "album_key": keys[1],
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2004,
+                "release_date": "2004-07-16",
+            },
+        ],
+        separate_release_keys=set(),
+    )
+
+    assert {row["album_key"] for row in album_rows} == {keys[1]}
+    assert {row["release_year"] for row in album_rows} == {2004}
+    assert {
+        row["metadata"]["release_date"] for row in album_rows
+    } == {"2004-07-16"}
+    assert {row["album_key"] for row in featured_rows} == {keys[1]}
+    assert {row["album_key"] for row in track_rows} == {keys[1]}
+
+
+def test_targeted_album_rows_ignore_full_date_outside_rebuilt_group():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+            "metadata": {},
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+    existing_memberships = [
+        {
+            "private_path": path,
+            "album_key": key,
+            "album_title": "Album",
+            "artist_key": "owner",
+            "release_year": year,
+        }
+        for path, key, year in zip(paths, keys, (2000, 2003), strict=True)
+    ]
+    existing_memberships.append(
+        {
+            "private_path": "C:/Music/Owner/Archive/01.flac",
+            "album_key": "owner::album::year::1990",
+            "album_title": "Album",
+            "artist_key": "owner",
+            "release_year": 1990,
+            "release_date": "1990-01-01",
+        }
+    )
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=existing_memberships,
+        separate_release_keys=set(),
+    )
+
+    assert {row["album_key"] for row in album_rows} == {keys[0]}
+    assert {row["release_year"] for row in album_rows} == {2000}
+    assert {row["album_key"] for row in featured_rows} == {keys[0]}
+    assert {row["album_key"] for row in track_rows} == {keys[0]}
+
+
+def test_targeted_album_rows_fail_closed_for_conflicting_full_dates():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+            "metadata": {},
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": path,
+                "album_key": key,
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": year,
+                "release_date": release_date,
+            }
+            for path, key, year, release_date in zip(
+                paths,
+                keys,
+                (2000, 2003),
+                ("2000-01-01", "2003-01-01"),
+                strict=True,
+            )
+        ],
+        separate_release_keys=set(),
+    )
+
+    assert [row["album_key"] for row in album_rows] == keys
+    assert [row["album_key"] for row in featured_rows] == keys
+    assert [row["album_key"] for row in track_rows] == keys
+
+
+def test_targeted_album_rows_preserve_existing_full_release_date_authority():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/Owner/Album/01.flac"
+    generated_key = "owner::album::year::2003"
+    existing_key = "owner::album::year::2001"
+    album_rows = [{
+        "artist_key": "owner",
+        "album_key": generated_key,
+        "title": "Album",
+        "release_year": 2003,
+        "metadata": {},
+    }]
+    featured_rows = [{
+        "album_key": generated_key,
+        "artist_key": "owner",
+        "featured_kind": "owner",
+    }]
+    track_rows = [{"album_key": generated_key, "track_key": path}]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[{
+            "private_path": path,
+            "album_key": existing_key,
+            "album_title": "Album",
+            "artist_key": "owner",
+            "release_year": 2004,
+            "release_date": "2004-07-16",
+        }],
+        separate_release_keys=set(),
+    )
+
+    assert album_rows[0]["album_key"] == existing_key
+    assert album_rows[0]["release_year"] == 2004
+    assert album_rows[0]["metadata"]["release_date"] == "2004-07-16"
+    assert featured_rows[0]["album_key"] == existing_key
+    assert track_rows[0]["album_key"] == existing_key
+
+
 def test_targeted_album_rows_keep_existing_identity_for_unresolved_track_years():
     from music_app.services.scan_cache_persistence import (
         _remap_targeted_album_identity_rows,

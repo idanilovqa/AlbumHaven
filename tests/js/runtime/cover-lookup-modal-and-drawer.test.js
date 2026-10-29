@@ -1600,8 +1600,72 @@ require('node:test')('active-only polling refreshes the modal when partial candi
   assert.equal(galleryRefreshes, 1);
 });
 
+require('node:test')('repeated explicit manual lookup reuses its terminal task without collapsing provider refresh generations', async () => {
+  class TestButton {
+    constructor() {
+      this.hidden = false;
+      this.disabled = false;
+    }
+  }
+  const album = {
+    album_artist: 'Synthetic Cover Artist',
+    name: 'Manual Lookup Album',
+    tracks: [{ path: 'C:/music/manual/01.flac' }],
+  };
+  const manualUrlInput = { value: 'https://covers.example/manual-front.jpg' };
+  const requestBodies = [];
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async (_url, options = {}) => {
+      requestBodies.push(JSON.parse(options.body));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          task: { id: requestBodies.at(-1).task_id || 'fresh-generation', status: 'pending' },
+        }),
+      };
+    },
+    document: {
+      body: { classList: { add: () => {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-save-remote-button': new TestButton(),
+        'cover-lookup-pasted-urls': manualUrlInput,
+      }[id] || null),
+    },
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'completed-manual-generation',
+    status: 'completed',
+    manual_urls: ['https://covers.example/manual-front.jpg'],
+  }];
+  context.state.coverLookup.modal.album = album;
+  context.state.coverLookup.modal.taskId = 'completed-manual-generation';
+  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  await context.startCoverLookupForAlbum(album);
+  manualUrlInput.value = '';
+  context.state.coverLookup.modal.manualUrlText = '';
+  context.state.coverLookup.modal.taskId = 'completed-manual-generation';
+  context.state.coverLookup.tasks = [{
+    id: 'completed-manual-generation',
+    status: 'completed',
+    manual_urls: ['https://covers.example/manual-front.jpg'],
+  }];
+  await context.startCoverLookupForAlbum(album);
+
+  assert.equal(requestBodies[0].task_id, 'completed-manual-generation');
+  assert.equal(requestBodies[1].task_id, '');
+});
+
 require('node:test')('active-only polling refreshes the first page when a running task disappears', async () => {
   const requestedUrls = [];
+  let statusAtGalleryRefresh = '';
   const { context } = createDrawerHarness({
     fetch: async (url) => {
       requestedUrls.push(String(url));
@@ -1622,7 +1686,11 @@ require('node:test')('active-only polling refreshes the first page when a runnin
         ok: true,
         json: async () => ({
           ok: true,
-          tasks: [{ id: 'finished', status: 'completed' }],
+          tasks: [{
+            id: 'finished',
+            status: 'completed',
+            possible_match_count: 4,
+          }],
           next_cursor: null,
           total_count: 1,
           active_count: 0,
@@ -1632,9 +1700,14 @@ require('node:test')('active-only polling refreshes the first page when a runnin
     },
   });
   context.state.coverLookup.tasks = [
-    { id: 'finished', status: 'running' },
+    { id: 'finished', status: 'running', progress_label: 'Searching...' },
     { id: 'history', status: 'completed' },
   ];
+  context.state.coverLookup.modal.taskId = 'finished';
+  context.state.coverLookup.modal.statusText = 'Searching...';
+  context.refreshCoverLookupGallery = async () => {
+    statusAtGalleryRefresh = context.state.coverLookup.modal.statusText;
+  };
 
   await context.loadCoverLookupTasksForPolling({ toast: false });
 
@@ -1644,6 +1717,11 @@ require('node:test')('active-only polling refreshes the first page when a runnin
   ]);
   assert.equal(context.state.coverLookup.tasks[0].status, 'completed');
   assert.deepEqual(Array.from(context.state.coverLookup.tasks, task => task.id), ['finished', 'history']);
+  assert.equal(
+    statusAtGalleryRefresh,
+    'Searching...',
+    'terminal summary must not publish completion before its counted candidates hydrate',
+  );
 });
 
 require('node:test')('notification history prefetches within two visible drawer heights', async () => {

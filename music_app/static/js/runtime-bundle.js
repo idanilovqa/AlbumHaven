@@ -31527,35 +31527,42 @@ async function loadCoverLookupTasks(options = {}) {
       const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
-        applyCoverLookupTaskModalStatus(task);
         const taskStatus = String(task.status || '');
         const candidateSource = getCoverLookupCandidateSource(
           task,
           state.coverLookup.modal.candidateSnapshot,
         );
-        applyCoverLookupCandidateSource(candidateSource);
-      const partialCandidatesAdvanced = ['pending', 'running'].includes(taskStatus)
-        && (
-          Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0)
-          || coverLookupCandidateTimestamp(task.candidate_updated_at)
-            > coverLookupCandidateTimestamp(state.coverLookup.modal.candidateSnapshot?.updated_at)
-        );
-      if (partialCandidatesAdvanced) {
-        await refreshCoverLookupGallery(false);
-      } else if (['completed', 'failed', 'canceled'].includes(taskStatus)) {
-          if (options.refreshModalGallery !== false) {
-            await refreshCoverLookupGallery(false);
-          } else {
-            renderCoverLookupModal();
-          }
-        } else if (Array.isArray(task.updated_albums) && task.updated_albums.length) {
-          if (Number(task.progress || 0) >= 100) {
-            await refreshCoverLookupGallery(false);
-          } else {
-            renderCoverLookupModal();
-          }
+        const terminalTask = ['completed', 'failed', 'canceled'].includes(taskStatus);
+        const terminalCandidatesPending = terminalTask
+          && Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0);
+        if (terminalCandidatesPending && options.refreshModalGallery !== false) {
+          await refreshCoverLookupGallery(false);
         } else {
-          renderCoverLookupModal();
+          applyCoverLookupTaskModalStatus(task);
+          applyCoverLookupCandidateSource(candidateSource);
+          const partialCandidatesAdvanced = ['pending', 'running'].includes(taskStatus)
+            && (
+              Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0)
+              || coverLookupCandidateTimestamp(task.candidate_updated_at)
+                > coverLookupCandidateTimestamp(state.coverLookup.modal.candidateSnapshot?.updated_at)
+            );
+          if (partialCandidatesAdvanced) {
+            await refreshCoverLookupGallery(false);
+          } else if (terminalTask) {
+            if (options.refreshModalGallery !== false) {
+              await refreshCoverLookupGallery(false);
+            } else {
+              renderCoverLookupModal();
+            }
+          } else if (Array.isArray(task.updated_albums) && task.updated_albums.length) {
+            if (Number(task.progress || 0) >= 100) {
+              await refreshCoverLookupGallery(false);
+            } else {
+              renderCoverLookupModal();
+            }
+          } else {
+            renderCoverLookupModal();
+          }
         }
       }
     }
@@ -31688,6 +31695,22 @@ function collectManualCoverLookupUrls() {
   const rawText = String(input?.value || state.coverLookup.modal.manualUrlText || '').trim();
   state.coverLookup.modal.manualUrlText = rawText;
   return rawText.split(/\s+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function reusableManualCoverLookupTaskId(manualUrls) {
+  if (!manualUrls.length) return '';
+  const taskId = String(state.coverLookup.modal.taskId || '').trim();
+  const task = (state.coverLookup.tasks || []).find(
+    (item) => String(item?.id || '') === taskId,
+  );
+  if (!task || !['completed', 'failed', 'canceled'].includes(String(task.status || ''))) return '';
+  const previousUrls = Array.isArray(task.manual_urls)
+    ? task.manual_urls.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  return previousUrls.length === manualUrls.length
+    && previousUrls.every((url, index) => url === manualUrls[index])
+    ? taskId
+    : '';
 }
 
 function applyCoverLookupTaskUpdates(task, options = {}) {
@@ -32076,12 +32099,15 @@ async function startCoverLookupForAlbum(album, options = {}) {
       showToast('Cover search started.', 'info', 2200, { placement: 'top-center', fixedViewport: true });
     }
     const manualUrls = !backgroundOnly ? collectManualCoverLookupUrls() : [];
+    const reusableTaskId = backgroundOnly
+      ? retryTaskId
+      : reusableManualCoverLookupTaskId(manualUrls);
     const response = await fetch('/utilities/cover-lookup/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         album,
-        task_id: backgroundOnly ? retryTaskId : '',
+        task_id: reusableTaskId,
         manual_urls: manualUrls,
       }),
     });

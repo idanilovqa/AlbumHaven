@@ -19,7 +19,10 @@ function transport(initial,t) {
   const listeners = new Set(), requests = [], bonusReads=bonusReadFixture(t,()=>data);
   return {requests, bonusReads, listeners, context: () => context,
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);},
-    async request(path, options) {const bonus=bonusReads.dispatch(path,options);if(bonus.handled)return {status:"ready",context_ref:context,data:bonus.data};requests.push({path, options}); const result = pending ? await pending.promise : data;
+    async request(path, options) {const bonus=bonusReads.dispatch(path,options);if(bonus.handled)return {status:"ready",context_ref:context,data:bonus.data};requests.push({path, options});
+      if(path==='/account/goals/weekly-settings' && options.method!=='POST') return {status:'ready',context_ref:context,data:{settings_revision:'1',genres:[],playthroughs:[],settings:{manual_count:5,suggestion_count:1,filters:[],sources:['tops','playthroughs'],prefer_preferences:true,discover:false,selection:'random',prefer_nearly_finished:false,preferred_playthrough_refs:[]}}};
+      if(path==='/account/goals/weekly-preview') return {status:'ready',context_ref:context,data:{albums:[],summary:[]}};
+      const result = pending ? await pending.promise : data;
       if (options.isCurrent && !options.isCurrent()) throw Object.assign(new Error('retired'), {name: 'AbortError'});
       return {status: 'ready', context_ref: context, data: result};},
     change() {context = 'b'.repeat(64); for (const fn of [...listeners]) fn();},
@@ -172,4 +175,35 @@ test('Throwing row-control disposal detaches every private card and never dispos
   assert.equal(h.header.content.querySelector('[role="progressbar"]'),null);
   h.click(action); assert.equal(h.wire.requests.filter(row=>row.options.method==='POST').length,0);
   h.owner.dispose(); assert.equal(disposals,1); assert.equal(h.wire.listeners.size,0);
+});
+
+test('library-only rating progress does not expose fake manual Top completion',async t=>{
+  const data=actionable();data.albums[0].completion_mode='rating';
+  for(const selected of Object.values(data.periods)){selected.rated_at={[album]:'2026-12-02T00:00:00Z'};selected.completed=1;}
+  const h=await mounted(t,data);h.click(h.named('Goal album actions'));
+  assert.deepEqual(menuItems(h).map(node=>node.textContent.trim()),['Remove from goals']);
+  assert.match(h.host.textContent,/Rated · Goal progress counted/);
+  assert.doesNotMatch(h.host.textContent,/Mark completed|Clear completion/);
+});
+test('rating timestamp and manual completion count once in Goals projection',async()=>{
+  const {normalizeGoals}=await load('goals-provider.mjs'), data=actionable(true);data.albums[0].completion_mode='rating';
+  for(const selected of Object.values(data.periods)){selected.rated_at={[album]:'2026-12-02T00:00:00Z'};selected.completed=1;}
+  const result=normalizeGoals(data);assert.equal(result.periods.week.completed,1);assert.equal(result.albums[0].completion_mode,'rating');
+  data.periods.week.rated_at[goal]='2026-12-02T00:00:00Z';assert.throws(()=>normalizeGoals(data));
+});
+
+test('actual Goals header settings icon opens weekly modal without opt-in or implicit admissions',async t=>{
+  const h=await mounted(t,actionable()),button=h.named('Weekly Goals settings');assert.ok(button);assert.equal(h.header.actions.contains(button),true);
+  assert.equal(button.textContent.trim(),'');h.click(button);await settle();h.drain();
+  assert.match(h.form.textContent,/Weekly Goals settings/);assert.ok(h.named('Add suggestions',h.form));
+  assert.equal(h.form.querySelector('input[aria-label="Your picks"]').value,'5');
+  assert.equal(h.wire.requests.some(row=>row.path==='/account/goals/weekly-draw'),false);
+  h.click(h.named('Cancel',h.form));assert.equal(h.form.hidden,true);
+});
+
+test('selected-period rating provenance overrides a manual album-level fallback',async t=>{
+  const data=actionable();data.albums[0].completion_mode='manual';data.periods.week.completion_modes={[album]:'rating'};
+  const h=await mounted(t,data);h.click(h.named('Goal album actions'));
+  assert.deepEqual(menuItems(h).map(node=>node.textContent.trim()),['Remove from goals']);
+  assert.match(h.host.textContent,/Rate in your library to advance Goals/);
 });

@@ -315,7 +315,8 @@ const PlaylistReactRuntime = (() => {
       artist_loved: lovedRecipe(detail),
       allowed_actions: {can_play: exactGrant(detail.allowed_actions, 'can_play')},
       track_rows: Array.from(detail.track_rows, row => row && typeof row === 'object' ? unreadable(row)
-        ? copy(row, ['playlist_item_id']) : {
+        ? {...copy(row, ['playlist_item_id']), source_readable: false} : {
+        source_readable: true,
         allowed_actions: {can_play: exactGrant(row.allowed_actions, 'can_play'), can_view_details: exactGrant(row.allowed_actions, 'can_view_details')},
         ...copy(row, ['playlist_item_id', 'inventory_track_ref', 'path', 'track_ref', 'canonical_track_ref', 'entry_ref', 'title', 'artist', 'secondary_artist', 'album_title', 'duration_seconds']),
         album_ref: typeof row.album_ref === 'string' && row.album_ref.trim() && !/[\\/\x00-\x1f\x7f]/.test(row.album_ref) ? row.album_ref : null,
@@ -365,7 +366,7 @@ const PlaylistReactRuntime = (() => {
         if (unreadable(row)) return {...copy(row, ['playlist_item_id']), source_readable: false};
         const preference = TrackActionsRuntime.preference(row);
         return {...copy(row, ['playlist_item_id', 'playlist_position', 'album_title', 'title', 'artist', 'secondary_artist',
-          'track_number', 'disc_number', 'duration_seconds', 'duration_display']), ...displayFacts(row),
+          'track_number', 'disc_number', 'duration_seconds', 'duration_display', 'recommended_by']), ...displayFacts(row),
           ...(typeof row.album_ref === 'string' ? {album_ref: row.album_ref} : {}),
           allowed_actions: {can_view_details: exactGrant(row.allowed_actions, 'can_view_details')},
           album_target: albumTarget(row, origin),
@@ -511,6 +512,14 @@ const PlaylistReactRuntime = (() => {
               return {...admit(value), source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
             }};
         });
+      },
+      resolveRecommendationRow: row => {
+        const original = currentTrackRow(row, context), detail = source?.playlist_detail;
+        if (!original || original.source_readable !== true || detail?.playlist_id !== context?.playlist_id) return null;
+        const presentation = window.AlbumHavenRecommendationPresentation;
+        return presentation?.recommendationResource('track', original.inventory_track_ref)
+          || presentation?.recommendationResource('track', `playlist-item:${original.playlist_item_id}`,
+            {playlist_ref: detail.playlist_id, revision: detail.revision}) || null;
       },
       resolveRow: row => currentTrackRow(row, context), creationSource: () => raw?.playlist_creation_source,
       navigationCurrent: () => sync().scopeKey === context?.scopeKey && raw === source && playlistReadEpoch === epoch,

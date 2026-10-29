@@ -8,7 +8,7 @@ function mounted(t, options={}) {
   assert.equal(typeof c.AlbumHavenBottomSheet?.mount,'function','actual registered presenter loaded');
   const api=c.AlbumHavenBottomSheet.mount({overlay:h.overlay,panel:h.panel,handle:h.handle,scroller:h.scroller,toggle:h.toggle,
     readBounds:()=>({header:h.header}),isCurrent:()=>current,foreground:()=>foreground,
-    requestClose:reason=>{close.push(reason);return options.close?.(h,api);},backgroundNodes:[h.main,h.player,h.document.body]});
+    requestClose:reason=>{close.push(reason);return options.close?.(h,api);},backgroundNodes:[h.main,h.player,h.document.body], ...options.presenter});
   t.after(()=>api.dispose());h.tick();
   return {...h,api,close,retire(){current=false;},foreground(value){foreground=value;api.update();h.tick();}};
 }
@@ -212,4 +212,12 @@ test('canonical nested successor restoration preserves original transform while 
   const a=h.context.AlbumHavenBottomSheet.mount(opts);h.tick();const b=h.context.AlbumHavenBottomSheet.mount(opts);b.expand();h.tick();a.dispose();
   h.panel.style.top='24.125px';b.dispose();assert.equal(h.panel.style.transform,'translate3d(0px, 2.5px, 0px)');
   assert.equal(h.panel.style.getPropertyPriority('transform'),'important');assert.equal(h.panel.style.top,'24.125px');
+});
+
+test('native form can retain dismissal and focus while shared sheet uses custom accessible labels',t=>{
+ const h=mounted(t,{presenter:{ownDismissal:false,ownFocus:false,expandLabel:'Expand Goals',collapseLabel:'Collapse Goals'}});
+ h.pointer(h.overlay,'pointerdown',5,5);h.pointer(h.overlay,'pointerup',5,5);h.send(h.overlay,'click',{detail:1});assert.deepEqual(h.close,[]);
+ h.toggle.focus();assert.equal(h.send(h.document,'keydown',{key:'Tab'}).defaultPrevented,false);
+ assert.equal(h.toggle.getAttribute('aria-label'),'Expand Goals');h.api.expand();h.tick();assert.equal(h.toggle.getAttribute('aria-label'),'Collapse Goals');
+ h.api.collapse();h.tick();assert.equal(h.toggle.getAttribute('aria-label'),'Expand Goals');
 });

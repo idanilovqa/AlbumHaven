@@ -87,6 +87,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/intrinsic-disclosure.js',
   'js/runtime/mobile-home.js',
   'js/runtime/private-ui-transport.js',
+  'js/runtime/recommendations.js',
   'js/runtime/playlist-queue.js',
   'js/runtime/track-actions.js',
   'js/runtime/explicit-queue-planner.js',

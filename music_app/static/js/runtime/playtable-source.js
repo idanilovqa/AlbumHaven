@@ -1,6 +1,6 @@
 /* Private source bindings for the shared React playtable owner. Media and write
    refs never enter its public snapshot, action packet, DOM keys or history. */
-function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCurrent, resolveRow,
+function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCurrent, resolveRow, resolveRecommendationRow,
   creationSource = () => null, activitySource = () => null, subscribe, navigationCurrent = isCurrent, resolveNavigationRow = resolveRow, retainNavigationSource, captureQueueRows, canQueueRow} = {}) {
   const nativeScope = TrackActionsRuntime.scope(), baseline = new Set(rows || []), listeners = new Set();
   let visibleRows = Array.from(rows || []), viewRevision = revision, retired = false;
@@ -52,6 +52,23 @@ function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCur
       const activity = activitySource(found.map(([row]) => row));
       return {rows: resolved, playlist_creation_source: creationSource(found.map(([row]) => row)),
         ...(activity ? {activity_source: activity} : {})};
+    },
+    // Recommendation metadata is a separate authority path: unresolved saved
+    // rows never become inventory, Playlist-write or queue/playback sources.
+    resolveRecommendationRows(keys) {
+      if (!active() || !Array.isArray(keys) || keys.length !== 1) return null;
+      const matches = visibleRows.filter(row => keyFor(row) === keys[0]);
+      if (matches.length !== 1 || !readable(matches[0]) || matches[0].selectable === false) return null;
+      const capturedRevision = viewRevision;
+      let resource;
+      if (typeof resolveRecommendationRow === 'function') resource = resolveRecommendationRow(matches[0]);
+      else {
+        const source = resolveRow(matches[0]);
+        if (!source || !readable(source)) return null;
+        const ref = inventoryRef(source);
+        resource = ref ? {kind: 'track', resource_ref: ref} : null;
+      }
+      return active() && capturedRevision === viewRevision && resource ? {rows: [resource]} : null;
     },
     canQueue(keys) {
       return active() && typeof captureQueueRows === 'function' && Array.isArray(keys) && keys.length > 0

@@ -148,6 +148,103 @@ def test_targeted_album_metadata_uses_every_retained_member(watcher_repair_inven
     assert after["owner::unrelated"] == before["owner::unrelated"]
 
 
+def test_targeted_additions_preserve_each_tagged_album_artist_identity(
+    watcher_repair_inventory,
+):
+    fixture = watcher_repair_inventory
+    additions = [
+        (
+            "Various Artists/Rain Man",
+            "Rain Man",
+            "Various Artists",
+            ("Belle Stars", "Watcher Compilation Performer"),
+        ),
+        ("!Air/Collation Air", "Watcher Collation Air", "!Air", ("!Air",)),
+        (
+            "I'm with Her/Collation Apostrophe",
+            "Watcher Collation Apostrophe",
+            "I'm with Her",
+            ("I'm with Her",),
+        ),
+        ("IZZ/Collation IZZ", "Watcher Collation IZZ", "IZZ", ("IZZ",)),
+        (
+            "'Til Tuesday/Collation Til",
+            "Watcher Collation Til",
+            "'Til Tuesday",
+            ("'Til Tuesday",),
+        ),
+        (
+            "Jordsjø and Breidablik/Joint Credit",
+            "Watcher Joint Credit Release",
+            "Jordsjø / Breidablik",
+            ("Jordsjø", "Breidablik"),
+        ),
+    ]
+
+    for addition_index, (folder, album, album_artist, track_artists) in enumerate(
+        additions
+    ):
+        entries = []
+        for index, track_artist in enumerate(track_artists, start=1):
+            entry = fixture.entry(
+                f"{folder}/{index:02}.flac",
+                artist=track_artist,
+                album=album,
+            )
+            entry["album_artist"] = album_artist
+            entry["track_number"] = index
+            entries.append(entry)
+        if addition_index == 0:
+            fixture.adapter.persist_targeted_inventory_mutation(
+                root_id="repair-main",
+                active_file_entries={entries[0]["path"]: entries[0]},
+            )
+        fixture.adapter.persist_targeted_inventory_mutation(
+            root_id="repair-main",
+            active_file_entries={entry["path"]: entry for entry in entries},
+        )
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albums = connection.execute(
+            """
+            select album.title, album.metadata, owner.name as owner_name,
+                   array_agg(distinct featured_artist.name order by featured_artist.name)
+                     filter (where featured.featured_kind = 'featured_track_artist')
+                     as featured_names
+            from library.local_albums album
+            left join library.local_artists owner on owner.id = album.artist_id
+            left join library.local_album_featured_artists featured
+              on featured.album_id = album.id
+            left join library.local_artists featured_artist
+              on featured_artist.id = featured.artist_id
+            where exists (
+              select 1
+              from library.local_tracks track
+              join library.local_track_files file on file.track_id = track.id
+              where track.album_id = album.id and file.scan_cache_stale is false
+            )
+            group by album.id, owner.name
+            order by album.title
+            """
+        ).fetchall()
+
+    by_title = {row["title"]: row for row in albums}
+    assert set(by_title) == {album for _folder, album, _owner, _artists in additions}
+    assert by_title["Rain Man"]["owner_name"] == "Various Artists"
+    assert by_title["Rain Man"]["metadata"]["album_artist"] == "Various Artists"
+    assert set(by_title["Rain Man"]["featured_names"]) == {
+        "Belle Stars",
+        "Watcher Compilation Performer",
+    }
+    for _folder, album, album_artist, _track_artists in additions[1:5]:
+        assert by_title[album]["owner_name"] == album_artist
+    assert by_title["Watcher Joint Credit Release"]["owner_name"] is None
+    assert set(by_title["Watcher Joint Credit Release"]["featured_names"]) == {
+        "Breidablik",
+        "Jordsjø",
+    }
+
+
 @pytest.mark.parametrize("owned_directory_name", [
     "watcher-reconciliation",
     "gallery-native-response-overlap",

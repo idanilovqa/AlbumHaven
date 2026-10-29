@@ -476,7 +476,11 @@ class PostgresScanCacheAdapter:
                 featured_artist_rows,
                 track_rows,
                 track_file_rows,
-            ) = _inventory_rows_from_albums(file_cache, albums)
+            ) = _inventory_rows_from_albums(
+                file_cache,
+                albums,
+                preserve_tagged_compilation_owner=True,
+            )
             _remap_targeted_album_identity_rows(
                 album_rows=album_rows,
                 featured_artist_rows=featured_artist_rows,
@@ -3174,6 +3178,7 @@ def _inventory_rows_from_albums(
     albums: list[object],
     *,
     include_track_inventory: bool = True,
+    preserve_tagged_compilation_owner: bool = False,
 ) -> tuple[
     list[dict[str, object]],
     list[dict[str, object]],
@@ -3220,6 +3225,11 @@ def _inventory_rows_from_albums(
         if len({_key(name) for name in tagged_owner_names}) == 1:
             tagged_owner = tagged_owner_names[0]
             if (
+                preserve_tagged_compilation_owner
+                and _is_various_artist(tagged_owner)
+            ):
+                return tagged_owner
+            if (
                 _is_various_artist(tagged_owner)
                 and classified_owner
                 and not _is_various_artist(classified_owner)
@@ -3240,6 +3250,12 @@ def _inventory_rows_from_albums(
 
     for album in albums:
         owner_name = album_owner_name(album)
+        persisted_album_artist = (
+            owner_name
+            if preserve_tagged_compilation_owner
+            and _is_various_artist(owner_name)
+            else getattr(album, "album_artist", None)
+        )
         member_artist_names = _deduped_artist_names(getattr(album, "artists", []) or [])
         if not member_artist_names:
             if owner_name is not None:
@@ -3253,6 +3269,31 @@ def _inventory_rows_from_albums(
         )
         album_artist_key = None if has_structured_shared_credit else ensure_artist(owner_name)
         album_key = str(getattr(album, "key", "") or "").strip()
+        classified_owner = _text_or_none(getattr(album, "album_artist", None))
+        if (
+            preserve_tagged_compilation_owner
+            and owner_name
+            and classified_owner
+            and _key(owner_name) != _key(classified_owner)
+        ):
+            title = _text_or_none(getattr(album, "name", None)) or "Unknown Album"
+            edition = _text_or_none(getattr(album, "edition", None)) or ""
+            classified_release_key = album_separate_release_key(
+                classified_owner,
+                title,
+                edition,
+            )
+            tagged_release_key = album_separate_release_key(
+                owner_name,
+                title,
+                edition,
+            )
+            if album_key == classified_release_key:
+                album_key = tagged_release_key
+            elif album_key.startswith(f"{classified_release_key}::year::"):
+                album_key = (
+                    tagged_release_key + album_key[len(classified_release_key):]
+                )
         if not album_key:
             continue
         tag_album_rating = _raw_tag_album_rating_from_file_entries(
@@ -3270,7 +3311,7 @@ def _inventory_rows_from_albums(
                 "metadata": _jsonb(
                     {
                         "source": _SOURCE,
-                        "album_artist": getattr(album, "album_artist", None),
+                        "album_artist": persisted_album_artist,
                         "artists": member_artist_names,
                         "is_compilation": bool(
                             getattr(album, "is_compilation", False)
@@ -3384,7 +3425,7 @@ def _inventory_rows_from_albums(
         album_rows[-1]["metadata"] = _jsonb(
             {
                 "source": _SOURCE,
-                "album_artist": getattr(album, "album_artist", None),
+                "album_artist": persisted_album_artist,
                 "artists": member_artist_names,
                 "is_compilation": bool(
                     getattr(album, "is_compilation", False)

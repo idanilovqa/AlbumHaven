@@ -2603,7 +2603,7 @@ async function loadCoverLookupNotificationCounts(options = {}) {
   }
 }
 
-function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
+function mergeCoverLookupTaskSummaries(incomingTasks, mode, removedTaskIds = []) {
   const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const currentById = new Map(current.map((task) => [String(task?.id || ''), task]));
   const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks).map((task) => {
@@ -2614,7 +2614,11 @@ function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
   });
   if (mode === 'replace') return incoming;
   const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
-  const remaining = current.filter((task) => !incomingIds.has(String(task?.id || '')));
+  const removedIds = new Set(removedTaskIds.map((taskId) => String(taskId || '')).filter(Boolean));
+  const remaining = current.filter((task) => {
+    const taskId = String(task?.id || '');
+    return !incomingIds.has(taskId) && !removedIds.has(taskId);
+  });
   if (mode === 'active') {
     const currentIds = new Set(current.map((task) => String(task?.id || '')).filter(Boolean));
     const incomingById = new Map(incoming.map((task) => [String(task?.id || ''), task]));
@@ -2676,9 +2680,15 @@ async function loadCoverLookupTasks(options = {}) {
     const incomingTaskIds = new Set(
       incomingTasks.map((task) => String(task?.id || '')).filter(Boolean),
     );
-    const missingActiveTask = activeOnly
-      && Array.from(previousActiveTaskIds).some((taskId) => !incomingTaskIds.has(taskId));
-    const nextTasks = mergeCoverLookupTaskSummaries(incomingTasks, requestMode);
+    const missingActiveTaskIds = activeOnly
+      ? new Set(Array.from(previousActiveTaskIds).filter((taskId) => !incomingTaskIds.has(taskId)))
+      : new Set();
+    const missingActiveTask = missingActiveTaskIds.size > 0;
+    const nextTasks = mergeCoverLookupTaskSummaries(
+      incomingTasks,
+      requestMode,
+      options.removedTaskIds,
+    );
     const completesInitialHydration = !activeOnly && !state.coverLookup.tasksHydrated;
     if (!activeOnly) {
       state.coverLookup.tasksHydrated = true;
@@ -2762,6 +2772,7 @@ async function loadCoverLookupTasks(options = {}) {
       await loadCoverLookupTasks({
         toast: false,
         mergeFirstPage: Number(data.total_count) > 0,
+        removedTaskIds: notificationsRemoved ? Array.from(missingActiveTaskIds) : [],
         refreshModalGallery: options.refreshModalGallery,
       });
     }

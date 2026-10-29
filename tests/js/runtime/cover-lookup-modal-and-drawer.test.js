@@ -1821,6 +1821,70 @@ require('node:test')('active-only polling refreshes the first page when a runnin
   );
 });
 
+require('node:test')('authoritative refresh removes a deleted active task without dropping loaded history', async () => {
+  const requestedUrls = [];
+  const firstPageSurvivor = { id: 'first-page-survivor', status: 'completed' };
+  const loadedHistory = Array.from({ length: 527 }, (_, index) => ({
+    id: `loaded-history-${index}`,
+    status: 'completed',
+  }));
+  const { context, badgeElement } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      if (String(url).includes('active_only=true')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            tasks: [],
+            next_cursor: null,
+            total_count: 528,
+            active_count: 0,
+            finished_count: 528,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [firstPageSurvivor],
+          next_cursor: 'page-two',
+          total_count: 528,
+          active_count: 0,
+          finished_count: 528,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-active', status: 'running' },
+    firstPageSurvivor,
+    ...loadedHistory,
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 529,
+    active_count: 1,
+    finished_count: 528,
+  };
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks.slice(0, 3), task => task.id),
+    ['first-page-survivor', 'loaded-history-0', 'loaded-history-1'],
+  );
+  assert.equal(context.state.coverLookup.tasks.length, 528);
+  assert.equal(context.state.coverLookup.tasks[1], loadedHistory[0]);
+  assert.equal(context.state.coverLookup.tasks.at(-1), loadedHistory.at(-1));
+  assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
+  assert.equal(badgeElement.textContent, '528');
+});
+
 require('node:test')('terminal gallery payload waits for its counted candidates before publishing completion', () => {
   const context = loadHelper();
   context.renderCoverLookupModal = () => {};

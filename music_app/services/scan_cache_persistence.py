@@ -3202,11 +3202,6 @@ def _inventory_rows_from_albums(
         if len({_key(name) for name in tagged_owner_names}) == 1:
             tagged_owner = tagged_owner_names[0]
             if (
-                preserve_tagged_compilation_owner
-                and _is_various_artist(tagged_owner)
-            ):
-                return tagged_owner
-            if (
                 _is_various_artist(tagged_owner)
                 and classified_owner
                 and not _is_various_artist(classified_owner)

@@ -43,6 +43,7 @@ def _published_rows(
     track_artists: tuple[str, ...],
     is_compilation: bool | None = None,
     persisted_album_artists: tuple[str | None, ...] | None = None,
+    preserve_tagged_compilation_owner: bool = False,
 ):
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
     file_cache = _file_cache(
@@ -67,6 +68,7 @@ def _published_rows(
     return albums[0], scan_cache_persistence._inventory_rows_from_albums(
         file_cache,
         albums,
+        preserve_tagged_compilation_owner=preserve_tagged_compilation_owner,
     )
 
 
@@ -531,6 +533,86 @@ def test_various_artists_owner_does_not_create_composite_display_artist(
     }
     assert {row["artist_key"] for row in track_rows} == {"jordsjø", "breidablik"}
     assert {row["artist_key"] for row in artist_rows} == {"jordsjø", "breidablik"}
+
+
+def test_targeted_various_artists_release_keeps_two_constituent_display_credit(
+    monkeypatch,
+):
+    album, rows = _published_rows(
+        monkeypatch,
+        album="Songs From Northern Wasteland",
+        album_artist="Various Artists",
+        track_artists=("Jordsjø", "Breidablik"),
+        preserve_tagged_compilation_owner=True,
+    )
+    artist_rows, album_rows, featured_rows, track_rows, _track_file_rows = rows
+
+    assert album.album_artist == "Jordsjø / Breidablik"
+    assert album_rows[0]["artist_key"] is None
+    assert album_rows[0]["metadata"]["album_artist"] == "Jordsjø / Breidablik"
+    assert {
+        row["artist_key"]
+        for row in featured_rows
+        if row["featured_kind"] == "featured_member"
+    } == {"jordsjø", "breidablik"}
+    assert {row["artist_key"] for row in track_rows} == {"jordsjø", "breidablik"}
+    assert {row["artist_key"] for row in artist_rows} == {"jordsjø", "breidablik"}
+
+
+def test_targeted_various_artists_tag_does_not_replace_structural_split_owner(
+    monkeypatch,
+):
+    album, rows = _published_rows(
+        monkeypatch,
+        album="Solo Release",
+        album_artist="Solo Voice",
+        track_artists=("Solo Voice feat. Featured Voice",),
+        persisted_album_artists=("Various Artists",),
+        preserve_tagged_compilation_owner=True,
+    )
+    _artist_rows, album_rows, featured_rows, _track_rows, _track_file_rows = rows
+
+    assert album.album_artist == "Solo Voice"
+    assert album_rows[0]["artist_key"] == "solo voice"
+    assert album_rows[0]["metadata"]["album_artist"] == "Solo Voice"
+    assert {
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+    } == {
+        ("solo voice", "owner"),
+        ("featured voice", "featured_track_artist"),
+    }
+
+
+def test_targeted_various_artists_release_keeps_every_track_artist_visible(
+    monkeypatch,
+):
+    album, rows = _published_rows(
+        monkeypatch,
+        album="Rain Man",
+        album_artist="Various Artists",
+        track_artists=("Belle Stars", "Watcher Compilation Performer"),
+        preserve_tagged_compilation_owner=True,
+    )
+    artist_rows, album_rows, featured_rows, track_rows, _track_file_rows = rows
+
+    assert album_rows[0]["artist_key"] is None
+    assert album_rows[0]["metadata"]["album_artist"] == (
+        "Belle Stars / Watcher Compilation Performer"
+    )
+    assert {
+        row["artist_key"]
+        for row in featured_rows
+        if row["featured_kind"] == "featured_track_artist"
+    } == {"belle stars", "watcher compilation performer"}
+    assert {row["artist_key"] for row in track_rows} == {
+        "belle stars",
+        "watcher compilation performer",
+    }
+    assert {row["artist_key"] for row in artist_rows} == {
+        "belle stars",
+        "watcher compilation performer",
+    }
 
 
 def test_structured_shared_release_does_not_persist_composite_owner(monkeypatch):

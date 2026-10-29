@@ -154,8 +154,10 @@ def test_targeted_album_metadata_uses_every_retained_member(watcher_repair_inven
     assert after["owner::unrelated"] == before["owner::unrelated"]
 
 
-def test_targeted_additions_preserve_each_tagged_album_artist_identity(
+@pytest.mark.parametrize("stage_first_track", [False, True])
+def test_targeted_additions_publish_tagged_or_inferred_album_artist_identity(
     watcher_repair_inventory,
+    stage_first_track,
 ):
     fixture = watcher_repair_inventory
     additions = [
@@ -200,7 +202,7 @@ def test_targeted_additions_preserve_each_tagged_album_artist_identity(
             entry["album_artist"] = album_artist
             entry["track_number"] = index
             entries.append(entry)
-        if addition_index == 0:
+        if stage_first_track and addition_index == 0:
             fixture.adapter.persist_targeted_inventory_mutation(
                 root_id="repair-main",
                 active_file_entries={entries[0]["path"]: entries[0]},
@@ -236,8 +238,10 @@ def test_targeted_additions_preserve_each_tagged_album_artist_identity(
 
     by_title = {row["title"]: row for row in albums}
     assert set(by_title) == {album for _folder, album, _owner, _artists in additions}
-    assert by_title["Rain Man"]["owner_name"] == "Various Artists"
-    assert by_title["Rain Man"]["metadata"]["album_artist"] == "Various Artists"
+    assert by_title["Rain Man"]["owner_name"] is None
+    assert by_title["Rain Man"]["metadata"]["album_artist"] == (
+        "Belle Stars / Watcher Compilation Performer"
+    )
     assert set(by_title["Rain Man"]["featured_names"]) == {
         "Belle Stars",
         "Watcher Compilation Performer",

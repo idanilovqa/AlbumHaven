@@ -24,14 +24,18 @@ def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inven
                 from library.libraries where library_kind = 'local' and name = 'Local Library'
             """)
     previous = {item["path"]: item for item in (changed, retained)}
+    initial_albums = build_albums_from_file_cache(previous, separate_keys)
+    assert len(initial_albums) == 1
+    initial_album_key = initial_albums[0].key
     fixture.adapter.save_snapshot(
         Path("unused-watcher-identity.json"), previous, "watcher-identity", 1.0,
         separate_release_keys=separate_keys, observed_library_root_ids={"repair-main"},
     )
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        established_album_id = connection.execute("""
-            select id from library.local_albums where album_key = 'owner::repair album'
-        """).fetchone()["id"]
+        established_album_id = connection.execute(
+            "select id from library.local_albums where album_key = %s",
+            (initial_album_key,),
+        ).fetchone()["id"]
     replacement = {**changed, **({"edition": "Deluxe"} if retag == "edition" else {"year": 2001})}
     expected_albums = build_albums_from_file_cache(
         {**previous, changed["path"]: replacement}, separate_keys,
@@ -61,9 +65,11 @@ def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inven
         assert row["metadata"].get("edition") == by_key[row["album_key"]].edition
     if retag == "separated_year":
         assert {row["release_year"] for row in rows} == {2000, 2001}
-    if retag == "ordinary_year":
-        assert {row["album_id"] for row in rows} == {established_album_id}
-        assert repair_album_ids == {established_album_id}
+    if retag in {"separated_year", "ordinary_year"}:
+        resulting_album_ids = {row["album_id"] for row in rows}
+        assert established_album_id in resulting_album_ids
+        assert len(resulting_album_ids) == 2
+        assert repair_album_ids == resulting_album_ids
 
 
 @pytest.mark.parametrize("other_root", [False, True])

@@ -458,6 +458,10 @@ class PostgresScanCacheAdapter:
                 context_entry = context_row.get("file_entry") or _fallback_file_entry(context_row)
                 if isinstance(context_entry, dict) and context_entry.get("path"):
                     membership_context[str(context_entry["path"])] = dict(context_entry)
+            file_cache = _restore_structurally_inherited_covers(
+                file_cache,
+                membership_context,
+            )
             file_cache = {**membership_context, **file_cache}
             existing_memberships = [
                 _row_mapping(row)
@@ -1508,6 +1512,9 @@ class PostgresScanCacheAdapter:
                     {
                         "album_ids": cover_album_ids,
                         "active_paths": sorted(normalized_paths),
+                        "cover_inherited_from_structural_edit": (
+                            input_path_count < source_album_track_file_count
+                        ),
                     },
                 )
             committed_relation_state = (
@@ -1535,6 +1542,9 @@ class PostgresScanCacheAdapter:
             "track_rows_updated": track_rows_updated,
             "track_file_rows_updated": track_file_rows_updated,
             "inventory_mutation_revision": inventory_mutation_revision,
+            "cover_inherited_from_structural_edit": (
+                input_path_count < source_album_track_file_count
+            ),
         }
         if committed_relation_state is not None:
             persistence_result.update(committed_relation_state)
@@ -2893,12 +2903,6 @@ def _remap_targeted_album_identity_rows(
             )
         )
 
-    preferred_album_keys = {
-        str(track_row.get("album_key") or "").strip()
-        for track_row in track_rows
-        if str(track_row.get("track_key") or "") in (preferred_paths or set())
-    }
-    preferred_album_keys.discard("")
     generated_key_by_path = {
         str(track_row.get("track_key") or ""): str(
             track_row.get("album_key") or ""
@@ -2906,23 +2910,13 @@ def _remap_targeted_album_identity_rows(
         for track_row in track_rows
         if track_row.get("track_key")
     }
-    stable_album_keys = {
-        generated_key_by_path.get(str(membership.get("private_path") or ""), "")
+    existing_key_by_path = {
+        str(membership.get("private_path") or ""): str(
+            membership.get("album_key") or ""
+        ).strip()
         for membership in existing_memberships
-        if str(membership.get("private_path") or "")
-        not in (excluded_paths or set())
-        and generated_key_by_path.get(
-            str(membership.get("private_path") or ""), ""
-        )
-        == str(membership.get("album_key") or "").strip()
+        if membership.get("private_path")
     }
-    stable_album_keys.discard("")
-    surviving_album_keys = {
-        str(track_row.get("album_key") or "").strip()
-        for track_row in track_rows
-        if str(track_row.get("track_key") or "") not in (excluded_paths or set())
-    }
-    surviving_album_keys.discard("")
 
     automatic_year_remaps: dict[str, str] = {}
     collapsed_album_row_ids: set[int] = set()
@@ -2944,6 +2938,17 @@ def _remap_targeted_album_identity_rows(
             if str(track_row.get("album_key") or "").strip() in grouped_keys
         }
         if not grouped_track_paths or not grouped_track_paths.issubset(existing_paths):
+            automatic_year_split_keys.update(grouped_keys)
+            continue
+        deliberately_changed_paths = {
+            path
+            for path in (preferred_paths or set())
+            if path not in (excluded_paths or set())
+            and generated_key_by_path.get(path) in grouped_keys
+            and existing_key_by_path.get(path)
+            and generated_key_by_path[path] != existing_key_by_path[path]
+        }
+        if deliberately_changed_paths:
             automatic_year_split_keys.update(grouped_keys)
             continue
         authorities = {
@@ -2990,55 +2995,16 @@ def _remap_targeted_album_identity_rows(
             )
             if established_identity is not None:
                 canonical_key, canonical_year = established_identity
-                established_row = next(
+                canonical_row = next(
                     (
                         row
                         for row in grouped_rows
-                        if str(row.get("album_key") or "").strip()
-                        == canonical_key
+                        if str(row.get("album_key") or "").strip() == canonical_key
                     ),
                     grouped_rows[0],
                 )
             else:
-                established_row = None
-            stable_rows = [
-                row
-                for row in grouped_rows
-                if str(row.get("album_key") or "").strip() in stable_album_keys
-            ]
-            stable_keys = {
-                str(row.get("album_key") or "").strip() for row in stable_rows
-            }
-            preferred_rows = [
-                row
-                for row in grouped_rows
-                if str(row.get("album_key") or "").strip()
-                in preferred_album_keys
-            ]
-            preferred_keys = {
-                str(row.get("album_key") or "").strip() for row in preferred_rows
-            }
-            surviving_rows = [
-                row
-                for row in grouped_rows
-                if str(row.get("album_key") or "").strip()
-                in surviving_album_keys
-            ]
-            surviving_keys = {
-                str(row.get("album_key") or "").strip()
-                for row in surviving_rows
-            }
-            if established_row is not None:
-                canonical_row = established_row
-            elif len(stable_keys) == 1:
-                canonical_row = stable_rows[0]
-            elif len(preferred_keys) == 1:
-                canonical_row = preferred_rows[0]
-            elif len(surviving_keys) == 1:
-                canonical_row = surviving_rows[0]
-            else:
                 canonical_row = grouped_rows[0]
-            if established_identity is None:
                 canonical_key = str(canonical_row.get("album_key") or "").strip()
                 canonical_year = safe_int(canonical_row.get("release_year"))
             canonical_release_date = None
@@ -3663,6 +3629,31 @@ def _fallback_file_entry(row: dict[str, object]) -> dict[str, object] | None:
         "library_root_category": row.get("library_root_category"),
         "exception_type": None,
     }
+
+
+def _restore_structurally_inherited_covers(
+    incoming_entries: dict[str, dict[str, object]],
+    persisted_entries: dict[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    restored_entries = dict(incoming_entries)
+    for path, incoming_entry in incoming_entries.items():
+        persisted_entry = persisted_entries.get(path)
+        if not isinstance(persisted_entry, dict):
+            continue
+        cover_path = str(persisted_entry.get("cover_path") or "").strip()
+        if (
+            incoming_entry.get("cover_path")
+            or persisted_entry.get("cover_inherited_from_structural_edit") is not True
+            or not cover_path
+            or not Path(cover_path).is_file()
+            or not inferred_local_cover_belongs_to_track(cover_path, path)
+        ):
+            continue
+        restored_entry = dict(incoming_entry)
+        restored_entry["cover_path"] = cover_path
+        restored_entry["cover_inherited_from_structural_edit"] = True
+        restored_entries[path] = restored_entry
+    return restored_entries
 
 
 def _targeted_surviving_file_entry(
@@ -6317,6 +6308,12 @@ def _synchronize_album_cover_file_entries_sql(
         f"'{field}', album.metadata -> '{field}'"
         for field in ("cover_revision", *_ALBUM_COVER_AUTHORITY_FIELDS)
     )
+    structural_cover_field = (
+        ", 'cover_inherited_from_structural_edit', "
+        "%(cover_inherited_from_structural_edit)s::boolean"
+        if by_album_ids
+        else ""
+    )
     album_filter = (
         """(
           album.id = any(%(album_ids)s::bigint[])
@@ -6345,7 +6342,8 @@ def _synchronize_album_cover_file_entries_sql(
         update library.local_track_files files
         set metadata = jsonb_set(files.metadata, '{{scan_cache,file_entry}}',
           (files.metadata #> '{{scan_cache,file_entry}}') || jsonb_build_object(
-            'album_id', album.id, 'cover_path', album.cover_path, {selection_fields}
+            'album_id', album.id, 'cover_path', album.cover_path,
+            {selection_fields}{structural_cover_field}
           ), true)
         from library.local_tracks tracks
         join repaired_albums album on album.id = tracks.album_id and album.library_id = tracks.library_id

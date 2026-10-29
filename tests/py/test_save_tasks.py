@@ -1626,6 +1626,53 @@ def test_structural_tag_edit_runtime_refresh_preserves_cover_selected_after_comm
     ]
 
 
+def test_structural_cover_inheritance_marks_only_affected_album_identities():
+    selected = "C:/Music/Artist/Folder/01.mp3"
+    sibling = "C:/Music/Artist/Folder/02.mp3"
+    unrelated = "C:/Music/Artist/Folder/03.mp3"
+    cover = "C:/Music/Artist/Folder/cover.jpg"
+    previous = {
+        selected: {
+            "path": selected,
+            "album_artist": "Artist",
+            "album": "Source",
+            "cover_path": cover,
+        }
+    }
+    updated = {
+        selected: {
+            **previous[selected],
+            "album": "Destination",
+        }
+    }
+    cache = {
+        selected: dict(updated[selected]),
+        sibling: {
+            "path": sibling,
+            "album_artist": "Artist",
+            "album": "Source",
+            "cover_path": cover,
+        },
+        unrelated: {
+            "path": unrelated,
+            "album_artist": "Artist",
+            "album": "Unrelated",
+            "cover_path": cover,
+        },
+    }
+
+    marked = save_tasks_module._mark_structurally_inherited_cover_entries(
+        file_cache=cache,
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_paths={selected},
+    )
+
+    assert marked[selected]["cover_inherited_from_structural_edit"] is True
+    assert marked[sibling]["cover_inherited_from_structural_edit"] is True
+    assert "cover_inherited_from_structural_edit" not in marked[unrelated]
+
+
 def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(tmp_path):
     task_id = create_save_task("edit-tags")
     compensations: list[dict[str, object]] = []

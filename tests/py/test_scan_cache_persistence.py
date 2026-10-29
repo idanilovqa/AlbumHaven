@@ -519,6 +519,42 @@ def test_targeted_surviving_entry_keeps_owned_folder_cover(tmp_path):
     assert entry["cover_selection_origin"] == "automatic"
 
 
+def test_targeted_reconciliation_restores_structurally_inherited_cover(tmp_path):
+    from music_app.services import scan_cache_persistence
+
+    track_path = tmp_path / "Artist" / "Shared Folder" / "01.flac"
+    cover_path = track_path.parent / "cover.jpg"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"audio")
+    cover_path.write_bytes(b"image")
+    incoming = {
+        str(track_path): {
+            "path": str(track_path),
+            "album": "Destination Album",
+            "cover_path": None,
+        }
+    }
+    persisted = {
+        str(track_path): {
+            "path": str(track_path),
+            "album": "Source Album",
+            "cover_path": str(cover_path),
+            "cover_inherited_from_structural_edit": True,
+        }
+    }
+
+    restored = scan_cache_persistence._restore_structurally_inherited_covers(
+        incoming,
+        persisted,
+    )
+
+    assert restored[str(track_path)]["album"] == "Destination Album"
+    assert restored[str(track_path)]["cover_path"] == str(cover_path)
+    assert (
+        restored[str(track_path)]["cover_inherited_from_structural_edit"] is True
+    )
+
+
 def test_targeted_surviving_entry_drops_removed_container_cover(tmp_path):
     from music_app.services import scan_cache_persistence
 
@@ -775,6 +811,60 @@ def test_targeted_album_rows_collapse_unseparated_automatic_year_members_to_comp
     assert {row["release_year"] for row in album_rows} == {2000}
     assert {row["album_key"] for row in featured_rows} == {keys[0]}
     assert {row["album_key"] for row in track_rows} == {keys[0]}
+
+
+def test_targeted_album_rows_keep_intentional_year_retag_as_a_split():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": paths[0],
+                "album_key": keys[0],
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2000,
+            },
+            {
+                "private_path": paths[1],
+                "album_key": keys[0],
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2000,
+            },
+        ],
+        separate_release_keys=set(),
+        preferred_paths={paths[1]},
+    )
+
+    assert [row["album_key"] for row in album_rows] == keys
+    assert [row["album_key"] for row in featured_rows] == keys
+    assert [row["album_key"] for row in track_rows] == keys
 
 
 def test_targeted_album_rows_prefer_one_full_date_for_automatic_year_group():

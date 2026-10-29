@@ -253,6 +253,7 @@ def test_postgres_album_rename_is_targeted_and_never_round_trips_a_snapshot(monk
         "destination_album_id": 41,
         "destination_album_key": "artist::new album",
         "destination_artist_name": "Artist",
+        "cover_inherited_from_structural_edit": False,
     }
     mutation_calls = [
         (sql, params)
@@ -2064,6 +2065,7 @@ def test_postgres_partial_album_move_publishes_source_and_destination_cover_auth
     assert publication_params == {
         "album_ids": [17, 41],
         "active_paths": [paths[0]],
+        "cover_inherited_from_structural_edit": True,
     }
     assert "join repaired_albums album on album.id = tracks.album_id" in (
         normalized_publication_sql
@@ -2072,6 +2074,7 @@ def test_postgres_partial_album_move_publishes_source_and_destination_cover_auth
     assert "'cover_selection_origin', album.metadata -> 'cover_selection_origin'" in (
         normalized_publication_sql
     )
+    assert "'cover_inherited_from_structural_edit'" in normalized_publication_sql
     assert "'cover_selection_provenance', album.metadata -> 'cover_selection_provenance'" in (
         normalized_publication_sql
     )
@@ -2102,6 +2105,7 @@ def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owne
     assert publication_params == {
         "album_ids": [17, 41],
         "active_paths": [paths[0]],
+        "cover_inherited_from_structural_edit": True,
     }
     assert "selected_files.private_path = any(%(active_paths)s::text[])" in normalized_publication_sql
     assert "selected_tracks.album_id = album.id" in normalized_publication_sql

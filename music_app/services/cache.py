@@ -64,6 +64,9 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "cover_validation_path": entry.get("cover_validation_path"),
         "cover_validation_mtime_ns": entry.get("cover_validation_mtime_ns"),
         "cover_validation_size": entry.get("cover_validation_size"),
+        "cover_inherited_from_structural_edit": entry.get(
+            "cover_inherited_from_structural_edit"
+        ),
         "remote_cover_url": entry.get("remote_cover_url"), "remote_cover_thumbnail_url": entry.get("remote_cover_thumbnail_url"),
         "remote_cover_source": entry.get("remote_cover_source"), "remote_cover_source_label": entry.get("remote_cover_source_label"),
         "remote_cover_album_url": entry.get("remote_cover_album_url"), "remote_cover_width": entry.get("remote_cover_width"),
@@ -94,6 +97,9 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "cover_validation_path": entry.get("cover_validation_path"),
         "cover_validation_mtime_ns": entry.get("cover_validation_mtime_ns"),
         "cover_validation_size": entry.get("cover_validation_size"),
+        "cover_inherited_from_structural_edit": entry.get(
+            "cover_inherited_from_structural_edit"
+        ),
         "remote_cover_url": entry.get("remote_cover_url"), "remote_cover_thumbnail_url": entry.get("remote_cover_thumbnail_url"),
         "remote_cover_source": entry.get("remote_cover_source"), "remote_cover_source_label": entry.get("remote_cover_source_label"),
         "remote_cover_album_url": entry.get("remote_cover_album_url"), "remote_cover_width": entry.get("remote_cover_width"),

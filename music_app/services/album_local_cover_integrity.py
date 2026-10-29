@@ -69,6 +69,7 @@ def clear_ambiguous_folder_covers(
             or not (ambiguous_inferred_cover or foreign_inferred_cover)
             or str(entry.get("cover_selection_origin") or "").casefold() == "user"
             or str(entry.get("cover_selection_provenance") or "").casefold() == "explicit"
+            or entry.get("cover_inherited_from_structural_edit") is True
             or bool(entry.get("remote_cover_url"))
         ):
             continue

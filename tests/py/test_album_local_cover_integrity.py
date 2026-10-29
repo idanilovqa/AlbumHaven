@@ -163,6 +163,34 @@ def test_ambiguous_loose_folder_preserves_user_local_cover(tmp_path, authority):
     assert all(entry["cover_path"] == str(cover) for entry in cache.values())
 
 
+def test_ambiguous_loose_folder_preserves_structurally_inherited_cover(tmp_path):
+    from music_app.services.album_local_cover_integrity import (
+        clear_ambiguous_folder_covers,
+    )
+
+    folder = tmp_path / "Split album"
+    cover = folder / "cover.jpg"
+    first = folder / "first.mp3"
+    second = folder / "second.mp3"
+    cache = {
+        str(first): {
+            "path": str(first),
+            "album": "Original Album",
+            "cover_path": str(cover),
+            "cover_inherited_from_structural_edit": True,
+        },
+        str(second): {
+            "path": str(second),
+            "album": "Split Album",
+            "cover_path": str(cover),
+            "cover_inherited_from_structural_edit": True,
+        },
+    }
+
+    assert clear_ambiguous_folder_covers(cache) == {}
+    assert all(entry["cover_path"] == str(cover) for entry in cache.values())
+
+
 def test_same_album_folder_keeps_art_across_track_artist_and_year_variation(tmp_path):
     from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 

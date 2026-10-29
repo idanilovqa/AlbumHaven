@@ -33,6 +33,21 @@ def test_file_entry_round_trip_preserves_local_membership_rejection(tmp_path):
     assert cache_module.deserialize_file_entry(serialized)["local_album_membership_problem"] == entry["local_album_membership_problem"]
 
 
+def test_file_entry_round_trip_preserves_structural_cover_inheritance(tmp_path):
+    entry = _cache_entry(tmp_path / "split.flac")
+    entry["cover_inherited_from_structural_edit"] = True
+
+    serialized = cache_module.serialize_file_entry(entry)
+
+    assert serialized["cover_inherited_from_structural_edit"] is True
+    assert (
+        cache_module.deserialize_file_entry(serialized)[
+            "cover_inherited_from_structural_edit"
+        ]
+        is True
+    )
+
+
 def _write_migration_cache(
     cache_path: Path,
     *,

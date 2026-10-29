@@ -89,7 +89,7 @@ def test_captured_local_due_date_and_new_calendar_boundary(start,period,zone,bef
 
 
 def test_overcapacity_never_silently_truncates():
-    value=state(albums=tuple('manual-'+str(i) for i in range(6))+('bonus',))
+    value=state(albums=tuple('manual-'+str(i) for i in range(7))+('bonus',))
     with pytest.raises(domain.GoalsDomainError,match='weekly_capacity'):
         move(value)
 

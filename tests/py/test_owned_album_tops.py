@@ -242,6 +242,19 @@ def test_save_rejects_an_empty_patch():
     _assert_invalid("save", {"request_key": REQUEST, "revision": "1"}, top_ref=TOP)
 
 
+@pytest.mark.parametrize("changes", [{"items": []}, {"item_selections": []},
+                                     {"evidence_revision": "0" * 64}])
+def test_save_keeps_explicit_empty_membership_and_publication_evidence(changes):
+    command = normalize_top_command("save", {"request_key": REQUEST, "revision": "1", **changes}, top_ref=TOP)
+    assert dict(command.data) == {"revision": "1", **changes}
+
+
+def test_enable_external_keeps_evidence_only_publication():
+    command = normalize_top_command("enable_external", {
+        "request_key": REQUEST, "revision": "1", "evidence_revision": "0" * 64}, top_ref=TOP)
+    assert dict(command.data) == {"revision": "1", "evidence_revision": "0" * 64}
+
+
 @pytest.mark.parametrize("action,field", [("create", "album_refs"), ("add", "album_refs"),
                                          ("remove", "item_refs"), ("reorder", "item_order")])
 @pytest.mark.parametrize("value", [None, True, ALBUM, (ALBUM,), {"ref": ALBUM}, [ALBUM, ALBUM],

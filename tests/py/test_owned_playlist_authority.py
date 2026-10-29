@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import pytest
 
 from music_app.services import owned_playlists as playlists
+from music_app.services.capabilities import grant_keys_for_action
 from music_app.services.current_actor import (
     ActorState, CapabilityGrant, CurrentActor, LibraryRelationship,
 )
@@ -67,6 +68,15 @@ def forbidden(value, *, actions=(BROWSE, MANAGE), owner=ACCOUNT, constraints=Non
     assert (error.value.code, error.value.status_code) == ("forbidden", 403)
 
 
+def revoke_current_action(value, action):
+    alternatives = grant_keys_for_action(action)
+    retained = tuple(grant for grant in value.capability_grants
+                     if not (grant.capability_key in alternatives and
+                             ((grant.scope_kind == "library" and grant.scope_id == LIBRARY) or
+                              (grant.scope_kind == "global" and grant.scope_id is None))))
+    return replace(value, capability_grants=retained)
+
+
 @pytest.mark.parametrize("required_actions", [
     (BROWSE,), (BROWSE, CREATE), (BROWSE, MANAGE), (BROWSE, ITEMS),
     (BROWSE, MANAGE, ITEMS),
@@ -113,35 +123,66 @@ def test_active_label_without_valid_account_and_session_fails_closed(field, valu
 
 
 @pytest.mark.parametrize("membership_role", ["owner", "admin", "editor", "listener"])
-def test_membership_role_name_does_not_expand_explicit_playlist_grants(membership_role):
-    forbidden(context(actor(grants=(BROWSE,), role=membership_role)))
+def test_membership_role_name_needs_durable_authority_but_browse_grants_personal_actions(membership_role):
+    value = actor(grants=(BROWSE,), role=membership_role)
+    assert require(context(value)) is None
+    forbidden(context(revoke_current_action(value, MANAGE)))
 
 
-def test_capability_admin_does_not_imply_playlist_manage():
-    forbidden(context(actor(grants=(BROWSE, "capability.admin"))))
+def test_capability_admin_alone_does_not_imply_playlist_manage_but_browse_does():
+    value = actor(grants=(BROWSE, "capability.admin"))
+    assert require(context(value)) is None
+    without_browse = revoke_current_action(value, MANAGE)
+    assert tuple(grant.capability_key for grant in without_browse.capability_grants) == ("capability.admin",)
+    forbidden(context(without_browse))
 
 
 @pytest.mark.parametrize("missing", [BROWSE, CREATE])
-def test_create_requires_browse_and_create_independently(missing):
+def test_create_requires_current_authority_not_a_redundant_direct_grant(missing):
     grants = tuple(action for action in ALL_ACTIONS if action != missing)
-    forbidden(context(actor(grants=grants), action=CREATE, resource=None),
+    value = actor(grants=grants)
+    if missing == CREATE:
+        assert require(context(value, action=CREATE, resource=None), actions=(BROWSE, CREATE), owner=None) is None
+    forbidden(context(revoke_current_action(value, missing), action=CREATE, resource=None),
               actions=(BROWSE, CREATE), owner=None)
 
 
 @pytest.mark.parametrize("missing", [BROWSE, MANAGE, ITEMS])
-def test_changed_metadata_and_order_need_intersection_of_all_required_grants(missing):
+def test_changed_metadata_and_order_require_effective_authority_after_revocation(missing):
     grants = tuple(action for action in ALL_ACTIONS if action != missing)
-    forbidden(context(actor(grants=grants)), actions=(BROWSE, MANAGE, ITEMS))
+    value = actor(grants=grants)
+    if missing != BROWSE:
+        assert require(context(value), actions=(BROWSE, MANAGE, ITEMS)) is None
+    forbidden(context(revoke_current_action(value, missing)), actions=(BROWSE, MANAGE, ITEMS))
 
 
 @pytest.mark.parametrize("required", [CREATE, MANAGE, ITEMS])
-def test_fine_grants_from_another_library_do_not_authorize_current_library(required):
+def test_foreign_fine_grant_never_replaces_current_browse_authority(required):
     grants = (
         CapabilityGrant(BROWSE, "library", LIBRARY),
         CapabilityGrant(required, "library", OTHER_LIBRARY),
     )
     value = actor(capability_grants=grants)
-    forbidden(context(value, action=required), actions=(BROWSE, required))
+    assert require(context(value, action=required), actions=(BROWSE, required)) is None
+    revoked = revoke_current_action(value, required)
+    assert revoked.capability_grants == (CapabilityGrant(required, "library", OTHER_LIBRARY),)
+    forbidden(context(revoked, action=required), actions=(BROWSE, required))
+
+
+@pytest.mark.parametrize("denied_action", [CREATE, MANAGE, ITEMS])
+def test_intrinsic_browse_does_not_bypass_each_requested_action_constraint(denied_action, monkeypatch):
+    value = context(actor(grants=(BROWSE,)), action=denied_action,
+                    resource=None if denied_action == CREATE else ResourceScope("playlist", PLAYLIST))
+    actions = (BROWSE, CREATE) if denied_action == CREATE else (BROWSE, MANAGE, ITEMS)
+    observed = []
+    evaluate = PolicyEvaluator.evaluate
+    def constrained_evaluate(self, requested, *, constraints=None):
+        observed.append(requested.action)
+        return evaluate(self, requested, constraints=PolicyEvaluationConstraints(
+            request_origin_allowed=requested.action != denied_action))
+    monkeypatch.setattr(PolicyEvaluator, "evaluate", constrained_evaluate)
+    forbidden(value, actions=actions, owner=None if denied_action == CREATE else ACCOUNT)
+    assert denied_action in observed
 
 
 def test_existing_global_grant_semantics_remain_authoritative():

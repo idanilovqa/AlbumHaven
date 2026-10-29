@@ -311,6 +311,68 @@ def test_cover_lookup_resolves_stale_identity_through_shared_lineage(monkeypatch
     assert context.track_paths == {"current/01.flac"}
 
 
+def test_cover_lookup_prefers_split_lineage_over_stale_physical_context(monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+
+    choices = [
+        {
+            "album_id": 41,
+            "album_key": "artist::first release",
+            "name": "First Release",
+        },
+        {
+            "album_id": 42,
+            "album_key": "artist::second release",
+            "name": "Second Release",
+        },
+    ]
+
+    class FakeLineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, **identity):
+            assert identity == {
+                "album_id": 40,
+                "album_key": "artist::old album",
+                "track_paths": {"old/01.flac", "old/02.flac"},
+            }
+            return {"status": "split", "album": None, "choices": choices}
+
+    monkeypatch.setattr(
+        cover_routes,
+        "AlbumIdentityLineageRepository",
+        FakeLineageRepository,
+    )
+    monkeypatch.setattr(
+        cover_routes,
+        "resolve_album_context",
+        lambda _config, _album: SimpleNamespace(
+            album_root="old",
+            track_paths={"old/01.flac", "old/02.flac"},
+        ),
+    )
+
+    album, context = asyncio.run(
+        cover_routes._resolve_album_payload_context(
+            {},
+            {
+                "album_id": 40,
+                "key": "artist::old album",
+                "tracks": [
+                    {"path": "old/01.flac"},
+                    {"path": "old/02.flac"},
+                ],
+            },
+            fallback_track_paths={"old/01.flac", "old/02.flac"},
+            task_scoped=True,
+        )
+    )
+
+    assert context is None
+    assert album["_identity_split_choices"] == choices
+
+
 def test_cover_lookup_task_identity_uses_legacy_nested_paths_and_merged_subset():
     from music_app.routes import api_wave_d_asgi_routes as cover_routes
 

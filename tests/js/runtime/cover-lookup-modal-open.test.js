@@ -142,6 +142,7 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
   };
   const requests = [];
   const toasts = [];
+  const renders = [];
   const overlay = {
     hidden: false,
     classList: { contains: () => false, toggle: () => {} },
@@ -184,7 +185,13 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
   };
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
-  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupModal = () => {
+    renders.push({
+      loading: context.state.coverLookup.modal.loading,
+      releaseIds: (context.state.coverLookup.modal.currentReleases || [])
+        .map(release => release.album_id),
+    });
+  };
   context.applyCoverLookupGalleryPayload = () => {};
   context.markCoverLookupAutomaticImprovementSeen = async () => {};
   context.ensureCoverLookupPolling = () => {};
@@ -196,6 +203,7 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
     context.state.coverLookup.modal.currentReleases.map((release) => release.album_id),
     [41, 42],
   );
+  assert.deepEqual(renders.at(-1), { loading: false, releaseIds: [41, 42] });
   assert.deepEqual(toasts, []);
 
   await context.chooseCoverLookupCurrentRelease('42');

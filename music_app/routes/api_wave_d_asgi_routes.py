@@ -267,6 +267,27 @@ async def _resolve_album_payload_context(
         normalized_album["_cover_lookup_task_scoped_context"] = True
     resolved_context = resolve_album_context(config, normalized_album)
     if resolved_context is not None:
+        if task_scoped and fallback_paths:
+            album_id = _album_id(normalized_album)
+            lineage_album_key = str(
+                normalized_album.get("_persisted_album_key")
+                or normalized_album.get("key")
+                or normalized_album.get("album_ref")
+                or ""
+            ).strip() or None
+            if album_id is not None or lineage_album_key is not None:
+                try:
+                    lineage = await run_in_threadpool(
+                        AlbumIdentityLineageRepository(config).resolve,
+                        album_id=album_id,
+                        album_key=lineage_album_key,
+                        track_paths=fallback_paths,
+                    )
+                except (RuntimeError, OSError):
+                    return normalized_album, None
+                if lineage["status"] == "split":
+                    normalized_album["_identity_split_choices"] = lineage["choices"]
+                    return normalized_album, None
         return normalized_album, resolved_context
     if fallback_paths and not _album_track_paths(normalized_album):
         album_id = await run_in_threadpool(

@@ -28,6 +28,10 @@ def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inven
         Path("unused-watcher-identity.json"), previous, "watcher-identity", 1.0,
         separate_release_keys=separate_keys, observed_library_root_ids={"repair-main"},
     )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        established_album_id = connection.execute("""
+            select id from library.local_albums where album_key = 'owner::repair album'
+        """).fetchone()["id"]
     replacement = {**changed, **({"edition": "Deluxe"} if retag == "edition" else {"year": 2001})}
     expected_albums = build_albums_from_file_cache(
         {**previous, changed["path"]: replacement}, separate_keys,
@@ -38,18 +42,28 @@ def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inven
     )
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         rows = connection.execute("""
-            select file.private_path, album.album_key, album.release_year, album.metadata
+            select file.private_path, album.id as album_id, album.album_key,
+                   album.release_year, album.metadata
             from library.local_track_files file
             join library.local_tracks track on track.id = file.track_id
             join library.local_albums album on album.id = track.album_id
             where file.scan_cache_stale is false order by file.private_path
         """).fetchall()
+        repair_album_ids = {
+            row["id"] for row in connection.execute("""
+                select id from library.local_albums
+                where lower(btrim(title)) = 'repair album'
+            """).fetchall()
+        }
     assert {row["private_path"]: row["album_key"] for row in rows} == expected_membership
     by_key = {album.key: album for album in expected_albums}
     for row in rows:
         assert row["metadata"].get("edition") == by_key[row["album_key"]].edition
     if retag == "separated_year":
         assert {row["release_year"] for row in rows} == {2000, 2001}
+    if retag == "ordinary_year":
+        assert {row["album_id"] for row in rows} == {established_album_id}
+        assert repair_album_ids == {established_album_id}
 
 
 @pytest.mark.parametrize("other_root", [False, True])

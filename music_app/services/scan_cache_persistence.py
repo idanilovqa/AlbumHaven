@@ -2856,25 +2856,25 @@ def _remap_targeted_album_identity_rows(
         if album_key.startswith(f"{release_key}::year::"):
             automatic_year_groups.setdefault(release_key, []).append(album_row)
 
-    full_date_authorities: dict[
-        str, set[tuple[str, str, int | None, str]]
+    existing_authorities: dict[
+        str, set[tuple[str, str, int | None, str | None]]
     ] = {}
     for membership in existing_memberships:
         release_date = str(membership.get("release_date") or "").strip()
         album_key = str(membership.get("album_key") or "").strip()
-        if not release_date or not album_key:
+        if not album_key:
             continue
         release_key = album_separate_release_key(
             str(membership.get("artist_key") or "").strip(),
             str(membership.get("album_title") or "").strip(),
             str(membership.get("edition") or "").strip(),
         )
-        full_date_authorities.setdefault(release_key, set()).add(
+        existing_authorities.setdefault(release_key, set()).add(
             (
                 str(membership.get("private_path") or ""),
                 album_key,
                 safe_int(membership.get("release_year")),
-                release_date,
+                release_date or None,
             )
         )
 
@@ -2933,10 +2933,10 @@ def _remap_targeted_album_identity_rows(
             continue
         authorities = {
             (album_key, release_year, release_date)
-            for path, album_key, release_year, release_date in full_date_authorities.get(
+            for path, album_key, release_year, release_date in existing_authorities.get(
                 release_key, set()
             )
-            if path in grouped_track_paths
+            if path in grouped_track_paths and release_date is not None
         }
         if len(authorities) > 1:
             continue
@@ -2953,6 +2953,39 @@ def _remap_targeted_album_identity_rows(
                 grouped_rows[0],
             )
         else:
+            established_rows = {
+                (album_key, release_year)
+                for path, album_key, release_year, _release_date in existing_authorities.get(
+                    release_key, set()
+                )
+                if path in grouped_track_paths
+            }
+            established_paths = {
+                path
+                for path, _album_key, _release_year, _release_date in existing_authorities.get(
+                    release_key, set()
+                )
+                if path in grouped_track_paths
+            }
+            established_identity = (
+                next(iter(established_rows))
+                if established_paths == grouped_track_paths
+                and len(established_rows) == 1
+                else None
+            )
+            if established_identity is not None:
+                canonical_key, canonical_year = established_identity
+                established_row = next(
+                    (
+                        row
+                        for row in grouped_rows
+                        if str(row.get("album_key") or "").strip()
+                        == canonical_key
+                    ),
+                    grouped_rows[0],
+                )
+            else:
+                established_row = None
             stable_rows = [
                 row
                 for row in grouped_rows
@@ -2980,7 +3013,9 @@ def _remap_targeted_album_identity_rows(
                 str(row.get("album_key") or "").strip()
                 for row in surviving_rows
             }
-            if len(stable_keys) == 1:
+            if established_row is not None:
+                canonical_row = established_row
+            elif len(stable_keys) == 1:
                 canonical_row = stable_rows[0]
             elif len(preferred_keys) == 1:
                 canonical_row = preferred_rows[0]
@@ -2988,8 +3023,9 @@ def _remap_targeted_album_identity_rows(
                 canonical_row = surviving_rows[0]
             else:
                 canonical_row = grouped_rows[0]
-            canonical_key = str(canonical_row.get("album_key") or "").strip()
-            canonical_year = safe_int(canonical_row.get("release_year"))
+            if established_identity is None:
+                canonical_key = str(canonical_row.get("album_key") or "").strip()
+                canonical_year = safe_int(canonical_row.get("release_year"))
             canonical_release_date = None
         for album_row in grouped_rows:
             generated_key = str(album_row.get("album_key") or "").strip()

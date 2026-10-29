@@ -13212,7 +13212,7 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const existingLoad = requestAliases
     .map((alias) => trackModalAlbumDetailsLoads.get(alias))
     .find(Boolean);
-  if (existingLoad) {
+  if (existingLoad && options.canonicalRefresh !== true) {
     const speculativeController = trackModalSpeculativeAlbumDetailsLoadControllers.get(existingLoad);
     if (options.speculative === true || !speculativeController) return existingLoad;
     trackModalSpeculativeAlbumDetailsLoadControllers.delete(existingLoad);

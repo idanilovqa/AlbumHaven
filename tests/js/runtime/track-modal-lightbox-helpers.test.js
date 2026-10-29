@@ -966,6 +966,64 @@ test('inventory mutation refresh follows a cached stale child to its merged rele
   assert.deepEqual(refreshed, [{ albumKey: staleChild.key, album: mergedRelease }]);
 });
 
+test('inventory mutation refresh does not reuse an in-flight stale child after merge', async () => {
+  const staleChild = {
+    album_id: 17,
+    key: 'artist::current-release-a',
+    request_key: 'artist::current-release-a',
+    name: 'Current Release A',
+    album_artist: 'Artist',
+    year: 2026,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Track One' }],
+  };
+  const mergedRelease = {
+    album_id: 9,
+    key: 'artist::two-track-rarity-fixture',
+    request_key: 'artist::two-track-rarity-fixture',
+    name: 'Two Track Rarity Fixture',
+    album_artist: 'Artist',
+    year: 2026,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Track One' }],
+  };
+  const responseResolvers = [];
+  const { context } = loadHelper({
+    initialAlbums: [staleChild],
+    inventoryMutationRevision: 12,
+    onFetchAlbumDetails: async () => new Promise((resolve) => responseResolvers.push(resolve)),
+  });
+  context.state.modalReleases = [staleChild];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+  const refreshed = [];
+  context.refreshOpenTrackModalVersionState = (albumKey, album) => {
+    refreshed.push({ albumKey, album });
+  };
+
+  const staleLoad = context.loadTrackModalAlbumDetails(staleChild.key, { albumId: 17 });
+  context.state.status.inventory_mutation_revision = 13;
+  const canonicalRefresh = context.refreshOpenTrackModalAfterInventoryMutation();
+  responseResolvers[0]({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: staleChild }),
+  });
+  await flushAlbumDetailsHydration();
+  if (responseResolvers[1]) {
+    responseResolvers[1]({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, album: mergedRelease }),
+    });
+  }
+
+  assert.equal(await staleLoad, mergedRelease);
+  assert.equal(await canonicalRefresh, true);
+  assert.equal(context.fetchCalls.length, 2);
+  assert.deepEqual(refreshed, [{ albumKey: staleChild.key, album: mergedRelease }]);
+});
+
 test('inventory mutation refresh renders current releases when the open album split', async () => {
   const stale = {
     album_id: 17,

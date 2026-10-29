@@ -2239,6 +2239,99 @@ require('node:test')('remote optimistic selection reuses the selected preview un
   );
 });
 
+require('node:test')('remote save publishes the selected preview before server acceptance', async () => {
+  const album = {
+    key: 'artist::album::2001',
+    tracks: [{ path: 'C:/music/Remote/01.flac' }],
+  };
+  let resolveResponse;
+  let optimisticCalls = 0;
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    showToast: () => {},
+  });
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-optimistic',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      thumbnail_url: 'https://images.example/remote-cover-preview.jpg',
+      display_only: false,
+    }],
+  };
+  context.applyOptimisticRemoteCoverSelection = () => {
+    optimisticCalls += 1;
+    return album;
+  };
+  context.closeCoverLookupModal = () => {};
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.fetch = () => new Promise((resolve) => { resolveResponse = resolve; });
+  context.loadCoverLookupTasks = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.renderCoverLookupDrawer = () => {};
+
+  const pending = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+
+  assert.equal(optimisticCalls, 1);
+
+  resolveResponse({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      queued: true,
+      task: { id: 'remote-save-optimistic' },
+    }),
+  });
+  await pending;
+});
+
+require('node:test')('rejected remote save restores the cover replaced before server acceptance', async () => {
+  const album = {
+    key: 'artist::album::2001',
+    tracks: [{ path: 'C:/music/Remote/01.flac' }],
+  };
+  const previousCover = { src: 'https://images.example/previous.jpg' };
+  let restoredAlbum = null;
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    showToast: () => {},
+  });
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-rejected',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      display_only: false,
+    }],
+  };
+  context.state.coverLookup.optimisticAlbumCovers = { album: previousCover };
+  context.applyOptimisticRemoteCoverSelection = () => {
+    context.state.coverLookup.optimisticAlbumCovers.album = {
+      src: 'https://images.example/remote-cover.jpg',
+    };
+    return album;
+  };
+  context.syncCoverLookupAlbumReferences = ([candidate]) => { restoredAlbum = candidate; };
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.fetch = async () => ({
+    ok: false,
+    json: async () => ({ ok: false, error: 'Save was rejected.' }),
+  });
+
+  await context.saveRemoteCoverFromLookup();
+
+  assert.strictEqual(context.state.coverLookup.optimisticAlbumCovers.album, previousCover);
+  assert.deepEqual(restoredAlbum, album);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+});
+
 require('node:test')('remote save closes only after the server accepts the queued mutation', async () => {
   const album = {
     key: 'artist::album::2001',

@@ -32313,7 +32313,13 @@ async function saveRemoteCoverFromLookup() {
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
   state.coverLookup.modal.saving = true;
   syncCoverLookupSaveButton();
+  const previousOptimisticCovers = { ...(state.coverLookup.optimisticAlbumCovers || {}) };
+  let optimisticAlbum = null;
+  let optimisticEntry = null;
   try {
+    optimisticAlbum = applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
+    optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
+      .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover) || null;
     const requestPayload = { album, task_id: taskId, candidate_id: candidateId };
     if (snapshotGeneration) requestPayload.snapshot_generation = snapshotGeneration;
     const response = await fetch('/utilities/cover-lookup/save-remote', {
@@ -32326,10 +32332,7 @@ async function saveRemoteCoverFromLookup() {
       throw new Error(data.error || 'Failed to save selected cover art');
     }
     const optimisticCoverPath = String(data.optimistic_cover_path || '').trim();
-    const previousOptimisticCovers = { ...(state.coverLookup.optimisticAlbumCovers || {}) };
-    const optimisticAlbum = selectedMatch
-      ? applyOptimisticRemoteCoverSelection(album, selectedMatch, optimisticCoverPath)
-      : null;
+    if (optimisticEntry?.[1]) optimisticEntry[1].coverPath = optimisticCoverPath;
     const acceptedTaskId = String(data.task?.id || taskId || '').trim();
     if (acceptedTaskId && selectedMatch) {
       const acceptedTask = data.task && typeof data.task === 'object' ? data.task : null;
@@ -32352,8 +32355,6 @@ async function saveRemoteCoverFromLookup() {
             : task
         ));
       }
-      const optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
-        .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover);
       coverLookupPendingRemoteSaves.set(acceptedTaskId, {
         previousAlbum,
         signature: optimisticEntry?.[0] || '',
@@ -32375,6 +32376,18 @@ async function saveRemoteCoverFromLookup() {
     ensureCoverLookupPolling();
     renderCoverLookupDrawer({ taskIds: acceptedTaskId ? [acceptedTaskId] : [] });
   } catch (error) {
+    if (
+      optimisticEntry
+      && state.coverLookup.optimisticAlbumCovers[optimisticEntry[0]] === optimisticEntry[1]
+    ) {
+      if (previousOptimisticCovers[optimisticEntry[0]]) {
+        state.coverLookup.optimisticAlbumCovers[optimisticEntry[0]] = previousOptimisticCovers[optimisticEntry[0]];
+      } else {
+        delete state.coverLookup.optimisticAlbumCovers[optimisticEntry[0]];
+      }
+      syncCoverLookupAlbumReferences([previousAlbum]);
+      refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
+    }
     if (ownsModal()) {
       state.coverLookup.modal.saving = false;
       syncCoverLookupSaveButton();

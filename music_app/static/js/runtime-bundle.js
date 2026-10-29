@@ -11412,6 +11412,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
   requestUrl.searchParams.set('include_non_album', '1');
+  const requestScopeKey = `${requestUrl.pathname}${requestUrl.search}`;
   if (options.libraryWide === true) {
     requestUrl.searchParams.set('include_library_wide_non_album', '1');
   }
@@ -11428,8 +11429,15 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
     if (!response.ok || payload?.ok === false) {
       throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
     }
-    if (deferredNonAlbumHydrationRequest !== request
-        || String(state.view?.selected_artist || '') !== requestedArtist) {
+    const currentView = state.view || {};
+    const currentScopeUrl = new URL(
+      buildApiUrl(currentView, { omitSidebar: true }),
+      'http://localhost',
+    );
+    currentScopeUrl.searchParams.set('include_non_album', '1');
+    const currentScopeKey = `${currentScopeUrl.pathname}${currentScopeUrl.search}`;
+    if (String(currentView.selected_artist || '') !== requestedArtist
+        || currentScopeKey !== requestScopeKey) {
       return state.view?.non_album_tracks || [];
     }
     state.view.non_album_tracks = Array.isArray(payload.non_album_tracks)

@@ -169,15 +169,17 @@ export class TrackModalActions {
       { timeout: options.timeout || 60000 },
     );
     await expect(this.trackModal.currentReleaseChoices).toHaveCount(expectedNames.length);
-    const labels = await this.trackModal.currentReleaseChoices.allTextContents();
-    expectedNames.forEach((albumName) => {
-      expect(labels.filter((label) => label.includes(albumName))).toHaveLength(1);
-    });
-    return labels;
+    const titles = await this.trackModal.currentReleaseChoices
+      .locator('span:first-child')
+      .allTextContents();
+    expect(titles.map((title) => title.trim()).sort()).toEqual([...expectedNames].sort());
+    return titles;
   }
 
   async chooseCurrentRelease(albumName) {
-    const choice = this.trackModal.currentReleaseChoices.filter({ hasText: albumName });
+    const choice = this.trackModal.currentReleaseChoices
+      .getByText(albumName, { exact: true })
+      .locator('..');
     await expect(choice).toHaveCount(1);
     await choice.click();
     return this.waitForInteractiveSummary();

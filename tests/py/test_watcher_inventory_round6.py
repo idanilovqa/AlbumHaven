@@ -39,7 +39,16 @@ def test_targeted_release_year_matches_complete_surviving_members(watcher_repair
         )
     expected_year = 2004 if explicit_date else build_albums_from_file_cache(complete, set())[0].year
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        album = connection.execute("select release_year, metadata from library.local_albums where album_key='owner::repair album'").fetchone()
+        album = connection.execute(
+            """
+            select album.release_year, album.metadata
+            from library.local_track_files file
+            join library.local_tracks track on track.id = file.track_id
+            join library.local_albums album on album.id = track.album_id
+            where file.private_path = %s and file.scan_cache_stale is false
+            """,
+            (other["path"],),
+        ).fetchone()
     assert album["release_year"] == expected_year
     if explicit_date:
         assert album["metadata"]["release_date"] == "2004-07-16"

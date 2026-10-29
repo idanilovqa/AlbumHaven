@@ -2815,10 +2815,20 @@ def _remap_targeted_album_identity_rows(
         existing_edition = str(existing.get("edition") or "").strip()
         if generated_edition.lower() != existing_edition.lower():
             continue
+        generated_release_year = safe_int(album_row.get("release_year"))
+        existing_release_year = safe_int(existing.get("release_year"))
         release_key = album_separate_release_key(
             generated_artist_key, generated_title, generated_edition,
         )
         generated_year_is_unresolved = generated_key.endswith("::year::unresolved")
+        if (
+            generated_key != release_key
+            and not generated_year_is_unresolved
+            and generated_release_year is not None
+            and existing_release_year is not None
+            and generated_release_year != existing_release_year
+        ):
+            continue
         if (
             generated_key != release_key
             and not generated_year_is_unresolved
@@ -2836,7 +2846,7 @@ def _remap_targeted_album_identity_rows(
                     existing_key,
                     existing_artist_key,
                     existing_title,
-                    safe_int(existing.get("release_year")),
+                    existing_release_year,
                 )
             )
 

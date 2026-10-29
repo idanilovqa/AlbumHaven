@@ -689,7 +689,7 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
                 where album.album_key = 'owner::repair album' and f.featured_kind = 'featured_track_artist'
             """).fetchall()
             assert connection.execute("select bool_and(scan_cache_stale) as all_stale from library.local_track_files").fetchone()["all_stale"]
-        assert {row["name"] for row in retained} == {"Owner", "Retained Guest"}
+        assert {row["name"] for row in retained} == {"Retained Guest"}
 
 
 @pytest.mark.parametrize("blocked_root", ["repair-main", "repair-hoard"])

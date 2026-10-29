@@ -1805,6 +1805,8 @@ def test_full_snapshot_adopts_existing_unseparated_semantic_album_key(
                     "fixture": "track-preserved",
                     "source": "runtime_scan_cache",
                     "album": "Selected Track Split Fixture",
+                    "artist": "Selected Track Artist",
+                    "artists": ["Selected Track Artist"],
                     "album_artist": "Selected Track Artist",
                     "root_provenance": {
                         "root_id": "semantic-adoption-root",

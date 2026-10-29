@@ -639,6 +639,45 @@ def test_targeted_album_rows_remap_automatic_year_identity_only_when_not_explici
     assert track_rows[0]["album_key"] == expected_key
 
 
+def test_targeted_album_rows_do_not_remap_a_changed_release_year_to_the_old_identity():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/Owner/Album/01.flac"
+    generated_key = "owner::album::year::2001"
+    album_rows = [{
+        "artist_key": "owner",
+        "album_key": generated_key,
+        "title": "Album",
+        "release_year": 2001,
+    }]
+    featured_rows = [{
+        "album_key": generated_key,
+        "artist_key": "owner",
+        "featured_kind": "owner",
+    }]
+    track_rows = [{"album_key": generated_key, "track_key": path}]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[{
+            "private_path": path,
+            "album_key": "owner::album",
+            "album_title": "Album",
+            "artist_key": "owner",
+            "release_year": 2000,
+        }],
+        separate_release_keys=set(),
+    )
+
+    assert album_rows[0]["album_key"] == generated_key
+    assert featured_rows[0]["album_key"] == generated_key
+    assert track_rows[0]["album_key"] == generated_key
+
+
 def test_targeted_album_rows_keep_existing_identity_for_unresolved_track_years():
     from music_app.services.scan_cache_persistence import (
         _remap_targeted_album_identity_rows,

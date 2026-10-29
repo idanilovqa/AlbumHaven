@@ -918,6 +918,45 @@ test('inventory mutation refresh rehydrates the album that is still open', async
   assert.deepEqual(refreshed, [{ albumKey: 'watcher-album', album: fresh }]);
 });
 
+test('inventory mutation refresh hides stale rows while canonical details load', async () => {
+  const stale = {
+    key: 'watcher-album',
+    request_key: 'watcher-album',
+    name: 'Watcher Album',
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Old title' }],
+  };
+  const fresh = {
+    ...stale,
+    tracks: [{ path: 'one', title: 'Fresh title' }],
+  };
+  let resolveResponse = null;
+  const { context } = loadHelper({
+    initialAlbums: [stale],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: () => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }),
+  });
+  context.state.modalReleases = [stale];
+  context.state.modalReleaseIndex = 0;
+  const elements = context.getTrackModalElements();
+  elements.overlay.hidden = false;
+  elements.list.innerHTML = '<li>Old title</li>';
+  context.refreshOpenTrackModalVersionState = () => {};
+
+  const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
+
+  assert.match(elements.list.innerHTML, /track-modal-loading-row/);
+  assert.doesNotMatch(elements.list.innerHTML, /Old title/);
+  resolveResponse({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: fresh }),
+  });
+  assert.equal(await refresh, true);
+});
+
 test('inventory mutation refresh follows a cached stale child to its merged release', async () => {
   const staleChild = {
     album_id: 17,

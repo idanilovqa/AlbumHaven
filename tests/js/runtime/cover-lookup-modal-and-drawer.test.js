@@ -257,18 +257,21 @@ require('node:test')('notification rerenders keep unchanged card nodes mounted',
   assert.strictEqual(replacement.replacedWith, retained);
 });
 
-require('node:test')('targeted notification update falls back to a full render when its card is not mounted', () => {
+require('node:test')('targeted notification update inserts a visible card without rebuilding mounted siblings', () => {
+  const incomingCard = { id: 'incoming-card' };
   const incomingTarget = {
     getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'prior-generation' : '',
-    closest: () => ({ id: 'incoming-card' }),
+    closest: () => incomingCard,
   };
   const detached = {
     innerHTML: '',
     querySelectorAll: () => [incomingTarget],
   };
   let renderedMarkup = '';
+  let insertedCard = null;
   const body = {
     querySelectorAll: () => [],
+    insertBefore: (card) => { insertedCard = card; },
   };
   Object.defineProperty(body, 'innerHTML', {
     get: () => renderedMarkup,
@@ -287,7 +290,8 @@ require('node:test')('targeted notification update falls back to a full render w
     ['prior-generation'],
   );
 
-  assert.match(renderedMarkup, /prior-generation/);
+  assert.equal(renderedMarkup, '');
+  assert.strictEqual(insertedCard, incomingCard);
 });
 
 require('node:test')('notification rerenders retain only each task\'s own unchanged image node', () => {
@@ -351,13 +355,21 @@ require('node:test')('notification rerenders retain only each task\'s own unchan
 require('node:test')('updating one notification does not rerender its sibling cards', () => {
   const retainedOuters = ['task-1', 'task-2', 'task-3'].map((taskId) => ({
     taskId,
+    innerHTML: `${taskId}-before`,
+    getAttributeNames: () => [],
+    querySelector: () => null,
     replaceWith(value) { this.replacedWith = value; },
   }));
   const retainedCards = retainedOuters.map((outer) => ({
     getAttribute: (name) => name === 'data-open-cover-lookup-task' ? outer.taskId : '',
     closest: () => outer,
   }));
-  const incomingOuters = ['task-1', 'task-2', 'task-3'].map((taskId) => ({ taskId }));
+  const incomingOuters = ['task-1', 'task-2', 'task-3'].map((taskId) => ({
+    taskId,
+    innerHTML: `${taskId}-after`,
+    getAttributeNames: () => [],
+    querySelector: () => null,
+  }));
   const incomingCards = incomingOuters.map((outer) => ({
     getAttribute: (name) => name === 'data-open-cover-lookup-task' ? outer.taskId : '',
     closest: () => outer,
@@ -378,8 +390,173 @@ require('node:test')('updating one notification does not rerender its sibling ca
 
   assert.equal(fullRenders, 0, 'the live notification list must not be rebuilt');
   assert.equal(retainedOuters[0].replacedWith, undefined);
-  assert.strictEqual(retainedOuters[1].replacedWith, incomingOuters[1]);
+  assert.equal(retainedOuters[1].replacedWith, undefined, 'the updated card node must stay mounted');
+  assert.equal(retainedOuters[1].innerHTML, 'task-2-after');
   assert.equal(retainedOuters[2].replacedWith, undefined);
+  assert.equal(retainedOuters[0].innerHTML, 'task-1-before');
+  assert.equal(retainedOuters[2].innerHTML, 'task-3-before');
+});
+
+require('node:test')('deleting one notification removes only that card without rebuilding siblings or moving scroll', () => {
+  const cards = ['task-1', 'task-2', 'task-3'].map((taskId) => ({
+    taskId,
+    removed: false,
+    remove() { this.removed = true; },
+  }));
+  const taskNodes = cards.map((card) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? card.taskId : '',
+    closest: () => card,
+  }));
+  const incomingTaskNodes = [0, 2].map((index) => ({
+    getAttribute: taskNodes[index].getAttribute,
+    closest: () => ({ taskId: cards[index].taskId }),
+  }));
+  let fullRenders = 0;
+  const body = {
+    scrollTop: 420,
+    querySelectorAll: () => taskNodes,
+    querySelector: () => null,
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '<div>mounted cards</div>',
+    set: () => { fullRenders += 1; },
+  });
+  const detached = {
+    innerHTML: '',
+    querySelectorAll: (selector) => selector === '[data-open-cover-lookup-task]'
+      ? incomingTaskNodes : [],
+    querySelector: () => null,
+  };
+  const context = loadHelper({ document: {
+    getElementById: () => null,
+    createElement: () => detached,
+  } });
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>remaining cards</div>', ['task-2']);
+
+  assert.equal(fullRenders, 0);
+  assert.equal(cards[0].removed, false);
+  assert.equal(cards[1].removed, true);
+  assert.equal(cards[2].removed, false);
+  assert.equal(body.scrollTop, 420);
+});
+
+require('node:test')('targeted deletion fills the vacated virtualized row without rebuilding retained cards', () => {
+  const retainedCards = Array.from({ length: 60 }, (_, index) => ({
+    taskId: `task-${index}`,
+    removed: false,
+    remove() { this.removed = true; },
+    getAttributeNames: () => [],
+    querySelector: () => null,
+  }));
+  let mountedCards = retainedCards.slice();
+  const taskNode = (card) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? card.taskId : '',
+    closest: () => card,
+  });
+  const incomingCards = [
+    ...retainedCards.filter((card) => card.taskId !== 'task-20'),
+    {
+      taskId: 'task-60',
+      getAttributeNames: () => [],
+      querySelector: () => null,
+    },
+  ];
+  const body = {
+    querySelectorAll: (selector) => selector === '[data-open-cover-lookup-task]'
+      ? mountedCards.filter((card) => !card.removed).map(taskNode)
+      : [],
+    querySelector: () => null,
+    insertBefore(card) { mountedCards.push(card); },
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '<div>mounted cards</div>',
+    set: () => { throw new Error('targeted deletion must not rebuild the drawer'); },
+  });
+  const detached = {
+    innerHTML: '',
+    querySelectorAll: (selector) => selector === '[data-open-cover-lookup-task]'
+      ? incomingCards.map(taskNode)
+      : [],
+    querySelector: () => null,
+  };
+  const context = loadHelper({ document: {
+    getElementById: () => null,
+    createElement: () => detached,
+  } });
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>next window</div>', ['task-20']);
+
+  mountedCards = mountedCards.filter((card) => !card.removed);
+  assert.equal(mountedCards.length, 60);
+  assert.equal(mountedCards.at(-1).taskId, 'task-60');
+  assert.strictEqual(mountedCards[0], retainedCards[0]);
+  assert.strictEqual(mountedCards[20], retainedCards[21]);
+});
+
+require('node:test')('targeted art update keeps the card and old pixels mounted until the new image decodes', async () => {
+  let finishDecode;
+  const listeners = {};
+  const oldImage = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=stable&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const newImage = {
+    complete: false,
+    naturalWidth: 0,
+    getAttribute: (name) => name === 'src' ? '/cover?album=stable&v=2' : '',
+    addEventListener(type, handler) { listeners[type] = handler; },
+    decode() { return new Promise((resolve) => { finishDecode = resolve; }); },
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  let currentImage = oldImage;
+  const currentCard = {
+    getAttributeNames: () => [],
+    querySelector: () => currentImage,
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  Object.defineProperty(currentCard, 'innerHTML', {
+    get: () => '<img src="old">',
+    set: () => { currentImage = newImage; },
+  });
+  const incomingCard = {
+    innerHTML: '<img src="new">',
+    getAttributeNames: () => [],
+    querySelector: () => newImage,
+  };
+  const taskNode = (card) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'stable-task' : '',
+    closest: () => card,
+  });
+  let fullRenders = 0;
+  const body = { querySelectorAll: () => [taskNode(currentCard)] };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '<div>mounted</div>',
+    set: () => { fullRenders += 1; },
+  });
+  const detached = {
+    innerHTML: '',
+    querySelectorAll: () => [taskNode(incomingCard)],
+  };
+  const context = loadHelper({ document: {
+    getElementById: () => null,
+    createElement: () => detached,
+  } });
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated</div>', ['stable-task']);
+
+  assert.equal(fullRenders, 0);
+  assert.equal(currentCard.replacedWith, undefined);
+  assert.strictEqual(newImage.replacedWith, oldImage);
+  newImage.complete = true;
+  newImage.naturalWidth = 320;
+  listeners.load();
+  assert.equal(oldImage.replacedWith, undefined);
+  finishDecode();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(oldImage.replacedWith, newImage);
 });
 
 require('node:test')('notification insertion preserves the visible task pixel anchor', () => {
@@ -1151,6 +1328,7 @@ require('node:test')('pasted cover updates its notification before the save resp
   };
   const markCalls = [];
   const lifecycleCalls = [];
+  const drawerRenderCalls = [];
   let resolveRequest;
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
@@ -1178,7 +1356,10 @@ require('node:test')('pasted cover updates its notification before the save resp
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
   context.closeCoverLookupModal = () => lifecycleCalls.push('close');
-  context.renderCoverLookupDrawer = () => lifecycleCalls.push('render');
+  context.renderCoverLookupDrawer = (options) => {
+    drawerRenderCalls.push(options || {});
+    lifecycleCalls.push('render');
+  };
   context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum, options) => {
     markCalls.push({ taskId, selectedAlbum, options });
     const task = context.state.coverLookup.tasks.find((item) => item.id === taskId);
@@ -1196,6 +1377,7 @@ require('node:test')('pasted cover updates its notification before the save resp
   assert.equal(markCalls[0].selectedAlbum.name, 'Aladdin');
   assert.equal(markCalls[0].options.persist, false);
   assert.deepEqual(lifecycleCalls, ['render', 'close']);
+  assert.deepEqual(Array.from(drawerRenderCalls[0].taskIds), ['aladdin-task']);
 
   resolveRequest({
     ok: false,
@@ -1204,6 +1386,7 @@ require('node:test')('pasted cover updates its notification before the save resp
   await savePromise;
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
   assert.deepEqual(lifecycleCalls, ['render', 'close', 'render']);
+  assert.deepEqual(Array.from(drawerRenderCalls[1].taskIds), ['aladdin-task']);
 });
 
 require('node:test')('pasted cover applies server-actioned notification when opened from album details', async () => {
@@ -1278,6 +1461,30 @@ require('node:test')('notification startup loads authoritative counts without lo
   assert.equal(context.state.coverLookup.notificationCounts.total_count, 528);
   assert.equal(badgeElement.textContent, '528');
   assert.deepEqual(context.state.coverLookup.tasks || [], []);
+});
+
+require('node:test')('targeted count hydration preserves the notification card update scope', async () => {
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        total_count: 3,
+        active_count: 0,
+        finished_count: 3,
+      }),
+    }),
+  });
+  const renderCalls = [];
+  context.renderCoverLookupDrawer = (options) => renderCalls.push(options || {});
+
+  await context.loadCoverLookupNotificationCounts({
+    toast: false,
+    taskIds: ['changed-task'],
+  });
+
+  assert.equal(renderCalls.length, 1);
+  assert.deepEqual(Array.from(renderCalls[0].taskIds), ['changed-task']);
 });
 
 require('node:test')('open drawer shows a loading card until the first history response succeeds', async () => {
@@ -1821,6 +2028,117 @@ require('node:test')('membership revision reconciles an equal-count completed no
     ['new-completed', 'retained-completed'],
   );
   assert.equal(context.state.coverLookup.tasksMembershipRevision, 'membership-new');
+});
+
+require('node:test')('count hydration preserves the membership baseline for a completed replacement', async () => {
+  const responses = [
+    {
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-old',
+    },
+    {
+      tasks: [],
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-completed', status: 'completed' },
+        { id: 'retained-completed', status: 'completed' },
+      ],
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-completed', status: 'completed' },
+    { id: 'retained-completed', status: 'completed' },
+  ];
+
+  await context.loadCoverLookupNotificationCounts({ toast: false });
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks/counts',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['new-completed', 'retained-completed'],
+  );
+});
+
+require('node:test')('positive-net notification additions cannot conceal a deletion', async () => {
+  const responses = [
+    {
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-old',
+    },
+    {
+      tasks: [{ id: 'new-active', status: 'running' }],
+      total_count: 3,
+      active_count: 1,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-active', status: 'running' },
+        { id: 'new-completed', status: 'completed' },
+        { id: 'retained-completed', status: 'completed' },
+      ],
+      total_count: 3,
+      active_count: 1,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-completed', status: 'completed' },
+    { id: 'retained-completed', status: 'completed' },
+  ];
+
+  await context.loadCoverLookupNotificationCounts({ toast: false });
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks/counts',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['new-active', 'new-completed', 'retained-completed'],
+  );
 });
 
 require('node:test')('membership revision reconciles a completed replacement from a loaded later page', async () => {
@@ -5968,6 +6286,29 @@ require('node:test')('successfully clearing one notification is silent', async (
   assert.deepEqual(toastCalls, []);
 });
 
+require('node:test')('failed single notification clear performs a full rollback render', async () => {
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: false,
+      json: async () => ({ ok: false, error: 'Delete failed' }),
+    }),
+    console: { error: () => {} },
+    showToast: () => {},
+  });
+  context.state.coverLookup.tasks = [{ id: 'rollback-task', status: 'completed' }];
+  const originalRender = context.renderCoverLookupDrawer;
+  const renderCalls = [];
+  context.renderCoverLookupDrawer = (options) => {
+    renderCalls.push(options || {});
+    return originalRender(options);
+  };
+
+  await context.clearCoverLookupTaskNotification('rollback-task');
+
+  assert.equal(context.state.coverLookup.tasks[0].id, 'rollback-task');
+  assert.deepEqual(Array.from(renderCalls.at(-1).taskIds || []), []);
+});
+
 require('node:test')('initial cover gallery load finishes before task polling starts', async () => {
   class TestButton {}
   const overlay = { hidden: true, classList: { toggle() {} } };
@@ -6532,11 +6873,11 @@ require('node:test')('progressive candidates only append within the same search 
 
 require('node:test')('progressive modal rendering retains existing cover card nodes', () => {
   const retainedCard = {
-    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img src="loaded.jpg" style="display:block"></div>',
+    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img src="loaded.jpg" style="display:block"><span>Initial provider details</span></div>',
     getAttribute: (name) => (name === 'data-cover-lookup-item-key' ? 'remote:stable' : ''),
   };
   const replacementCard = {
-    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img data-cover-lookup-deferred-src="loaded.jpg"></div>',
+    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img data-cover-lookup-deferred-src="loaded.jpg"><span>Enriched provider details</span></div>',
     getAttribute: retainedCard.getAttribute,
     replaceWith(value) { this.replacedWith = value; },
   };
@@ -6557,7 +6898,7 @@ require('node:test')('progressive modal rendering retains existing cover card no
   assert.strictEqual(
     replacementCard.replacedWith,
     retainedCard,
-    'an unchanged decoded card must stay mounted while later results append',
+    'a same-identity card must stay mounted while provider details change and later results append',
   );
 });
 
@@ -6822,7 +7163,7 @@ require('node:test')('loading Cover Lookup renders only known gallery card place
 
 require('node:test')('notification polling rerenders when the selected user cover preview changes', async () => {
   let previewUrl = '/cover?album=temple&v=before';
-  let renderCount = 0;
+  const renderOptions = [];
   const context = loadHelper({
     fetch: async () => ({
       ok: true,
@@ -6845,17 +7186,46 @@ require('node:test')('notification polling rerenders when the selected user cove
   });
   context.state.coverLookup.tasks = [];
   context.state.coverLookup.modal = { taskId: '' };
-  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+  context.renderCoverLookupDrawer = (options) => { renderOptions.push(options || {}); };
 
   await context.loadCoverLookupTasks({ toast: false });
-  const initialRenderCount = renderCount;
+  const initialRenderCount = renderOptions.length;
   assert.ok(initialRenderCount > 0);
 
   previewUrl = '/cover?album=temple&v=selected';
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].current_user_cover_preview_url, previewUrl);
-  assert.equal(renderCount, initialRenderCount + 1);
+  assert.equal(renderOptions.length, initialRenderCount + 1);
+  assert.deepEqual(Array.from(renderOptions.at(-1).taskIds), ['temple-task']);
+});
+
+require('node:test')('poll acknowledgement does not rerender an already-updated notification list', async () => {
+  const task = {
+    id: 'saved-task',
+    status: 'completed',
+    notification_action_taken: true,
+    current_user_cover_preview_url: '/cover?saved=1',
+  };
+  const context = loadHelper({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, tasks: [{ ...task }] }),
+    }),
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    updateCoverLookupNotificationCounts: () => {},
+    applyCoverLookupTaskUpdates: () => {},
+    stopCoverLookupPollingIfIdle: () => {},
+  });
+  context.state.coverLookup.tasks = [{ ...task }];
+  context.state.coverLookup.tasksHydrated = true;
+  context.state.coverLookup.tasksSnapshot = 'stale-before-optimistic-update';
+  let renderCount = 0;
+  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(renderCount, 0);
 });
 
 require('node:test')('changed notification card keeps its keyed outer node mounted', () => {

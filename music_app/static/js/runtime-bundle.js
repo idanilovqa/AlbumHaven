@@ -6850,6 +6850,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
     closeGalleryMainSurface(true);
     return false;
   }
+  if (key === 'sources') hydrateDeferredNonAlbumTracksForAlbumTypes();
   if (previous) closeGalleryMainSurface(false, { immediate: true });
   galleryMainSurfaceCloseCallbacks.get(surface)?.();
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
@@ -13277,6 +13278,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
+  renderTrackModalLoadingState(openAlbum);
   let refreshedAlbum = null;
   let loadError = null;
   try {
@@ -30481,6 +30483,112 @@ function restoreCoverLookupDrawerScrollAnchor(body, anchor) {
   return true;
 }
 
+function syncCoverLookupElementAttributes(retained, incoming) {
+  retained?.getAttributeNames?.().forEach((name) => {
+    if (!incoming?.hasAttribute?.(name)) retained.removeAttribute?.(name);
+  });
+  incoming?.getAttributeNames?.().forEach((name) => {
+    retained?.setAttribute?.(name, incoming.getAttribute?.(name) || '');
+  });
+}
+
+function retainCoverLookupTaskImageUntilReplacementDecodes(retainedImage, incomingImage) {
+  if (!retainedImage || !incomingImage) return;
+  const retainedSrc = String(retainedImage.getAttribute?.('src') || '');
+  const desiredSrc = String(incomingImage.getAttribute?.('src') || '');
+  const retainedFailed = retainedImage.complete === true && Number(retainedImage.naturalWidth || 0) <= 0;
+  if (!retainedSrc || retainedFailed) return;
+  if (retainedSrc === desiredSrc) {
+    delete retainedImage.__coverLookupReplacementSrc;
+    incomingImage.replaceWith?.(retainedImage);
+    return;
+  }
+  if (!desiredSrc || retainedImage.complete !== true || Number(retainedImage.naturalWidth || 0) <= 0) return;
+
+  retainedImage.__coverLookupReplacementSrc = desiredSrc;
+  incomingImage.loading = 'eager';
+  incomingImage.replaceWith?.(retainedImage);
+  let decodeStarted = false;
+  const promoteReplacement = () => {
+    if (
+      decodeStarted
+      || retainedImage.__coverLookupReplacementSrc !== desiredSrc
+      || incomingImage.complete !== true
+      || Number(incomingImage.naturalWidth || 0) <= 0
+    ) return;
+    decodeStarted = true;
+    if (typeof incomingImage.decode !== 'function') {
+      delete retainedImage.__coverLookupReplacementSrc;
+      retainedImage.replaceWith?.(incomingImage);
+      return;
+    }
+    Promise.resolve(incomingImage.decode()).then(() => {
+      if (
+        retainedImage.__coverLookupReplacementSrc !== desiredSrc
+        || incomingImage.complete !== true
+        || Number(incomingImage.naturalWidth || 0) <= 0
+      ) return;
+      delete retainedImage.__coverLookupReplacementSrc;
+      retainedImage.replaceWith?.(incomingImage);
+    }).catch(() => {
+      if (retainedImage.__coverLookupReplacementSrc === desiredSrc) {
+        delete retainedImage.__coverLookupReplacementSrc;
+      }
+    });
+  };
+  incomingImage.addEventListener?.('load', promoteReplacement, { once: true });
+  incomingImage.addEventListener?.('error', () => {
+    if (retainedImage.__coverLookupReplacementSrc === desiredSrc) {
+      delete retainedImage.__coverLookupReplacementSrc;
+    }
+  }, { once: true });
+  if (incomingImage.complete === true) promoteReplacement();
+}
+
+function updateCoverLookupTaskCardInPlace(retainedCard, incomingCard) {
+  if (!retainedCard || !incomingCard) return;
+  const retainedImage = retainedCard.querySelector?.('img.cover-lookup-task-cover');
+  syncCoverLookupElementAttributes(retainedCard, incomingCard);
+  retainedCard.innerHTML = incomingCard.innerHTML;
+  const incomingImage = retainedCard.querySelector?.('img.cover-lookup-task-cover');
+  retainCoverLookupTaskImageUntilReplacementDecodes(retainedImage, incomingImage);
+}
+
+function syncCoverLookupDrawerSpacers(body, detached) {
+  const currentSpacers = Array.from(body.querySelectorAll?.('.cover-lookup-task-spacer') || []);
+  const incomingSpacers = Array.from(detached.querySelectorAll?.('.cover-lookup-task-spacer') || []);
+  currentSpacers.forEach((spacer, index) => {
+    const incoming = incomingSpacers[index];
+    if (!incoming) return;
+    syncCoverLookupElementAttributes(spacer, incoming);
+  });
+}
+
+function syncCoverLookupDrawerWindowMembership(body, detached) {
+  const mountedNodes = Array.from(body.querySelectorAll?.('[data-open-cover-lookup-task]') || []);
+  const incomingNodes = Array.from(detached.querySelectorAll?.('[data-open-cover-lookup-task]') || []);
+  const taskId = (node) => String(node.getAttribute?.('data-open-cover-lookup-task') || '');
+  const mountedCards = new Map(mountedNodes.map((node) => [taskId(node), node.closest?.('.cover-lookup-task-card')]));
+  const incomingEntries = incomingNodes.map((node) => [taskId(node), node.closest?.('.cover-lookup-task-card')]);
+  const incomingIds = new Set(incomingEntries.map(([id]) => id));
+  mountedCards.forEach((card, id) => {
+    if (!incomingIds.has(id)) {
+      card?.remove?.();
+      mountedCards.delete(id);
+    }
+  });
+  const spacers = Array.from(body.querySelectorAll?.('.cover-lookup-task-spacer') || []);
+  const bottomSpacer = spacers.at(-1) || null;
+  incomingEntries.forEach(([id, card], index) => {
+    if (!id || !card || mountedCards.has(id)) return;
+    const nextMountedCard = incomingEntries.slice(index + 1)
+      .map(([nextId]) => mountedCards.get(nextId))
+      .find(Boolean);
+    body.insertBefore?.(card, nextMountedCard || bottomSpacer);
+    mountedCards.set(id, card);
+  });
+}
+
 function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
   const targetedTaskIds = new Set((Array.isArray(taskIds) ? taskIds : [])
     .map((taskId) => String(taskId || '').trim())
@@ -30492,14 +30600,18 @@ function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
       .map((element) => [String(element.getAttribute?.('data-open-cover-lookup-task') || ''), element]));
     const currentTasks = indexTasks(body);
     const incomingTasks = indexTasks(detached);
-    const replacedEveryTarget = Array.from(targetedTaskIds).every((taskId) => {
+    targetedTaskIds.forEach((taskId) => {
       const current = currentTasks.get(taskId)?.closest?.('.cover-lookup-task-card');
       const incoming = incomingTasks.get(taskId)?.closest?.('.cover-lookup-task-card');
-      if (!current || !incoming) return false;
-      current.replaceWith(incoming);
-      return true;
+      if (current && incoming) {
+        updateCoverLookupTaskCardInPlace(current, incoming);
+      } else if (current && !incoming) {
+        current.remove?.();
+      }
     });
-    if (replacedEveryTarget) return;
+    syncCoverLookupDrawerWindowMembership(body, detached);
+    syncCoverLookupDrawerSpacers(body, detached);
+    return;
   }
   const retainedTasks = new Map();
   const retainedImages = new Map();
@@ -30523,12 +30635,7 @@ function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
     if (retainedTask?.element) {
       const incomingElement = taskElement;
       const retainedElement = retainedTask.element;
-      retainedElement.getAttributeNames?.().forEach((name) => {
-        if (!incomingElement.hasAttribute?.(name)) retainedElement.removeAttribute?.(name);
-      });
-      incomingElement.getAttributeNames?.().forEach((name) => {
-        retainedElement.setAttribute?.(name, incomingElement.getAttribute?.(name) || '');
-      });
+      syncCoverLookupElementAttributes(retainedElement, incomingElement);
       retainedElement.innerHTML = incomingElement.innerHTML;
       incomingElement.replaceWith(retainedElement);
       taskElement = retainedElement;
@@ -30536,52 +30643,7 @@ function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
     const retained = retainedImages.get(taskId);
     const image = taskElement.querySelector?.('img.cover-lookup-task-cover');
     if (!retained || !image) return;
-    const desiredSrc = String(image.getAttribute?.('src') || '');
-    if (retained.src === desiredSrc) {
-      delete retained.image.__coverLookupReplacementSrc;
-      image.replaceWith(retained.image);
-      return;
-    }
-    if (!desiredSrc || retained.image.complete !== true || Number(retained.image.naturalWidth || 0) <= 0) return;
-
-    retained.image.__coverLookupReplacementSrc = desiredSrc;
-    image.loading = 'eager';
-    image.replaceWith(retained.image);
-    let decodeStarted = false;
-    const promoteReplacement = () => {
-      if (
-        decodeStarted
-        || retained.image.__coverLookupReplacementSrc !== desiredSrc
-        || image.complete !== true
-        || Number(image.naturalWidth || 0) <= 0
-      ) return;
-      decodeStarted = true;
-      if (typeof image.decode !== 'function') {
-        delete retained.image.__coverLookupReplacementSrc;
-        retained.image.replaceWith(image);
-        return;
-      }
-      Promise.resolve(image.decode()).then(() => {
-        if (
-          retained.image.__coverLookupReplacementSrc !== desiredSrc
-          || image.complete !== true
-          || Number(image.naturalWidth || 0) <= 0
-        ) return;
-        delete retained.image.__coverLookupReplacementSrc;
-        retained.image.replaceWith(image);
-      }).catch(() => {
-        if (retained.image.__coverLookupReplacementSrc === desiredSrc) {
-          delete retained.image.__coverLookupReplacementSrc;
-        }
-      });
-    };
-    image.addEventListener?.('load', promoteReplacement, { once: true });
-    image.addEventListener?.('error', () => {
-      if (retained.image.__coverLookupReplacementSrc === desiredSrc) {
-        delete retained.image.__coverLookupReplacementSrc;
-      }
-    }, { once: true });
-    if (image.complete === true) promoteReplacement();
+    retainCoverLookupTaskImageUntilReplacementDecodes(retained.image, image);
   });
 }
 
@@ -30843,7 +30905,7 @@ async function clearCompletedCoverLookupTasks() {
     return;
   }
   state.coverLookup.clearingCompleted = true;
-  renderCoverLookupDrawer({ preserveInteraction: false });
+  renderCoverLookupDrawer({ preserveInteraction: false, taskIds: terminalTaskIds });
   stopCoverLookupPollingIfIdle();
   try {
     const response = await fetch('/utilities/cover-lookup/tasks/clear-completed', {
@@ -30859,18 +30921,18 @@ async function clearCompletedCoverLookupTasks() {
       throw new Error(data.error || 'Failed to clear completed cover lookups');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
-    await loadCoverLookupNotificationCounts({ toast: false });
-    renderCoverLookupDrawer();
+    await loadCoverLookupNotificationCounts({ toast: false, taskIds: terminalTaskIds });
+    renderCoverLookupDrawer({ taskIds: terminalTaskIds });
     stopCoverLookupPollingIfIdle();
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear completed tasks.', error);
-    renderCoverLookupDrawer({ preserveInteraction: false });
+    renderCoverLookupDrawer({ preserveInteraction: false, taskIds: terminalTaskIds });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear completed cover lookups.', 'error', 2800);
   } finally {
     state.coverLookup.clearingCompleted = false;
-    renderCoverLookupDrawer({ preserveInteraction: false });
+    renderCoverLookupDrawer({ preserveInteraction: false, taskIds: terminalTaskIds });
   }
 }
 
@@ -30884,7 +30946,7 @@ async function clearCoverLookupTaskNotification(taskId) {
   if (String(state.coverLookup.modal.taskId || '') === normalizedTaskId) {
     state.coverLookup.modal.taskId = '';
   }
-  renderCoverLookupDrawer({ preserveInteraction: false });
+  renderCoverLookupDrawer({ preserveInteraction: false, taskIds: [normalizedTaskId] });
   stopCoverLookupPollingIfIdle();
   try {
     const response = await fetch(`/utilities/cover-lookup/task/${encodeURIComponent(normalizedTaskId)}/clear`, {
@@ -30900,8 +30962,8 @@ async function clearCoverLookupTaskNotification(taskId) {
       throw new Error(data.error || 'Failed to clear notification');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
-    await loadCoverLookupNotificationCounts({ toast: false });
-    renderCoverLookupDrawer();
+    await loadCoverLookupNotificationCounts({ toast: false, taskIds: [normalizedTaskId] });
+    renderCoverLookupDrawer({ taskIds: [normalizedTaskId] });
     stopCoverLookupPollingIfIdle();
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
@@ -31168,42 +31230,49 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
   );
 }
 
-function normalizeCoverLookupCardMarkup(markup) {
-  return String(markup || '').replace(/<img\b[^>]*>/gi, (imageMarkup) => {
-    const isPreview = /\bclass=(['"])[^'"]*\bcover-lookup-art-preview-image\b[^'"]*\1/i.test(imageMarkup)
-      || /\bdata-cover-lookup-deferred-src=/i.test(imageMarkup)
-      || /\bstyle=(['"])[^'"]*\bdisplay\s*:\s*block\b[^'"]*\1/i.test(imageMarkup);
-    if (!isPreview || /\bstyle=(['"])[^'"]*\bdisplay\s*:\s*none\b[^'"]*\1/i.test(imageMarkup)) {
-      return imageMarkup;
-    }
-    const deferredMatch = imageMarkup.match(/\sdata-cover-lookup-deferred-src=(['"])(.*?)\1/i);
-    const srcMatch = imageMarkup.match(/\ssrc=(['"])(.*?)\1/i);
-    const source = String(deferredMatch?.[2] || srcMatch?.[2] || '');
-    return imageMarkup
-      .replace(/\sdata-cover-lookup-deferred-src=(['"])(.*?)\1/i, '')
-      .replace(/\ssrc=(['"])(.*?)\1/i, '')
-      .replace(/\sstyle=(['"])[^'"]*\bdisplay\s*:\s*block\s*;?[^'"]*\1/i, '')
-      .replace(/>$/, ` data-cover-lookup-preview-src="${source}">`);
-  });
-}
-
 function replaceCoverLookupModalMarkup(body, markup) {
   const retainedCards = new Map();
   body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
     const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
-    const cardMarkup = String(card.outerHTML || '');
-    if (key && cardMarkup) retainedCards.set(key, {
-      card,
-      markup: normalizeCoverLookupCardMarkup(cardMarkup),
-    });
+    if (key) retainedCards.set(key, card);
   });
   body.innerHTML = markup;
   body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
     const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
     const retained = retainedCards.get(key);
-    if (retained?.markup === normalizeCoverLookupCardMarkup(card.outerHTML)) {
-      card.replaceWith(retained.card);
+    if (!retained || typeof card.replaceWith !== 'function') return;
+    const retainedImage = retained.querySelector?.('img.cover-lookup-art-preview-image');
+    const incomingImage = card.querySelector?.('img.cover-lookup-art-preview-image');
+    const previewSource = (image) => String(
+      image?.getAttribute?.('data-cover-lookup-deferred-src')
+      || image?.getAttribute?.('src')
+      || '',
+    );
+    if (
+      retainedImage
+      && incomingImage
+      && previewSource(retainedImage) === previewSource(incomingImage)
+      && typeof incomingImage.replaceWith === 'function'
+    ) {
+      incomingImage.replaceWith(retainedImage);
     }
+    if (retained.attributes && card.attributes) {
+      const incomingAttributeNames = new Set(
+        Array.from(card.attributes).map((attribute) => attribute.name),
+      );
+      Array.from(retained.attributes).forEach((attribute) => {
+        if (!incomingAttributeNames.has(attribute.name)) retained.removeAttribute(attribute.name);
+      });
+      Array.from(card.attributes).forEach((attribute) => {
+        retained.setAttribute(attribute.name, attribute.value);
+      });
+    }
+    if (typeof retained.replaceChildren === 'function' && card.childNodes) {
+      retained.replaceChildren(...Array.from(card.childNodes));
+    } else if ('innerHTML' in retained && 'innerHTML' in card) {
+      retained.innerHTML = card.innerHTML;
+    }
+    card.replaceWith(retained);
   });
 }
 
@@ -31463,7 +31532,12 @@ async function loadCoverLookupNotificationCounts(options = {}) {
       throw new Error(data.error || 'Failed to load cover lookup notification counts');
     }
     updateCoverLookupNotificationCounts(data);
-    renderCoverLookupDrawer();
+    if (data.membership_revision) {
+      state.coverLookup.tasksMembershipRevision = String(data.membership_revision);
+    }
+    renderCoverLookupDrawer({
+      taskIds: Array.isArray(options.taskIds) ? options.taskIds : [],
+    });
   } catch (error) {
     console.warn('[AlbumHaven][CoverLookup] Failed to load notification counts.', error);
     if (options.toast !== false) {
@@ -31507,6 +31581,28 @@ function mergeCoverLookupTaskSummaries(
     ];
   }
   return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
+}
+
+function buildCoverLookupDrawerTaskSnapshot(task) {
+  return {
+    id: task.id,
+    status: task.status,
+    progress: task.progress,
+    progress_label: task.progress_label,
+    message: task.message,
+    result_kind: task.result_kind,
+    artist: task.artist,
+    album: task.album,
+    year: task.year,
+    notification_action_taken: Boolean(task.notification_action_taken),
+    current_user_cover_preview_url: String(task.current_user_cover_preview_url || ''),
+    possible_match_count: Number(task.possible_match_count || 0),
+    candidate_updated_at: String(task.candidate_updated_at || ''),
+    job_kind: String(task.job_kind || ''),
+    selected_candidate_id: task.selected_candidate_id,
+    possible_match_ids: buildCoverLookupCandidateSnapshot(task),
+    updated_albums_count: Array.isArray(task.updated_albums) ? task.updated_albums.length : 0,
+  };
 }
 
 async function loadCoverLookupTasks(options = {}) {
@@ -31657,28 +31753,23 @@ async function loadCoverLookupTasks(options = {}) {
     if (requestMode !== 'active') {
       state.coverLookup.tasksNextCursor = tasksNextCursor;
     }
-    const snapshot = JSON.stringify(nextTasks.map((task) => ({
-      id: task.id,
-      status: task.status,
-      progress: task.progress,
-      progress_label: task.progress_label,
-      message: task.message,
-      result_kind: task.result_kind,
-      artist: task.artist,
-      album: task.album,
-      year: task.year,
-      notification_action_taken: Boolean(task.notification_action_taken),
-      current_user_cover_preview_url: String(task.current_user_cover_preview_url || ''),
-      possible_match_count: Number(task.possible_match_count || 0),
-      candidate_updated_at: String(task.candidate_updated_at || ''),
-      job_kind: String(task.job_kind || ''),
-      selected_candidate_id: task.selected_candidate_id,
-      possible_match_ids: buildCoverLookupCandidateSnapshot(task),
-      updated_albums_count: Array.isArray(task.updated_albums) ? task.updated_albums.length : 0,
-    })));
+    const previousTasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+    const previousTaskSnapshots = previousTasks.map(buildCoverLookupDrawerTaskSnapshot);
+    const nextTaskSnapshots = nextTasks.map(buildCoverLookupDrawerTaskSnapshot);
+    const sameTaskOrder = previousTaskSnapshots.length === nextTaskSnapshots.length
+      && previousTaskSnapshots.every((task, index) => task.id === nextTaskSnapshots[index]?.id);
+    const changedTaskIds = sameTaskOrder
+      ? nextTaskSnapshots
+        .filter((task, index) => JSON.stringify(task) !== JSON.stringify(previousTaskSnapshots[index]))
+        .map((task) => String(task.id || ''))
+        .filter(Boolean)
+      : [];
+    const snapshot = JSON.stringify(nextTaskSnapshots);
     const tasksChanged = snapshot !== state.coverLookup.tasksSnapshot;
     state.coverLookup.tasks = nextTasks;
-    if (tasksChanged || completesInitialHydration) renderCoverLookupDrawer();
+    if (completesInitialHydration || (tasksChanged && (!sameTaskOrder || changedTaskIds.length))) {
+      renderCoverLookupDrawer({ taskIds: changedTaskIds });
+    }
     nextTasks.forEach((task) => {
       applyCoverLookupTaskUpdates(task);
     });
@@ -32289,7 +32380,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
           }
           : task
       ));
-      renderCoverLookupDrawer({ preserveInteraction: false });
+      renderCoverLookupDrawer({ preserveInteraction: false, taskIds: [retryTaskId] });
     }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = true;
@@ -32326,7 +32417,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
       if (!backgroundOnly) {
         state.coverLookup.modal.taskId = acceptedTaskId;
       }
-      renderCoverLookupDrawer();
+      renderCoverLookupDrawer({ taskIds: [acceptedTaskId] });
     }
     if (!backgroundOnly) {
       state.coverLookup.modal.statusText = String(acceptedTask?.progress_label || 'Searching...');
@@ -32342,7 +32433,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
       state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
         String(task?.id || '') === retryTaskId ? retryTask : task
       ));
-      renderCoverLookupDrawer();
+      renderCoverLookupDrawer({ taskIds: [retryTaskId] });
     }
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);
     showToast(error.message || 'Failed to start cover art lookup.', 'error', 2800);
@@ -32732,7 +32823,7 @@ async function savePastedCoverFromLookup(imageId) {
     const optimisticAlbum = applyOptimisticPastedCoverSelection(album, pastedItem);
     if (taskId && optimisticAlbum) {
       markCoverLookupTaskActionTaken(taskId, optimisticAlbum, { persist: false });
-      renderCoverLookupDrawer();
+      renderCoverLookupDrawer({ taskIds: [taskId] });
     }
     state.coverLookup.modal.manualBusy = false;
     state.coverLookup.modal.pendingLocalPath = '';
@@ -32775,7 +32866,7 @@ async function savePastedCoverFromLookup(imageId) {
       state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
         String(task?.id || '') === taskId ? previousTask : task
       ));
-      renderCoverLookupDrawer();
+      renderCoverLookupDrawer({ taskIds: [taskId] });
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save pasted image.', error);
     showToast(error.message || 'Failed to save pasted image.', 'error', 2800);

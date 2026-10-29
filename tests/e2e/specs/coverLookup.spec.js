@@ -876,13 +876,21 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   expect(await readTargetOrder()).toEqual(orderBeforeSave);
   await verifyCardDestinations();
 
-  const clearResponse = await page.request.post('/utilities/cover-lookup/tasks/clear-completed', {
-    data: {},
-  });
-  expect(clearResponse.ok()).toBe(true);
+  const siblingTaskIds = notifications.slice(0, -1).map(({ taskId }) => taskId);
+  const siblingEvidenceBeforeDelete = Object.fromEntries(await Promise.all(
+    siblingTaskIds.map(async (taskId) => [
+      taskId,
+      await coverLookupActions.readTaskCardEvidenceById(taskId),
+    ]),
+  ));
+  const scrollBeforeDelete = await coverLookupActions.readDrawerScrollTop();
+  await coverLookupActions.clearTaskAndExpectImmediateRemoval(selected.identity.album);
+  expect(await coverLookupActions.readDrawerScrollTop()).toBe(scrollBeforeDelete);
   await expect(coverLookupActions.coverLookup.taskCardById(selected.taskId)).toHaveCount(0);
-  for (const { taskId } of notifications.slice(0, -1)) {
+  for (const taskId of siblingTaskIds) {
     await expect(coverLookupActions.coverLookup.taskCardById(taskId)).toHaveCount(1);
+    expect(await coverLookupActions.readTaskCardEvidenceById(taskId))
+      .toEqual(siblingEvidenceBeforeDelete[taskId]);
   }
 });
 

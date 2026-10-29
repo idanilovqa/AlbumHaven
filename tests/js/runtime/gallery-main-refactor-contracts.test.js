@@ -230,6 +230,35 @@ test('an open Album Types menu hydrates deferred loose tracks after navigation c
   assert.equal(hydrationCount, 1);
 });
 
+test('opening Sources hydrates deferred loose tracks', async () => {
+  let hydrationCount = 0;
+  const view = { non_album_tracks_deferred: true };
+  const anchor = { setAttribute() {}, contains: () => false };
+  const surface = {
+    hidden: true,
+    matches: () => false,
+    setAttribute() {},
+    contains: () => false,
+    classList: { add() {}, remove() {} },
+  };
+  const context = loadRuntime({
+    state: { view },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: () => null,
+      body: { appendChild() {} },
+    },
+  });
+  context.hydrateDeferredNonAlbumTracks = async () => { hydrationCount += 1; };
+
+  context.openGalleryMainSurface('sources', anchor, surface);
+  await Promise.resolve();
+
+  assert.equal(hydrationCount, 1);
+});
+
 test('initial Artist Family markup is hidden only when no effective artist is selected', () => {
   const button = indexTemplateSource.match(/<button[^>]*data-gallery-bar-action="artist-family"[^>]*>/)?.[0];
   assert.match(button, /\{% if not effective_selected_artist %\} hidden\{% endif %\}/);

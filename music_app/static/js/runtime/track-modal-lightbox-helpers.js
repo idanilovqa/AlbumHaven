@@ -565,6 +565,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
+  renderTrackModalLoadingState(openAlbum);
   let refreshedAlbum = null;
   let loadError = null;
   try {

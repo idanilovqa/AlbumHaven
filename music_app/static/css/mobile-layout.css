@@ -229,6 +229,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .cover-lookup-modal-header { display: none; }
   .is-mobile-page .cover-lookup-modal-body { display: block; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 16px; }
   .is-mobile-page .cover-lookup-modal-body > * { min-width: 0; max-width: 100%; }
+  .is-mobile-page :is(.cover-lookup-manual-row, .cover-lookup-manual-actions) { display: none; }
   .is-mobile-page .cover-lookup-modal-actions { flex: 0 0 auto; padding: 12px 0; background: var(--appearance-main-surface, var(--bg)); }
   .is-mobile-page .cover-lookup-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .is-mobile-page :is(.cover-lookup-art-card, .cover-lookup-art-card-shell) { min-width: 0; width: 100%; max-width: none; }

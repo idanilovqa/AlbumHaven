@@ -785,3 +785,39 @@ test('Queue Playlist builder capture freshly checks original readable item witho
   fresh = payload('playlist:one', {revision: '4', track_rows: [row]}); await assert.rejects(capture.resolvePlaylistItem(), {name: 'AbortError'});
   fresh = payload('playlist:one', {revision: '3', track_rows: [{...row, source_readable: false}]}); await assert.rejects(capture.resolvePlaylistItem(), {name: 'AbortError'});
 });
+
+const REC_PLAYLIST='11111111-1111-4111-8111-111111111111', REC_ITEM='22222222-2222-4222-8222-222222222222';
+async function savedSongSource(patch={}) {
+ const row=track(REC_ITEM,{inventory_track_ref:null,track_ref:null,path:null,source_readable:true,availability:'unresolved',
+  playback_state:{can_start_here:false},allowed_actions:{can_read:true,can_play:false},...patch});
+ const data=payload(REC_PLAYLIST,{revision:'7',allowed_actions:{can_play:false},track_rows:[row]}), h=setup(data);
+ h.context.AlbumHavenRecommendationPresentation=await import('../../../music_app/static/js/recommendations/presentation.mjs');
+ const snapshot=h.bridge.snapshot(), projected={...snapshot.payload.playlist_detail.track_rows[0],row_key:'song'};
+ const context={scopeKey:snapshot.scopeKey,playlist_id:REC_PLAYLIST};
+ const adapter=h.bridge.createPlaytableSource({rows:[projected],context,instance:snapshot.payload,revision:'view',isCurrent:()=>true});
+ return {...h,adapter,row:projected,actionContext:context};
+}
+test('saved unresolved Playlist rows recommend from the actual private witness without gaining play or queue',async()=>{
+ const h=await savedSongSource();
+ assert.deepEqual(plain(h.adapter.resolveRecommendationRows(['song'])),{rows:[{kind:'track',resource_ref:`playlist-item:${REC_ITEM}`,source:{playlist_ref:REC_PLAYLIST,revision:'7'}}]});
+ assert.equal(h.adapter.resolveRows(['song']).rows[0].track_ref,null);assert.equal(h.adapter.canQueue(['song']),false);
+ assert.equal(h.bridge.canTrackIntent('play',h.row,h.actionContext),false);
+ await assert.rejects(h.bridge.trackIntent('play',h.row,h.actionContext),{status:403});
+ assert.equal(h.calls.reads.length,0);assert.doesNotMatch(JSON.stringify(h.adapter.snapshot()),/playlist-item|playlist_ref|metadata_occurrence/);
+ h.adapter.dispose();
+});
+for(const denial of [{source_readable:false},{allowed_actions:{can_read:false}}]) {
+ test(`private recommendation source rejects unreadable Playlist row ${JSON.stringify(denial)}`,async()=>{
+  const h=await savedSongSource(denial);assert.equal(h.adapter.resolveRecommendationRows(['song']),null);h.adapter.dispose();
+ });
+}
+for(const change of ['revision','route','account','session']) {
+ test(`saved-song private authority retires after ${change}`,async()=>{
+  const h=await savedSongSource();assert.ok(h.adapter.resolveRecommendationRows(['song']));
+  if(change==='revision')h.state.view=payload(REC_PLAYLIST,{revision:'8',track_rows:[track(REC_ITEM)]});
+  if(change==='route')h.context.location=new URL('https://albumhaven.test/account');
+  if(change==='account')h.shell.dataset.nativeAccountId='another-account';
+  if(change==='session')h.shell.hidden=true;
+  h.bridge.sync();assert.equal(h.adapter.resolveRecommendationRows(['song']),null);h.adapter.dispose();
+ });
+}

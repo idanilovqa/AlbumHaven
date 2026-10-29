@@ -78,7 +78,7 @@ for(const changes of [{normal_top_weight:2},{preferred_top_weight:2},{selection_
     assert.throws(()=>normalizeBonusSettings(settings(changes)));
   });
 }
-for(const value of [{cycle_id:null,bonus:null,manual_count:1},{cycle_id:id(10),bonus:null,manual_count:6},
+for(const value of [{cycle_id:null,bonus:null,manual_count:1},{cycle_id:id(10),bonus:null,manual_count:8},
   {cycle_id:id(10),bonus:{catalog_ref:ALBUM,present:1},manual_count:1}]) {
   test('bonus DTO rejects impossible state '+JSON.stringify(value),async()=>{
     const {normalizeCurrentBonus}=await load('goals-provider.mjs');assert.throws(()=>normalizeCurrentBonus(value));
@@ -373,3 +373,25 @@ for(const action of ['drawBonus','transition']) {
     assert.equal(h.controller.getSnapshot().settings.settings_revision,'2');
   });
 }
+
+test('weekly transition accepts distinct carried-suggestion provenance and configurable manual limit',async t=>{
+  const h=await harness(t);await h.controller.loadBonus();
+  h.hook=(url,_options,row)=>url.endsWith('/transition')?{...row,manual_limit:4,weekly_suggestions_carried:1,manual_count:0,manual_slots_available:4}:undefined;
+  await h.controller.transition(capture(h.controller));
+  assert.equal(h.controller.getSnapshot().status,'ready');assert.equal(h.controller.getSnapshot().mutation,'idle');
+});
+test('weekly transition rejects a partial new provenance contract',async t=>{
+  const h=await harness(t);await h.controller.loadBonus();
+  h.hook=(url,_options,row)=>url.endsWith('/transition')?{...row,manual_limit:4}:undefined;
+  await h.controller.transition(capture(h.controller));assert.equal(h.controller.getSnapshot().mutation,'uncertain');
+});
+test('rated weekly members are not expected to roll over as unfinished albums',async t=>{
+  const h=await harness(t);h.data.albums[0].completion_mode='rating';
+  h.data.periods.week.rated_at={[ALBUM]:'2026-01-02T00:00:00Z'};h.data.periods.week.completed=1;
+  await h.controller.loadBonus();h.hook=(url,_options,row)=>{
+    if(!url.endsWith('/transition'))return undefined;
+    Object.assign(h.data.periods.week,{album_refs:[],manual_completed_at:{},rated_at:{},total:0,completed:0});h.bonus.manual_count=0;
+    return {...row,retained_count:0,manual_limit:5,weekly_suggestions_carried:0,manual_count:0,manual_slots_available:5};
+  };
+  await h.controller.transition(capture(h.controller));assert.equal(h.controller.getSnapshot().status,'ready');assert.equal(h.controller.getSnapshot().data.periods.week.total,0);
+});

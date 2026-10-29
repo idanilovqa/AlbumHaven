@@ -126,3 +126,24 @@ test('Add identity requires explicit scoped inventory and never aliases a media 
   assert.equal(h.adapter.resolveRows(['row:first']).rows[0].track_ref, 'inventory-track:1:2');
   assert.equal(h.adapter.resolveRows(['row:first']).rows[0].canonical_track_ref, null);
 });
+
+test('a dedicated metadata resolver retains private witness without promoting playback or inventory refs', () => {
+ const h=setup(), witness={kind:'track',resource_ref:'playlist-item:11111111-1111-4111-8111-111111111111',
+  source:{playlist_ref:'22222222-2222-4222-8222-222222222222',revision:'7'}};
+ let reads=0;
+ const adapter=h.context.createPrivatePlaytableSource({scopeKey:'scope',rows:h.rows,instance:{},revision:'v',isCurrent:()=>true,
+  resolveRow:()=>({source_readable:true,availability:'unresolved'}),resolveRecommendationRow:()=>{reads++;return witness;}});
+ assert.deepEqual(plain(adapter.resolveRecommendationRows(['row:first'])),{rows:[witness]});
+ assert.equal(adapter.resolveRows(['row:first']).rows[0].track_ref,null);assert.equal(adapter.canQueue(['row:first']),false);
+ assert.doesNotMatch(JSON.stringify(adapter.snapshot()),/playlist-item|playlist_ref|22222222/);
+ for(const keys of [[],['row:first','row:repeat'],['row:first','row:first'],['row:denied'],['missing']])
+  assert.equal(adapter.resolveRecommendationRows(keys),null);
+ assert.equal(reads,1);adapter.updateRows([h.rows[1]],'new');assert.equal(adapter.resolveRecommendationRows(['row:first']),null);
+ adapter.dispose();assert.equal(adapter.resolveRecommendationRows(['row:repeat']),null);
+});
+
+test('the default recommendation resolver keeps inventory-only authority and rejects denied raw sources', () => {
+ const h=setup();assert.equal(h.adapter.resolveRecommendationRows(['row:first']).rows[0].resource_ref,'inventory-track:1:2');
+ h.raw.set(h.rows[0],{source_readable:true,track_ref:'/private/path'});assert.equal(h.adapter.resolveRecommendationRows(['row:first']),null);
+ h.raw.set(h.rows[0],{inventory_track_ref:'inventory-track:1:2',allowed_actions:{can_read:false}});assert.equal(h.adapter.resolveRecommendationRows(['row:first']),null);
+});

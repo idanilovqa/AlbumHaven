@@ -64,3 +64,18 @@ test('consumer source construction is inert until commit and effect replay repla
   }finally{second.dispose();}
   assert.equal(retired,2);
 });
+
+test('the native selection bridge forwards private recommendation rows only while its accepted owner is current',async()=>{
+ const {createPlaytableSource}=await load(), rows=[{id:'song'}],context={scopeKey:'owned'},instance={};
+ const resource={kind:'track',resource_ref:'playlist-item:11111111-1111-4111-8111-111111111111',
+  source:{playlist_ref:'22222222-2222-4222-8222-222222222222',revision:'7'}};
+ let current=true,calls=0;
+ const runtime={openPlaylistAction(){},createPlaytableSource(){return {snapshot:()=>({scopeKey:'owned',instance,revision:'v'}),
+  subscribe:()=>()=>{},updateRows:()=>true,resolveRows:()=>null,resolveRecommendationRows(keys){calls++;assert.deepEqual(keys,['song']);return {rows:[resource]};},dispose(){}};}};
+ const options={runtime,sourceRows:rows,rows,context,instance,revision:'v',isCurrent:()=>current,rowFacts:row=>({rowKey:row.id,readable:true})};
+ const owner=createPlaytableSource(options);
+ assert.deepEqual(owner.sourceAdapter.resolveRecommendationRows(['song']),{rows:[resource]});
+ assert.equal(owner.sourceAdapter.resolveRows(['song']),null);assert.equal(owner.sourceAdapter.canQueue(['song']),false);
+ current=false;assert.equal(owner.sourceAdapter.resolveRecommendationRows(['song']),null);assert.equal(calls,1);
+ owner.dispose();current=true;assert.equal(owner.sourceAdapter.resolveRecommendationRows(['song']),null);
+});

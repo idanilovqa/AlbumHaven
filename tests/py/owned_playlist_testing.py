@@ -53,12 +53,27 @@ class Step:
 class Cursor:
     def __init__(self, rows):
         self.rows = deepcopy(rows)
+        self.closed = False
+        self.close_calls = 0
+
+    def _check_open(self):
+        if self.closed:
+            from psycopg import InterfaceError
+            raise InterfaceError("the cursor is closed")
 
     def fetchone(self):
+        self._check_open()
         return self.rows[0] if self.rows else None
 
     def fetchall(self):
+        self._check_open()
         return self.rows
+
+    def close(self):
+        self.close_calls += 1
+        self.closed = True
+        # Release the fake's result reference, not rows already fetched by callers.
+        self.rows = []
 
 
 class Connection:
@@ -66,6 +81,7 @@ class Connection:
     def __init__(self, steps=(), *, commit_error=None):
         self.pending = list(steps)
         self.operations = []
+        self.cursors = []
         self.entered = 0
         self.exits = []
         self.commit_error = commit_error
@@ -94,7 +110,9 @@ class Connection:
             step.after()
         if step.error is not None:
             raise step.error
-        return Cursor(step.rows)
+        cursor = Cursor(step.rows)
+        self.cursors.append(cursor)
+        return cursor
 
     def done(self):
         assert not self.pending, [step.sql for step in self.pending]

@@ -1022,7 +1022,30 @@ def ensure_best_cover_for_folder(
     ):
         detail["reason"] = "satisfactory_selected_remote_cover_present"
         return None, False, detail
-    if local_cover and (selected_user_cover or not force_search) and not local_cover_requires_upgrade_check(local_cover, minimum_edge=minimum_edge):
+    release_local_cover_stem = cover_stem(local_cover)
+    viable_release_local_cover = bool(
+        local_cover
+        and (
+            is_authoritative_cover_name(local_cover)
+            or release_local_cover_stem == "front"
+            or release_local_cover_stem.startswith(("front-", "front_", "front "))
+        )
+        and not local_cover_requires_upgrade_check(
+            local_cover,
+            minimum_edge=_MIN_AUTHORITATIVE_COVER_EDGE,
+        )
+    )
+    if (
+        local_cover
+        and (selected_user_cover or not force_search)
+        and (
+            viable_release_local_cover
+            or not local_cover_requires_upgrade_check(
+                local_cover,
+                minimum_edge=minimum_edge,
+            )
+        )
+    ):
         detail["reason"] = "satisfactory_local_cover_present"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
         return local_cover, False, detail

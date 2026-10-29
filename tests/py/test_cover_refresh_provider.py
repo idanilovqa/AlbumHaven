@@ -161,6 +161,56 @@ def test_satisfactory_local_cover_skips_remote_without_lookup_cache(tmp_path):
     assert detail["reason"] == "satisfactory_local_cover_present"
 
 
+def test_background_refresh_prefers_viable_front_art_before_remote_search(tmp_path, monkeypatch):
+    image_module = pytest.importorskip("PIL.Image")
+    monkeypatch.setattr(
+        cover_refresh_provider,
+        "automatic_cover_repair_minimum_edge",
+        lambda: 2000,
+    )
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    front = folder / "front-scan.jpg"
+    image_module.new("RGB", (1200, 1200), "navy").save(front)
+    image_module.new("RGB", (2400, 2400), "red").save(folder / "booklet-page.jpg")
+
+    resolved, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2007, {".jpg"},
+        CoverSearchCache(tmp_path / "lookup.json"), "AlbumHavenTests/1.0",
+        search_remote_cover_func=lambda *_args, **_kwargs: pytest.fail(
+            "viable release-local front art must prevent remote search"
+        ),
+    )
+
+    assert (resolved, downloaded) == (front, False)
+    assert detail["reason"] == "satisfactory_local_cover_present"
+
+
+@pytest.mark.parametrize("local_art", ["absent", "invalid"])
+def test_background_refresh_still_searches_when_local_art_is_not_viable(tmp_path, local_art):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    if local_art == "invalid":
+        (folder / "front-scan.jpg").write_bytes(b"not an image")
+    searches = []
+
+    resolved, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2007, {".jpg"},
+        CoverSearchCache(tmp_path / "lookup.json"), "AlbumHavenTests/1.0",
+        search_remote_cover_func=lambda *_args, **_kwargs: (
+            searches.append("remote") or None,
+            [{"resolver": "_search_apple", "status": "no_candidate"}],
+        ),
+    )
+
+    assert searches == ["remote"]
+    assert (resolved, downloaded) == (
+        folder / "front-scan.jpg" if local_art == "invalid" else None,
+        False,
+    )
+    assert detail["reason"] == "remote_search_returned_no_candidate"
+
+
 def test_search_primary_remote_cover_keeps_apple_provider_threshold(monkeypatch):
     calls: list[str] = []
 

@@ -2830,8 +2830,13 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
       pendingRemoteSave.optimisticCover
       && state.coverLookup.optimisticAlbumCovers[pendingRemoteSave.signature] === pendingRemoteSave.optimisticCover
     ) {
-      clearOptimisticAlbumCovers([pendingRemoteSave.previousAlbum]);
-      markAlbumCoverPathsFresh([pendingRemoteSave.previousAlbum]);
+      if (pendingRemoteSave.previousOptimisticCover) {
+        state.coverLookup.optimisticAlbumCovers[pendingRemoteSave.signature] = (
+          pendingRemoteSave.previousOptimisticCover
+        );
+      } else {
+        delete state.coverLookup.optimisticAlbumCovers[pendingRemoteSave.signature];
+      }
       syncCoverLookupAlbumReferences([pendingRemoteSave.previousAlbum]);
       refreshCoverLookupAlbumArtwork(pendingRemoteSave.previousAlbum, [pendingRemoteSave.previousAlbum]);
     }
@@ -3474,6 +3479,9 @@ async function saveRemoteCoverFromLookup() {
         previousAlbum,
         signature: optimisticEntry?.[0] || '',
         optimisticCover: optimisticEntry?.[1],
+        previousOptimisticCover: optimisticEntry
+          ? previousOptimisticCovers[optimisticEntry[0]]
+          : undefined,
       });
       markCoverLookupTaskActionTaken(acceptedTaskId, optimisticAlbum || album, { persist: false });
     }

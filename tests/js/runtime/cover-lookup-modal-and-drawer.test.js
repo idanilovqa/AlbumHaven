@@ -2299,6 +2299,9 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
   };
   const albumSignature = 'C:/music/Remote/01.flac';
+  const previousOptimisticCover = {
+    src: '/cover?path=original.jpg&size=480&revision=stable-prior-revision',
+  };
   let terminalStatus = 'failed';
   const toastCalls = [];
   const restoredAlbums = [];
@@ -2318,7 +2321,9 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   };
   context.state.coverLookup.tasks = [];
   context.state.coverLookup.appliedTaskUpdateSignatures = {};
-  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.optimisticAlbumCovers = {
+    [albumSignature]: previousOptimisticCover,
+  };
   context.applyOptimisticRemoteCoverSelection = (_selectedAlbum, selectedMatch) => {
     context.state.coverLookup.optimisticAlbumCovers[albumSignature] = { src: selectedMatch.url };
   };
@@ -2362,6 +2367,10 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   await context.loadCoverLookupTasks({ activeOnly: true, toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
+  assert.equal(
+    context.state.coverLookup.optimisticAlbumCovers[albumSignature]?.src,
+    previousOptimisticCover.src,
+  );
   assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbums)), [[album]]);
   assert.deepEqual(toastCalls, [['Remote image could not be saved.', 'error', 5000]]);
 
@@ -2376,6 +2385,10 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   await context.loadCoverLookupTasks({ activeOnly: true, toast: false });
 
   assert.equal(restoredAlbums.length, 2);
+  assert.equal(
+    context.state.coverLookup.optimisticAlbumCovers[albumSignature]?.src,
+    previousOptimisticCover.src,
+  );
   assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbums.at(-1))), [album]);
   assert.deepEqual(toastCalls, [['Remote image could not be saved.', 'error', 5000]]);
 });

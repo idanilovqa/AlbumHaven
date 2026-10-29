@@ -122,6 +122,9 @@ def test_mixed_random_folder_duplicate_does_not_join_real_album_or_replace_its_c
     assert {str(track.path) for track in album.tracks} == set(proper_paths)
     assert str(album.cover_path) == proper_cover
     assert {track.disc_number for track in album.tracks} == {1, 2}
+    unrelated_album = next(album for album in albums if album.name == "Other Album")
+    assert [str(track.path) for track in unrelated_album.tracks] == [unrelated]
+    assert unrelated_album.cover_path is None
 
 
 def test_disc_total_and_title_survive_album_projection(tmp_path):

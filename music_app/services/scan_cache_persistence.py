@@ -3446,24 +3446,80 @@ def _inventory_rows_from_albums(
             }
         )
 
+    published_album_keys = {
+        str(row.get("album_key") or "").strip()
+        for row in album_rows
+        if str(row.get("album_key") or "").strip()
+    }
     for cache_key, file_entry in (file_cache.items() if include_track_inventory else ()):
         if not isinstance(file_entry, dict):
             continue
         private_path = str(file_entry.get("path") or cache_key or "").strip()
         if not private_path or private_path in represented_private_paths:
             continue
+        membership_problem = str(
+            file_entry.get("local_album_membership_problem") or ""
+        ).strip()
+        album_owner = _text_or_none(
+            file_entry.get("album_artist") or file_entry.get("artist")
+        )
+        album_title = _text_or_none(file_entry.get("album"))
+        rejected_album_key = (
+            album_separate_release_key(
+                str(album_owner or ""),
+                str(album_title or ""),
+                str(file_entry.get("edition") or ""),
+            )
+            if membership_problem
+            else None
+        )
         track_artist_key = ensure_artist(
             file_entry.get("artist") or file_entry.get("album_artist") or "Unknown Artist"
         )
+        if (
+            rejected_album_key
+            and album_owner
+            and album_title
+            and rejected_album_key not in published_album_keys
+        ):
+            album_artist_key = ensure_artist(album_owner)
+            album_rows.append(
+                {
+                    "artist_key": album_artist_key,
+                    "album_key": rejected_album_key,
+                    "title": album_title,
+                    "release_year": safe_int(file_entry.get("year")),
+                    "cover_path": None,
+                    "metadata": _jsonb(
+                        {
+                            "source": _SOURCE,
+                            "album_artist": album_owner,
+                            "artists": [album_owner],
+                            "is_compilation": False,
+                            "featured_artists": [],
+                            "edition": file_entry.get("edition"),
+                            "release_type": file_entry.get("album_type") or "ALBUM",
+                            "root_provenance": build_root_provenance_payload(
+                                file_entry.get("library_root_id"),
+                                file_entry.get("library_root_category"),
+                            ),
+                        }
+                    ),
+                }
+            )
+            _append_featured_artist_row(
+                featured_artist_rows,
+                seen_featured_rows,
+                album_key=rejected_album_key,
+                artist_key=album_artist_key,
+                featured_kind="owner",
+                source=_SOURCE,
+            )
+            published_album_keys.add(rejected_album_key)
         track_key = private_path
         track_rows.append(
             {
-                "album_key": (
-                    album_separate_release_key(str(file_entry.get("album_artist") or file_entry.get("artist") or ""),
-                                               str(file_entry.get("album") or ""),
-                                               str(file_entry.get("edition") or ""))
-                    if file_entry.get("local_album_membership_problem") else None
-                ),
+                "album_key": rejected_album_key,
                 "artist_key": track_artist_key,
                 "track_key": track_key,
                 "title": _text_or_none(file_entry.get("title")) or Path(track_key).stem,

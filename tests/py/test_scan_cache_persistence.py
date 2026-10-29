@@ -4151,6 +4151,112 @@ def test_local_album_inventory_does_not_publish_null_cover_authority(monkeypatch
     assert "remote_cover_url" not in metadata
 
 
+def test_scan_projection_keeps_unrelated_release_identity_from_rejected_mixed_folder(
+    monkeypatch,
+):
+    from music_app.services import scan_cache_persistence
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    artist = "Fixture Artist"
+    real_paths = [
+        "C:/Music/Fixture Artist/Real Album/01.mp3",
+        "C:/Music/Fixture Artist/Real Album/02.mp3",
+    ]
+    copied_path = "C:/Music/Fixture Artist/Random songs/copied-song.mp3"
+    unrelated_path = "C:/Music/Fixture Artist/Random songs/unrelated.mp3"
+
+    def entry(path, album, title, track_number):
+        return {
+            "path": path,
+            "album": album,
+            "album_artist": artist,
+            "artist": artist,
+            "title": title,
+            "year": 2026,
+            "track_number": track_number,
+            "disc_number": 1,
+            "duration_seconds": 180,
+            "mtime": 1.0,
+            "size": 123,
+            "library_root_id": "main",
+            "cover_path": "C:/Music/Fixture Artist/Random songs/cover.png",
+            "cover_selection_origin": "user",
+        }
+
+    file_cache = {
+        real_paths[0]: entry(real_paths[0], "Real Album", "Song One", 1),
+        real_paths[1]: entry(real_paths[1], "Real Album", "Song Two", 2),
+        copied_path: entry(copied_path, "Real Album", "Song One", 1),
+        unrelated_path: entry(
+            unrelated_path,
+            "Unrelated Album",
+            "Unrelated song",
+            8,
+        ),
+    }
+    album = SimpleNamespace(
+        key="fixture artist::real album",
+        name="Real Album",
+        album_artist=artist,
+        artists=[artist],
+        year=2026,
+        cover_path="C:/Music/Fixture Artist/Real Album/cover.png",
+        cover_revision="repaired",
+        cover_selection_origin="automatic",
+        cover_selection_provenance=None,
+        cover_selection_repair_previous={
+            "cover_path": "C:/Music/Fixture Artist/Random songs/cover.png",
+            "cover_selection_origin": "user",
+            "cover_revision": "inherited",
+        },
+        edition=None,
+        root_provenance={"root_id": "main"},
+        album_rating=None,
+        tracks=[
+            SimpleNamespace(
+                path=path,
+                title=title,
+                artist=artist,
+                album="Real Album",
+                album_artist=artist,
+                year=2026,
+                disc_number=1,
+                track_number=index,
+                duration_seconds=180,
+                edition=None,
+                root_provenance={"root_id": "main"},
+            )
+            for index, (path, title) in enumerate(
+                zip(real_paths, ("Song One", "Song Two")),
+                start=1,
+            )
+        ],
+    )
+
+    _artists, album_rows, _featured, track_rows, _files = (
+        scan_cache_persistence._inventory_rows_from_albums(file_cache, [album])
+    )
+
+    unrelated = next(
+        row for row in album_rows
+        if row["album_key"] == "fixture artist::unrelated album"
+    )
+    assert unrelated["title"] == "Unrelated Album"
+    assert unrelated["cover_path"] is None
+    assert "cover_path" not in unrelated["metadata"]
+    assert "cover_selection_origin" not in unrelated["metadata"]
+    assert "Random songs" not in repr(unrelated)
+    assert [row["album_key"] for row in album_rows].count(
+        "fixture artist::real album"
+    ) == 1
+    assert next(row for row in track_rows if row["track_key"] == copied_path)[
+        "album_key"
+    ] == "fixture artist::real album"
+    assert next(row for row in track_rows if row["track_key"] == unrelated_path)[
+        "album_key"
+    ] == unrelated["album_key"]
+
+
 @pytest.mark.parametrize(
     ("raw_rating", "expected_candidates"),
     [

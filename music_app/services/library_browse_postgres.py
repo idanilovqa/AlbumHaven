@@ -7189,9 +7189,11 @@ def _queue_display_cover_variants_for_groups(
                     source_path,
                     cache_root=display_cover_variant_cache_root(
                         source_path,
-                        data_dir=config.get("DATA_DIR") if cover_revision else None,
-                        storage_policy=config.get(
-                            "_GENERATED_PREVIEW_STORAGE_POLICY"
+                        data_dir=config.get("DATA_DIR"),
+                        storage_policy=(
+                            config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
+                            if cover_revision
+                            else None
                         ),
                     ),
                     max_size=_DISPLAY_COVER_VARIANT_SIZE,

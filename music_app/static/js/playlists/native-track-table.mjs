@@ -1,3 +1,4 @@
+import {recommenderListHtml} from '../recommendations/presentation.mjs';
 import {createNativeOwnerScope} from './native-owner-scope.mjs';
 import {cycleTableSort,sortTableRows} from '../home-friends/table-order.mjs';
 import {safeServerArtworkUrl} from '../home-friends/model.mjs';
@@ -7,11 +8,12 @@ import {playlistTrackMetricColumns,playlistTrackMetricCells,getPlaylistTrackMetr
 import {defaultFilters,granted,hasPlaylistFilters,playlistDraft,playlistFilters,visiblePlaylistRows} from './model.mjs';
 import {createPlaytableSource,mountPlaytableSelection} from '../playtables/native-selection.mjs';
 const METRIC_COLUMNS = playlistTrackMetricColumns();
-const playlistColumns = reorderable => [
+const playlistColumns = (reorderable, recommended = false) => [
   ...(reorderable ? [{key: 'order', label: 'Order', action: true, width: 70}] : []),
   {key: 'number', label: '#', required: true, width: 36},
   {key: 'title', label: 'Track', identity: true, width: 100},
   {key: 'artist', label: 'Artist', width: 112, autoMinWidth: 641}, {key: 'album', label: 'Album', width: 112, autoMinWidth: 641},
+  ...(recommended ? [{key:'recommended_by',label:'Recommended by',width:150,required:true}] : []),
   {key: 'availability', label: 'Availability', width: 88, autoMinWidth: 641},
   ...METRIC_COLUMNS.map(({hideWhenNarrow, ...column}) => ({...column, width: parseFloat(column.width),
     autoMinWidth: column.key === 'track_rating' ? 481 : 0, required: ['love_tier', 'duration'].includes(column.key)})),
@@ -59,7 +61,7 @@ export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reo
   const escape = runtime.escapeHtml;
   const positions = new Map(sourceRows.map((row, index) => [row, index]));
   reorderable = reorderable && !sorted(sort);
-  const columns = playlistColumns(reorderable);
+  const columns = playlistColumns(reorderable, detail.playlist_kind === 'recommended_by');
   return runtime.tableHtml({id: 'playlist-tracks', ariaLabel: `${detail.title || 'Playlist'} tracks`, density: 'compact', frame: 'outline', sort,
     selection: 'multiple', overflow: 'local',
     columns: columns.map(column => column.identity ? 'minmax(0,1fr)' : `${column.width}px`).join(' '), columnsConfig: columns,
@@ -79,6 +81,7 @@ export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reo
             ariaLabel: `Show details for ${track.title || 'track'}`, title: 'Show track and album information', presentation: 'bare',
             disabled: track.source_readable !== true, attributes: {'data-playlists-select': '1'}})},
           ...playlistTrackMetricCells(runtime, track, preferenceFor?.(track)),
+          ...(detail.playlist_kind === 'recommended_by' ? {recommended_by:{content:recommenderListHtml(track.recommended_by,escape) || '–'}} : {}),
           artist: {content: escape(track.artist || track.secondary_artist || '–')}, album: {content: escape(track.album_title || '–')},
           availability: {content: escape({local: 'Local', missing: 'Missing', unresolved: 'Needs review'}[track.availability])
             + (track.source_readable === true && ['missing', 'unresolved'].includes(track.availability) ? runtime.buttonHtml({label: 'Review', size: 'small',
@@ -177,7 +180,7 @@ export function mountPlaylistTracks(container, runtime, initialProps) {
         : undefined,
       onError: owner.onError,
       tablePresentation: {resourceKey: ownerContext, source: owner.state,
-        columns: playlistColumns(reorderable), isCurrent: owns}
+        columns: playlistColumns(reorderable, owner.detail.playlist_kind === 'recommended_by'), isCurrent: owns}
     };
   }
 

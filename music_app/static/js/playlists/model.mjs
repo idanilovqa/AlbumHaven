@@ -1,3 +1,4 @@
+import {normalizeRecommenders} from '../recommendations/presentation.mjs';
 import {normalizeSavedArtistLovedRecipe} from './artist-loved-recipe.mjs';
 import {DEFAULT_PLAYLIST_FILTERS, normalizePlaylistFacts, normalizePlaylistFilters, matchesPlaylistFilters, playlistFiltersActive} from './filters.mjs';
 import {createPlaylistFilterMemory} from './filter-preferences.mjs';
@@ -58,6 +59,7 @@ function track(value, index) {
     availability: 'unresolved', source_readable: false, allowed_actions: grants()});
   // Projection-only keys are never passed to item mutations or used as media refs.
   return freeze({row_key: itemId ? `item:${itemId}` : `projection:${index}`, playlist_item_id: itemId,
+    ...(own(value,'recommended_by') ? {recommended_by: normalizeRecommenders(value.recommended_by)} : {}),
     source_readable: true, playlist_position: count(value.playlist_position),
     title: text(value.title), artist: text(value.artist), secondary_artist: text(value.secondary_artist),
     album_title: text(value.album_title), album_ref: ref(value.album_ref), track_number: count(value.track_number),

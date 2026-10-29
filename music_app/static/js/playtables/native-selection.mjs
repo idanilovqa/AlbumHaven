@@ -30,6 +30,7 @@ export function createPlaytableSource(initial) {
     canQueue: keys => current() && accepted && native?.canQueue?.(keys) === true,
     captureQueue: (keys, settings) => current() && accepted ? native?.captureQueue?.(keys, settings) || null : null,
     resolveRows: keys => current() && accepted ? native?.resolveRows(keys) || null : null,
+    resolveRecommendationRows: keys => current() && accepted ? native?.resolveRecommendationRows?.(keys) || null : null,
     retainNavigation: keys => current() && accepted ? native?.retainNavigation?.(keys) || null : null,
     updateRows(rows, nextRevision) {
       if (!current()) return false;
@@ -87,12 +88,13 @@ export function mountPlaytableSelection(host, initialOptions) {
     const status = host.ownerDocument.createElement('span');
     status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.setAttribute('aria-atomic', 'true');
     const addHost = host.ownerDocument.createElement('span'), createHost = host.ownerDocument.createElement('span');
-    const columnsHost = host.ownerDocument.createElement('span');
-    actionsHost.replaceChildren(status, addHost, createHost, columnsHost);
+    const columnsHost = host.ownerDocument.createElement('span'), moreHost = host.ownerDocument.createElement('span');
+    actionsHost.replaceChildren(status, addHost, createHost, moreHost, columnsHost);
     const buttons = host.ownerDocument.defaultView?.ButtonComponent;
     const runtime = options.runtime || (buttons ? {buttonHtml: value => buttons.renderButton(value)} : null);
     const add = runtime ? acquire(mountButton(addHost, runtime, {label: 'Add to playlist'})) : null;
     const create = runtime ? acquire(mountButton(createHost, runtime, {label: 'Create new playlist'})) : null;
+    const more = runtime ? acquire(mountButton(moreHost, runtime, {label:'More actions'})) : null;
 
     function refresh() {
       if (disposed) return;
@@ -104,13 +106,16 @@ export function mountPlaytableSelection(host, initialOptions) {
       if (disposed) return;
       create?.update({label: 'Create new playlist', size: 'small', disabled,
         onClick: event => owner?.openSelection(event.target.closest('button'), {mode: 'create'})});
+      moreHost.hidden = typeof options.onContextAction !== 'function';
+      more?.update({label:'More actions',size:'small',disabled:!count || moreHost.hidden,
+        onClick:event=>owner?.openSelection(event.target.closest('button'),{context:true})});
       if (!disposed) options.onSelectionChange?.(snapshot);
     }
     function connect() {
       if (options.enabled !== false) {
         const adapter = options.sourceAdapter;
         safeSource = {...adapter};
-        for (const key of ['snapshot', 'canQueue', 'captureQueue', 'resolveRows', 'retainNavigation']) {
+        for (const key of ['snapshot', 'canQueue', 'captureQueue', 'resolveRows', 'resolveRecommendationRows', 'retainNavigation']) {
           if (typeof adapter[key] === 'function') safeSource[key] = (...args) => adapter[key](...args);
         }
         safeSource.subscribe = listener => {
@@ -179,7 +184,7 @@ export function mountPlaytableSelection(host, initialOptions) {
       release(() => love?.dispose());
       for (const type of ['click', 'dblclick', 'pointerdown']) release(() => host.removeEventListener(type, preferenceEvent, true));
       release(() => columns?.dispose()); release(() => presentation?.dispose());
-      release(() => add?.dispose()); release(() => create?.dispose());
+      release(() => add?.dispose()); release(() => create?.dispose()); release(() => more?.dispose());
       release(() => actionsHost.replaceChildren());
       if (ownsHost) release(() => actionsHost.remove());
       acquired.length = 0;

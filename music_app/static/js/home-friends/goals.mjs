@@ -4,8 +4,7 @@ import {createGoalsController} from './goals-model.mjs';
 import {mountChoice, mountButton} from './native-controls.mjs';
 import {mountAlbumProgress} from './album-progress.mjs';
 import {mountGoalAdmission} from './goals-admission.mjs';
-import {mountGoalBonusSettings, mountGoalBonusSwitch} from './goals-bonus-settings.mjs';
-import {createAlbumTopBackendProviders} from '../album-tops/backend-providers.mjs';
+import {mountWeeklyGoalsSettings} from './goals-weekly-settings.mjs';
 import {openNativeDialog} from './native-dialog.mjs';
 
 const periodIcons = {week: 'calendar-week', month: 'calendar-month', 'six-months': 'calendar-six-months', year: 'calendar-year'};
@@ -25,7 +24,7 @@ export function mountGoalsPanel(host, runtime, initial) {
   let attentionView, dismissAttention, dismissAttentionHost, retryAttention, retryAttentionHost;
   let rendering = false, queuedRender = false, frameSnapshot = null;
   let menu = null, menuGuard = null, menuGeneration = 0;
-  let bonusHost, bonusSwitch, bonusOutcome, sourceSequence = 0;
+  let settingsHost, settingsButton, bonusOutcome;
   const sourceTransport = initial.sourceTransport || null;
   let sourceContext = null;
   try {sourceContext = sourceTransport?.context() || null;} catch {}
@@ -48,7 +47,7 @@ export function mountGoalsPanel(host, runtime, initial) {
     if (!valid()) return;
     const formats = [];
     const completed = selected.manual_completed_at[ref] !== null;
-    if (data.allowed_actions.can_complete) formats.push({value: 'completion', label: completed ? 'Clear completion' : 'Mark completed'});
+    if (data.allowed_actions.can_complete && (selected.completion_modes?.[ref] ?? data.albums.find(album => album.catalog_ref === ref)?.completion_mode) !== 'rating') formats.push({value: 'completion', label: completed ? 'Clear completion' : 'Mark completed'});
     if (data.allowed_actions.can_remove) formats.push({value: 'remove', label: 'Remove from goals'});
     if (!formats.length) return;
     const expected = Object.freeze({data, period, revision: data.revision, cycle_id: selected.cycle?.cycle_id ?? null});
@@ -93,37 +92,25 @@ export function mountGoalsPanel(host, runtime, initial) {
     });
     if (!valid() || opened.closed) opened.dispose(); else {dialog = opened; dialogGuard = valid;}
   }
-  function openBonusSettings() {
-    const captured = controller.getSnapshot(), {data, settings, bonus, period} = captured;
+  function openWeeklySettings() {
+    const captured = controller.getSnapshot(), {data, period} = captured;
     const valid = () => current() && controller.getSnapshot().status === 'ready'
-      && controller.getSnapshot().mutation === 'idle' && controller.getSnapshot().bonusStatus === 'ready'
-      && controller.getSnapshot().data === data && controller.getSnapshot().settings === settings
-      && controller.getSnapshot().bonus === bonus && controller.getSnapshot().period === period;
-    if (!valid() || !data.allowed_actions.can_add) return;
+      && controller.getSnapshot().mutation === 'idle' && controller.getSnapshot().data === data
+      && controller.getSnapshot().period === period && data.allowed_actions.can_add === true;
+    if (!valid()) return;
     closeMenu(); closeDialog(); if (!valid()) return;
-    const expected = Object.freeze({data, settings, bonus, period});
-    const scope = `goals-bonus-sources-${++sourceSequence}`;
-    const opened = openNativeDialog(runtime, {title: 'Bonus album settings',
-      returnFocus: () => bonusHost.querySelector('button')}, {fallbackHost: body,
-      mount(content, close) {
-        let sources = null, child = null, stop = null, retired = false;
-        const sourceValid = () => !retired && valid() && sourceCurrent();
-        const dispose = () => {if (retired) return;retired=true;const old=child;child=null;
-          try {stop?.();} finally {try {sources?.dispose();} finally {old?.dispose();}}};
-        try {
-          if (sourceValid()) sources = createAlbumTopBackendProviders({transport: sourceTransport,
-            acceptsScope: value => value === scope && sourceValid()});
-          child = mountGoalBonusSettings(content, runtime, {controller, expected,
-            proposedEnabled: !settings.enabled, sourceProvider: sources, sourceScope: scope,
-            sourceCurrent: sourceValid, isCurrent: valid,
-            onClose: () => close(),
-            onSave: values => {if (!valid()) return;close({restoreFocus:false});if (valid()) void controller.saveBonusSettings(values, expected);},
-            onDraw: () => {if (!valid() || !sourceValid()) return;close({restoreFocus:false});if (valid() && sourceCurrent()) void controller.drawBonus(expected);}});
-          stop = sourceTransport?.subscribe?.(() => {if (!sourceCurrent()) child?.updateSource({sourceProvider:null,sourceScope:null,sourceCurrent:()=>false});});
-          if (!sourceCurrent()) child.updateSource({sourceProvider:null,sourceScope:null,sourceCurrent:()=>false});
-          return {dispose};
-        } catch(error) {dispose();throw error;}
-      }, onClose() {dialog = null; dialogGuard = null;}});
+    const opened = openNativeDialog(runtime, {title: 'Weekly Goals settings', contentOwnsFooter: true,
+      showCloseButton: true, returnFocus: () => settingsHost.querySelector('button')}, {
+      fallbackHost: body,
+      mount(content, close) {return mountWeeklyGoalsSettings(content, runtime, {provider, isCurrent: valid,
+        subscribeSources: listener => sourceTransport?.subscribe?.(listener),
+        onClose: next => close(next), onDraw: settingsRevision => {
+          if (!valid()) return;
+          close({restoreFocus: false});
+          if (valid()) void controller.drawWeekly(settingsRevision, {data, period});
+        }});},
+      onClose() {dialog = null; dialogGuard = null;},
+    });
     if (!valid() || opened.closed) opened.dispose(); else {dialog = opened; dialogGuard = valid;}
   }
   function confirmReset() {
@@ -191,11 +178,11 @@ export function mountGoalsPanel(host, runtime, initial) {
       onClick: confirmReset});
     if (!checkpoint()) return;
     resetHost.hidden = snapshot.status !== 'ready' || !selected?.cycle || selected.total === 0 && !isGoalCycleDue(selected.cycle);
-    bonusSwitch.update({id:'goals-bonus-enabled', enabled:snapshot.settings?.enabled===true,
-      disabled:snapshot.status!=='ready'||snapshot.bonusStatus!=='ready'||snapshot.mutation!=='idle'||data?.allowed_actions.can_add!==true, onClick:openBonusSettings});
+    settingsButton.update({label:'Weekly Goals settings', icon:'target-tools',
+      disabled:snapshot.status!=='ready'||snapshot.mutation!=='idle'||data?.allowed_actions.can_add!==true, onClick:openWeeklySettings});
     if (!checkpoint()) return;
-    bonusOutcome.textContent = snapshot.status==='ready' && snapshot.outcome?.action==='bonus_draw' && snapshot.outcome.reason==='no_eligible_source'
-      ? 'No eligible unfinished album was available in your active Album Top sources.' : '';
+    bonusOutcome.textContent = snapshot.status==='ready' && ['bonus_draw','weekly_draw'].includes(snapshot.outcome?.action) && snapshot.outcome.reason==='no_eligible_source'
+      ? 'No eligible unfinished album was available in your selected sources.' : '';
     bonusOutcome.hidden = !bonusOutcome.textContent;
     const canAdd = snapshot.status === 'ready' && data?.allowed_actions.can_add === true;
     startHost.hidden = !canAdd || selected.total !== 0;
@@ -219,7 +206,8 @@ export function mountGoalsPanel(host, runtime, initial) {
     const albums = new Map((data?.albums || []).map(album => [album.catalog_ref, album]));
     for (const [index, ref] of desired.entries()) {
       let row = rows.get(ref);
-      const album = albums.get(ref), key = JSON.stringify(album);
+      const album = albums.get(ref), rated = selected.rated_at?.[ref] != null;
+      const completionMode = selected.completion_modes?.[ref] ?? album.completion_mode, key = JSON.stringify([album, rated, completionMode]);
       if (!row) {
         row = doc.createElement('div'); row.dataset.goalAlbumRef = ref; rows.set(ref, row);
         row.goalContextMenu = event => {
@@ -234,7 +222,8 @@ export function mountGoalsPanel(host, runtime, initial) {
         if (!checkpoint()) return;
         const markup = runtime.galleryCardHtml({identity: ref, title: album.title, artist: album.artist_display,
           year: album.first_release_date?.slice(0, 4) || '', interaction: 'none', displayMode: 'cards',
-          artboxHtml: artwork, listeningSummaryHtml: ''});
+          artboxHtml: artwork, listeningSummaryHtml: completionMode === 'rating'
+            ? `<span>${rated ? 'Rated · Goal progress counted' : 'Rate in your library to advance Goals.'}</span>` : ''});
         if (!checkpoint()) return;
         retireRowAction(row);
         if (!checkpoint()) return;
@@ -242,7 +231,7 @@ export function mountGoalsPanel(host, runtime, initial) {
         if (!checkpoint()) return;
         row.goalRenderKey = key; row.goalCardRenderer = runtime.galleryCardHtml; row.goalArtworkRenderer = runtime.artboxHtml;
       }
-      const canAct = data.allowed_actions.can_complete || data.allowed_actions.can_remove;
+      const canAct = data.allowed_actions.can_complete && completionMode !== 'rating' || data.allowed_actions.can_remove;
       if (canAct && !row.goalActionOwner) {
         const actionHost = doc.createElement('div'); actionHost.className = 'gallery-card__actions';
         row.querySelector('.album-card').append(actionHost); row.goalActionHost = actionHost;
@@ -271,7 +260,7 @@ export function mountGoalsPanel(host, runtime, initial) {
   }
   function dispose() {
     if (disposed) return; disposed = true; attentionView?.dispose(); dismissAttention?.dispose(); retryAttention?.dispose(); unsubscribe?.(); closeMenu(); closeDialog(); if (!initial.owner) {try {controller?.dispose();} finally {provider?.dispose();}}
-    bonusSwitch?.dispose(); retry?.dispose(); start?.dispose(); add?.dispose(); reset?.dispose(); progress?.dispose(); choice?.dispose();
+    settingsButton?.dispose(); retry?.dispose(); start?.dispose(); add?.dispose(); reset?.dispose(); progress?.dispose(); choice?.dispose();
     for (const row of rows.values()) disposeRow(row);
     nodes.reverse().forEach(value => value.remove()); rows.clear();
   }
@@ -282,8 +271,8 @@ export function mountGoalsPanel(host, runtime, initial) {
     resetHost = node(initial.header.actions, 'span'); addHost = node(initial.header.actions, 'span'); periodHost = node(initial.header.actions, 'span');
     initial.header.actions.insertBefore(resetHost, firstAction); initial.header.actions.insertBefore(addHost, firstAction); initial.header.actions.insertBefore(periodHost, firstAction);
     progressHost = node(initial.header.content, 'span'); body = node(host);
-    bonusHost = node(body);bonusHost.className='home-goals__bonus-controls';
-    bonusSwitch = mountGoalBonusSwitch(bonusHost,runtime,{id:'goals-bonus-enabled',enabled:false,disabled:true,onClick:openBonusSettings});
+    settingsHost = node(initial.header.actions, 'span');
+    settingsButton = mountButton(settingsHost,runtime,{label:'Weekly Goals settings',icon:'target-tools',disabled:true,onClick:openWeeklySettings});
     bonusOutcome = node(body,'p');bonusOutcome.setAttribute('role','status');
     emptyHost = node(body); emptyHost.className = 'home-goals__empty-state'; status = node(emptyHost); startHost = node(emptyHost, 'span'); error = node(body);
     retryHost = node(body, 'span'); body.className = 'home-recent__body gallery-scrollbar';

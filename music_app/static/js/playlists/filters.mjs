@@ -138,7 +138,7 @@ export function groupPlaylists(items) {
     if (!object(item) || !own(item, 'playlist_id') || typeof item.playlist_id !== 'string'
       || !item.playlist_id.trim() || /[\x00-\x1f\x7f]/.test(item.playlist_id)) continue;
     const kind = own(item, 'playlist_kind') ? item.playlist_kind : null;
-    groups[kind === 'autoplaylist' ? 'autoplaylists' : kind === 'manual' ? 'manual' : 'unclassified'].push(item);
+    groups[['autoplaylist', 'recommended_by'].includes(kind) ? 'autoplaylists' : kind === 'manual' ? 'manual' : 'unclassified'].push(item);
   }
   for (const key of Object.keys(groups)) Object.freeze(groups[key]);
   return Object.freeze(groups);

@@ -802,6 +802,7 @@ export function mountPlaylistsView(host,runtime,initial) {
             if(['queued','running'].includes(value.popularity_refresh_status))note('Last.fm popularity refresh is in progress. Auto-updating mixes use newly resolved counts when the owner next opens them.');
             if(value.popularity_refresh_status==='blocked'||value.popularity_refresh_error)note(`${value.popularity_refresh_error==='not_configured'?'Last.fm popularity refresh is not configured.':'Last.fm popularity refresh is unavailable.'} Resolved cached counts are still used.`);
           }
+          if(detail.playlist_kind === 'recommended_by') note('Songs recommended to you appear here automatically. To add one yourself, use Add to Recommended By from a track’s menu and name the recommender.');
           if(detail.artist_loved) {
             const value=detail.artist_loved;
             note('Loved and Obsessed · updates automatically when the owner opens this playlist · Generated membership is locked');
@@ -1008,6 +1009,7 @@ export function mountPlaylistsView(host,runtime,initial) {
       }
     };
     scope.listen(selectionHost,'keydown',keydown);
+    scope.listen(host.ownerDocument.defaultView,'albumhaven:recommendations-changed',()=>{if(!disposed && host.isConnected)void props.controller.load();});
     render();
     return {
       element:host,

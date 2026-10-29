@@ -1,3 +1,4 @@
+import * as recommendationPresentation from '../recommendations/presentation.mjs';
 import {normalizeArtistLovedDescriptor, normalizeArtistLovedLaunch, normalizeSavedArtistLovedRecipe} from '../playlists/artist-loved-recipe.mjs';
 import {createGoalsOwner} from './goals-owner.mjs';
 import {captureArtistMixScope} from '../playlists/library-mix-recipe.mjs';
@@ -20,6 +21,8 @@ import {mountSearchResults} from '../search-results/native.mjs';
 import {mountArtistPage} from '../artist-page/native.mjs';
 import {createFoobarHistoryOwner} from '../foobar-history/owner.mjs';
 import {createFoobarHistoryNativeActions} from '../foobar-history/native-actions.mjs';
+
+window.AlbumHavenRecommendationPresentation = Object.freeze(recommendationPresentation);
 
 let requestedProviders = null, providers = {}, providerGeneration = 0, activeController = null, homeOwner = null, mountedRuntime = null;
 let friendNotifications = null, ownedHomeProviders = null, presencePublisher = null, notificationsView = null;
@@ -305,11 +308,22 @@ function openPlaytableContext(packet, lifetime, sourceAdapter, anchor) {
   const native = window.AlbumHavenPlaylistRuntime;
   if (!lifetime?.isCurrent?.() || !native?.openChoice) return false;
   const queue = window.AlbumHavenExplicitQueue;
+  const recommended = recommendationPresentation.singleRecommendedTrack(packet, lifetime, sourceAdapter);
   const formats = [{value: 'new', label: 'Create new playlist'}, {value: 'add', label: 'Add to playlist'},
+    ...(recommended && window.AlbumHavenRecommendations ? [{value: 'recommend', label: 'Recommend'}, {value: 'recommend-manual', label: 'Add to Recommended By…'}] : []),
     ...(queue && sourceAdapter.canQueue?.(packet.row_keys) ? queue.timingOptions().map(option => ({value: `queue:${option.value ?? option.id}`, label: option.label, reason: option.reason, disabled: option.enabled !== true})) : [])];
   return Boolean(native.openChoice(anchor, {formats, label: 'Selected track actions', actionMenu: true, menuWidth: 'content',
     updateTriggerLabel: false, initialFocus: 'first', onSelect: value => {
       if (!lifetime.isCurrent()) return false;
+      if (value === 'recommend' || value === 'recommend-manual') {
+        const fresh = recommendationPresentation.singleRecommendedTrack(packet, lifetime, sourceAdapter);
+        if (!recommendationPresentation.sameRecommendationResource(fresh, recommended)) return false;
+        void window.AlbumHavenRecommendations.open({...fresh, manual: value === 'recommend-manual', anchor,
+          isCurrent: () => lifetime.isCurrent() && recommendationPresentation.sameRecommendationResource(
+            recommendationPresentation.singleRecommendedTrack(packet,lifetime,sourceAdapter), fresh)})
+          .finally(() => lifetime.dispose?.());
+        return true;
+      }
       if (value === 'new' || value === 'add') return openPlaylistAction(packet, lifetime, sourceAdapter, anchor, {mode: value === 'new' ? 'create' : 'add'});
       if (!value.startsWith('queue:') || !queue) return false;
       const request = new AbortController();

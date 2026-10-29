@@ -9878,6 +9878,7 @@ def test_postgres_track_file_entry_batch_uses_effective_persisted_exception_valu
         track_number=1,
         private_path=selected_path,
     )
+    selected_row["album_metadata"]["cover_revision"] = "revision-1"
     unrelated_row = _exception_album_row(
         track_id=9692,
         track_key="exception-album-9692",
@@ -9902,6 +9903,8 @@ def test_postgres_track_file_entry_batch_uses_effective_persisted_exception_valu
     assert entries[selected_path]["exception_type"] == "Non-album rarity"
     assert entries[selected_path]["album"] == "Exception Album"
     assert entries[selected_path]["album_artist"] == "Exception Artist"
+    assert entries[selected_path]["cover_path"] == "covers/exception.jpg"
+    assert entries[selected_path]["cover_revision"] == "revision-1"
 
 
 def test_postgres_track_file_entry_batch_resolves_detached_non_album_paths(

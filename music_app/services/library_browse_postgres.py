@@ -2878,6 +2878,15 @@ class PostgresLibraryBrowseRepository:
             if path not in normalized_paths:
                 continue
             file_entry = dict(_row_json_mapping(row_payload.get("file_entry")))
+            album_cover_path = str(row_payload.get("album_cover_path") or "").strip()
+            if album_cover_path:
+                file_entry["cover_path"] = album_cover_path
+            album_cover_revision = str(
+                _row_json_mapping(row_payload.get("album_metadata")).get("cover_revision")
+                or ""
+            ).strip()
+            if album_cover_revision:
+                file_entry["cover_revision"] = album_cover_revision
             file_entry.update(
                 {
                     "album_id": row_payload.get("album_id"),

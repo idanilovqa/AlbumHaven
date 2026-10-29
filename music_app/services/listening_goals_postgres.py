@@ -17,6 +17,11 @@ from music_app.services.listening_goal_bonus_settings import (
 )
 from music_app.services.listening_goal_bonus import BonusDrawCommand, normalize_bonus_draw
 from music_app.services import listening_goal_bonus_postgres as bonus
+from music_app.services import listening_goal_weekly_postgres as weekly_settings_store
+from music_app.services.listening_goal_completion_postgres import propagate_goal_completion
+from music_app.services import listening_goal_weekly_draw as weekly_draw
+from music_app.services import listening_goal_rating_progress as rating_progress
+from music_app.services.listening_goal_membership_sources import sync_sources
 from music_app.services.listening_goal_transition import (
     GoalTransitionCommand, normalize_goal_transition, transition_goal_period,
 )
@@ -127,15 +132,19 @@ class PostgresListeningGoalsService:
                                        (account,)).fetchone()
         # The partial current-cycle index bounds this projection to four cycles.
         # Retained item counts never hydrate archived cycles or catalog metadata.
-        rows = connection.execute("""select c.goal_ref,c.period,c.cycle_id,c.start_date,c.due_date,c.timezone_name,
+        ratings = rating_progress.storage_ready(connection)
+        rating_join = "left join app.listening_goal_rating_progress rp on rp.account_id=i.account_id and rp.goal_ref=i.goal_ref and rp.cycle_id=i.cycle_id and rp.catalog_ref=i.catalog_ref and rp.membership_position=i.position" if ratings else ""
+        completed = "coalesce(i.manual_completed_at,rp.rated_at)" if ratings else "i.manual_completed_at"
+        rows = connection.execute(f"""select c.goal_ref,c.period,c.cycle_id,c.start_date,c.due_date,c.timezone_name,
             count(i.catalog_ref)::bigint as total,
-            count(i.manual_completed_at)::bigint as completed,
+            count({completed})::bigint as completed,
             exists(select 1 from app.listening_goal_attention_acknowledgments a
                 where a.account_id=c.account_id and a.goal_ref=c.goal_ref and a.cycle_id=c.cycle_id
                   and a.kind='weekly_cycle_started') as acknowledged
             from app.listening_goal_cycles c
             left join app.listening_goal_cycle_items i on i.account_id=c.account_id
                 and i.goal_ref=c.goal_ref and i.cycle_id=c.cycle_id and i.removed_at is null
+            {rating_join}
             where c.account_id=%s and c.closed_at is null
             group by c.account_id,c.goal_ref,c.period,c.cycle_id,c.start_date,c.due_date,c.timezone_name
             order by c.period""", (account,)).fetchall()
@@ -176,7 +185,7 @@ class PostgresListeningGoalsService:
         if not isinstance(command, GoalTransitionCommand):
             raise GoalsError('invalid_command')
         command = normalize_goal_transition(command.payload())
-        with self._authorized(context, WRITE, constraints) as (connection, live, now):
+        with self._weekly_schema(), self._authorized(context, WRITE, constraints) as (connection, live, now):
             account = live.actor.account_id
             prior = bonus.replay(connection, account, live.actor.session_id, command)
             if prior is not None:
@@ -203,11 +212,19 @@ class PostgresListeningGoalsService:
             captured = bonus.cycle_bonus(connection, account, before) if command.period == 'week' else None
             captured_ref = (str(captured['catalog_ref']) if captured
                 and str(captured['catalog_ref']) in selected_members else None)
+            weekly_captured = weekly_draw.cycle_draws(connection, account, command.expected_cycle_id) if command.period == 'week' else []
+            rated_refs = frozenset(str(row['catalog_ref']) for row in connection.execute(
+                '''select rp.catalog_ref from app.listening_goal_rating_progress rp
+                    join app.listening_goal_cycle_items rs on rs.account_id=rp.account_id and rs.cycle_id=rp.cycle_id
+                        and rs.catalog_ref=rp.catalog_ref and rs.position=rp.membership_position and rs.removed_at is null
+                    where rp.account_id=%s and rp.cycle_id=%s''', (account, command.expected_cycle_id)).fetchall())
+            origins = origins | frozenset(str(row['catalog_ref']) for row in weekly_captured)
             new_cycle = str(uuid4())
             after = transition_goal_period(before, period=command.period,
                 expected_cycle_id=command.expected_cycle_id, new_cycle_id=new_cycle, occurred_at=now,
                 timezone_name=command.timezone_name, viewer_ref=str(account), bonus_origin_refs=origins,
-                captured_bonus_ref=captured_ref, unfinished_policy=settings['unfinished_policy'])
+                captured_bonus_ref=captured_ref, unfinished_policy=settings['unfinished_policy'],
+                rated_refs=rated_refs.intersection(selected_members))
             revision += 1
             self._persist(connection, account, before, after, evidence=None, now=now,
                           revision=revision, exists=True)
@@ -218,6 +235,13 @@ class PostgresListeningGoalsService:
                     (account_id,goal_ref,cycle_id,catalog_ref,admission_ref,captured_at)
                     values(%s,%s,%s,%s,%s,%s)''',
                     (account,after['top_ref'],new_cycle,captured_ref,captured['admission_ref'],now))
+            carried_weekly = [row for row in weekly_captured if str(row['catalog_ref']) in members]
+            for slot, row in enumerate(carried_weekly):
+                connection.execute('''insert into app.listening_goal_weekly_draws
+                    (account_id,goal_ref,cycle_id,slot,catalog_ref,admission_ref,objective,allocation_cursor_used,captured_at)
+                    select account_id,goal_ref,%s,%s,catalog_ref,admission_ref,objective,allocation_cursor_used,%s
+                    from app.listening_goal_weekly_draws where account_id=%s and cycle_id=%s and slot=%s''',
+                    (new_cycle,slot,now,account,command.expected_cycle_id,row['slot']))
             # Rollover archives marks; it is not an explicit Clear and must not
             # reset completed-source eligibility or mutate any other period.
             receipt = {'ok':True,'action':'transition','request_key':command.request_key,
@@ -226,8 +250,10 @@ class PostgresListeningGoalsService:
                 'cycle_id':new_cycle,'settings_revision':command.settings_revision,
                 'retained_count':len(members),'bonus_carried':carried_bonus}
             if command.period == 'week':
-                receipt['manual_count'] = len(members) - int(carried_bonus)
-                receipt['manual_slots_available'] = 5 - receipt['manual_count']
+                receipt['manual_count'] = len(members) - int(carried_bonus) - len(carried_weekly)
+                receipt['manual_limit'] = weekly_settings_store.read_settings(connection, account)['settings']['manual_count']
+                receipt['weekly_suggestions_carried'] = len(carried_weekly)
+                receipt['manual_slots_available'] = max(0, receipt['manual_limit'] - receipt['manual_count'])
                 receipt['bonus_slot_available'] = not carried_bonus
             connection.execute('''insert into app.listening_goal_operations
                 (account_id,request_key,original_session_id,action,command_digest,receipt,committed_at)
@@ -256,7 +282,48 @@ class PostgresListeningGoalsService:
             prior = bonus.replay(connection, live.actor.account_id, live.actor.session_id, command)
             if prior is not None:
                 return prior
-        return bonus.draw(self, context, command, constraints=constraints)
+        with self._weekly_schema():
+            return bonus.draw(self, context, command, constraints=constraints)
+
+    @staticmethod
+    @contextmanager
+    def _weekly_schema():
+        try:
+            yield
+        except Exception as error:
+            if getattr(error, 'sqlstate', None) in {'42P01', '42703'}:
+                raise GoalsError('weekly_settings_schema_unavailable', 503) from None
+            raise
+
+    def read_weekly_settings(self, context, *, constraints=None):
+        # Account settings survive missing current-library access. Source options
+        # remain unavailable rather than using cached authority or browser facts.
+        with self._weekly_schema():
+            with self._authorized(context, READ, constraints) as (connection, live, _):
+                value = weekly_settings_store.read_settings(connection, live.actor.account_id)
+            value.pop('allocation_cursor')
+            value.update(genres=[], playthroughs=[])
+            if context.actor.current_library_id is not None:
+                try:
+                    snapshot = weekly_settings_store.source_snapshot(self, context, constraints=constraints)
+                    value.update(genres=snapshot['genres'], playthroughs=snapshot['playthroughs'])
+                except GoalsError as error:
+                    if error.code != 'source_context_unavailable':
+                        raise
+                    value['source_status'] = 'unavailable'
+            return value
+
+    def save_weekly_settings(self, context, command, *, constraints=None):
+        with self._weekly_schema():
+            return weekly_settings_store.save_settings(self, context, command, constraints=constraints)
+
+    def draw_weekly_suggestions(self, context, command, *, constraints=None):
+        with self._weekly_schema():
+            return weekly_draw.draw(self, context, command, constraints=constraints)
+
+    def preview_weekly_settings(self, context, settings, *, constraints=None):
+        with self._weekly_schema():
+            return weekly_settings_store.source_snapshot(self, context, settings=settings, constraints=constraints)
 
     def read_bonus_settings(self, context, *, constraints=None):
         with self._authorized(context, READ, constraints) as (connection, live, _):
@@ -443,6 +510,7 @@ class PostgresListeningGoalsService:
                 can_write = False
             periods = {name: domain.goal_period_view(state, period=name,
                 viewer_ref=str(live.actor.account_id)) for name in domain.GOAL_PERIODS}
+            completion_modes = rating_progress.overlay(connection, live, periods, albums, constraints=constraints)
             if aggregate is None:
                 for value in periods.values():
                     value['top_ref'] = None
@@ -453,7 +521,8 @@ class PostgresListeningGoalsService:
                                         'can_complete': can_write, 'can_remove': can_write},
                     'albums': [{'catalog_ref': str(row['catalog_ref']), 'title': row['title'],
                         'artist_display': row['artist_display'], 'first_release_date': row['first_release_date'],
-                        'primary_type': row['primary_type']} for row in albums]}
+                        'primary_type': row['primary_type'],
+                        'completion_mode': completion_modes.get(str(row['catalog_ref']), 'manual')} for row in albums]}
 
     @staticmethod
     def _catalog(connection, evidence):
@@ -466,8 +535,13 @@ class PostgresListeningGoalsService:
             raise GoalsError('identity_conflict', 409) from None
 
     @staticmethod
-    def _persist(connection, account, before, after, *, evidence, now, revision, exists, top_admission=None):
+    def _persist(connection, account, before, after, *, evidence, now, revision, exists, top_admission=None, weekly_admissions=()):
         ref = after['top_ref']
+        if any(not isinstance(item, weekly_draw.WeeklyAdmission) for item in weekly_admissions):
+            raise RuntimeError('Invalid typed weekly admissions.')
+        admission_by_ref = {item.catalog_ref: item for item in weekly_admissions}
+        if len(admission_by_ref) != len(weekly_admissions):
+            raise RuntimeError('Duplicate weekly admission.')
         if not exists:
             connection.execute('''insert into app.listening_goals(account_id,ref,revision,created_at,updated_at)
                 values(%s,%s,%s,%s,%s)''', (account, ref, revision, now, now))
@@ -496,7 +570,12 @@ class PostgresListeningGoalsService:
                     where account_id=%s and goal_ref=%s and catalog_ref=%s''',
                     (current_position, account, ref, album))
                 continue
-            if evidence is None and top_admission is None:
+            weekly_admission = admission_by_ref.get(album)
+            admission = weekly_admission or top_admission
+            if weekly_admission is not None and (not isinstance(weekly_admission, weekly_draw.WeeklyAdmission)
+                    or weekly_admission.catalog_ref != album or top_admission is not None or evidence is not None):
+                raise RuntimeError('Invalid typed weekly admission.')
+            if evidence is None and admission is None:
                 raise RuntimeError('Goal album admission evidence is missing.')
             if top_admission is not None and (not isinstance(top_admission, bonus.TopAdmission)
                     or top_admission.catalog_ref != album or evidence is not None):
@@ -506,15 +585,16 @@ class PostgresListeningGoalsService:
                 raise GoalsError('order_exhausted', 409)
             connection.execute('''insert into app.listening_goal_albums
                 (account_id,goal_ref,catalog_ref,original_position,current_position,title,artist_display,
-                 first_release_date,primary_type,evidence_ref,evidence_version,admitted_at,admission_kind,top_admission_ref)
-                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                 first_release_date,primary_type,evidence_ref,evidence_version,admitted_at,admission_kind,top_admission_ref,weekly_admission_ref)
+                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
                 (account, ref, album, original_position, current_position,
-                 top_admission.title if top_admission else evidence['title'],
-                 top_admission.artist_display if top_admission else evidence['artist_display'],
-                 top_admission.first_release_date if top_admission else evidence['first_release_date'],
-                 top_admission.primary_type if top_admission else evidence['primary_type'],
-                 None if top_admission else evidence['ref'], None if top_admission else evidence['evidence_version'], now,
-                 'album_top' if top_admission else 'musicbrainz', top_admission.ref if top_admission else None))
+                 admission.title if admission else evidence['title'],
+                 admission.artist_display if admission else evidence['artist_display'],
+                 admission.first_release_date if admission else evidence['first_release_date'],
+                 admission.primary_type if admission else evidence['primary_type'],
+                 None if admission else evidence['ref'], None if admission else evidence['evidence_version'], now,
+                 'weekly' if weekly_admission else ('album_top' if top_admission else 'musicbrainz'),
+                 top_admission.ref if top_admission else None, weekly_admission.ref if weekly_admission else None))
         previous_assignments = {row['assignment_id'] for row in before['assignments']}
         next_assignments = {row['assignment_id'] for row in after['assignments']}
         for assignment in previous_assignments - next_assignments:
@@ -597,11 +677,13 @@ class PostgresListeningGoalsService:
                               and removed_at is null''',
                             (marks.get(album), account, ref, cycle['cycle_id'], album))
 
+        sync_sources(connection, account, before, after, weekly_admissions)
+
     def execute(self, context, command, *, constraints=None):
         # Revalidate a command at the write boundary; construction alone is not
         # authority and no caller-owned mutable object survives into the lock.
         command = normalize_goal_command(command.action, {**command.data, 'request_key': command.request_key})
-        with self._authorized(context, WRITE, constraints) as (connection, live, now):
+        with self._weekly_schema(), self._authorized(context, WRITE, constraints) as (connection, live, now):
             account = live.actor.account_id
             prior = connection.execute('''select original_session_id,command_digest,receipt
                 from app.listening_goal_operations where account_id=%s and request_key=%s''',
@@ -633,11 +715,16 @@ class PostgresListeningGoalsService:
                 weekly = before['periods'].get('week')
                 captured_bonus = bonus.cycle_bonus(connection, account, before)
                 bonus_ref = str(captured_bonus['catalog_ref']) if captured_bonus else None
-                manual_count = (len(weekly['current']['album_refs'])
-                    - int(bonus_ref in weekly['current']['album_refs'])) if weekly else 0
-                if (command.data['period'] == 'week' and not duplicate and weekly is not None
-                        and album != bonus_ref and manual_count >= 5):
-                    raise GoalsError('weekly_capacity', 409)
+                if command.data['period'] == 'week' and not duplicate and album != bonus_ref:
+                    drawn_refs = {str(row['catalog_ref']) for row in weekly_draw.cycle_draws(
+                        connection, account, weekly['current']['cycle_id'] if weekly else None)}
+                    current_refs = [ref for ref in weekly['current']['album_refs']
+                        if ref != bonus_ref and ref not in drawn_refs] if weekly else []
+                    if weekly is not None and len(weekly['current']['album_refs']) >= 7:
+                        raise GoalsError('weekly_capacity', 409)
+                    with self._weekly_schema():
+                        weekly_settings_store.require_manual_admission(connection, account, current_refs, album,
+                            context=live, constraints=constraints, now=now)
                 selected_period = before['periods'].get(command.data['period'])
                 if (album == bonus_ref and selected_period is not None
                         and album in selected_period['current']['album_refs']):
@@ -655,6 +742,8 @@ class PostgresListeningGoalsService:
                     occurred_at=now, timezone_name=command.data['timezone_name'])
             elif command.action == 'completion':
                 album = command.data['catalog_ref']
+                if command.data['completed'] and rating_progress.requires_rating(connection, live, album, command.data['expected_cycle_id'], constraints=constraints):
+                    raise GoalsError('library_goal_rating_required', 409)
                 result = domain.set_goal_completion(before, period=command.data['period'],
                     expected_cycle_id=command.data['expected_cycle_id'], album_ref=album,
                     viewer_ref=str(account), completed=command.data['completed'], occurred_at=now)
@@ -664,6 +753,10 @@ class PostgresListeningGoalsService:
                     expected_cycle_id=command.data['expected_cycle_id'], album_ref=album)
             else:
                 raise GoalsError('invalid_command', 400)
+            propagated = []
+            if command.action == 'completion' and command.data['completed'] and result['changed']:
+                propagated = propagate_goal_completion(connection, live, album, command.request_key,
+                    now, constraints=constraints)
             if result['changed']:
                 if revision == BIGINT_MAX:
                     raise GoalsError('revision_exhausted', 409)
@@ -671,10 +764,14 @@ class PostgresListeningGoalsService:
                 self._persist(connection, account, before, result['state'], evidence=evidence,
                               now=now, revision=revision, exists=aggregate is not None)
             bonus.sync_after_command(connection, account, before, result['state'], command, now)
+            if command.action == 'reset' and command.data['period'] == 'week':
+                weekly_draw.retain_after_reset(connection, account, before, result['state'], now)
             receipt = {'ok': True, 'action': command.action, 'request_key': command.request_key,
                        'changed': result['changed'], 'reason': result['reason'],
                        'goal_ref': result['state']['top_ref'] if aggregate or result['changed'] else None,
                        'revision': str(revision), 'period': command.data['period']}
+            if propagated:
+                receipt['top_completions'] = propagated
             if album is not None:
                 receipt['catalog_ref'] = album
             selected = result['state']['periods'].get(command.data['period'])
@@ -711,6 +808,7 @@ class PostgresListeningGoalsService:
                 where account_id=%s and period=%s and closed_at is not null and position>%s
                 order by position limit %s''', (account, period, after, limit + 1)).fetchall()
             records = []
+            ratings = rating_progress.storage_ready(connection)
             for cycle in cycles[:limit]:
                 items = connection.execute('''select i.catalog_ref,i.manual_completed_at,a.title,a.artist_display,
                     a.first_release_date,a.primary_type from app.listening_goal_cycle_items i
@@ -718,6 +816,11 @@ class PostgresListeningGoalsService:
                         (i.account_id,i.goal_ref,i.catalog_ref)
                     where i.account_id=%s and i.cycle_id=%s and i.removed_at is null order by i.position''',
                     (account, cycle['cycle_id'])).fetchall()
+                rated_rows = connection.execute('''select rp.catalog_ref,rp.rated_at from app.listening_goal_rating_progress rp
+                    join app.listening_goal_cycle_items rs on rs.account_id=rp.account_id and rs.cycle_id=rp.cycle_id
+                        and rs.catalog_ref=rp.catalog_ref and rs.position=rp.membership_position and rs.removed_at is null
+                    where rp.account_id=%s and rp.cycle_id=%s''',(account,cycle['cycle_id'])).fetchall() if ratings else []
+                rated = {str(row['catalog_ref']):_iso(row['rated_at']) for row in rated_rows}
                 records.append({'cycle_id': str(cycle['cycle_id']), 'period': period,
                     'started_at': _iso(cycle['started_at']), 'closed_at': _iso(cycle['closed_at']),
                     'start_date': cycle['start_date'].isoformat(), 'due_date': cycle['due_date'].isoformat(),
@@ -725,6 +828,7 @@ class PostgresListeningGoalsService:
                         'catalog_ref': str(item['catalog_ref']), 'title': item['title'],
                         'artist_display': item['artist_display'], 'first_release_date': item['first_release_date'],
                         'primary_type': item['primary_type'], 'manual_completed_at':
-                            _iso(item['manual_completed_at']) if item['manual_completed_at'] else None} for item in items]})
+                            _iso(item['manual_completed_at']) if item['manual_completed_at'] else None,
+                        'rated_at': rated.get(str(item['catalog_ref']))} for item in items]})
             return {'cycles': records, 'next_cursor': encode_social_cursor(
                 cycles[limit - 1]['position'] if len(cycles) > limit else None, secret=cursor_secret, scope=scope)}

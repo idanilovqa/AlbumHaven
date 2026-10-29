@@ -46,7 +46,7 @@ def normalize_goal_transition(payload):
 
 def transition_goal_period(state, *, period, expected_cycle_id, new_cycle_id, occurred_at,
                            timezone_name, viewer_ref, bonus_origin_refs, captured_bonus_ref,
-                           unfinished_policy):
+                           unfinished_policy, rated_refs=frozenset()):
     """Archive one due cycle, carry its unfinished members without new admission."""
     zone_names, cycle_ids = domain._validate_state(state)
     domain._period(period)
@@ -78,10 +78,12 @@ def transition_goal_period(state, *, period, expected_cycle_id, new_cycle_id, oc
     if any(instant < domain._stored_instant(value) for value in bounds):
         raise domain.GoalsDomainError('event_before_cycle')
     members = current['album_refs']
-    if period == 'week' and len(members) - int(captured_bonus_ref in members) > 5:
+    if type(rated_refs) is not frozenset or not rated_refs.issubset(set(members)):
+        raise domain.GoalsDomainError('invalid_input')
+    if period == 'week' and len(members) > 7:
         raise domain.GoalsDomainError('weekly_capacity')
     marks = current['completion'].get(viewer_ref, {})
-    retained = [ref for ref in members if ref not in marks and
+    retained = [ref for ref in members if ref not in marks and ref not in rated_refs and
         (period == 'year' or unfinished_policy == 'carry' or ref not in bonus_origin_refs)]
     updated = deepcopy(state)
     archive = {**updated['periods'][period]['current'], 'closed_at': instant.isoformat()}

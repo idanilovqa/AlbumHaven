@@ -65,6 +65,9 @@ class PostgresOwnedAlbumTopsService:
     def _require(context, actions, constraints, top=None, *, owner_only=False):
         if not isinstance(context, PolicyContext):
             raise AlbumTopError("forbidden", 403)
+        if top and top.get("recommendation_collection") and (
+                top["owner_account_id"] != context.actor.account_id or ACCESS in actions):
+            raise AlbumTopError("forbidden", 403)
         target = replace(context, resource=ResourceScope("album_top", str(top["ref"])) if top else None)
         require_top_authority(target, required_actions=actions,
             owner_account_id=top["owner_account_id"] if top else None,
@@ -84,6 +87,8 @@ class PostgresOwnedAlbumTopsService:
             raise AlbumTopError("top_unavailable", 404)
         top = dict(row)
         owner = top["owner_account_id"] == context.actor.account_id
+        if top.get("recommendation_collection") and not owner:
+            raise AlbumTopError("top_unavailable", 404)
         if top["deleted_at"] is not None and (not allow_deleted or not owner):
             raise AlbumTopError("top_unavailable", 404)
         top["editor_grant"] = False
@@ -114,16 +119,17 @@ class PostgresOwnedAlbumTopsService:
             return {**actions, "can_create": actions.get(CREATE, False)}
         read, manage, items = (actions.get(action, False) for action in (BROWSE, MANAGE, ITEMS))
         own_progress = self._allows(context, (BROWSE, PROGRESS), constraints, top)
+        recommended = top.get('recommendation_collection') is True
         unlocked = not top.get('source_locked', False)
-        return {**actions, "can_read": read, "can_edit": manage, "can_rename": manage,
-                "can_add": items and unlocked, "can_remove": items and unlocked, "can_reorder": items and unlocked,
+        return {**actions, "can_read": read, "can_edit": manage and not recommended, "can_rename": manage and not recommended,
+                "can_add": items and unlocked and not recommended, "can_remove": items and unlocked, "can_reorder": items and unlocked,
                 **({'can_unlock_source': not unlocked and self._allows(context, (BROWSE, MANAGE), constraints, top, owner_only=True),
                     'can_view_source': read and (top['owner_account_id'] == context.actor.account_id
                                                 or top.get('editor_grant', False))}
                    if top.get('source_derived', False) else {}),
-                "can_delete": self._allows(context, (BROWSE, MANAGE), constraints, top, owner_only=True),
+                "can_delete": not recommended and self._allows(context, (BROWSE, MANAGE), constraints, top, owner_only=True),
                 "can_share": self._allows(context, (BROWSE, ACCESS), constraints, top, owner_only=True),
-                "can_view_sharing": read,
+                "can_view_sharing": read and not recommended,
                 "can_set_activity": own_progress,
                 "can_manage_own_progress": active and own_progress,
                 "can_request_edit": read and (top["visibility"] == "server_shared" or top.get("viewer_grant", False))
@@ -156,7 +162,7 @@ class PostgresOwnedAlbumTopsService:
                 state = activities[str(top["ref"])]
                 actions = self._actions(live, constraints, top, active=state["active"])
                 if actions["can_read"]:
-                    tops.append({"top_ref": str(top["ref"]), "title": top["title"],
+                    tops.append({**({"top_kind": "recommended_by"} if top.get("recommendation_collection") else {}), "top_ref": str(top["ref"]), "title": top["title"],
                         "description": top["description"], "revision": str(top["revision"]),
                         "visibility": top["visibility"], "allowed_actions": actions, **scope_projection(top),
                         **({'source_locked': top['source_locked'], 'source_derived': True}
@@ -227,32 +233,14 @@ class PostgresOwnedAlbumTopsService:
             require_private_action(live, BROWSE, resource=ResourceScope("album", str(album_id)), constraints=constraints)
             declared = artist_scopes.requested_scope(top, artist_scope)
             scope_witness = artist_scopes.local_admission(connection, live, declared, album_id, constraints)
-            row = connection.execute("""select a.title,a.release_year,ar.name as artist_display
-                from library.local_albums a join library.local_artists ar
-                  on ar.id=a.artist_id and ar.library_id=a.library_id
-                where a.id=%s and a.library_id=%s for update of a""",
-                (album_id, live.library_id)).fetchone()
-            if row is None:
-                raise AlbumTopError("album_unavailable", 404)
-            artist_scopes.confirm_local_admission(connection, live, scope_witness, album_id, constraints)
-            self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
-            require_private_action(live, BROWSE, resource=ResourceScope("album", str(album_id)), constraints=constraints)
-            existing = connection.execute("""select catalog_ref from library.catalog_album_links
-                where library_id=%s and local_album_id=%s""", (live.library_id, album_id)).fetchone()
-            if existing:
-                artist_scopes.finish(connection, live, scope_witness, constraints)
-                return {"album_ref": str(existing["catalog_ref"])}
-            title, artist = row["title"], row["artist_display"]
-            if any(not isinstance(value, str) or not value.strip() or len(value) > 1000 for value in (title, artist)):
-                raise AlbumTopError("album_metadata_unresolved", 409)
-            ref = str(uuid4())
-            year = row["release_year"]
-            connection.execute("""insert into catalog.release_groups(ref,title,artist_display,release_year)
-                values(%s,%s,%s,%s)""", (ref, title, artist, year if type(year) is int and 1 <= year <= 9999 else None))
-            connection.execute("""insert into library.catalog_album_links(library_id,local_album_id,catalog_ref)
-                values(%s,%s,%s)""", (live.library_id, album_id, ref))
-            artist_scopes.finish(connection, live, scope_witness, constraints)
-            return {"album_ref": ref}
+            from music_app.services.local_album_catalog_admission import admit_local_album
+            def validate_locked():
+                artist_scopes.confirm_local_admission(connection,live,scope_witness,album_id,constraints)
+                self._require(live,(BROWSE,ITEMS) if top else (BROWSE,CREATE),constraints,top)
+            catalog_ref=admit_local_album(connection,live,album_id,constraints=constraints,validate_locked=validate_locked)
+            artist_scopes.finish(connection,live,scope_witness,constraints)
+            self._require(live,(BROWSE,ITEMS) if top else (BROWSE,CREATE),constraints,top)
+            return {'album_ref':catalog_ref}
 
     @staticmethod
     def _catalog(connection, context, refs, constraints):
@@ -331,8 +319,17 @@ class PostgresOwnedAlbumTopsService:
                 {**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]
             items = project_native_albums(connection, live, items,
                 remote_item_refs=remote, constraints=constraints)
+            if top.get('recommendation_collection') or top.get('contains_recommendation_summaries'):
+                from music_app.services.recommendations_postgres import load_attributions
+                by = load_attributions(connection, live, kind='album', item_refs=[str(row['ref']) for row in rows]) if top.get('recommendation_collection') else {}
+                summaries = {str(row['ref']) for row in connection.execute(
+                    'select ref from app.album_list_items where top_ref=%s and recommendation_metadata_only',
+                    (ref,)).fetchall()}
+                items = [{**item, 'recommended_by': by.get(str(item['ref']), []),
+                    **({'source_kind': 'recommendation_summary'} if str(item['ref']) in summaries
+                       and item.get('native_album') is None else {})} for item in items]
             self._require(live, (BROWSE,), constraints, top)
-            return {"top_ref": ref, "title": top["title"], "description": top["description"],
+            return {**({'top_kind': 'recommended_by'} if top.get('recommendation_collection') else {}), "top_ref": ref, "title": top["title"], "description": top["description"],
                 "revision": str(top["revision"]), "visibility": top["visibility"],
                 **({'source_locked': top['source_locked'], 'source_derived': True}
                    if top.get('source_derived', False) else {}),
@@ -549,6 +546,9 @@ class PostgresOwnedAlbumTopsService:
                 self._require(live, command_actions(command), constraints,
                               None if command.action == "copy" else top,
                               owner_only=command.action in {'delete', 'unlock_source'})
+                if top.get('recommendation_collection') and command.action not in {
+                        'remove', 'reorder', 'copy', 'set_activity', 'set_manual_completion'}:
+                    raise AlbumTopError('recommendation_action_required', 409)
                 if not private_state and str(top["revision"]) != command.data["revision"]:
                     raise AlbumTopError("revision_conflict", 409)
                 if top.get('source_locked', False) and command.action in {'add', 'remove', 'reorder'}:
@@ -603,6 +603,15 @@ class PostgresOwnedAlbumTopsService:
                     constraints=constraints, context_ref=context_ref, remote_sources=remote)
                 source_import.copy_flags(connection, top, receipt['top_ref'])
                 artist_scopes.copy_scope(connection, top, receipt['top_ref'])
+                if top.get('recommendation_collection') or top.get('contains_recommendation_summaries'):
+                    # Copy metadata-only availability, never recipient attribution
+                    # or provider/playback authority, into an ordinary owned Top.
+                    connection.execute('update app.album_lists set contains_recommendation_summaries=true where ref=%s',
+                        (receipt['top_ref'],))
+                    connection.execute('''update app.album_list_items target set recommendation_metadata_only=true
+                        from app.album_list_items source where source.top_ref=%s and target.top_ref=%s
+                        and source.library_id=target.library_id and source.catalog_ref=target.catalog_ref
+                        and source.recommendation_metadata_only''', (str(top['ref']), receipt['top_ref']))
             else:
                 mutation = command
                 if command.action == 'create' and 'playlist_preview_ref' in command.data:

@@ -370,6 +370,8 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
             if type(evidence) is not str or not _EVIDENCE.fullmatch(evidence):
                 raise AlbumTopError("invalid_command")
             data["evidence_revision"] = evidence
+        if action == "save" and set(data) == {"revision"}:
+            raise AlbumTopError("invalid_command")
     elif action in {"add", "remove", "reorder"}:
         if action == "add" and "selections" in payload:
             if "album_refs" in payload:

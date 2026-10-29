@@ -66,6 +66,8 @@ class PostgresOwnedPlaylistsService:
             raise PlaylistError("playlist_unavailable", 404)
         playlist = dict(row)
         owner = playlist["owner_account_id"] == context.actor.account_id
+        if playlist.get("recommendation_collection") and not owner:
+            raise PlaylistError("playlist_unavailable", 404)
         if playlist["deleted_at"] is not None and (not allow_deleted or not owner):
             raise PlaylistError("playlist_unavailable", 404)
         playlist["editor_grant"] = False
@@ -87,6 +89,9 @@ class PostgresOwnedPlaylistsService:
 
     @staticmethod
     def _require(context, actions, constraints, playlist=None, *, owner_only=False):
+        if playlist and playlist.get("recommendation_collection") and (
+                playlist["owner_account_id"] != context.actor.account_id or ACCESS in actions):
+            raise PlaylistError("forbidden", 403)
         target = replace(context, resource=ResourceScope("playlist",str(playlist["ref"])) if playlist else None)
         authority = dict(owner_account_id=playlist["owner_account_id"] if playlist else None,
                          editor_grant=playlist.get("editor_grant", False) if playlist else False,
@@ -247,6 +252,8 @@ class PostgresOwnedPlaylistsService:
                 playlist = self._playlist(connection,live,command.playlist_ref,write=True)
                 self._require(live,(BROWSE,MANAGE) if command.action == "save" else command_actions(command),
                     constraints,playlist, owner_only=command.action == "delete")
+                if playlist.get("recommendation_collection") and command.action not in {'remove', 'reorder', 'default_sort'}:
+                    raise PlaylistError("recommendation_action_required", 409)
                 if str(playlist["revision"]) != command.data["revision"]:
                     raise PlaylistError("revision_conflict",409)
                 library_mixes.require_manual_membership(command, playlist)
@@ -505,7 +512,7 @@ class PostgresOwnedPlaylistsService:
                 "playlist_creation_protocol":"library_selection_v1", "actor_scope":self._scope(live),
                 "playlist_sidebar":{"active_playlist_id":playlist_ref or "","items":[
                     {"playlist_id":card["playlist_id"],"title":card["title"],"item_count":card["item_count"],
-                     "is_active":card["playlist_id"]==playlist_ref,"allowed_actions":{"can_open":True}} for card in cards]}}
+                     "is_active":card["playlist_id"]==playlist_ref, **({"playlist_kind":"recommended_by"} if card["playlist_kind"]=="recommended_by" else {}), "allowed_actions":{"can_open":True}} for card in cards]}}
             if playlist_ref is None:
                 folded=query.strip().casefold()
                 payload["playlist_index"]={"query":query,"playlists":[card for card in cards if folded in card["title"].casefold()]}
@@ -517,6 +524,11 @@ class PostgresOwnedPlaylistsService:
                 if row["local_track_id"] is not None and self._resource_allowed(live,BROWSE,ResourceScope("track",str(row["local_track_id"])),constraints)],config=self._config)
             card=self._card(live,{**playlist,"item_count":len(rows)},constraints)
             tracks=[self._track_row(live,row,current.get(row["local_track_id"]),constraints=constraints) for row in rows]
+            if playlist.get("recommendation_collection"):
+                from music_app.services.recommendations_postgres import load_attributions
+                by = load_attributions(connection, live, kind='track', item_refs=[str(row['ref']) for row in rows])
+                for track in tracks:
+                    track['recommended_by'] = by.get(track['playlist_item_id'], [])
             if playlist.get("library_mix") or playlist.get("artist_loved"):
                 from music_app.services.listen_history_postgres import read_scoped_track_play_counts
                 personal = read_scoped_track_play_counts(connection, account_id=live.actor.account_id,
@@ -663,6 +675,7 @@ class PostgresOwnedPlaylistsService:
         settings=cls._allows(context,(BROWSE,SETTINGS),constraints,row)
         access=cls._allows(context,(BROWSE,ACCESS),constraints,row,owner_only=True)
         delete=cls._allows(context,(BROWSE,MANAGE),constraints,row,owner_only=True)
+        recommended = row.get("recommendation_collection") is True
         mix = row.get("library_mix")
         loved = row.get("artist_loved")
         if mix and loved:
@@ -682,13 +695,13 @@ class PostgresOwnedPlaylistsService:
                 pass
         return {"playlist_id":str(row["ref"]),"title":row["title"],"description":row["description"],
                 "revision":str(row["revision"]),"item_count":int(row["item_count"]),"visibility":row["visibility"],
-                "playlist_kind":"artist_loved" if loved else "library_mix" if mix else "manual",
+                "playlist_kind":"recommended_by" if recommended else "artist_loved" if loved else "library_mix" if mix else "manual",
                 "library_mix":library_mixes.project_recipe(mix),
                 **({"artist_loved":artist_loves.project_recipe(loved)} if loved else {}),
                 "allowed_actions":{"can_open":True,"can_read":True,"can_export":True,
-                    "can_edit":manage,"can_rename":manage,"can_reorder":items,"can_add":items,"can_remove":items,
-                    "can_delete":delete,"can_play":False,"can_share":access,
-                    "can_view_sharing":True,
+                    "can_edit":manage and not recommended,"can_rename":manage and not recommended,"can_reorder":items,"can_add":items and not recommended,"can_remove":items,
+                    "can_delete":delete and not recommended,"can_play":False,"can_share":access and not recommended,
+                    "can_view_sharing":not recommended,
                     "can_request_edit":row["owner_account_id"]!=context.actor.account_id and not row.get("editor_grant",False),
                     "can_copy":cls._allows(context,(BROWSE,CREATE),constraints),"can_save_default_sort":settings,"can_create_album_top":can_create_top,"can_create_sample":False}}
 

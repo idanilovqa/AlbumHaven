@@ -12,6 +12,7 @@ import pytest
 from music_app.services import owned_playlists as commands
 from music_app.services import owned_playlists_postgres as postgres
 from music_app.services import playlist_creation_sources_postgres as sources
+from music_app.services.capabilities import grant_keys_for_action
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
 from tests.py.owned_playlist_testing import (
     ACCOUNT, SESSION, LIBRARY, NOW, ALL_ACTIONS, REQUEST, PLAYLIST, OTHER_PLAYLIST,
@@ -48,9 +49,20 @@ def prior_receipt(cmd, **changes):
             "action": cmd.action, "playlist_ref": PLAYLIST, "receipt": receipt, **changes}
 
 
+def recipe_steps(*, include_artist_loved=True):
+    # These ordinary fixtures have neither automatic recipe. Keep the real
+    # owner reads and exact scope parameters, rather than bypassing the owners.
+    steps = [Step("select * from app.playlist_library_mixes where library_id=%s and playlist_ref=any(%s::uuid[])",
+                  rows=[], params=(LIBRARY, [PLAYLIST]))]
+    if include_artist_loved:
+        steps.append(Step("select * from app.playlist_artist_loved_recipes where library_id=%s and playlist_ref=any(%s::uuid[]) and retired_at is null",
+                          rows=[], params=(LIBRARY, [PLAYLIST])))
+    return steps
+
+
 def existing_steps(*, grants=ALL_ACTIONS, rows=(), playlist=None, recheck=True):
     return [*authority_steps(grants=grants), receipt_lookup(),
-            owned_step([playlist] if playlist is not None else None), item_step(rows),
+            owned_step([playlist] if playlist is not None else None), *recipe_steps(), item_step(rows),
             *([authority_steps()[3]] if recheck else [])]
 
 
@@ -160,7 +172,8 @@ def test_exact_replay_returns_original_receipt_before_source_or_current_revision
            else command(action, **({"title": "Changed"} if action == "save" else {"item_order": [ITEM_B, ITEM_A]})))
     prior = prior_receipt(cmd)
     connection = Connection([*authority_steps(grants=(commands.BROWSE,)), receipt_lookup([prior]),
-                             owned_step([playlist_row(revision=99)],write=False),authority_steps()[3]])
+                             owned_step([playlist_row(revision=99)],write=False),
+                             *recipe_steps(include_artist_loved=False), authority_steps()[3]])
     result = service(connection).execute(context(), cmd)
     assert result == prior["receipt"]
     assert result["revision"] == "8"
@@ -218,22 +231,67 @@ def test_operation_read_requires_current_owner_before_returning_committed_receip
 
 
 def test_stale_revision_rejects_before_loading_items_or_writing_receipt():
-    connection = Connection([*authority_steps(), receipt_lookup(), owned_step([playlist_row(revision=8)])])
+    connection = Connection([*authority_steps(), receipt_lookup(), owned_step([playlist_row(revision=8)]),
+                             *recipe_steps()])
     assert_error(lambda: service(connection).execute(context(), command(title="Changed")), "revision_conflict", 409)
     assert connection.writes == []
     connection.done()
 
 
-@pytest.mark.parametrize("missing", [commands.MANAGE, commands.ITEMS])
-def test_combined_metadata_and_real_reorder_require_both_live_grants_before_writes(missing):
-    steps = existing_steps(grants=tuple(key for key in ALL_ACTIONS if key != missing),
+@pytest.mark.parametrize("denied", [commands.MANAGE, commands.ITEMS])
+def test_combined_metadata_and_real_reorder_require_both_live_action_constraints_before_writes(denied):
+    steps = existing_steps(grants=ALL_ACTIONS,
                            rows=[item_row(), item_row(ITEM_B, 902, 2)], recheck=False)
-    if missing == commands.MANAGE:
+    if denied == commands.MANAGE:
         steps.pop()  # Stronger current metadata admission rejects before reading items.
     connection = Connection(steps)
-    assert_error(lambda: service(connection).execute(context(), command(title="Changed", item_order=[ITEM_B, ITEM_A])), "forbidden", 403)
+    seen = []
+
+    def constraints(live):
+        scoped = live.resource is not None and live.resource.resource_kind == "playlist"
+        if scoped:
+            assert live.resource.resource_ref == PLAYLIST
+            assert live.actor.account_id == ACCOUNT and live.library_id == LIBRARY
+            assert {grant.capability_key for grant in live.actor.capability_grants} == set(ALL_ACTIONS)
+            seen.append(live.action)
+        return PolicyEvaluationConstraints(request_origin_allowed=not (scoped and live.action == denied))
+
+    assert_error(lambda: service(connection).execute(context(),
+        command(title="Changed", item_order=[ITEM_B, ITEM_A]), constraints=constraints), "forbidden", 403)
+    assert commands.BROWSE in seen and denied in seen
     assert connection.writes == []
     connection.done()
+
+
+@pytest.mark.parametrize("revoked", [commands.MANAGE, commands.ITEMS])
+def test_combined_save_effective_grant_revocation_rejects_at_live_browse_prerequisite(revoked):
+    alternatives = grant_keys_for_action(revoked)
+    grants = tuple(key for key in ALL_ACTIONS if key not in alternatives)
+    assert not set(grants) & alternatives and commands.BROWSE not in grants
+    connection = Connection(authority_steps(grants=grants))
+    assert_error(lambda: service(connection).execute(context(),
+        command(title="Changed", item_order=[ITEM_B, ITEM_A])), "forbidden", 403)
+    connection.done()
+    assert connection.writes == []
+    assert all("playlist_operations" not in sql for sql, _ in connection.operations)
+    assert connection.exits and connection.exits[0] is not None
+
+
+@pytest.mark.parametrize("revoked", [commands.MANAGE, commands.ITEMS])
+def test_combined_save_direct_only_revocation_keeps_intrinsic_browse_own_collection_access(revoked):
+    grants = tuple(key for key in ALL_ACTIONS if key != revoked)
+    assert commands.BROWSE in grants and revoked not in grants
+    connection = Connection([*existing_steps(grants=grants, rows=[item_row(), item_row(ITEM_B, 902, 2)]),
+        Step("update app.playlists set title=", params=("Changed", "Saved description", PLAYLIST)),
+        Step("update app.playlist_items i set position=", params=([ITEM_B, ITEM_A], PLAYLIST)),
+        Step("update app.playlists set revision=revision+1", [{"revision": 8}], (PLAYLIST,)),
+        authority_steps()[3], Step("insert into app.playlist_operations")])
+    result = service(connection).execute(context(), command(title="Changed", item_order=[ITEM_B, ITEM_A]))
+    assert result["changed"] is True and result["revision"] == "8"
+    assert len(connection.writes) == 4
+    assert json.loads(connection.writes[-1][1][-1]) == result
+    connection.done()
+    assert connection.exits == [None]
 
 
 def test_combined_metadata_and_order_mutation_bumps_revision_once_and_records_one_receipt():

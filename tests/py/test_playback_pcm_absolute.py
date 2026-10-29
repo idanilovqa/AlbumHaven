@@ -17,11 +17,18 @@ HEADER = (b"Input #0, wav, from 'fd:':\n"
     b'  Stream #0:0 -> #0:0 (pcm_s16le (native) -> pcm_f32le (native))\n')
 
 
-def fixture(path, frames=16):
+def fixture(path, frames=16, bits=16):
     with wave.open(str(path), 'wb') as out:
-        out.setnchannels(2);out.setsampwidth(2);out.setframerate(48000)
-        out.writeframes(b''.join(struct.pack('<hh', n, -n) for n in range(frames)))
+        out.setnchannels(2);out.setsampwidth(bits//8);out.setframerate(48000)
+        out.writeframes(b''.join((sample << (bits-16)).to_bytes(bits//8,'little',signed=True)
+                                for n in range(frames) for sample in (n,-n)))
     return path
+
+
+def profile_header(bits):
+    return HEADER.replace(b'pcm_s16le',f'pcm_s{bits}le'.encode()).replace(
+        b', s16,', {16:b', s16,',24:b', s32 (24 bit),',32:b', s32,'}[bits]).replace(
+        b'1536 kb/s',f'{96*bits} kb/s'.encode())
 
 
 def command(path):
@@ -29,16 +36,19 @@ def command(path):
         capture_local_coordinates=True, capture_absolute_coordinates=True)
 
 
-def test_qualified_same_open_file(tmp_path):
-    path=fixture(tmp_path/'valid.wav')
+@pytest.mark.parametrize('bits',[16,24,32])
+def test_qualified_same_open_file(tmp_path,bits):
+    path=fixture(tmp_path/'valid.wav',bits=bits)
     source=open_qualified_wave(path)
     assert source is not None and source.tell()==0
+    assert source.qualification_bits==bits and source.qualification_frames==16
     assert os.lseek(source.fileno(),0,os.SEEK_CUR)==0
     assert source.read(4)==b'RIFF'
     source.close()
 
 
-@pytest.mark.parametrize('change', ['metadata', 'wrong_rate', 'wrong_layout', 'truncated', 'newline_path'])
+@pytest.mark.parametrize('change', ['metadata', 'wrong_rate', 'wrong_layout', 'truncated', 'newline_path',
+    'wrong_width','wrong_alignment','wrong_byte_rate','float_encoding','extensible_encoding','partial_frame'])
 def test_noncanonical_input_rejected(tmp_path, change):
     path=fixture(tmp_path/('bad\nfile.wav' if change=='newline_path' else 'bad.wav'))
     data=bytearray(path.read_bytes())
@@ -46,6 +56,15 @@ def test_noncanonical_input_rejected(tmp_path, change):
     if change=='wrong_rate':data[24:28]=struct.pack('<I',44100)
     if change=='wrong_layout':data[22:24]=struct.pack('<H',1)
     if change=='truncated':data=data[:-1]
+    if change=='wrong_width':data[34:36]=struct.pack('<H',20)
+    if change=='wrong_alignment':data[32:34]=struct.pack('<H',6)
+    if change=='wrong_byte_rate':data[28:32]=struct.pack('<I',288000)
+    if change=='float_encoding':data[20:22]=struct.pack('<H',3)
+    if change=='extensible_encoding':data[20:22]=struct.pack('<H',65534)
+    if change=='partial_frame':
+        data=data[:-1]
+        data[4:8]=struct.pack('<I',len(data)-8)
+        data[40:44]=struct.pack('<I',len(data)-44)
     path.write_bytes(data)
     assert open_qualified_wave(path) is None
 
@@ -70,10 +89,11 @@ def test_metadata_line_cannot_impersonate_descriptor():
 
 
 @pytest.mark.asyncio
-async def test_unsupported_capability_preserves_original_invocation(tmp_path, monkeypatch):
+@pytest.mark.parametrize('bits',[16,24,32])
+async def test_unsupported_capability_preserves_original_invocation(tmp_path, monkeypatch,bits):
     monkeypatch.setattr(capability,'fd_capture_ready',lambda executable:False)
     calls=[];process=FakeProcess(stdout=bytes(32))
-    path=fixture(tmp_path/'valid.wav')
+    path=fixture(tmp_path/'valid.wav',bits=bits)
     decoder=await PcmDecoderProcess.start(command(path),ffmpeg_executable='ffmpeg',process_factory=factory_for(process,calls))
     try:
         assert calls[0][0][calls[0][0].index('-i')+1]==str(path)
@@ -83,15 +103,22 @@ async def test_unsupported_capability_preserves_original_invocation(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_split_frame_only_current_unsent_suffix_qualified(tmp_path, monkeypatch):
+@pytest.mark.parametrize('bits',[16,24,32])
+async def test_split_frame_only_current_unsent_suffix_qualified(tmp_path, monkeypatch,bits):
     monkeypatch.setattr(capability,'fd_capture_ready',lambda executable:True)
-    pcm=bytes(32);calls=[];process=FakeProcess(stdout=pcm,stderr=HEADER+line(pcm))
-    path=fixture(tmp_path/'valid.wav')
+    pcm=bytes(32);calls=[];process=FakeProcess(stdout=pcm,stderr=profile_header(bits)+line(pcm))
+    # The fake emits native source frames7..10 then EOF: declare that exact end.
+    path=fixture(tmp_path/'valid.wav',frames=11,bits=bits)
     decoder=await PcmDecoderProcess.start(command(path),ffmpeg_executable='ffmpeg',process_factory=factory_for(process,calls))
     try:
         await decoder._stderr_task
         assert calls[0][0][calls[0][0].index('-i')+1]=='fd:'
+        assert calls[0][0]==('ffmpeg','-hide_banner','-loglevel','info','-copyts','-nostdin',
+            '-ss','0.000145833','-i','fd:','-vn','-af',
+            'aformat=sample_fmts=flt:sample_rates=48000:channel_layouts=stereo,asettb=expr=1/48000,ashowinfo',
+            '-f','f32le','-acodec','pcm_f32le','-ac','2','-ar','48000','pipe:1')
         assert not calls[0][1]['stdin'].closed
+        assert calls[0][1]['stdin'].qualification_bits==bits
         decoder.grant_credit(2)
         first=await decoder.read_credited_frames(max_frames=2)
         assert first.pcm==pcm[:16] and first.verified_absolute_ranges==()
@@ -108,10 +135,29 @@ async def test_split_frame_only_current_unsent_suffix_qualified(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_missing_sideband_retains_audio_local_time(tmp_path,monkeypatch):
+@pytest.mark.parametrize('bits',[24,32])
+async def test_profile_mismatch_loses_coordinates_without_changing_audio(tmp_path,monkeypatch,bits):
+    monkeypatch.setattr(capability,'fd_capture_ready',lambda executable:True)
+    pcm=bytes(32);process=FakeProcess(stdout=pcm,stderr=HEADER+line(pcm))
+    decoder=await PcmDecoderProcess.start(command(fixture(tmp_path/'profile.wav',frames=11,bits=bits)),
+        ffmpeg_executable='ffmpeg',process_factory=factory_for(process,[]))
+    try:
+        await decoder._stderr_task
+        decoder.grant_credit(4)
+        chunk=await decoder.read_credited_frames(max_frames=4)
+        assert chunk.pcm==pcm and chunk.verified_absolute_ranges==()
+        assert decoder._absolute_observer.loss_reason=='unsupported_input'
+        decoder.grant_credit(1);await decoder.read_credited_frames(max_frames=1)
+        assert decoder.absolute_metadata.capture_extent_frames48 is None
+    finally:await decoder.cancel()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bits',[16,24,32])
+async def test_missing_sideband_retains_audio_local_time(tmp_path,monkeypatch,bits):
     monkeypatch.setattr(capability,'fd_capture_ready',lambda executable:True)
     pcm=bytes(32);process=FakeProcess(stdout=pcm)
-    decoder=await PcmDecoderProcess.start(command(fixture(tmp_path/'valid.wav')),
+    decoder=await PcmDecoderProcess.start(command(fixture(tmp_path/'valid.wav',bits=bits)),
         ffmpeg_executable='ffmpeg',process_factory=factory_for(process,[]))
     try:
         decoder.grant_credit(4)
@@ -182,11 +228,12 @@ async def test_failed_absolute_admission_keeps_packets_local(tmp_path,monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_in_place_source_mutation_loses_coordinates_not_audio(tmp_path,monkeypatch):
+@pytest.mark.parametrize('bits',[16,24,32])
+async def test_in_place_source_mutation_loses_coordinates_not_audio(tmp_path,monkeypatch,bits):
     monkeypatch.setattr(capability,'fd_capture_ready',lambda executable:True)
-    pcm=bytes(32);path=fixture(tmp_path/'mutated.wav');calls=[]
+    pcm=bytes(32);path=fixture(tmp_path/'mutated.wav',bits=bits);calls=[]
     decoder=await PcmDecoderProcess.start(command(path),ffmpeg_executable='ffmpeg',
-        process_factory=factory_for(FakeProcess(stdout=pcm,stderr=HEADER+line(pcm)),calls))
+        process_factory=factory_for(FakeProcess(stdout=pcm,stderr=profile_header(bits)+line(pcm)),calls))
     source=calls[0][1]['stdin']
     try:
         await decoder._stderr_task

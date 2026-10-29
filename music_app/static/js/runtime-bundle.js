@@ -31026,6 +31026,66 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
 }
 
+function getCoverLookupCandidateRenderGroup(item) {
+  const lookupGroup = String(item?.lookup_group || 'services');
+  const source = String(item?.source || '');
+  const artKind = String(item?.art_kind || 'cover');
+  if (lookupGroup === 'manual_links') {
+    if (artKind === 'cover') return { key: 'manual-links', title: 'MANUAL LINKS' };
+    if (artKind === 'other') {
+      return { key: 'manual-links-other', title: 'MANUAL LINKS - OTHER REMOTE ART' };
+    }
+    return null;
+  }
+  if (source === 'discogs') {
+    return ['cover', 'other'].includes(artKind)
+      ? { key: 'discogs', title: 'Discogs', provider: 'discogs' }
+      : null;
+  }
+  if (lookupGroup === 'cover_art_archive') {
+    return ['cover', 'other'].includes(artKind)
+      ? {
+        key: 'cover-art-archive',
+        title: 'Cover Art Archive',
+        provider: 'cover_art_archive',
+      }
+      : null;
+  }
+  if (artKind === 'other' && !['discogs', 'cover_art_archive'].includes(source)) {
+    return { key: 'other-cover-art', title: 'OTHER COVER ART' };
+  }
+  if (lookupGroup === 'services' && source !== 'discogs' && artKind === 'cover') {
+    return { key: 'services', title: 'From services' };
+  }
+  return null;
+}
+
+function buildCoverLookupPossibleMatchesMarkup(possibleMatches) {
+  const runs = [];
+  possibleMatches.forEach((item) => {
+    const group = getCoverLookupCandidateRenderGroup(item);
+    if (!group) return;
+    const previousRun = runs[runs.length - 1];
+    if (previousRun?.group.key === group.key) {
+      previousRun.items.push(item);
+      return;
+    }
+    runs.push({ group, items: [item] });
+  });
+  let prioritizedServicePreview = false;
+  return runs.map(({ group, items }) => {
+    const providerAttr = group.provider
+      ? ` data-cover-lookup-provider-group="${group.provider}"`
+      : '';
+    const cards = items.map((item) => {
+      const prioritize = group.key === 'services' && !prioritizedServicePreview;
+      if (prioritize) prioritizedServicePreview = true;
+      return buildCoverLookupCard(item, 'remote', prioritize);
+    }).join('');
+    return `<div class="cover-lookup-subsection-title">${group.title}</div><div class="cover-lookup-gallery"${providerAttr}>${cards}</div>`;
+  }).join('');
+}
+
 function captureCoverLookupModalScrollAnchor(body) {
   if (!body) return null;
   const scrollTop = Number(body.scrollTop || 0);
@@ -31182,36 +31242,7 @@ function renderCoverLookupModal() {
   const otherArt = Array.isArray(modalState.otherArt) ? modalState.otherArt : [];
   const remoteCover = modalState.remoteCover && typeof modalState.remoteCover === 'object' ? modalState.remoteCover : null;
   const possibleMatches = Array.isArray(modalState.possibleMatches) ? modalState.possibleMatches : [];
-  const serviceMatches = possibleMatches
-    .filter((item) => (
-      String(item?.lookup_group || 'services') === 'services'
-      && String(item?.source || '') !== 'discogs'
-      && String(item?.art_kind || 'cover') === 'cover'
-    ));
-  const discogsMatches = possibleMatches
-    .filter((item) => (
-      String(item?.source || '') === 'discogs'
-      && String(item?.lookup_group || '') !== 'manual_links'
-    ));
-  const discogsCoverMatches = discogsMatches
-    .filter((item) => String(item?.art_kind || 'cover') === 'cover');
-  const discogsOtherArtMatches = discogsMatches
-    .filter((item) => String(item?.art_kind || '') === 'other');
-  const groupedDiscogsMatches = [...discogsCoverMatches, ...discogsOtherArtMatches];
-  const manualLinkMatches = possibleMatches
-    .filter((item) => String(item?.lookup_group || '') === 'manual_links' && String(item?.art_kind || 'cover') === 'cover');
-  const manualLinkOtherArtMatches = possibleMatches
-    .filter((item) => String(item?.lookup_group || '') === 'manual_links' && String(item?.art_kind || '') === 'other');
   const archiveMatches = possibleMatches.filter((item) => String(item?.lookup_group || '') === 'cover_art_archive');
-  const archiveCoverMatches = archiveMatches.filter((item) => String(item?.art_kind || 'cover') === 'cover');
-  const archiveOtherArtMatches = archiveMatches.filter((item) => String(item?.art_kind || '') === 'other');
-  const groupedArchiveMatches = [...archiveCoverMatches, ...archiveOtherArtMatches];
-  const remoteOtherArtMatches = possibleMatches
-    .filter((item) => (
-      String(item?.art_kind || '') === 'other'
-      && String(item?.lookup_group || '') !== 'manual_links'
-      && !['discogs', 'cover_art_archive'].includes(String(item?.source || ''))
-    ));
   const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(modalState.taskId || '')) || null;
   const showCaaEmptyNotice = Boolean(task?.caa_empty_notice) && !archiveMatches.length;
   const taskRunning = Boolean(task && ['pending', 'running'].includes(String(task.status || '')));
@@ -31249,12 +31280,7 @@ function renderCoverLookupModal() {
     : '';
   const possibleMatchesMarkup = possibleMatches.length
     ? `
-        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item, index) => buildCoverLookupCard(item, 'remote', index === 0)).join('')}</div>` : ''}
-        ${groupedDiscogsMatches.length ? `<div class="cover-lookup-subsection-title">Discogs</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="discogs">${groupedDiscogsMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
-        ${groupedArchiveMatches.length ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="cover_art_archive">${groupedArchiveMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
-        ${manualLinkMatches.length ? `<div class="cover-lookup-subsection-title">MANUAL LINKS</div><div class="cover-lookup-gallery">${manualLinkMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
-        ${manualLinkOtherArtMatches.length ? `<div class="cover-lookup-subsection-title">MANUAL LINKS - OTHER REMOTE ART</div><div class="cover-lookup-gallery">${manualLinkOtherArtMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
-        ${remoteOtherArtMatches.length ? `<div class="cover-lookup-subsection-title">OTHER COVER ART</div><div class="cover-lookup-gallery">${remoteOtherArtMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
+        ${buildCoverLookupPossibleMatchesMarkup(possibleMatches)}
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
     : '';

@@ -5871,6 +5871,107 @@ require('node:test')('only the first service cover preview receives eager browse
   assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
 });
 
+require('node:test')('progressive provider rendering appends without moving existing cards', () => {
+  const bodyElement = { innerHTML: '', scrollTop: 0 };
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  context.getCoverLookupModalElements = () => ({
+    overlay: {},
+    body: bodyElement,
+    subtitle: { textContent: '' },
+    status: null,
+    saveRemote: null,
+  });
+  context.captureCoverLookupModalScrollAnchor = () => null;
+  context.restoreCoverLookupModalScrollAnchor = () => {};
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Album' },
+    loading: false,
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: [],
+    selectedRemoteId: '',
+    remoteSelectionOverrideGeneration: '',
+    remoteSelectionOverrideCandidateId: '',
+    remoteSelectionOverrideUrl: '',
+  };
+  const initialCandidates = [
+    {
+      id: 'apple-first',
+      source: 'apple',
+      art_kind: 'cover',
+      url: 'https://images.example/apple.jpg',
+    },
+    {
+      id: 'manual-front-second',
+      source: 'direct_url',
+      lookup_group: 'manual_links',
+      art_kind: 'cover',
+      url: 'https://images.example/manual-front.jpg',
+    },
+    {
+      id: 'manual-other-third',
+      source: 'direct_url',
+      lookup_group: 'manual_links',
+      art_kind: 'other',
+      url: 'https://images.example/manual-other.jpg',
+    },
+  ];
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-render-order',
+    status: 'running',
+    revision: 1,
+    candidates: initialCandidates,
+  });
+  context.renderCoverLookupModal();
+  const initialOrder = Array.from(
+    bodyElement.innerHTML.matchAll(/data-cover-lookup-item-key="remote:([^"]+)"/g),
+    match => match[1],
+  );
+  assert.deepEqual(initialOrder, initialCandidates.map(candidate => candidate.id));
+
+  const laterCandidates = [
+    ...initialCandidates,
+    {
+      id: 'discogs-front-fourth',
+      source: 'discogs',
+      art_kind: 'cover',
+      url: 'https://images.example/discogs-front.jpg',
+    },
+    {
+      id: 'discogs-other-fifth',
+      source: 'discogs',
+      art_kind: 'other',
+      url: 'https://images.example/discogs-other.jpg',
+    },
+    {
+      id: 'caa-front-sixth',
+      source: 'cover_art_archive',
+      lookup_group: 'cover_art_archive',
+      art_kind: 'cover',
+      url: 'https://images.example/caa-front.jpg',
+    },
+  ];
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-render-order',
+    status: 'running',
+    revision: 2,
+    candidates: laterCandidates,
+  });
+  context.renderCoverLookupModal();
+  const progressiveOrder = Array.from(
+    bodyElement.innerHTML.matchAll(/data-cover-lookup-item-key="remote:([^"]+)"/g),
+    match => match[1],
+  );
+
+  assert.deepEqual(
+    progressiveOrder,
+    laterCandidates.map(candidate => candidate.id),
+    'new provider cards append after every card already visible in the modal',
+  );
+});
+
 require('node:test')('loading Cover Lookup renders only known gallery card placeholders', () => {
   const bodyElement = { innerHTML: '', scrollTop: 0 };
   const context = loadHelper({ escapeHtml: (value) => String(value ?? '') });

@@ -923,7 +923,7 @@ async function confirmManualTagEdit() {
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;
-    const completedResponseNeedsCanonicalRefresh = saveTaskCompleted
+    const terminalResponseNeedsCanonicalRefresh = responseIsTerminal
       && Boolean(data.requires_view_refresh);
     const committedValues = data.committed_values
       && typeof data.committed_values === 'object'
@@ -940,7 +940,7 @@ async function confirmManualTagEdit() {
       responseIsTerminal
       && updatedAlbums.length
       && responseOwnsVisibleResources
-      && !completedResponseNeedsCanonicalRefresh
+      && !terminalResponseNeedsCanonicalRefresh
     ) {
       const reconciledUpdatedAlbums = applyUpdatedAlbumsToCurrentView(
         updatedAlbums,
@@ -979,9 +979,9 @@ async function confirmManualTagEdit() {
     ) {
       provisionalProblematicMutation.taskId = String(data.save_task_id);
     }
-    if (completedResponseNeedsCanonicalRefresh) {
+    if (terminalResponseNeedsCanonicalRefresh) {
       pendingProblematicEntry.accept();
-      await watchSaveTask(data.save_task_id, {
+      await watchSaveTask(data.save_task_id || pendingProblematicEntry.key, {
         ...saveTaskWatchOptions,
         terminalPayload: data,
       });
@@ -994,7 +994,7 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    if (responseIsTerminal && !completedResponseNeedsCanonicalRefresh) {
+    if (responseIsTerminal && !terminalResponseNeedsCanonicalRefresh) {
       const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
         .map((warning) => String(warning || '').trim())
         .filter(Boolean);
@@ -1013,7 +1013,7 @@ async function confirmManualTagEdit() {
       pendingProblematicEntry.settle();
       if (
         provisionalProblematicMutation
-        && !completedResponseNeedsCanonicalRefresh
+        && !terminalResponseNeedsCanonicalRefresh
         && typeof settleProblematicSaveTaskMutation === 'function'
       ) {
         await settleProblematicSaveTaskMutation(
@@ -1021,7 +1021,7 @@ async function confirmManualTagEdit() {
           { reconcileSelection: true },
         );
       }
-      if (!completedResponseNeedsCanonicalRefresh) {
+      if (!terminalResponseNeedsCanonicalRefresh) {
         settleTagEditViewMutation(tagEditMutationClaim);
       }
     }

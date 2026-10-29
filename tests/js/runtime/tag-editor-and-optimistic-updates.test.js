@@ -2093,6 +2093,68 @@ test('completed refresh-required response gives its terminal payload to canonica
   assert.deepEqual(settledClaims, [mutationClaim]);
 });
 
+test('refresh-required response without save task delegates terminal canonical reconciliation', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Selected.flac';
+  const album = {
+    id: 58,
+    key: 'artist::album',
+    name: 'Album',
+    album_artist: 'Artist',
+    year: 2004,
+    tracks: [{ path: trackPath, album: 'Album', title: 'Original' }],
+  };
+  const closedModal = { hidden: true };
+  const mutationClaim = {};
+  const watchCalls = [];
+  const terminalPayload = {
+    ok: true,
+    save_task_status: 'completed',
+    requires_view_refresh: true,
+    committed_values: { [trackPath]: { year: '2014' } },
+    updated_albums: [],
+    destination_album_id: 401,
+    destination_artist: 'Artist',
+    inventory_mutation_revision: 1,
+  };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { year: '2014' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    installCommittedTagValues() {},
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert() {},
+    claimTagEditViewMutation() { return mutationClaim; },
+    tagEditViewMutationStillOwnsResources() { return true; },
+    settleTagEditViewMutation() {},
+    watchSaveTask(...args) { watchCalls.push(args); },
+    fetch: async () => ({
+      ok: true,
+      async json() { return terminalPayload; },
+    }),
+  });
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(watchCalls.length, 1);
+  assert.match(watchCalls[0][0], /^optimistic-tag-edit-/);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(watchCalls[0][1].terminalPayload)),
+    terminalPayload,
+  );
+  assert.equal(watchCalls[0][1].tagEditMutationClaim, mutationClaim);
+});
+
 test('completed tag edit with reconciliation warning confirms save without a frozen or failure alert', async () => {
   const trackPath = 'C:\\Music\\Ovderhead\\Telepathic Minds\\01.flac';
   const album = {

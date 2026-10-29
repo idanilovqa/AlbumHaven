@@ -311,6 +311,140 @@ def test_cover_lookup_resolves_stale_identity_through_shared_lineage(monkeypatch
     assert context.track_paths == {"current/01.flac"}
 
 
+def test_cover_lookup_prefers_merged_lineage_over_stale_physical_context(monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+
+    class FakeLineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, **identity):
+            assert identity == {
+                "album_id": 17,
+                "album_key": "artist::old",
+                "track_paths": {"old/01.flac"},
+            }
+            return {
+                "status": "resolved",
+                "album": {
+                    "album_id": 92,
+                    "album_key": "artist::current",
+                    "name": "Current Album",
+                    "album_artist": "Artist",
+                    "year": 2026,
+                },
+                "choices": [],
+            }
+
+    class FakeSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            assert (album_id, album_key) == (92, "artist::current")
+            return {
+                "album_id": 92,
+                "album_key": "artist::current",
+                "track_paths": ["current/01.flac"],
+            }
+
+    monkeypatch.setattr(
+        cover_routes,
+        "AlbumIdentityLineageRepository",
+        FakeLineageRepository,
+    )
+    monkeypatch.setattr(
+        cover_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        FakeSnapshotRepository,
+    )
+    monkeypatch.setattr(
+        cover_routes,
+        "resolve_album_context",
+        lambda _config, album: SimpleNamespace(
+            album_root="current" if album.get("album_id") == 92 else "old",
+            track_paths=cover_routes._album_track_paths(album),
+        ),
+    )
+
+    album, context = asyncio.run(
+        cover_routes._resolve_album_payload_context(
+            {},
+            {
+                "album_id": 17,
+                "key": "artist::old",
+                "tracks": [{"path": "old/01.flac"}],
+            },
+            fallback_track_paths={"old/01.flac"},
+            task_scoped=True,
+        )
+    )
+
+    assert album["album_id"] == 92
+    assert album["key"] == "artist::current"
+    assert cover_routes._album_track_paths(album) == {"current/01.flac"}
+    assert context.album_root == "current"
+
+
+def test_cover_lookup_merged_lineage_successor_read_failure_never_restores_stale_context(
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+
+    monkeypatch.setattr(
+        cover_routes,
+        "AlbumIdentityLineageRepository",
+        lambda _config: SimpleNamespace(
+            resolve=lambda **_identity: {
+                "status": "resolved",
+                "album": {
+                    "album_id": 92,
+                    "album_key": "artist::current",
+                    "name": "Current Album",
+                    "album_artist": "Artist",
+                    "year": 2026,
+                },
+                "choices": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cover_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        lambda _config: SimpleNamespace(
+            resolve_album_track_context=lambda **_identity: (_ for _ in ()).throw(
+                ValueError("database query failed")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        cover_routes,
+        "resolve_album_context",
+        lambda _config, album: SimpleNamespace(
+            album_root="old",
+            track_paths=cover_routes._album_track_paths(album),
+        ),
+    )
+
+    album, context = asyncio.run(
+        cover_routes._resolve_album_payload_context(
+            {},
+            {
+                "album_id": 17,
+                "key": "artist::old",
+                "tracks": [{"path": "old/01.flac"}],
+            },
+            fallback_track_paths={"old/01.flac"},
+            task_scoped=True,
+        )
+    )
+
+    assert album["album_id"] == 92
+    assert album["key"] == "artist::current"
+    assert cover_routes._album_track_paths(album) == set()
+    assert context is None
+
+
 def test_cover_lookup_prefers_split_lineage_over_stale_physical_context(monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as cover_routes
 

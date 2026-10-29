@@ -288,6 +288,36 @@ async def _resolve_album_payload_context(
                 if lineage["status"] == "split":
                     normalized_album["_identity_split_choices"] = lineage["choices"]
                     return normalized_album, None
+                current_album = lineage.get("album")
+                if lineage["status"] == "resolved" and isinstance(
+                    current_album, Mapping
+                ):
+                    normalized_album.update(current_album)
+                    normalized_album["id"] = current_album.get("album_id")
+                    normalized_album["key"] = current_album.get("album_key")
+                    normalized_album["tracks"] = []
+                    try:
+                        track_context = await run_in_threadpool(
+                            repository.resolve_album_track_context,
+                            album_id=current_album.get("album_id"),
+                            album_key=current_album.get("album_key"),
+                        )
+                    except Exception:
+                        return normalized_album, None
+                    if not isinstance(track_context, Mapping):
+                        return normalized_album, None
+                    normalized_album["id"] = track_context.get("album_id")
+                    normalized_album["album_id"] = track_context.get("album_id")
+                    normalized_album["key"] = track_context.get("album_key")
+                    normalized_album["tracks"] = [
+                        {"path": path}
+                        for path in list(track_context.get("track_paths") or [])
+                        if str(path or "").strip()
+                    ]
+                    return normalized_album, (
+                        resolve_album_context(config, normalized_album)
+                        or _resolve_distributed_album_context(config, normalized_album)
+                    )
         return normalized_album, resolved_context
     if fallback_paths and not _album_track_paths(normalized_album):
         album_id = await run_in_threadpool(

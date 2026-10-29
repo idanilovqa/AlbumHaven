@@ -1505,7 +1505,10 @@ class PostgresScanCacheAdapter:
             if cover_album_ids:
                 connection.execute(
                     _synchronize_album_cover_file_entries_sql(by_album_ids=True),
-                    {"album_ids": cover_album_ids},
+                    {
+                        "album_ids": cover_album_ids,
+                        "active_paths": sorted(normalized_paths),
+                    },
                 )
             committed_relation_state = (
                 _patch_structural_relation_projection(
@@ -6315,7 +6318,19 @@ def _synchronize_album_cover_file_entries_sql(
         for field in ("cover_revision", *_ALBUM_COVER_AUTHORITY_FIELDS)
     )
     album_filter = (
-        "album.id = any(%(album_ids)s::bigint[])"
+        """(
+          album.id = any(%(album_ids)s::bigint[])
+          or exists (
+            select 1
+            from library.local_tracks as selected_tracks
+            join library.local_track_files as selected_files
+              on selected_files.track_id = selected_tracks.id
+             and selected_files.scan_cache_stale is false
+            where selected_tracks.album_id = album.id
+              and selected_tracks.library_id = album.library_id
+              and selected_files.private_path = any(%(active_paths)s::text[])
+          )
+        )"""
         if by_album_ids
         else "album.album_key = any(%(album_keys)s::text[])"
     )

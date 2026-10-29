@@ -32,8 +32,20 @@ class PcmPositionObserver:
     stdout order. Input chunks must be bounded by the existing caller. The only
     retained data is a bounded line and descriptor queue plus checksum counters.
     """
-    def __init__(self, *, require_wav_header=False):
+    def __init__(self, *, require_wav_header=False, wav_bits=16, source_frames48=None):
+        if type(wav_bits) is not int or wav_bits not in (16, 24, 32):
+            raise ValueError('unsupported WAV sample width')
+        if source_frames48 is not None and (type(source_frames48) is not int
+                or not 0 <= source_frames48 <= _MAX):
+            raise ValueError('invalid native WAV frame extent')
         self._require_wav_header = require_wav_header
+        self._source_frames48 = source_frames48
+        codec = f'pcm_s{wav_bits}le'.encode()
+        sample_format = {16: rb's16', 24: rb's32 \(24 bit\)', 32: rb's32'}[wav_bits]
+        self._wav_stream_line = re.compile(rb'  Stream #0:0: Audio: ' + codec
+            + rb'(?: \([^\r\n]*\))?, 48000 Hz, stereo, ' + sample_format
+            + rb', ' + str(96 * wav_bits).encode() + rb' kb/s')
+        self._wav_mapping_line = b'  Stream #0:0 -> #0:0 (' + codec + b' (native) -> pcm_f32le (native))'
         self._wav_demuxer = False
         self._wav_stream = False
         self._wav_mapping = False
@@ -88,9 +100,9 @@ class PcmPositionObserver:
             if line.startswith(b'Input #0, '):
                 self._wav_demuxer = line.startswith(b"Input #0, wav, from '")
             if line.startswith(b'  Stream #0:0: Audio: '):
-                self._wav_stream = re.fullmatch(rb'  Stream #0:0: Audio: pcm_s16le(?: \([^\r\n]*\))?, 48000 Hz, stereo, s16, [0-9]+ kb/s', line) is not None
+                self._wav_stream = self._wav_stream_line.fullmatch(line) is not None
             if line.startswith(b'  Stream #0:0 -> '):
-                self._wav_mapping = line == b'  Stream #0:0 -> #0:0 (pcm_s16le (native) -> pcm_f32le (native))'
+                self._wav_mapping = line == self._wav_mapping_line
         if b'ashowinfo' not in line or b' n:' not in line:
             return
         if self._require_wav_header and not (self._wav_demuxer and self._wav_stream and self._wav_mapping):
@@ -110,6 +122,9 @@ class PcmPositionObserver:
                 or pts + count > _MAX or int(checksum, 16) != int(plane, 16)
                 or self._next_source is not None and pts != self._next_source):
             self.lose('descriptor_discontinuity')
+            return
+        if self._source_frames48 is not None and pts + count > self._source_frames48:
+            self.lose('source_extent_exceeded')
             return
         if len(self._queue) >= _QUEUE_LIMIT:
             self.lose('descriptor_queue_limit')
@@ -149,4 +164,7 @@ class PcmPositionObserver:
     def finish(self):
         if self.available and (self._line or self._queue or self._frame_bytes or not self._next_n):
             self.lose('incomplete_output')
+        if (self.available and self._source_frames48 is not None
+                and self._next_source != self._source_frames48):
+            self.lose('source_extent_mismatch')
         return self.available

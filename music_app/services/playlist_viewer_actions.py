@@ -7,6 +7,7 @@ from music_app.services.collection_member_authority import collection_member_con
 from music_app.services.owned_playlists import BROWSE, CREATE, ACCESS, MAX_PLAYLIST_ITEMS_PER_COMMAND, PlaylistError
 from music_app.services.policy import ResourceScope
 from music_app.services import playlist_creation_sources_postgres as sources
+from music_app.services import playlist_metadata_occurrences as occurrences
 
 
 def requester_context(connection, context, account_id, *, lock=False):
@@ -70,6 +71,7 @@ def decide(owner, connection, context, command, playlist, constraints):
 
 def copy_playlist(owner, connection, context, command, playlist, constraints):
     owner._require(context,(BROWSE,CREATE),constraints)
+    carry_occurrence = occurrences.installed(connection)
     rows = connection.execute('select * from app.playlist_items where playlist_ref=%s order by position',
         (command.playlist_ref,)).fetchall()
     if len(rows) > MAX_PLAYLIST_ITEMS_PER_COMMAND:
@@ -86,12 +88,14 @@ def copy_playlist(owner, connection, context, command, playlist, constraints):
     title = command.data.get('title', (playlist['title'][:93] + ' (copy)'))
     connection.execute('''insert into app.playlists(ref,owner_account_id,library_id,title,description,visibility)
         values(%s,%s,%s,%s,%s,'private')''',(ref,context.actor.account_id,context.library_id,title,playlist['description']))
-    connection.execute("""insert into app.playlist_items
+    occurrence_column = ',metadata_occurrence_ref' if carry_occurrence else ''
+    occurrence_value = ',coalesce(metadata_occurrence_ref,ref)' if carry_occurrence else ''
+    connection.execute(f"""insert into app.playlist_items
         (ref,playlist_ref,library_id,position,original_local_track_id,local_track_id,
-         title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,source_kind,source_protocol,source_lineage)
+         title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,source_kind,source_protocol,source_lineage{occurrence_column})
         select gen_random_uuid(),%s,library_id,position,original_local_track_id,local_track_id,
          title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,'playlist','playlist_copy_v1',
-         jsonb_build_object('playlist_ref',playlist_ref::text,'playlist_item_ref',ref::text,'playlist_revision',%s::text)
+         jsonb_build_object('playlist_ref',playlist_ref::text,'playlist_item_ref',ref::text,'playlist_revision',%s::text){occurrence_value}
         from app.playlist_items where playlist_ref=%s order by position""",(ref,command.data['revision'],command.playlist_ref))
     return owner._receipt(context,command,ref,1,True,source_playlist_id=command.playlist_ref,
         source_revision=command.data['revision'],added_count=len(rows))

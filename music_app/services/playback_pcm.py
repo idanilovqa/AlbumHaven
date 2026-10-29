@@ -346,7 +346,9 @@ class PcmDecoderProcess:
         if absolute_source is not None:
             from music_app.services.playback_pcm_position import PcmPositionObserver
             self._absolute_source = absolute_source
-            self._absolute_observer = PcmPositionObserver(require_wav_header=True)
+            self._absolute_observer = PcmPositionObserver(require_wav_header=True,
+                wav_bits=absolute_source.qualification_bits,
+                source_frames48=absolute_source.qualification_frames)
             self.absolute_metadata = replace(self.metadata, capture_source_id=str(uuid4()),
                 capture_local_coordinates=False, capture_absolute_coordinates=True)
             audio_filter = ("-af", "aformat=sample_fmts=flt:sample_rates=48000:channel_layouts=stereo,asettb=expr=1/48000,ashowinfo")

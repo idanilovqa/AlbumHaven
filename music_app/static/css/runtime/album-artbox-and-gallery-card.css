@@ -170,3 +170,6 @@
   border-color: color-mix(in srgb, var(--album-card-search-accent) 60%, var(--border));
   filter: drop-shadow(0 0 7px color-mix(in srgb, var(--album-card-search-accent) 28%, transparent));
 }
+
+/* Unavailable catalog metadata must never look like a playable local album. */
+.album-card--unavailable { outline: 2px solid var(--danger, #c93e4b); outline-offset: -2px; }

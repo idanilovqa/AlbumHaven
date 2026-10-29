@@ -8659,7 +8659,7 @@ def _album_detail_sql() -> str:
         from library.local_albums
         join bootstrap_context
           on bootstrap_context.library_id = library.local_albums.library_id
-        join library.local_artists
+        left join library.local_artists
           on library.local_artists.library_id = library.local_albums.library_id
          and library.local_artists.id = library.local_albums.artist_id
         left join library.local_album_cover_candidate_snapshots cover_candidate_snapshots

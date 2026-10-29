@@ -176,6 +176,57 @@ def test_album_match_bonus_rewards_exact_and_near_prefix_album_titles():
     assert matching.album_match_bonus("Blue Sky", "Red Moon") == pytest.approx(0.0)
 
 
+def test_match_score_accepts_exact_first_disc_title_in_compound_release_title():
+    assert matching.match_score(
+        target_artist="Miriodor",
+        target_album="Parade",
+        target_edition=None,
+        target_year=2005,
+        candidate_artist="Miriodor",
+        candidate_album="Parade + Live at NEARfest",
+        candidate_year=2005,
+    ) > 0.0
+
+
+def test_match_score_does_not_treat_unseparated_live_title_as_compound_release():
+    assert matching.match_score(
+        target_artist="Miriodor",
+        target_album="Parade",
+        target_edition=None,
+        target_year=2005,
+        candidate_artist="Miriodor",
+        candidate_album="Parade Live at NEARfest",
+        candidate_year=2005,
+    ) == 0.0
+
+
+def test_exact_album_title_candidates_displace_partial_title_candidates():
+    exact = (1.5, "https://images.example/parade.jpg", {"album": "Parade"})
+    partial = (
+        1.2,
+        "https://images.example/parade-live.jpg",
+        {"collectionName": "Parade + Live at NEARfest"},
+    )
+
+    assert matching.prefer_exact_album_title_matches(
+        [partial, exact],
+        target_album="Parade",
+    ) == [exact]
+
+
+def test_partial_album_title_candidates_remain_when_no_exact_title_exists():
+    partial = (
+        1.2,
+        "https://images.example/parade-live.jpg",
+        {"collectionName": "Parade + Live at NEARfest"},
+    )
+
+    assert matching.prefer_exact_album_title_matches(
+        [partial],
+        target_album="Parade",
+    ) == [partial]
+
+
 def test_edition_match_bonus_rewards_contained_and_high_combined_similarity():
     assert matching.edition_match_bonus("Blue Sky", "Deluxe Edition", "Blue Sky Deluxe Edition") == pytest.approx(0.22)
     assert matching.edition_match_bonus("Blue Sky", "Deluxe Edition", "Blue Sky Deluxe Editio") == pytest.approx(0.16)

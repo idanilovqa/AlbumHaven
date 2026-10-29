@@ -10348,6 +10348,19 @@ def test_album_detail_sql_excludes_tracks_without_an_active_file():
     assert "metadata #>> '{{scan_cache,stale}}'" not in detail_joins
 
 
+def test_album_detail_sql_keeps_joint_credit_album_without_synthetic_owner_artist():
+    from music_app.services.library_browse_postgres import _album_detail_sql
+
+    sql = " ".join(_album_detail_sql().split()).lower()
+    detail_joins = sql.split("from library.local_albums", 1)[1]
+
+    assert (
+        "left join library.local_artists on "
+        "library.local_artists.library_id = library.local_albums.library_id "
+        "and library.local_artists.id = library.local_albums.artist_id"
+    ) in detail_joins
+
+
 def test_postgres_album_detail_preserves_raw_featured_title_and_projects_track_artist_credit(monkeypatch):
     import music_app.services.album_details as album_details_module
     from music_app.services.library_browse_postgres import (

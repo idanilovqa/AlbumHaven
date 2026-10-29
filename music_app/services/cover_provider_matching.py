@@ -404,9 +404,40 @@ def album_match_bonus(target_album: str, candidate_album: str) -> float:
     return 0.0
 
 
+def compound_release_title_starts_with_album(target_album: str, candidate_album: str) -> bool:
+    parts = re.split(r"\s+\+\s+", str(candidate_album or ""), maxsplit=1)
+    if len(parts) != 2 or not parts[1].strip():
+        return False
+    return canonical_album_title(parts[0]) == canonical_album_title(target_album)
+
+
 def release_year_from_match_meta(meta: dict | None) -> int | None:
     metadata = meta or {}
     return parse_year(metadata.get("year") or metadata.get("releaseDate"))
+
+
+def prefer_exact_album_title_matches(
+    matches: list[tuple[float, str, dict]],
+    *,
+    target_album: str,
+) -> list[tuple[float, str, dict]]:
+    target_title = canonical_album_title(target_album)
+    if not target_title:
+        return matches
+    exact_matches = [
+        item
+        for item in matches
+        if canonical_album_title(
+            str(
+                (item[2] or {}).get("album")
+                or (item[2] or {}).get("collectionName")
+                or (item[2] or {}).get("title")
+                or ""
+            )
+        )
+        == target_title
+    ]
+    return exact_matches or matches
 
 
 def prefer_release_year_matches(
@@ -560,7 +591,13 @@ def match_score(
         and (target_sequence_marker is not None or candidate_sequence_marker is not None)
     ):
         return 0.0
+    compound_release_match = compound_release_title_starts_with_album(
+        target_album,
+        candidate_album,
+    )
     album_core_score = similarity(target_album_core, candidate_album_core)
+    if compound_release_match:
+        album_core_score = max(album_core_score, 1.0)
     is_self_titled_target = is_self_titled_album(target_artist, target_album)
     self_titled_album_identity_matches = (
         target_album_core == candidate_album_core
@@ -587,6 +624,7 @@ def match_score(
     if (
         target_tokens != candidate_tokens
         and (target_tokens < candidate_tokens or candidate_tokens < target_tokens)
+        and not compound_release_match
         and not (is_self_titled_target and self_titled_album_identity_matches)
     ):
         return 0.0

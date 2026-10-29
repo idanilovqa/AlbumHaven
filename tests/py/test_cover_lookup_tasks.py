@@ -1759,8 +1759,9 @@ def test_task_level_bounded_notification_reads_preserve_contract(monkeypatch):
     monkeypatch.setattr(
         task_service,
         "load_cover_lookup_notification_summary_page",
-        lambda config, *, limit, cursor, active_only: page
-        if (config, limit, cursor, active_only) == ({"key": "value"}, 50, None, False)
+        lambda config, *, limit, cursor, active_only, task_ids: page
+        if (config, limit, cursor, active_only, task_ids)
+        == ({"key": "value"}, 50, None, False, ())
         else None,
         raising=False,
     )

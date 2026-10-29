@@ -53,7 +53,13 @@ def test_cover_jobs_exclude_mixed_and_orphan_sources_but_keep_disc_siblings(
     jobs = cover_refresh_planning.build_cover_refresh_jobs(
         entries, require_missing_cover=require_missing_cover,
     )
-    assert {track for job in jobs for track in job["track_paths"]} == set(entries) - set(excluded)
+    expected_excluded = set(excluded if persisted_markers else (excluded[0], excluded[2]))
+    assert {track for job in jobs for track in job["track_paths"]} == set(entries) - expected_excluded
+    if not persisted_markers:
+        unrelated_jobs = [job for job in jobs if excluded[1] in job["track_paths"]]
+        assert len(unrelated_jobs) == 1
+        assert unrelated_jobs[0]["track_paths"] == [excluded[1]]
+        assert unrelated_jobs[0]["album"] == "Unrelated"
     assert all(job["needs_cover_fetch"] for job in jobs)
 
 

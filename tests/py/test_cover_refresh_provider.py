@@ -921,6 +921,51 @@ def test_automatic_deezer_probe_stops_after_satisfactory_candidate(monkeypatch):
     assert seen == ["https://example.test/first.jpg"]
 
 
+def test_automatic_probe_prefers_exact_album_title_over_partial(monkeypatch):
+    monkeypatch.setattr(
+        cover_refresh_provider,
+        "_LOGGER",
+        type("Logger", (), {"verbose": lambda self, *_args: None})(),
+    )
+    monkeypatch.setattr(
+        cover_refresh_provider,
+        "_probe_candidate_metrics",
+        lambda *_args, **_kwargs: {
+            "raw_bytes": b"cover",
+            "width": 1400,
+            "height": 1400,
+            "area": 1960000,
+            "sharpness": 1.0,
+        },
+    )
+
+    candidates = cover_refresh_provider._probe_match_candidates(
+        source="deezer",
+        matches=[
+            (
+                1.0,
+                "https://example.test/parade-live.jpg",
+                {"artist": "Miriodor", "album": "Parade + Live at NEARfest"},
+            ),
+            (
+                1.0,
+                "https://example.test/parade.jpg",
+                {"artist": "Miriodor", "album": "Parade"},
+            ),
+        ],
+        user_agent="AlbumHavenTests/1.0",
+        query_mode="artist+album",
+        artist="Miriodor",
+        album="Parade",
+        year=2005,
+        probe_limit=None,
+    )
+
+    assert [candidate.url for candidate in candidates] == [
+        "https://example.test/parade.jpg"
+    ]
+
+
 def test_automatic_probe_keeps_smaller_candidate_on_later_timeout(monkeypatch):
     from music_app.services.cover_provider_deadline import AutomaticCoverDeadlineExceeded, automatic_cover_budget
     monkeypatch.setattr(cover_refresh_provider, "_LOGGER", type("Logger", (), {"verbose": lambda self, *_args: None})())

@@ -192,6 +192,10 @@ def _probe_match_candidates(
         return []
     if source == "apple":
         positive_matches = cover_provider_apple.dedupe_apple_matches(positive_matches)
+    positive_matches = cover_provider_matching.prefer_exact_album_title_matches(
+        positive_matches,
+        target_album=album,
+    )
     year_preferred_matches = cover_provider_matching.prefer_release_year_matches(
         positive_matches,
         target_year=year,

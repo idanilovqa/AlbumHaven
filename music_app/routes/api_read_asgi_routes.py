@@ -1064,6 +1064,12 @@ async def album_details(request: Request) -> JSONResponse:
                 album_key,
                 client_surface_class=client_surface_class,
             )
+        if payload is None and album_id is not None and album_key:
+            payload = await run_in_threadpool(
+                repository.build_album_detail_payload,
+                album_key,
+                client_surface_class=client_surface_class,
+            )
         if payload is None:
             if lineage is None:
                 try:

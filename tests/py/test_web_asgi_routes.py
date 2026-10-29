@@ -1792,6 +1792,47 @@ def test_asgi_cover_serves_opaque_png_display_variant_as_jpeg(app, monkeypatch):
     assert not (cover_path.parent / ".album-haven").exists()
 
 
+def test_asgi_cover_snapshots_new_variant_before_relocation_can_remove_it(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    image_module = pytest.importorskip("PIL.Image")
+    cover_path = (Path(app.config["MUSIC_DIR"]) / "relocating-cover.png").resolve()
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    image_module.new("RGB", (1200, 1200), color=(64, 128, 192)).save(
+        cover_path,
+        format="PNG",
+    )
+    _configure_selected_postgres_library_roots(app.config, monkeypatch)
+    original_response = web_asgi._conditional_file_response
+    relocated_paths = []
+
+    def relocate_before_send(request, path, **kwargs):
+        if path != cover_path:
+            assert kwargs.get("content") == path.read_bytes()
+            assert kwargs.get("stat_result") is not None
+            relocated_paths.append(path)
+            path.unlink()
+        return original_response(request, path, **kwargs)
+
+    monkeypatch.setattr(web_asgi, "_conditional_file_response", relocate_before_send)
+
+    status, headers, body = _run_asgi_request(
+        _make_asgi_app(app),
+        "GET",
+        "/cover",
+        query={"path": str(cover_path), "size": "480"},
+    )
+
+    assert status == 200
+    assert relocated_paths
+    assert headers.get("content-type") == "image/jpeg"
+    with image_module.open(io.BytesIO(body)) as rendered:
+        assert rendered.size == (480, 480)
+
+
 def test_asgi_open_album_location_preserves_json_statuses(app, monkeypatch):
     from music_app.routes import web_asgi
     from music_app.services.library_roots import normalize_library_root_settings

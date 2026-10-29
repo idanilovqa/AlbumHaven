@@ -1438,6 +1438,7 @@ def _cover_response(
             if cached_response is not None:
                 return cached_response
             if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
+                source_path = resolved
                 generation_options = {}
                 if inventory_recorder is not None:
                     generation_options["on_published"] = inventory_recorder
@@ -1449,6 +1450,21 @@ def _cover_response(
                     **revision_options,
                     **generation_options,
                 )
+                if resolved != source_path:
+                    try:
+                        with resolved.open("rb") as handle:
+                            stat_result = os.fstat(handle.fileno())
+                            content = handle.read()
+                    except FileNotFoundError:
+                        resolved = source_path
+                    else:
+                        return _conditional_file_response(
+                            request,
+                            resolved,
+                            max_age=31536000 if normalized_revision else 300,
+                            stat_result=stat_result,
+                            content=content,
+                        )
         except Exception:
             _app_logger(request).exception(
                 "cover: failed to prepare display variant for %s", resolved

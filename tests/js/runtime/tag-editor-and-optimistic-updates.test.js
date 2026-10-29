@@ -2762,7 +2762,7 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   assert.strictEqual(context.state.view, navigatedView);
   assert.deepEqual(persistedEntries, [logEntry]);
   assert.equal(persistedEntries[0].error, logEntry.error);
-  assert.equal(alerts.at(-1)[0], logEntry.error);
+  assert.equal(alerts.at(-1)[0], 'Failed to edit tags.');
   assert.equal(alerts.at(-1)[1], 'error');
   assert.equal(alerts.at(-1)[2], null);
   assert.equal(alerts.at(-1)[3].logHistoryEntryId, logEntry.id);
@@ -2849,6 +2849,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
     album_artist: 'Artist',
     tracks: [{ path: trackPath, album: 'Album' }],
   };
+  const alerts = [];
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -2865,7 +2866,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
     applyUpdatedAlbumsToCurrentView() { return [album]; },
     updateOpenTrackModalAfterTagEdit() {},
     renderView() {},
-    showRepairAlert() {},
+    showRepairAlert(...args) { alerts.push(args); },
     async prependUtilityLogHistoryEntry() {},
     async fetch() {
       return {
@@ -2873,9 +2874,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
         async json() {
           return {
             ok: false,
-            error: 'Permission denied while writing tags.',
-            save_task_id: 'failed-tag-save',
-            save_task_status: 'failed',
+            error: `PermissionError: cannot write ${trackPath}`,
             failure_stage: 'media_write',
             edit_outcome: 'failed_rolled_back',
             log_entry: { id: 'tag-edit-failure-42', action: 'Tag edit failed' },
@@ -2890,6 +2889,12 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
   await context.confirmManualTagEdit();
 
   assert.equal(closedModal.hidden, true);
+  assert.equal(alerts.at(-1)[0], 'Failed to edit tags.');
+  assert.doesNotMatch(JSON.stringify(alerts.at(-1)), /C:\\Music|PermissionError/);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1)[3])), {
+    logHistoryEntryId: 'tag-edit-failure-42',
+    logHistoryLink: true,
+  });
 });
 
 test('failed tag save does not replace a newer tag editor session', () => {

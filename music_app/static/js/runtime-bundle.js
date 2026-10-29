@@ -33359,7 +33359,12 @@ async function confirmManualTagEdit() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
-      failedSaveTaskError = String(data.error || '').trim();
+      if (
+        data.save_task_id
+        && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
+      ) {
+        failedSaveTaskError = String(data.error || '').trim();
+      }
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {

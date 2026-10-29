@@ -6154,6 +6154,21 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/galleryBarAlignment.spec.js",
+    "case": "desktop page GalleryBar aligns its back control with the title row",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "desktop page GalleryBar aligns its back control with the title row"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryBarAlignment.spec.js",
     "case": "light Gallery-bar hover uses its approved surface",
     "profile": null,
     "setupScope": "suite",

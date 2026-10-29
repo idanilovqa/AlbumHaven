@@ -1045,6 +1045,26 @@ async def album_details(request: Request) -> JSONResponse:
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
+        lineage = None
+        if album_id is not None and album_key:
+            try:
+                lineage = await run_in_threadpool(
+                    AlbumIdentityLineageRepository(_app_config(request)).resolve,
+                    album_id=album_id,
+                    album_key=album_key,
+                )
+            except (RuntimeError, OSError):
+                lineage = {"status": "unresolved", "album": None, "choices": []}
+            if lineage["status"] == "split":
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "This album was split—choose the current release",
+                        "resolution_kind": "album_split",
+                        "current_releases": lineage["choices"],
+                    },
+                    status_code=409,
+                )
         payload = None
         if album_id is not None:
             current_payload = await run_in_threadpool(
@@ -1064,24 +1084,25 @@ async def album_details(request: Request) -> JSONResponse:
                 client_surface_class=client_surface_class,
             )
         if payload is None:
-            try:
-                lineage = await run_in_threadpool(
-                    AlbumIdentityLineageRepository(_app_config(request)).resolve,
-                    album_id=album_id,
-                    album_key=album_key or None,
-                )
-            except (RuntimeError, OSError):
-                lineage = {"status": "unresolved", "album": None, "choices": []}
-            if lineage["status"] == "split":
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "error": "This album was split—choose the current release",
-                        "resolution_kind": "album_split",
-                        "current_releases": lineage["choices"],
-                    },
-                    status_code=409,
-                )
+            if lineage is None:
+                try:
+                    lineage = await run_in_threadpool(
+                        AlbumIdentityLineageRepository(_app_config(request)).resolve,
+                        album_id=album_id,
+                        album_key=album_key or None,
+                    )
+                except (RuntimeError, OSError):
+                    lineage = {"status": "unresolved", "album": None, "choices": []}
+                if lineage["status"] == "split":
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "This album was split—choose the current release",
+                            "resolution_kind": "album_split",
+                            "current_releases": lineage["choices"],
+                        },
+                        status_code=409,
+                    )
             current_album = lineage.get("album")
             if isinstance(current_album, Mapping):
                 payload = await run_in_threadpool(

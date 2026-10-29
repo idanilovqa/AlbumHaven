@@ -3590,7 +3590,7 @@ def test_asgi_album_details_resolves_a_stale_identity_through_shared_lineage(
     assert detail_calls == [(17, "private_web"), (92, "private_web")]
 
 
-def test_asgi_album_details_uses_matching_current_id_and_key_before_lineage(
+def test_asgi_album_details_checks_lineage_before_accepting_matching_current_id_and_key(
     asgi_app,
     monkeypatch,
 ):
@@ -3607,9 +3607,17 @@ def test_asgi_album_details_uses_matching_current_id_and_key_before_lineage(
             assert (album_id, client_surface_class) == (17, "private_web")
             return {"album_id": 17, "key": "artist::current"}
 
-    class FailLineageRepository:
+    class FakeLineageRepository:
         def __init__(self, _config):
-            raise AssertionError("A matching current album identity must not consult lineage")
+            pass
+
+        def resolve(self, **identity):
+            assert identity == {"album_id": 17, "album_key": "artist::current"}
+            return {
+                "status": "current",
+                "album": {"album_id": 17, "album_key": "artist::current"},
+                "choices": [],
+            }
 
     monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
     monkeypatch.setattr(
@@ -3620,7 +3628,7 @@ def test_asgi_album_details_uses_matching_current_id_and_key_before_lineage(
     monkeypatch.setattr(
         asgi_read_routes,
         "AlbumIdentityLineageRepository",
-        FailLineageRepository,
+        FakeLineageRepository,
     )
     monkeypatch.setattr(
         asgi_read_routes,
@@ -3690,7 +3698,7 @@ def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
 
         def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
             assert (album_id, client_surface_class) == (17, "private_web")
-            return {"album_id": 17, "key": "artist::left"}
+            return {"album_id": 17, "key": "artist::old"}
 
     monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
     monkeypatch.setattr(

@@ -1444,6 +1444,121 @@ require('node:test')('active-only polling drops completed cards cleared by anoth
   assert.deepEqual(Array.from(context.state.coverLookup.tasks), []);
 });
 
+require('node:test')('count-only polling preserves loaded history after a known card was removed', async () => {
+  const history = Array.from({ length: 528 }, (_, index) => ({
+    id: `history-${String(index + 1).padStart(4, '0')}`,
+    status: 'completed',
+  }));
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      if (String(url).includes('active_only=true')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            tasks: [],
+            next_cursor: null,
+            total_count: 528,
+            active_count: 0,
+            finished_count: 528,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: history.slice(0, 50),
+          next_cursor: 'page-two',
+          total_count: 528,
+          active_count: 0,
+          finished_count: 528,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [...history];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 529,
+    active_count: 0,
+    finished_count: 528,
+  };
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.equal(context.state.coverLookup.tasks.length, 528);
+  assert.equal(context.state.coverLookup.tasks[259].id, 'history-0260');
+  assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
+});
+
+require('node:test')('active polling never removes a card before its terminal first-page refresh', async () => {
+  const history = Array.from({ length: 60 }, (_, index) => ({
+    id: `history-${String(index + 1).padStart(2, '0')}`,
+    status: 'completed',
+  }));
+  const transitioningTask = { id: 'transitioning-task', status: 'running' };
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      if (String(url).includes('active_only=true')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            tasks: [],
+            next_cursor: null,
+            total_count: 61,
+            active_count: 0,
+            finished_count: 61,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{ ...transitioningTask, status: 'completed' }, ...history.slice(0, 49)],
+          next_cursor: 'page-two',
+          total_count: 61,
+          active_count: 0,
+          finished_count: 61,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [...history, transitioningTask];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 61,
+    active_count: 1,
+    finished_count: 60,
+  };
+  const renderedTaskStates = [];
+  context.renderCoverLookupDrawer = () => {
+    renderedTaskStates.push(context.state.coverLookup.tasks.map((task) => ({
+      id: task.id,
+      status: task.status,
+    })));
+  };
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.ok(renderedTaskStates.length >= 1);
+  assert.equal(
+    renderedTaskStates.every((tasks) => tasks.some((task) => task.id === transitioningTask.id)),
+    true,
+    'a card must remain mounted while polling learns its terminal state',
+  );
+  assert.equal(
+    context.state.coverLookup.tasks.find((task) => task.id === transitioningTask.id)?.status,
+    'completed',
+  );
+});
+
 require('node:test')('active-only polling refreshes the modal when partial candidates advance', async () => {
   let galleryRefreshes = 0;
   let pollCount = 0;

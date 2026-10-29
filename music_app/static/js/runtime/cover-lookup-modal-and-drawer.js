@@ -2694,7 +2694,7 @@ async function loadCoverLookupTasks(options = {}) {
     if (missingActiveTask || notificationsRemoved) {
       await loadCoverLookupTasks({
         toast: false,
-        mergeFirstPage: !notificationsRemoved,
+        mergeFirstPage: Number(data.total_count) > 0,
         refreshModalGallery: options.refreshModalGallery,
       });
     }

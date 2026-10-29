@@ -318,6 +318,113 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   assert.equal(controlSyncs, 1);
 });
 
+test('deferred non-album hydration starts a new request after gallery identity changes', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  let resolveRootRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => {
+    requested.push(url);
+    if (requested.length === 1) {
+      return new Promise((resolve) => {
+        resolveRootRequest = () => resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ non_album_tracks: [] }),
+        });
+      });
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Neal Morse',
+        non_album_tracks: [{ path: '/music/neal-morse/loose.flac', title: 'Loose Track' }],
+      }),
+    };
+  };
+
+  context.state.view = {
+    selected_artist: '',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  const rootHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  const artistHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+
+  assert.equal(requested.length, 2);
+  resolveRootRequest();
+  await Promise.all([rootHydration, artistHydration]);
+  assert.deepEqual(
+    Array.from(context.state.view.non_album_tracks, (track) => track.title),
+    ['Loose Track'],
+  );
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
+});
+
+test('an older deferred hydration cannot overwrite a newer scope for the same artist', async () => {
+  const { context } = loadHelper();
+  let resolveOldRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}&query=${encodeURIComponent(view.query || '')}`;
+  context.fetch = async (url) => {
+    if (new URL(url, 'http://localhost').searchParams.get('query') === 'old') {
+      return new Promise((resolve) => {
+        resolveOldRequest = () => resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            non_album_tracks: [{ path: '/music/neal-morse/old.flac', title: 'Old Scope' }],
+          }),
+        });
+      });
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        non_album_tracks: [{ path: '/music/neal-morse/new.flac', title: 'New Scope' }],
+      }),
+    };
+  };
+
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    query: 'old',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  const oldHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    query: 'new',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  await context.hydrateDeferredNonAlbumTracks();
+  resolveOldRequest();
+  await oldHydration;
+
+  assert.deepEqual(
+    Array.from(context.state.view.non_album_tracks, (track) => track.title),
+    ['New Scope'],
+  );
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
+});
+
 test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
   const { context } = loadHelper();
   for (const filename of ['gallery-main-state.js', 'gallery-main-interactions.js']) {

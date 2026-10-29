@@ -11404,28 +11404,32 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
-let deferredNonAlbumHydrationPromise = null;
+let deferredNonAlbumHydrationRequest = null;
 
 async function hydrateDeferredNonAlbumTracks(options = {}) {
   const view = state.view || {};
   if (!view.non_album_tracks_deferred) return view.non_album_tracks || [];
-  if (deferredNonAlbumHydrationPromise) return deferredNonAlbumHydrationPromise;
-
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
   requestUrl.searchParams.set('include_non_album', '1');
   if (options.libraryWide === true) {
     requestUrl.searchParams.set('include_library_wide_non_album', '1');
   }
-  deferredNonAlbumHydrationPromise = (async () => {
-    const response = await fetch(`${requestUrl.pathname}${requestUrl.search}`, {
+  const requestKey = `${requestUrl.pathname}${requestUrl.search}`;
+  if (deferredNonAlbumHydrationRequest?.key === requestKey) {
+    return deferredNonAlbumHydrationRequest.promise;
+  }
+  const request = { key: requestKey, promise: null };
+  request.promise = (async () => {
+    const response = await fetch(requestKey, {
       headers: { Accept: 'application/json' },
     });
     const payload = await response.json();
     if (!response.ok || payload?.ok === false) {
       throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
     }
-    if (String(state.view?.selected_artist || '') !== requestedArtist) {
+    if (deferredNonAlbumHydrationRequest !== request
+        || String(state.view?.selected_artist || '') !== requestedArtist) {
       return state.view?.non_album_tracks || [];
     }
     state.view.non_album_tracks = Array.isArray(payload.non_album_tracks)
@@ -11438,9 +11442,12 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_tracks;
   })().finally(() => {
-    deferredNonAlbumHydrationPromise = null;
+    if (deferredNonAlbumHydrationRequest === request) {
+      deferredNonAlbumHydrationRequest = null;
+    }
   });
-  return deferredNonAlbumHydrationPromise;
+  deferredNonAlbumHydrationRequest = request;
+  return request.promise;
 }
 
 function buildNonAlbumTrackRowsMarkup(items, startingIndex) {

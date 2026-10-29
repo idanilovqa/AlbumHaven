@@ -3590,7 +3590,7 @@ def test_asgi_album_details_resolves_a_stale_identity_through_shared_lineage(
     assert detail_calls == [(17, "private_web"), (92, "private_web")]
 
 
-def test_asgi_album_details_checks_lineage_before_accepting_matching_current_id_and_key(
+def test_asgi_album_details_accepts_matching_current_id_and_key_before_lineage(
     asgi_app,
     monkeypatch,
 ):
@@ -3611,13 +3611,8 @@ def test_asgi_album_details_checks_lineage_before_accepting_matching_current_id_
         def __init__(self, _config):
             pass
 
-        def resolve(self, **identity):
-            assert identity == {"album_id": 17, "album_key": "artist::current"}
-            return {
-                "status": "current",
-                "album": {"album_id": 17, "album_key": "artist::current"},
-                "choices": [],
-            }
+        def resolve(self, **_identity):
+            raise AssertionError("An exact live album id/key pair must bypass lineage")
 
     monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
     monkeypatch.setattr(
@@ -3698,7 +3693,11 @@ def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
 
         def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
             assert (album_id, client_surface_class) == (17, "private_web")
-            return {"album_id": 17, "key": "artist::old"}
+            return None
+
+        def build_album_detail_payload(self, album_key, *, client_surface_class=None):
+            assert (album_key, client_surface_class) == ("artist::old", "private_web")
+            return None
 
     monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
     monkeypatch.setattr(

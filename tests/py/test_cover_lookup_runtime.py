@@ -3910,6 +3910,68 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
     assert final_snapshot["phase_timings_ms"]["persistence"] > 1.5
 
 
+def test_progressive_service_candidates_accumulate_provider_stages(
+    config,
+    logger,
+    monkeypatch,
+    tmp_path: Path,
+):
+    track_path = tmp_path / "song.mp3"
+    album = _album_payload(track_path)
+    apple_candidate = {
+        "id": "apple-candidate",
+        "url": "https://images.example/apple.jpg",
+        "source": "apple",
+        "lookup_group": "services",
+    }
+    deezer_candidate = {
+        "id": "deezer-candidate",
+        "url": "https://images.example/deezer.jpg",
+        "source": "deezer",
+        "lookup_group": "services",
+    }
+    published_ids: list[tuple[str, ...]] = []
+
+    class StagedServiceRegistry:
+        def search_music_service_matches(self, _query, *, on_candidates=None, **_kwargs):
+            assert callable(on_candidates)
+            on_candidates([apple_candidate])
+            on_candidates([deezer_candidate])
+            return [apple_candidate, deezer_candidate], []
+
+        def search_bandcamp_matches(self, _query, **_kwargs):
+            return []
+
+        def search_discogs_and_cover_art_archive_matches(self, _query, **_kwargs):
+            return [], []
+
+        def search_artist_website_fallback_matches(self, _query, **_kwargs):
+            return []
+
+    def capture_update(_task_id, **changes):
+        possible_matches = changes.get("possible_matches")
+        if possible_matches is not None:
+            published_ids.append(tuple(str(candidate["id"]) for candidate in possible_matches))
+
+    monkeypatch.setattr(cover_lookup_runtime, "COVER_LOOKUP_PROVIDER_REGISTRY", StagedServiceRegistry())
+    monkeypatch.setattr(cover_lookup_runtime, "update_cover_lookup_task", capture_update)
+    monkeypatch.setattr(cover_lookup_runtime, "discard_cover_lookup_future", lambda _task_id: None)
+    monkeypatch.setattr(cover_lookup_runtime, "log_app_event", lambda *_args, **_kwargs: None)
+
+    cover_lookup_runtime._run_cover_lookup_task(
+        "task-progressive-services",
+        config,
+        logger,
+        str(config["MUSICBRAINZ_USER_AGENT"]),
+        album,
+        {str(track_path)},
+        Event(),
+    )
+
+    first_deezer_snapshot = next(ids for ids in published_ids if deezer_candidate["id"] in ids)
+    assert first_deezer_snapshot == (apple_candidate["id"], deezer_candidate["id"])
+
+
 def test_progressive_candidate_publication_never_regresses_to_an_older_provider_subset(
     config,
     logger,

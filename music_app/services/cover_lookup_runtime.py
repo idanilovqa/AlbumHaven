@@ -699,7 +699,10 @@ def _run_cover_lookup_task(
 
         def retain_service_candidates(candidates: list[dict[str, object]]) -> None:
             with progressive_candidates_lock:
-                progressive_service_candidates[:] = list(candidates)
+                progressive_service_candidates[:] = merge_lookup_matches(
+                    progressive_service_candidates,
+                    candidates,
+                )
             publish_progressive_candidates()
 
         service_search_kwargs = _provider_call_kwargs(

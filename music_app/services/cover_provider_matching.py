@@ -501,7 +501,7 @@ def match_score(
 ) -> float:
     target_is_various_artists = normalize(target_artist) in _VARIOUS_ARTIST_KEYS
     if target_is_various_artists:
-        if target_year and candidate_year != target_year:
+        if enforce_year and target_year and candidate_year != target_year:
             return 0.0
         artist_score = 1.0
     else:

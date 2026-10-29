@@ -431,6 +431,32 @@ def test_match_score_accepts_named_provider_credit_for_various_artists_soundtrac
     ) > 0.0
 
 
+def test_match_score_accepts_exact_various_artists_soundtrack_when_relaxed_provider_omits_year():
+    assert matching.match_score(
+        target_artist="Various Artists",
+        target_album="The Hunchback of Notre Dame",
+        target_edition=None,
+        target_year=1996,
+        candidate_artist="Various Artists",
+        candidate_album="The Hunchback of Notre Dame (Original Motion Picture Soundtrack)",
+        candidate_year=None,
+        enforce_year=False,
+    ) > 0.0
+
+
+def test_match_score_rejects_wrong_year_for_various_artists_soundtrack_when_year_is_enforced():
+    assert matching.match_score(
+        target_artist="Various Artists",
+        target_album="The Hunchback of Notre Dame",
+        target_edition=None,
+        target_year=1996,
+        candidate_artist="Various Artists",
+        candidate_album="The Hunchback of Notre Dame (Original Motion Picture Soundtrack)",
+        candidate_year=2021,
+        enforce_year=True,
+    ) == 0.0
+
+
 def test_match_score_rejects_unrequested_localized_soundtrack_version():
     assert matching.match_score(
         target_artist="Various Artists",

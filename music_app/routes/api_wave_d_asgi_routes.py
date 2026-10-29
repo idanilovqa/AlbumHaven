@@ -240,8 +240,6 @@ async def _resolve_album_payload_context(
 ):
     normalized_album = _album_with_context_tracks(album)
     normalized_album.pop("_cover_lookup_task_scoped_context", None)
-    if task_scoped:
-        normalized_album["_cover_lookup_task_scoped_context"] = True
     repository = AlbumCoverCandidateSnapshotRepository(config)
     fallback_paths = {
         str(path or "").strip()

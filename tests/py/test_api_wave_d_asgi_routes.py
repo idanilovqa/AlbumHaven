@@ -1009,6 +1009,109 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     assert snapshot_reads == [41, 41]
 
 
+def test_asgi_cover_lookup_gallery_uses_current_snapshot_for_exact_notification_album(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    album = {**_album_payload(track_path), "id": 41, "album_id": 41}
+
+    cover_lookup_tasks.reset_cover_lookup_runtime_state()
+    task_id, _cancel_event = cover_lookup_tasks.create_cover_lookup_task(
+        album,
+        {str(track_path)},
+    )
+    cover_lookup_tasks.update_cover_lookup_task(
+        task_id,
+        status="completed",
+        possible_matches=[],
+    )
+
+    candidate = {
+        "id": "current-caa-cover",
+        "source": "cover_art_archive",
+        "source_label": "Cover Art Archive",
+        "lookup_group": "cover_art_archive",
+        "url": "https://coverartarchive.org/release/current/front",
+        "thumbnail_url": "https://coverartarchive.org/release/current/front-250",
+    }
+
+    class SnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            assert album_id == 41
+            assert album_key in {None, "test artist::test album"}
+            return {
+                "album_id": 41,
+                "album_key": "test artist::test album",
+                "track_paths": [str(track_path)],
+            }
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            assert album_id == 41
+            return {
+                "album_id": 41,
+                "search_generation": task_id,
+                "search_kind": "automatic",
+                "status": "completed",
+                "revision": 1,
+                "candidates": [candidate],
+                "best_candidate_id": candidate["id"],
+            }
+
+    class LineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, *, album_id, album_key, track_paths):
+            assert album_id == 41
+            assert album_key in {None, "test artist::test album"}
+            assert track_paths == {str(track_path)}
+            return {
+                "status": "resolved",
+                "album": {
+                    "album_id": 41,
+                    "album_key": "test artist::test album",
+                },
+                "choices": [],
+            }
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        SnapshotRepository,
+    )
+    monkeypatch.setattr(asgi_routes, "AlbumIdentityLineageRepository", LineageRepository)
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_cover_state_entries_by_paths",
+        lambda _self, _paths: {},
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={"album": album, "task_id": task_id},
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["candidate_snapshot"]["candidates"] == [candidate]
+
+
 def test_asgi_cover_lookup_gallery_keeps_persisted_task_scope_out_of_any_superset(
     app, monkeypatch
 ):
@@ -1577,12 +1680,23 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
             assert track_paths == {str(first_track), str(second_track)}
             return current_releases
 
+    class LineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, *, album_id, album_key, track_paths):
+            assert album_id == 40
+            assert album_key is None
+            assert track_paths == {str(first_track), str(second_track)}
+            return {"status": "split", "album": None, "choices": []}
+
     monkeypatch.setattr(
         asgi_routes,
         "AlbumCoverCandidateSnapshotRepository",
         SnapshotRepository,
     )
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", BrowseRepository)
+    monkeypatch.setattr(asgi_routes, "AlbumIdentityLineageRepository", LineageRepository)
 
     async def serialize_gallery(*_args, **_kwargs):
         return {"ok": True, "local_covers": [], "other_art": []}

@@ -1299,6 +1299,73 @@ def test_reset_accepts_pristine_database_without_application_tables(monkeypatch)
     isolatedPostgres.reset_application_tables("setup")
 
 
+def test_reset_restores_generated_preview_storage_singleton_defaults(monkeypatch):
+    statements = []
+
+    class Result:
+        @staticmethod
+        def fetchall():
+            return [
+                {"schemaname": "app", "tablename": "generated_preview_storage"},
+                {"schemaname": "app", "tablename": "generated_preview_inventory"},
+                {"schemaname": "app", "tablename": "generated_preview_relocation_items"},
+            ]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, statement, *_args):
+            rendered = (
+                statement.as_string(None)
+                if hasattr(statement, "as_string")
+                else str(statement)
+            )
+            statements.append(" ".join(rendered.split()).casefold())
+            return Result()
+
+    monkeypatch.setattr(isolatedPostgres, "_connect", lambda _url: Connection())
+    monkeypatch.setattr(
+        isolatedPostgres, "_assert_connected_role", lambda *_args: None
+    )
+
+    isolatedPostgres.reset_application_tables("setup")
+
+    truncate_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("truncate table")
+    )
+    reset_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("update app.generated_preview_storage")
+    )
+    assert truncate_index < reset_index
+    reset = statements[reset_index]
+    for default in (
+        "mode = 'album_folders'",
+        "active_root = null",
+        "requested_mode = null",
+        "requested_root = null",
+        "operation_id = null",
+        "operation_state = 'idle'",
+        "revision = 0",
+        "total_count = 0",
+        "completed_count = 0",
+        "failed_count = 0",
+        "total_bytes = 0",
+        "completed_bytes = 0",
+        "cancel_requested = false",
+        "failure_summary = '[]'::jsonb",
+    ):
+        assert default in reset
+    assert "where storage_key = 1" in reset
+
+
 @pytest.mark.parametrize(
     ("probe_error", "expected_state"),
     [

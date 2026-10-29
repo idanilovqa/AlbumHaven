@@ -817,13 +817,39 @@ def reset_application_tables(setup_database_url: str) -> None:
             )
             for row in reset_owned_rows
         ]
-        if not qualified_tables:
-            return
-        connection.execute(
-            sql.SQL("truncate table {} restart identity cascade").format(
-                sql.SQL(", ").join(qualified_tables)
+        if qualified_tables:
+            connection.execute(
+                sql.SQL("truncate table {} restart identity cascade").format(
+                    sql.SQL(", ").join(qualified_tables)
+                )
             )
-        )
+        if any(
+            str(row["schemaname"]) == "app"
+            and str(row["tablename"]) == "generated_preview_storage"
+            for row in rows
+        ):
+            # The migration owns this seed row, but each test owns its mutable state.
+            connection.execute(
+                """
+                update app.generated_preview_storage
+                set mode = 'album_folders',
+                    active_root = null,
+                    requested_mode = null,
+                    requested_root = null,
+                    operation_id = null,
+                    operation_state = 'idle',
+                    revision = 0,
+                    total_count = 0,
+                    completed_count = 0,
+                    failed_count = 0,
+                    total_bytes = 0,
+                    completed_bytes = 0,
+                    cancel_requested = false,
+                    failure_summary = '[]'::jsonb,
+                    updated_at = now()
+                where storage_key = 1
+                """
+            )
 
 
 def seed_bootstrap_owner_and_library(setup_database_url: str) -> None:

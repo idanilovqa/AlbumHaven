@@ -460,6 +460,9 @@ def create_asgi_app():
                     record_generated_preview(
                         preview_storage_repository, source_path, preview_path
                     )
+                    relocation_worker = _app.state.generated_preview_relocation
+                    if relocation_worker is not None:
+                        relocation_worker.wake()
                 except Exception:
                     runtime.logger.exception(
                         "Generated preview inventory record failed for %s.",

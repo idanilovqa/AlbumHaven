@@ -246,6 +246,19 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
   );
   assert.match(sql, /Юрий Шевчук \/ ДДТ/);
   assert.match(sql, /else target_album\.id/);
+  assert.equal(
+    (
+      sql.match(
+        /from library\.local_albums\s+cross join bootstrap_context\s+where library\.local_albums\.library_id\s*=\s*bootstrap_context\.library_id/g,
+      ) || []
+    ).length,
+    4,
+    'every target album or library lookup must stay inside the bootstrap library',
+  );
+  assert.match(
+    sql,
+    /from library\.library_roots\s+cross join fixture_context\s+cross join bootstrap_context\s+where library\.library_roots\.library_id\s*=\s*bootstrap_context\.library_id/,
+  );
   assert.match(
     sql,
     /replace\(library\.local_track_files\.private_path, chr\(92\), '\/'\)/,

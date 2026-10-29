@@ -39,7 +39,7 @@ def load_cover_lookup_notification_summaries(
     return _filter_notification_tasks(adapter.load_notifications())
 
 
-def count_cover_lookup_notifications(config: dict[str, object]) -> dict[str, int]:
+def count_cover_lookup_notifications(config: dict[str, object]) -> dict[str, int | str]:
     return _cover_lookup_notifications_adapter(config).count_notifications()
 
 

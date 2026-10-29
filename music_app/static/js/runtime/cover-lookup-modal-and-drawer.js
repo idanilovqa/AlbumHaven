@@ -2613,7 +2613,13 @@ async function loadCoverLookupNotificationCounts(options = {}) {
   }
 }
 
-function mergeCoverLookupTaskSummaries(incomingTasks, mode, removedTaskIds = []) {
+function mergeCoverLookupTaskSummaries(
+  incomingTasks,
+  mode,
+  removedTaskIds = [],
+  authoritativeHasNextPage = false,
+  replaceAuthoritativePage = false,
+) {
   const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const currentById = new Map(current.map((task) => [String(task?.id || ''), task]));
   const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks).map((task) => {
@@ -2625,7 +2631,10 @@ function mergeCoverLookupTaskSummaries(incomingTasks, mode, removedTaskIds = [])
   if (mode === 'replace') return incoming;
   const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
   const removedIds = new Set(removedTaskIds.map((taskId) => String(taskId || '')).filter(Boolean));
-  const remaining = current.filter((task) => {
+  const mergeSource = mode === 'refresh' && replaceAuthoritativePage
+    ? (authoritativeHasNextPage ? current.slice(incoming.length) : [])
+    : current;
+  const remaining = mergeSource.filter((task) => {
     const taskId = String(task?.id || '');
     return !incomingIds.has(taskId) && !removedIds.has(taskId);
   });
@@ -2681,12 +2690,92 @@ async function loadCoverLookupTasks(options = {}) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
     const previousNotificationTotal = Number(state.coverLookup.notificationCounts?.total_count);
+    const previousMembershipRevision = String(
+      state.coverLookup.tasksMembershipRevision || '',
+    );
+    const responseMembershipRevision = String(data.membership_revision || '');
     updateCoverLookupNotificationCounts(data);
-    const notificationsRemoved = activeOnly
-      && Number.isFinite(previousNotificationTotal)
+    if (responseMembershipRevision) {
+      state.coverLookup.tasksMembershipRevision = responseMembershipRevision;
+    }
+    const notificationCountDecrease = Number.isFinite(previousNotificationTotal)
       && Number.isFinite(Number(data.total_count))
-      && Number(data.total_count) < previousNotificationTotal;
-    const incomingTasks = Array.isArray(data.tasks) ? data.tasks : [];
+      ? Math.max(0, previousNotificationTotal - Number(data.total_count))
+      : 0;
+    if (
+      notificationCountDecrease > 0
+      && (activeOnly || options.replaceAuthoritativePage === true)
+    ) {
+      state.coverLookup.notificationReconciliationPending = true;
+      state.coverLookup.notificationReconciliationRemovedCount = (
+        Number(state.coverLookup.notificationReconciliationRemovedCount || 0)
+        + notificationCountDecrease
+      );
+    }
+    let incomingTasks = Array.isArray(data.tasks) ? data.tasks : [];
+    let tasksNextCursor = String(data.next_cursor || '') || null;
+    const currentTaskIds = new Set(
+      (state.coverLookup.tasks || []).map((task) => String(task?.id || '')).filter(Boolean),
+    );
+    const notificationMembershipReplacement = activeOnly
+      && Number.isFinite(previousNotificationTotal)
+      && Number(data.total_count) <= previousNotificationTotal
+      && incomingTasks.some((task) => !currentTaskIds.has(String(task?.id || '')));
+    if (notificationMembershipReplacement) {
+      state.coverLookup.notificationReconciliationPending = true;
+      state.coverLookup.notificationReconciliationMembershipChanged = true;
+    }
+    if (
+      requestMode !== 'replace'
+      && options.replaceAuthoritativePage !== true
+      && previousMembershipRevision
+      && responseMembershipRevision
+      && responseMembershipRevision !== previousMembershipRevision
+    ) {
+      state.coverLookup.notificationReconciliationPending = true;
+      state.coverLookup.notificationReconciliationMembershipChanged = true;
+    }
+    const notificationReconciliationPending = options.replaceAuthoritativePage !== true
+      && state.coverLookup.notificationReconciliationPending === true;
+    const authoritativeLoadedCount = Math.min(
+      Math.max(0, Number(options.authoritativeLoadedCount || 0)),
+      Math.max(0, Number(data.total_count || 0)),
+    );
+    const removedTaskIds = new Set(
+      (options.removedTaskIds || []).map((taskId) => String(taskId || '')).filter(Boolean),
+    );
+    const removedTaskReappeared = incomingTasks.some(
+      (task) => removedTaskIds.has(String(task?.id || '')),
+    );
+    const reconcileLoadedPages = options.replaceAuthoritativePage === true
+      && (
+        !removedTaskIds.size
+        || removedTaskReappeared
+        || Number(state.coverLookup.notificationReconciliationRemovedCount || 0)
+          > removedTaskIds.size
+        || state.coverLookup.notificationReconciliationMembershipChanged === true
+      );
+    while (
+      requestMode === 'refresh'
+      && reconcileLoadedPages
+      && tasksNextCursor
+      && incomingTasks.length < authoritativeLoadedCount
+    ) {
+      const pageParams = new URLSearchParams({ limit: '50', cursor: tasksNextCursor });
+      const pageResponse = await fetch(`/utilities/cover-lookup/tasks?${pageParams.toString()}`, {
+        headers: { Accept: 'application/json' },
+      });
+      const pageData = await pageResponse.json().catch(() => ({}));
+      if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
+      if (!pageResponse.ok || !pageData.ok) {
+        throw new Error(pageData.error || 'Failed to load cover lookups');
+      }
+      incomingTasks = [
+        ...incomingTasks,
+        ...(Array.isArray(pageData.tasks) ? pageData.tasks : []),
+      ];
+      tasksNextCursor = String(pageData.next_cursor || '') || null;
+    }
     const incomingTaskIds = new Set(
       incomingTasks.map((task) => String(task?.id || '')).filter(Boolean),
     );
@@ -2698,6 +2787,8 @@ async function loadCoverLookupTasks(options = {}) {
       incomingTasks,
       requestMode,
       options.removedTaskIds,
+      Boolean(tasksNextCursor),
+      options.replaceAuthoritativePage === true,
     );
     const completesInitialHydration = !activeOnly && !state.coverLookup.tasksHydrated;
     if (!activeOnly) {
@@ -2705,7 +2796,7 @@ async function loadCoverLookupTasks(options = {}) {
       state.coverLookup.tasksLoadFailed = false;
     }
     if (requestMode !== 'active') {
-      state.coverLookup.tasksNextCursor = String(data.next_cursor || '') || null;
+      state.coverLookup.tasksNextCursor = tasksNextCursor;
     }
     const snapshot = JSON.stringify(nextTasks.map((task) => ({
       id: task.id,
@@ -2778,14 +2869,30 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
-    if (missingActiveTask || notificationsRemoved) {
-      await loadCoverLookupTasks({
+    if (missingActiveTask || notificationReconciliationPending) {
+      const loadedTaskCount = (state.coverLookup.tasks || []).length;
+      const loadedTasksMatchAuthoritativeCount = (
+        state.coverLookup.notificationReconciliationMembershipChanged !== true
+        && !state.coverLookup.tasksNextCursor
+        && loadedTaskCount === Number(data.total_count)
+      );
+      const reconciled = await loadCoverLookupTasks({
         toast: false,
         mergeFirstPage: Number(data.total_count) > 0,
-        removedTaskIds: notificationsRemoved ? Array.from(missingActiveTaskIds) : [],
+        removedTaskIds: notificationReconciliationPending
+          ? Array.from(missingActiveTaskIds)
+          : [],
+        replaceAuthoritativePage: notificationReconciliationPending,
+        authoritativeLoadedCount: loadedTasksMatchAuthoritativeCount ? 0 : loadedTaskCount,
         refreshModalGallery: options.refreshModalGallery,
       });
+      if (notificationReconciliationPending && reconciled) {
+        state.coverLookup.notificationReconciliationPending = false;
+        state.coverLookup.notificationReconciliationRemovedCount = 0;
+        state.coverLookup.notificationReconciliationMembershipChanged = false;
+      }
     }
+    return true;
   } catch (error) {
     if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     if (!activeOnly) state.coverLookup.tasksLoadFailed = true;
@@ -2794,6 +2901,7 @@ async function loadCoverLookupTasks(options = {}) {
     if (options.toast !== false) {
       showToast(error.message || 'Failed to load cover lookups.', 'error', 2800);
     }
+    return false;
   }
 }
 

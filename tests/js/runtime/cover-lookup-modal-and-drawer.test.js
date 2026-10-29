@@ -1477,6 +1477,475 @@ require('node:test')('active-only polling drops completed cards cleared by anoth
   assert.deepEqual(Array.from(context.state.coverLookup.tasks), []);
 });
 
+require('node:test')('authoritative refresh drops a completed cross-tab deletion while an active task finishes', async () => {
+  const responses = [
+    {
+      tasks: [],
+      next_cursor: null,
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+    },
+    {
+      tasks: [
+        { id: 'active-to-complete', status: 'completed' },
+        { id: 'retained', status: 'completed' },
+      ],
+      next_cursor: null,
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+    },
+  ];
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, ...responses.shift() }),
+    }),
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'active-to-complete', status: 'running' },
+    { id: 'deleted-in-another-client', status: 'completed' },
+    { id: 'retained', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 3,
+    active_count: 1,
+    finished_count: 2,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['active-to-complete', 'retained'],
+  );
+});
+
+require('node:test')('authoritative refresh reconciles a cross-tab deletion from a loaded later page', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `first-page-${index}`,
+    status: 'completed',
+  }));
+  const requestedUrls = [];
+  const responses = [
+    { tasks: [], next_cursor: null, total_count: 51, active_count: 0, finished_count: 51 },
+    { tasks: firstPage, next_cursor: 'page-two', total_count: 51, active_count: 0, finished_count: 51 },
+    {
+      tasks: [{ id: 'retained-page-two', status: 'completed' }],
+      next_cursor: null,
+      total_count: 51,
+      active_count: 0,
+      finished_count: 51,
+    },
+  ];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-active-task', status: 'running' },
+    ...firstPage,
+    { id: 'deleted-page-two', status: 'completed' },
+    { id: 'retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 53,
+    active_count: 1,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 3);
+  assert.match(requestedUrls[2], /cursor=page-two/);
+  assert.equal(context.state.coverLookup.tasks.length, 51);
+  assert.equal(context.state.coverLookup.tasks.at(-1).id, 'retained-page-two');
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('authoritative reconciliation retries after a later-page request fails', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `retry-first-page-${index}`,
+    status: 'completed',
+  }));
+  const responses = [
+    { data: { ok: true, tasks: [], total_count: 51, active_count: 0, finished_count: 51 } },
+    { data: { ok: true, tasks: firstPage, next_cursor: 'retry-page-two', total_count: 51 } },
+    { ok: false, data: { ok: false, error: 'temporary page failure' } },
+    { data: { ok: true, tasks: [], total_count: 51, active_count: 0, finished_count: 51 } },
+    { data: { ok: true, tasks: firstPage, next_cursor: 'retry-page-two', total_count: 51 } },
+    {
+      data: {
+        ok: true,
+        tasks: [{ id: 'retry-retained-page-two', status: 'completed' }],
+        total_count: 51,
+      },
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      const response = responses.shift();
+      return {
+        ok: response.ok !== false,
+        json: async () => response.data,
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    ...firstPage,
+    { id: 'retry-deleted-page-two', status: 'completed' },
+    { id: 'retry-retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 52,
+    active_count: 0,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'retry-deleted-page-two'),
+    true,
+  );
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 6);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'retry-deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('authoritative reconciliation accumulates deletions while its retry is pending', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `pending-first-page-${index}`,
+    status: 'completed',
+  }));
+  const responses = [
+    { ok: true, data: { ok: true, tasks: [], total_count: 52, active_count: 0, finished_count: 52 } },
+    { ok: false, data: { ok: false, error: 'temporary first-page failure' } },
+    { ok: true, data: { ok: true, tasks: [], total_count: 51, active_count: 0, finished_count: 51 } },
+    {
+      ok: true,
+      data: { ok: true, tasks: firstPage, next_cursor: 'pending-page-two', total_count: 51 },
+    },
+    {
+      ok: true,
+      data: {
+        ok: true,
+        tasks: [{ id: 'pending-retained-page-two', status: 'completed' }],
+        total_count: 51,
+      },
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      const response = responses.shift();
+      return { ok: response.ok, json: async () => response.data };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'pending-deleted-active', status: 'running' },
+    ...firstPage,
+    { id: 'pending-deleted-page-two', status: 'completed' },
+    { id: 'pending-retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 53,
+    active_count: 1,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 5);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'pending-deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('authoritative reconciliation includes deletions during its first-page request', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `mid-request-first-page-${index}`,
+    status: 'completed',
+  }));
+  const responses = [
+    { tasks: [], total_count: 52, active_count: 0, finished_count: 52 },
+    { tasks: firstPage, next_cursor: 'mid-request-page-two', total_count: 51 },
+    {
+      tasks: [{ id: 'mid-request-retained-page-two', status: 'completed' }],
+      total_count: 51,
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return { ok: true, json: async () => ({ ok: true, ...responses.shift() }) };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'mid-request-deleted-active', status: 'running' },
+    ...firstPage,
+    { id: 'mid-request-deleted-page-two', status: 'completed' },
+    { id: 'mid-request-retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 53,
+    active_count: 1,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 3);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'mid-request-deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('authoritative reconciliation catches equal-count notification replacement', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `replacement-first-page-${index}`,
+    status: 'completed',
+  }));
+  const newActive = { id: 'replacement-new-active', status: 'running' };
+  const responses = [
+    { tasks: [newActive], total_count: 52, active_count: 1, finished_count: 51 },
+    {
+      tasks: [newActive, ...firstPage.slice(0, 49)],
+      next_cursor: 'replacement-page-two',
+      total_count: 52,
+    },
+    {
+      tasks: [firstPage[49], { id: 'replacement-retained-page-two', status: 'completed' }],
+      total_count: 52,
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return { ok: true, json: async () => ({ ok: true, ...responses.shift() }) };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    ...firstPage,
+    { id: 'replacement-deleted-page-two', status: 'completed' },
+    { id: 'replacement-retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 52,
+    active_count: 0,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 3);
+  assert.equal(context.state.coverLookup.tasks.length, 52);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'replacement-deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('membership revision reconciles an equal-count completed notification replacement', async () => {
+  const responses = [
+    {
+      tasks: [],
+      next_cursor: null,
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-completed', status: 'completed' },
+        { id: 'retained-completed', status: 'completed' },
+      ],
+      next_cursor: null,
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-completed', status: 'completed' },
+    { id: 'retained-completed', status: 'completed' },
+  ];
+  context.state.coverLookup.tasksMembershipRevision = 'membership-old';
+  context.state.coverLookup.notificationCounts = {
+    total_count: 2,
+    active_count: 0,
+    finished_count: 2,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['new-completed', 'retained-completed'],
+  );
+  assert.equal(context.state.coverLookup.tasksMembershipRevision, 'membership-new');
+});
+
+require('node:test')('membership revision reconciles a completed replacement from a loaded later page', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `terminal-first-page-${index}`,
+    status: 'completed',
+  }));
+  const responses = [
+    {
+      tasks: [],
+      next_cursor: null,
+      total_count: 52,
+      active_count: 0,
+      finished_count: 52,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-completed', status: 'completed' },
+        ...firstPage.slice(0, 49),
+      ],
+      next_cursor: 'terminal-page-two',
+      total_count: 52,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        firstPage[49],
+        { id: 'retained-page-two', status: 'completed' },
+      ],
+      next_cursor: null,
+      total_count: 52,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    ...firstPage,
+    { id: 'deleted-page-two', status: 'completed' },
+    { id: 'retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.tasksMembershipRevision = 'membership-old';
+  context.state.coverLookup.notificationCounts = {
+    total_count: 52,
+    active_count: 0,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 3);
+  assert.match(requestedUrls[2], /cursor=terminal-page-two/);
+  assert.equal(context.state.coverLookup.tasks.length, 52);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('later-page loading cannot hide an equal-count completed replacement', async () => {
+  const responses = [
+    {
+      tasks: [{ id: 'older-completed', status: 'completed' }],
+      next_cursor: null,
+      total_count: 3,
+      active_count: 0,
+      finished_count: 3,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-completed', status: 'completed' },
+        { id: 'retained-completed', status: 'completed' },
+        { id: 'older-completed', status: 'completed' },
+      ],
+      next_cursor: null,
+      total_count: 3,
+      active_count: 0,
+      finished_count: 3,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-completed', status: 'completed' },
+    { id: 'retained-completed', status: 'completed' },
+  ];
+  context.state.coverLookup.tasksNextCursor = 'page-two';
+  context.state.coverLookup.tasksMembershipRevision = 'membership-old';
+  context.state.coverLookup.notificationCounts = {
+    total_count: 3,
+    active_count: 0,
+    finished_count: 3,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, append: true });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&cursor=page-two',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['new-completed', 'retained-completed', 'older-completed'],
+  );
+});
+
 require('node:test')('count-only polling preserves loaded history after a known card was removed', async () => {
   const history = Array.from({ length: 528 }, (_, index) => ({
     id: `history-${String(index + 1).padStart(4, '0')}`,

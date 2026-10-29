@@ -318,6 +318,56 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   assert.equal(controlSyncs, 1);
 });
 
+test('library-wide non-album tracks hydrate after artist hydration completes', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    const libraryWide = new URL(url, 'http://localhost')
+      .searchParams.get('include_library_wide_non_album') === '1';
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        non_album_tracks: [{ path: '/music/artist/loose.flac', title: 'Artist Loose' }],
+        ...(libraryWide ? {
+          library_non_album_tracks: [{ path: '/music/other/loose.flac', title: 'Library Loose' }],
+        } : {}),
+      }),
+    };
+  };
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    non_album_tracks: [],
+    library_non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+
+  await context.hydrateDeferredNonAlbumTracks();
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+
+  assert.equal(requested.length, 2);
+  assert.deepEqual(
+    Array.from(context.state.view.library_non_album_tracks, (track) => track.title),
+    ['Library Loose'],
+  );
+
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'The Other Artist',
+    non_album_tracks: [],
+    library_non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  await context.hydrateDeferredNonAlbumTracks();
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.equal(requested.length, 4);
+});
+
 test('current artist hydration reaches terminal state while library-wide hydration is pending', async () => {
   const { context } = loadHelper();
   let resolveArtistRequest;

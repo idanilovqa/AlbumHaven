@@ -320,7 +320,12 @@ def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatc
     monkeypatch.setattr(
         asgi_routes,
         "count_cover_lookup_task_notifications",
-        lambda *, config: {"total_count": 528, "active_count": 2, "finished_count": 526},
+        lambda *, config: {
+            "total_count": 528,
+            "active_count": 2,
+            "finished_count": 526,
+            "membership_revision": "membership-v2",
+        },
     )
 
     def fake_page(*, limit, cursor, active_only, config):
@@ -334,6 +339,7 @@ def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatc
                 "total_count": 528,
                 "active_count": 2,
                 "finished_count": 526,
+                "membership_revision": "membership-v2",
             },
         }
 
@@ -364,6 +370,7 @@ def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatc
         "total_count": 528,
         "active_count": 2,
         "finished_count": 526,
+        "membership_revision": "membership-v2",
     }
     assert page_status == 200
     assert _decode_json(page_body) == {
@@ -373,6 +380,7 @@ def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatc
         "total_count": 528,
         "active_count": 2,
         "finished_count": 526,
+        "membership_revision": "membership-v2",
     }
     assert page_calls[0][:3] == (50, "page-1", True)
     assert invalid_status == 400
@@ -399,14 +407,24 @@ def test_cover_lookup_notification_reads_use_threadpool_boundary(app, monkeypatc
 
     def fake_counts(*, config):
         assert inside_threadpool, "notification counts must not block the ASGI event loop"
-        return {"total_count": 1, "active_count": 0, "finished_count": 1}
+        return {
+            "total_count": 1,
+            "active_count": 0,
+            "finished_count": 1,
+            "membership_revision": "membership-v1",
+        }
 
     def fake_page(*, limit, cursor, active_only, config):
         assert inside_threadpool, "notification history must not block the ASGI event loop"
         return {
             "items": [{"id": "task-1"}],
             "next_cursor": None,
-            "counts": {"total_count": 1, "active_count": 0, "finished_count": 1},
+            "counts": {
+                "total_count": 1,
+                "active_count": 0,
+                "finished_count": 1,
+                "membership_revision": "membership-v1",
+            },
         }
 
     def fake_unpaged(*, config):
@@ -484,7 +502,12 @@ def test_asgi_cover_lookup_notification_page_preserves_each_album_payload(app, m
         lambda **_kwargs: {
             "items": items,
             "next_cursor": None,
-            "counts": {"total_count": 3, "active_count": 0, "finished_count": 3},
+            "counts": {
+                "total_count": 3,
+                "active_count": 0,
+                "finished_count": 3,
+                "membership_revision": "membership-v3",
+            },
         },
     )
 

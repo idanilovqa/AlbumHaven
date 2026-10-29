@@ -120,12 +120,24 @@ fixture_rows as materialized (
     modified_at_epoch double precision
   )
 ),
+bootstrap_context as materialized (
+  select library.libraries.id as library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1
+),
 target_album as materialized (
   select
     library.local_albums.id,
     library.local_albums.library_id
   from library.local_albums
-  where library.local_albums.title = 'Студийные записи'
+  cross join bootstrap_context
+  where library.local_albums.library_id = bootstrap_context.library_id
+    and library.local_albums.title = 'Студийные записи'
   order by
     (
       library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
@@ -328,11 +340,23 @@ fixture_context as materialized (
     'UTF8'
   ) as root_path
 ),
+bootstrap_context as materialized (
+  select library.libraries.id as library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1
+),
 fixture_root as materialized (
   select library.library_roots.id
   from library.library_roots
   cross join fixture_context
-  where library.library_roots.root_path = fixture_context.root_path
+  cross join bootstrap_context
+  where library.library_roots.library_id = bootstrap_context.library_id
+    and library.library_roots.root_path = fixture_context.root_path
     and library.library_roots.is_active
   limit 1
 ),
@@ -341,7 +365,9 @@ target_album as materialized (
     library.local_albums.id,
     library.local_albums.library_id
   from library.local_albums
-  where library.local_albums.title = 'Студийные записи'
+  cross join bootstrap_context
+  where library.local_albums.library_id = bootstrap_context.library_id
+    and library.local_albums.title = 'Студийные записи'
   order by
     (
       library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
@@ -623,12 +649,24 @@ fixture_rows as materialized (
     modified_at_epoch double precision
   )
 ),
+bootstrap_context as materialized (
+  select library.libraries.id as library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1
+),
 target_album as materialized (
   select
     library.local_albums.id,
     library.local_albums.library_id
   from library.local_albums
-  where library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
+  cross join bootstrap_context
+  where library.local_albums.library_id = bootstrap_context.library_id
+    and library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
       || '::'
       || lower('Студийные записи'::text)
     and library.local_albums.title = 'Студийные записи'
@@ -689,10 +727,22 @@ select
 \gset cleanup_
 
 with
+bootstrap_context as materialized (
+  select library.libraries.id as library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1
+),
 target_library as materialized (
   select library.local_albums.library_id
   from library.local_albums
-  where library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
+  cross join bootstrap_context
+  where library.local_albums.library_id = bootstrap_context.library_id
+    and library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
       || '::'
       || lower('Студийные записи'::text)
     and library.local_albums.title = 'Студийные записи'

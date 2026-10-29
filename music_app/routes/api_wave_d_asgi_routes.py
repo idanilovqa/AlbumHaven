@@ -769,6 +769,7 @@ async def utilities_cover_lookup_tasks(
             "total_count": counts["total_count"],
             "active_count": counts["active_count"],
             "finished_count": counts["finished_count"],
+            "membership_revision": counts["membership_revision"],
         }
     )
 

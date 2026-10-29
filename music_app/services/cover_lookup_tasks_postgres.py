@@ -86,7 +86,7 @@ class CoverLookupTasksPostgresAdapter:
             if str(summary.get("id") or "").strip()
         ]
 
-    def count_notifications(self) -> dict[str, int]:
+    def count_notifications(self) -> dict[str, int | str]:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             return _count_notifications(connection)
@@ -320,7 +320,7 @@ def _timestamp_text(value: object) -> str:
     return _text(value)
 
 
-def _count_notifications(connection: Any) -> dict[str, int]:
+def _count_notifications(connection: Any) -> dict[str, int | str]:
     row = _row_mapping(
         _first_row(
             connection.execute(
@@ -339,6 +339,7 @@ def _count_notifications(connection: Any) -> dict[str, int]:
         "total_count": int(row.get("total_count") or 0),
         "active_count": int(row.get("active_count") or 0),
         "finished_count": int(row.get("finished_count") or 0),
+        "membership_revision": _text(row.get("membership_revision")),
     }
 
 
@@ -846,7 +847,14 @@ def _count_notifications_sql() -> str:
                  and ops.cover_lookup_tasks.metadata -> 'source_payload'
                    -> 'job_contract' ->> 'job_kind' = 'save_remote_selection'
                )
-          )::int as finished_count
+          )::int as finished_count,
+          coalesce(
+            md5(string_agg(
+              ops.cover_lookup_tasks.task_key,
+              E'\\n' order by ops.cover_lookup_tasks.task_key
+            )),
+            md5('')
+          ) as membership_revision
         from ops.cover_lookup_tasks
         join bootstrap_context
           on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id

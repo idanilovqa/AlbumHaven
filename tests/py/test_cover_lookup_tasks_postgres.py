@@ -146,12 +146,22 @@ def _row(task_id: str, timestamp: str, *, status: str = "completed"):
 
 def test_count_notifications_uses_one_filtered_aggregate_query():
     connection = _Connection(
-        count_rows=[{"total_count": 528, "active_count": 3, "finished_count": 525}]
+        count_rows=[{
+            "total_count": 528,
+            "active_count": 3,
+            "finished_count": 525,
+            "membership_revision": "membership-v2",
+        }]
     )
 
     counts = _adapter(connection).count_notifications()
 
-    assert counts == {"total_count": 528, "active_count": 3, "finished_count": 525}
+    assert counts == {
+        "total_count": 528,
+        "active_count": 3,
+        "finished_count": 525,
+        "membership_revision": "membership-v2",
+    }
     count_operations = [
         item for item in connection.operations if "as active_count" in item[0]
     ]
@@ -161,6 +171,8 @@ def test_count_notifications_uses_one_filtered_aggregate_query():
     assert "source_family" in sql
     assert "job_kind" in sql
     assert "save_remote_selection" in sql
+    assert "md5(string_agg(" in sql
+    assert "ops.cover_lookup_tasks.task_key" in sql
     assert params == (
         ["pending", "running"],
         ["completed", "failed", "canceled"],
@@ -216,6 +228,7 @@ def test_load_notification_summary_page_returns_newest_first_page_and_counts():
         "total_count": 3,
         "active_count": 0,
         "finished_count": 3,
+        "membership_revision": "",
     }
     page_sql, page_params = connection.operations[-1]
     assert "offset" not in page_sql

@@ -521,7 +521,7 @@ def list_cover_lookup_task_summaries(
 
 def count_cover_lookup_task_notifications(
     *, config: Mapping[str, object]
-) -> dict[str, int]:
+) -> dict[str, int | str]:
     _reconcile_stale_cover_lookup_tasks(config=config)
     return count_cover_lookup_notifications(dict(config))
 

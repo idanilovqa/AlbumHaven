@@ -164,6 +164,16 @@ def test_live_album_identity_lineage_survives_rename_split_merge_and_restart(
         fixture.album_ids["left"],
         fixture.album_ids["right"],
     }
+    agreed_child = repository.resolve(
+        album_id=fixture.album_ids["left"],
+        album_key="lineage::old",
+    )
+    assert agreed_child["status"] == "resolved"
+    assert agreed_child["album"]["album_id"] == fixture.album_ids["left"]
+    assert repository.resolve(
+        album_id=fixture.album_ids["left"],
+        album_key="lineage::right",
+    )["status"] == "unresolved"
     chosen = repository.resolve(
         album_id=fixture.album_ids["old"],
         album_key="lineage::old",

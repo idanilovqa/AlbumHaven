@@ -49,6 +49,8 @@ def _candidate(
     matched_paths=0,
     requested_paths=0,
     track_count=None,
+    matched_by_id=True,
+    matched_by_key=True,
 ):
     candidate = {
         "album_id": album_id,
@@ -60,6 +62,8 @@ def _candidate(
         "cycle_detected": False,
         "matched_path_count": matched_paths,
         "requested_path_count": requested_paths,
+        "matched_by_id": matched_by_id,
+        "matched_by_key": matched_by_key,
     }
     if track_count is not None:
         candidate["track_count"] = track_count
@@ -94,7 +98,7 @@ def test_resolve_follows_a_merge_to_one_current_album():
     assert result["choices"] == []
 
 
-def test_resolve_treats_album_id_and_key_as_alternative_identity_evidence():
+def test_resolution_sql_tracks_album_id_and_key_as_independent_evidence():
     repository, connection = _repository([_candidate(9, "artist::current", depth=0)])
 
     result = repository.resolve(album_id=4, album_key="artist::current")
@@ -111,6 +115,81 @@ def test_resolve_treats_album_id_and_key_as_alternative_identity_evidence():
         "where (%(album_id)s::bigint is not null and albums.id = %(album_id)s::bigint) "
         "or (%(album_key)s::text is not null and albums.album_key = %(album_key)s::text)"
     ) in compact_sql
+    assert "as matched_by_id" in compact_sql
+    assert "as matched_by_key" in compact_sql
+
+
+def test_resolve_prefers_the_candidate_supported_by_both_identity_inputs():
+    repository, _connection = _repository(
+        [
+            _candidate(
+                9,
+                "artist::agreed",
+                depth=2,
+                matched_by_id=True,
+                matched_by_key=True,
+            ),
+            _candidate(
+                10,
+                "artist::key-only",
+                depth=1,
+                matched_by_id=False,
+                matched_by_key=True,
+            ),
+        ]
+    )
+
+    result = repository.resolve(album_id=4, album_key="artist::old")
+
+    assert result["status"] == "resolved"
+    assert result["album"]["album_id"] == 9
+    assert result["choices"] == []
+
+
+def test_resolve_rejects_two_live_identity_inputs_that_do_not_agree():
+    repository, _connection = _repository(
+        [
+            _candidate(9, "artist::id-only", matched_by_id=True, matched_by_key=False),
+            _candidate(10, "artist::key-only", matched_by_id=False, matched_by_key=True),
+        ]
+    )
+
+    assert repository.resolve(album_id=4, album_key="artist::current") == {
+        "status": "unresolved",
+        "album": None,
+        "choices": [],
+    }
+
+
+def test_resolve_uses_exact_paths_to_settle_disagreeing_identity_inputs():
+    repository, _connection = _repository(
+        [
+            _candidate(
+                9,
+                "artist::id-only",
+                matched_paths=2,
+                requested_paths=2,
+                matched_by_id=True,
+                matched_by_key=False,
+            ),
+            _candidate(
+                10,
+                "artist::key-only",
+                requested_paths=2,
+                matched_by_id=False,
+                matched_by_key=True,
+            ),
+        ]
+    )
+
+    result = repository.resolve(
+        album_id=4,
+        album_key="artist::current",
+        track_paths={"C:/Music/a.mp3", "C:/Music/b.mp3"},
+    )
+
+    assert result["album"]["album_id"] == 9
+    assert result["choices"] == []
 
 
 def test_resolve_returns_split_choices_without_guessing():

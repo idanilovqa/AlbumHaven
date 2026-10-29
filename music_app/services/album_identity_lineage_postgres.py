@@ -33,6 +33,8 @@ _FIELDS = (
     "matched_path_count",
     "requested_path_count",
     "track_count",
+    "matched_by_id",
+    "matched_by_key",
 )
 
 
@@ -94,6 +96,32 @@ class AlbumIdentityLineageRepository:
             if int(candidate.get("requested_path_count") or 0) > 0
             and int(candidate.get("matched_path_count") or 0)
             == int(candidate.get("requested_path_count") or 0)
+        ]
+
+        if album_id is not None and normalized_key is not None:
+            agreed = [
+                candidate
+                for candidate in live
+                if bool(candidate.get("matched_by_id"))
+                and bool(candidate.get("matched_by_key"))
+            ]
+            if agreed:
+                live = agreed
+            else:
+                id_matches = [candidate for candidate in live if candidate.get("matched_by_id")]
+                key_matches = [candidate for candidate in live if candidate.get("matched_by_key")]
+                if id_matches and key_matches:
+                    if len(complete_path_matches) != 1:
+                        return _result("unresolved")
+                    live = complete_path_matches
+                else:
+                    live = id_matches or key_matches
+
+        if not live:
+            return _result("unresolved")
+
+        complete_path_matches = [
+            candidate for candidate in complete_path_matches if candidate in live
         ]
         if len(complete_path_matches) == 1:
             live = complete_path_matches
@@ -179,7 +207,11 @@ def _resolution_sql() -> str:
               transitions.predecessor_album_id::text || ':' || transitions.predecessor_album_key,
               transitions.successor_album_id::text || ':' || transitions.successor_album_key
             ] as visited,
-            false as cycle_detected
+            false as cycle_detected,
+            (%(album_id)s::bigint is not null
+             and transitions.predecessor_album_id = %(album_id)s::bigint) as matched_by_id,
+            (%(album_key)s::text is not null
+             and transitions.predecessor_album_key = %(album_key)s::text) as matched_by_key
           from library.local_album_identity_transitions as transitions
           join active_library using (library_id)
           where (%(album_id)s::bigint is not null
@@ -199,7 +231,9 @@ def _resolution_sql() -> str:
               transitions.successor_album_id::text || ':' || transitions.successor_album_key
             ),
             (transitions.successor_album_id::text || ':' || transitions.successor_album_key)
-              = any(lineage.visited)
+              = any(lineage.visited),
+            lineage.matched_by_id,
+            lineage.matched_by_key
           from lineage
           join library.local_album_identity_transitions as transitions
             on transitions.library_id = lineage.library_id
@@ -210,27 +244,35 @@ def _resolution_sql() -> str:
         ),
         current_identity as (
           select albums.library_id, albums.id as album_id, albums.album_key, 0 as depth,
-                 false as cycle_detected
+                 false as cycle_detected,
+                 (%(album_id)s::bigint is not null
+                  and albums.id = %(album_id)s::bigint) as matched_by_id,
+                 (%(album_key)s::text is not null
+                  and albums.album_key = %(album_key)s::text) as matched_by_key
           from active_library
           join library.local_albums as albums using (library_id)
           where (%(album_id)s::bigint is not null and albums.id = %(album_id)s::bigint)
              or (%(album_key)s::text is not null and albums.album_key = %(album_key)s::text)
         ),
         live_candidates as (
-          select distinct on (albums.id)
+          select
             albums.library_id,
             albums.id as album_id,
             albums.album_key,
             albums.title,
             coalesce(artists.name, '') as album_artist,
             albums.release_year,
-            identities.depth,
-            identities.cycle_detected,
-            active_tracks.track_count
+            max(identities.depth) as depth,
+            bool_or(identities.cycle_detected) as cycle_detected,
+            active_tracks.track_count,
+            bool_or(identities.matched_by_id) as matched_by_id,
+            bool_or(identities.matched_by_key) as matched_by_key
           from (
             select * from current_identity
             union all
-            select library_id, album_id, album_key, depth, cycle_detected from lineage
+            select library_id, album_id, album_key, depth, cycle_detected,
+                   matched_by_id, matched_by_key
+            from lineage
           ) as identities
           join library.local_albums as albums
             on albums.library_id = identities.library_id
@@ -247,7 +289,8 @@ def _resolution_sql() -> str:
               and tracks.album_id = albums.id
           ) as active_tracks
           where active_tracks.track_count > 0
-          order by albums.id, identities.depth desc
+          group by albums.library_id, albums.id, albums.album_key, albums.title,
+                   artists.name, albums.release_year, active_tracks.track_count
         ),
         requested_paths as (
           select distinct requested_path as private_path
@@ -287,7 +330,9 @@ def _resolution_sql() -> str:
           invalid_lineage.invalid as cycle_detected,
           coalesce(path_matches.matched_path_count, 0) as matched_path_count,
           cardinality(%(track_paths)s::text[]) as requested_path_count,
-          live_candidates.track_count
+          live_candidates.track_count,
+          live_candidates.matched_by_id,
+          live_candidates.matched_by_key
         from live_candidates
         cross join invalid_lineage
         left join path_matches on path_matches.album_id = live_candidates.album_id
@@ -295,7 +340,7 @@ def _resolution_sql() -> str:
         union all
 
         select null, null, null, null, null, 16, true, 0,
-               cardinality(%(track_paths)s::text[]), null
+               cardinality(%(track_paths)s::text[]), null, false, false
         from invalid_lineage
         where invalid_lineage.invalid is true;
     """

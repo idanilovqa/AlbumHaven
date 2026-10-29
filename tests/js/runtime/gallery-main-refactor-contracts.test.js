@@ -213,7 +213,7 @@ test('an open Album Types menu hydrates deferred loose tracks after navigation c
     document: {
       querySelectorAll: () => [],
       querySelector: () => null,
-      getElementById: () => null,
+      getElementById: id => id === 'gallery-album-types-menu' ? surface : null,
       body: { appendChild() {} },
     },
   });
@@ -223,6 +223,7 @@ test('an open Album Types menu hydrates deferred loose tracks after navigation c
   context.openGalleryMainSurface('album-types', anchor, surface);
 
   view.non_album_tracks_deferred = true;
+  vm.runInContext('galleryMainSurfaceController = createAnchoredSurfaceController()', context);
   context.updateGalleryMainControls();
   await Promise.resolve();
 

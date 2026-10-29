@@ -675,7 +675,7 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
             join library.local_albums album on album.id = f.album_id
             where album.album_key = 'owner::repair album' and f.featured_kind = 'featured_track_artist'
         """).fetchall()
-    assert {row["name"] for row in rows} == ({"Owner", "New Guest", "Retained Guest"} if operation == "update" else {"Owner", "Retained Guest"})
+    assert {row["name"] for row in rows} == ({"New Guest", "Retained Guest"} if operation == "update" else {"Retained Guest"})
     if operation == "delete":
         Path(untouched["path"]).unlink()
         fixture.adapter.persist_targeted_inventory_mutation(

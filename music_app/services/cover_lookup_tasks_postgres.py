@@ -29,6 +29,7 @@ _PROVIDER_PAYLOAD_KEYS = (
     "possible_matches",
     "manual_urls",
     "selected_candidate_id",
+    "save_generation",
     "caa_empty_notice",
     "job_contract",
 )
@@ -710,6 +711,7 @@ def _load_notification_summaries_sql() -> str:
                 'cancel_requested', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'cancel_requested',
                 'caa_empty_notice', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'caa_empty_notice',
                 'selected_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'selected_candidate_id',
+                'save_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'save_generation',
                 'best_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'best_candidate_id',
                 'candidate_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_revision',
                 'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at'
@@ -889,6 +891,7 @@ def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) 
               'cancel_requested', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'cancel_requested',
               'caa_empty_notice', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'caa_empty_notice',
               'selected_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'selected_candidate_id',
+              'save_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'save_generation',
               'best_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'best_candidate_id',
               'candidate_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_revision',
               'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at',

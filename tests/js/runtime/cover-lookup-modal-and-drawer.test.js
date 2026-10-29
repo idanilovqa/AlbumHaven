@@ -2648,6 +2648,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   const lifecycleCalls = [];
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
     showToast: () => {},
   });
   context.state.coverLookup.modal = {
@@ -2662,23 +2663,64 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   };
   context.state.coverLookup.tasks = [
     { id: 'newer-task', status: 'completed' },
-    { id: 'remote-save-task', status: 'completed', notification_action_taken: false },
+    {
+      id: 'remote-save-task',
+      status: 'completed',
+      result_kind: 'cover-updated',
+      selected_candidate_id: 'candidate-1',
+      save_generation: 'old-save',
+      notification_action_taken: false,
+    },
     { id: 'older-task', status: 'completed' },
   ];
-  context.applyOptimisticRemoteCoverSelection = () => {};
+  context.state.coverLookup.optimisticAlbumCovers = { album: 'previous-cover' };
+  context.applyOptimisticRemoteCoverSelection = () => {
+    context.state.coverLookup.optimisticAlbumCovers.album = 'optimistic-cover';
+    return album;
+  };
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
   context.closeCoverLookupModal = () => {};
   context.fetch = async (url, options) => {
     fetchCalls.push({ url, options });
+    if (String(url).startsWith('/utilities/cover-lookup/tasks?')) {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{
+            id: 'remote-save-task',
+            status: 'completed',
+            result_kind: 'cover-updated',
+            selected_candidate_id: 'candidate-1',
+            save_generation: 'old-save',
+          }],
+          total_count: 1,
+          active_count: 0,
+          finished_count: 1,
+        }),
+      };
+    }
     return {
       ok: true,
-      json: async () => ({ ok: true, queued: true }),
+      json: async () => ({
+        ok: true,
+        queued: true,
+        task: {
+          id: 'remote-save-task',
+          status: 'running',
+          result_kind: '',
+          selected_candidate_id: 'candidate-1',
+          save_generation: 'new-save',
+          notification_action_taken: false,
+        },
+      }),
     };
   };
-  context.loadCoverLookupTasks = async () => lifecycleCalls.push('reload');
   context.markCoverLookupTaskActionTaken = (taskId) => {
     markCalls.push(taskId);
     const task = context.state.coverLookup.tasks.find((item) => item.id === taskId);
-    if (task) task.notification_action_taken = true;
+    if (task?.status === 'completed') task.notification_action_taken = true;
   };
   context.ensureCoverLookupPolling = () => lifecycleCalls.push('poll');
   context.renderCoverLookupDrawer = () => lifecycleCalls.push('render');
@@ -2698,9 +2740,24 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     'remote-save-task',
     'older-task',
   ]);
-  assert.equal(context.state.coverLookup.tasks[1].status, 'completed');
-  assert.equal(context.state.coverLookup.tasks[1].notification_action_taken, true);
+  assert.equal(context.state.coverLookup.tasks[1].status, 'running');
+  assert.equal(context.state.coverLookup.tasks[1].result_kind, '');
+  assert.equal(context.state.coverLookup.tasks[1].save_generation, 'new-save');
+  assert.equal(context.state.coverLookup.tasks[1].notification_action_taken, false);
   assert.deepEqual(lifecycleCalls, ['poll', 'render']);
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  assert.ok(fetchCalls.length >= 2);
+  assert.ok(fetchCalls.some((call) => /active_only=true/.test(call.url)));
+  assert.equal(context.state.coverLookup.tasks[1].status, 'running');
+  assert.equal(context.state.coverLookup.tasks[1].save_generation, 'new-save');
+  context.applyCoverLookupTaskUpdates({
+    id: 'remote-save-task',
+    status: 'failed',
+    save_generation: 'new-save',
+    message: 'save failed',
+  });
+  assert.equal(context.state.coverLookup.optimisticAlbumCovers.album, 'previous-cover');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

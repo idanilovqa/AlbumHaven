@@ -3587,7 +3587,68 @@ def test_asgi_album_details_resolves_a_stale_identity_through_shared_lineage(
         "key": "artist::current",
     }
     assert lineage_calls == [{"album_id": 17, "album_key": "artist::old"}]
-    assert detail_calls == [(92, "private_web")]
+    assert detail_calls == [(17, "private_web"), (92, "private_web")]
+
+
+def test_asgi_album_details_uses_matching_current_id_and_key_before_lineage(
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    class FakeBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            assert (album_id, client_surface_class) == (17, "private_web")
+            return {"album_id": 17, "key": "artist::current"}
+
+    class FailLineageRepository:
+        def __init__(self, _config):
+            raise AssertionError("A matching current album identity must not consult lineage")
+
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakeBrowseRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "AlbumIdentityLineageRepository",
+        FailLineageRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "_repair_album_detail_cover_identity",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type(
+            "Selection",
+            (),
+            {"seam_id": seam_id, "effective_backend": "postgres"},
+        )(),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/album-details",
+        query={"album_key": "artist::current", "album_id": "17"},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {
+        "ok": True,
+        "album": {"album_id": 17, "key": "artist::current"},
+    }
 
 
 def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
@@ -3623,11 +3684,24 @@ def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
         def resolve(self, **_identity):
             return {"status": "split", "album": None, "choices": choices}
 
+    class FakeBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            assert (album_id, client_surface_class) == (17, "private_web")
+            return {"album_id": 17, "key": "artist::left"}
+
     monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
     monkeypatch.setattr(
         asgi_read_routes,
         "AlbumIdentityLineageRepository",
         FakeLineageRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakeBrowseRepository,
     )
     monkeypatch.setattr(
         asgi_read_routes,

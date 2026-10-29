@@ -64,7 +64,22 @@ def track_artist_credit_members(value: object, album_owner: object) -> list[str]
                 if not same_artist_credit_spelling(owner, member)
             ),
         ]
-    return members
+    shared_parts = [
+        part.strip() for part in _STABLE_ARTIST_COMPOSITE_RE.split(text) if part.strip()
+    ]
+    if (
+        len(shared_parts) == 2
+        and not all(part.isdecimal() for part in shared_parts)
+        and ";" not in text
+        and _OWNER_LED_FEATURE_RE.match(text) is None
+        and (
+            same_artist_credit_spelling(owner, text)
+            or any(same_artist_credit_spelling(owner, part) for part in shared_parts)
+        )
+    ):
+        members = shared_parts
+
+    return [_NUMERIC_ARTIST_SLASH_RE.sub("/", member) for member in members]
 
 
 def deduplicate_repeated_album_artist_members(value: object) -> list[str]:

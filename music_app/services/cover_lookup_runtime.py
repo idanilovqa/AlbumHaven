@@ -281,6 +281,7 @@ def queue_cover_lookup_save_remote_task(
     logger,
     library_state: dict[str, object],
     user_agent: str | None = None,
+    save_generation: str,
     cover_selection_origin: str = "user",
     notification_action_taken: bool = True,
     apply_cover_selection_for_tracks,
@@ -296,6 +297,8 @@ def queue_cover_lookup_save_remote_task(
         message="Saving selected cover art.",
         result_kind="",
         finished_at=None,
+        selected_candidate_id=candidate_id,
+        save_generation=save_generation,
         job_contract=build_cover_lookup_job_contract("save_remote_selection"),
     )
     future = _COVER_LOOKUP_SAVE_EXECUTOR.submit(

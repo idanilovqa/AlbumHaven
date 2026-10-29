@@ -753,6 +753,7 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
         logger=logger,
         library_state=library_state,
         user_agent="ExplicitAgent/2.0",
+        save_generation="save-generation-1",
         apply_cover_selection_for_tracks=fake_apply_cover_selection_for_tracks,
     )
 
@@ -781,6 +782,10 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
     assert calls["registered"] == ("task-123", "fake-future")
     assert calls["task_update"][0] == "task-123"
     assert calls["task_update"][1]["status"] == "running"
+    assert calls["task_update"][1]["result_kind"] == ""
+    assert calls["task_update"][1]["finished_at"] is None
+    assert calls["task_update"][1]["selected_candidate_id"] == "candidate-1"
+    assert calls["task_update"][1]["save_generation"] == "save-generation-1"
     assert calls["task_update"][1]["progress_label"] == "Saving art"
     assert calls["task_update"][1]["job_contract"]["job_kind"] == "save_remote_selection"
 

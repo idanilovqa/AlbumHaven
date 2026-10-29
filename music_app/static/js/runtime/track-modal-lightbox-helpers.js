@@ -563,7 +563,15 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+  let refreshedAlbum = null;
+  let loadError = null;
+  try {
+    refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
+      albumId: openAlbum.album_id || openAlbum.id,
+    });
+  } catch (error) {
+    loadError = error;
+  }
   const currentAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
   if (
     els.overlay.hidden
@@ -573,6 +581,10 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
       && getTrackModalAlbumVersionKey(currentAlbum) !== albumVersionKey
     )
   ) return false;
+  if (loadError) {
+    if (renderTrackModalIdentitySplitChoices(loadError.currentReleases)) return true;
+    throw loadError;
+  }
   refreshOpenTrackModalVersionState(albumKey, refreshedAlbum);
   return true;
 }

@@ -574,6 +574,7 @@ def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
             "album_title": "Studio Records",
             "artist_key": "yuri shevchuk / ddt",
         }],
+        separate_release_keys=set(),
     )
 
     assert album_rows[0] == {
@@ -587,7 +588,17 @@ def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
     assert track_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
 
 
-def test_targeted_album_rows_keep_an_automatic_year_identity():
+@pytest.mark.parametrize(
+    ("separate_release_keys", "expected_key"),
+    [
+        (set(), "owner::album"),
+        ({"owner::album"}, "owner::album::year::2001"),
+    ],
+)
+def test_targeted_album_rows_remap_automatic_year_identity_only_when_not_explicit(
+    separate_release_keys,
+    expected_key,
+):
     from music_app.services.scan_cache_persistence import (
         _remap_targeted_album_identity_rows,
     )
@@ -620,11 +631,12 @@ def test_targeted_album_rows_keep_an_automatic_year_identity():
                 "release_year": 2001,
             }
         ],
+        separate_release_keys=separate_release_keys,
     )
 
-    assert album_rows[0]["album_key"] == year_key
-    assert featured_rows[0]["album_key"] == year_key
-    assert track_rows[0]["album_key"] == year_key
+    assert album_rows[0]["album_key"] == expected_key
+    assert featured_rows[0]["album_key"] == expected_key
+    assert track_rows[0]["album_key"] == expected_key
 
 
 def test_targeted_album_rows_keep_existing_identity_for_unresolved_track_years():
@@ -668,6 +680,7 @@ def test_targeted_album_rows_keep_existing_identity_for_unresolved_track_years()
             }
             for path in paths
         ],
+        separate_release_keys=set(),
     )
 
     assert album_rows[0]["album_key"] == existing_key
@@ -707,6 +720,7 @@ def test_targeted_album_rows_accept_an_external_album_artist_correction():
             "album_title": "Studio Records",
             "artist_key": "old artist",
         }],
+        separate_release_keys=set(),
     )
 
     assert album_rows[0]["artist_key"] == "new artist"

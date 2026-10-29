@@ -1785,7 +1785,16 @@ def test_full_snapshot_adopts_existing_unseparated_semantic_album_key(
         assert adopted["cover_rows"] == [
             {
                 "album_key": incoming_album_key,
-                "metadata": {"cover": "preserved"},
+                "metadata": {
+                    "cover": "preserved",
+                    "source_payload": {
+                        "album_payload": {
+                            "id": legacy_album_id,
+                            "album_id": legacy_album_id,
+                            "key": incoming_album_key,
+                        }
+                    },
+                },
             }
         ]
         assert adopted["track_rows"] == [

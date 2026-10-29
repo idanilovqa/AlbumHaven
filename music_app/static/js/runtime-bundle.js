@@ -6884,7 +6884,8 @@ function updateGalleryMainControls() {
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
   }
-  if (galleryMainSurfaceController?.current?.()?.key === 'album-types') {
+  if (galleryMainSurfaceController?.current?.()?.key === 'album-types'
+      || document.getElementById?.('gallery-album-types-menu')?.hidden === false) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
   }
   document.querySelectorAll('[data-gallery-source]').forEach((button) => {
@@ -13248,7 +13249,15 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+  let refreshedAlbum = null;
+  let loadError = null;
+  try {
+    refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
+      albumId: openAlbum.album_id || openAlbum.id,
+    });
+  } catch (error) {
+    loadError = error;
+  }
   const currentAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
   if (
     els.overlay.hidden
@@ -13258,6 +13267,10 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
       && getTrackModalAlbumVersionKey(currentAlbum) !== albumVersionKey
     )
   ) return false;
+  if (loadError) {
+    if (renderTrackModalIdentitySplitChoices(loadError.currentReleases)) return true;
+    throw loadError;
+  }
   refreshOpenTrackModalVersionState(albumKey, refreshedAlbum);
   return true;
 }
@@ -31365,9 +31378,15 @@ async function loadCoverLookupNotificationCounts(options = {}) {
 }
 
 function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
-  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks);
-  if (mode === 'replace') return incoming;
   const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const currentById = new Map(current.map((task) => [String(task?.id || ''), task]));
+  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks).map((task) => {
+    if (isStalePendingRemoteSaveUpdate(task)) {
+      return currentById.get(String(task?.id || '')) || task;
+    }
+    return task;
+  });
+  if (mode === 'replace') return incoming;
   const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
   const remaining = current.filter((task) => !incomingIds.has(String(task?.id || '')));
   if (mode === 'active') {
@@ -31639,6 +31658,7 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
   const taskId = String(task?.id || '');
   const pendingRemoteSave = coverLookupPendingRemoteSaves.get(taskId);
   const taskStatus = String(task?.status || '');
+  if (isStalePendingRemoteSaveUpdate(task)) return;
   if (pendingRemoteSave && ['failed', 'canceled'].includes(taskStatus)) {
     coverLookupPendingRemoteSaves.delete(taskId);
     if (
@@ -31704,6 +31724,17 @@ function invalidateCoverLookupGalleryCache(album) {
 const coverLookupPendingLocalMutations = new Set();
 const coverLookupPendingRemoteSaves = new Map();
 const coverLookupSeenRequests = new WeakMap();
+
+function isStalePendingRemoteSaveUpdate(task) {
+  const pendingGeneration = String(
+    coverLookupPendingRemoteSaves.get(String(task?.id || ''))?.saveGeneration || '',
+  );
+  return Boolean(
+    pendingGeneration
+    && ['completed', 'failed', 'canceled'].includes(String(task?.status || ''))
+    && String(task?.save_generation || '') !== pendingGeneration
+  );
+}
 
 function isCoverLookupLocalMutationPending(album = state.coverLookup.modal.album) {
   return coverLookupPendingLocalMutations.size > 0
@@ -32288,6 +32319,26 @@ async function saveRemoteCoverFromLookup() {
       : null;
     const acceptedTaskId = String(data.task?.id || taskId || '').trim();
     if (acceptedTaskId && selectedMatch) {
+      const acceptedTask = data.task && typeof data.task === 'object' ? data.task : null;
+      if (acceptedTask) {
+        const optimisticPreviewUrl = String(
+          optimisticAlbum && typeof buildAlbumDisplayCoverUrl === 'function'
+            ? buildAlbumDisplayCoverUrl(optimisticAlbum)
+            : '',
+        ).trim();
+        state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
+          String(task?.id || '') === acceptedTaskId
+            ? {
+              ...task,
+              ...acceptedTask,
+              current_user_cover_preview_url: optimisticPreviewUrl
+                || acceptedTask.current_user_cover_preview_url
+                || task.current_user_cover_preview_url
+                || '',
+            }
+            : task
+        ));
+      }
       const optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
         .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover);
       coverLookupPendingRemoteSaves.set(acceptedTaskId, {
@@ -32297,6 +32348,7 @@ async function saveRemoteCoverFromLookup() {
         previousOptimisticCover: optimisticEntry
           ? previousOptimisticCovers[optimisticEntry[0]]
           : undefined,
+        saveGeneration: String(data.task?.save_generation || ''),
       });
       markCoverLookupTaskActionTaken(acceptedTaskId, optimisticAlbum || album, { persist: false });
     }

@@ -55,12 +55,14 @@ def test_notification_rows_keep_the_authoritative_album_key():
             "artist": "Artist",
             "album": "Album",
             "year": 2026,
+            "save_generation": "save-generation-1",
             "album_payload": {"key": "artist::album::year::2026"},
         },
         source_index=0,
     )
 
     assert row["album_key"] == "artist::album::year::2026"
+    assert row["provider_payload"]["save_generation"] == "save-generation-1"
 
 
 def test_load_notification_reads_one_full_persisted_task_by_id():

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import logging
 from threading import Event
 from time import perf_counter
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -1741,6 +1741,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             "display_only": str(selected_match.get("source") or "").strip().casefold()
             in DISPLAY_ONLY_REMOTE_SOURCES,
         }
+    save_generation = uuid4().hex
     update_cover_lookup_task(
         task_id,
         config=config,
@@ -1750,6 +1751,11 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             "progress": 92,
             "progress_label": "Saving selected cover art...",
             "selected_candidate_id": candidate_id,
+            "save_generation": save_generation,
+            "result_kind": "",
+            "finished_at": None,
+            "updated_albums": [],
+            "updated_problematic_album": None,
             "notification_completed_at": str(
                 task_payload.get("notification_completed_at")
                 or task_payload.get("finished_at")
@@ -1786,6 +1792,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         logger=logger,
         library_state=library_state,
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+        save_generation=save_generation,
         cover_selection_origin="user",
         notification_action_taken=notification_action_taken,
         apply_cover_selection_for_tracks=apply_cover_path_for_tracks,

@@ -918,6 +918,44 @@ test('inventory mutation refresh rehydrates the album that is still open', async
   assert.deepEqual(refreshed, [{ albumKey: 'watcher-album', album: fresh }]);
 });
 
+test('inventory mutation refresh renders current releases when the open album split', async () => {
+  const stale = {
+    album_id: 17,
+    key: 'artist::old',
+    request_key: 'artist::old',
+    name: 'Old Album',
+    preview_only: false,
+    tracks: [{ path: 'one' }, { path: 'two' }],
+  };
+  const choices = [
+    { album_id: 92, album_key: 'artist::left', name: 'Left Album', track_count: 1 },
+    { album_id: 93, album_key: 'artist::right', name: 'Right Album', track_count: 1 },
+  ];
+  const { context } = loadHelper({
+    initialAlbums: [stale],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        ok: false,
+        error: 'This album was split—choose the current release',
+        resolution_kind: 'album_split',
+        current_releases: choices,
+      }),
+    }),
+  });
+  context.state.modalReleases = [stale];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
+  assert.match(
+    context.getTrackModalElements().list.innerHTML,
+    /data-track-modal-current-release="92"[\s\S]*Left Album[\s\S]*data-track-modal-current-release="93"[\s\S]*Right Album/,
+  );
+});
+
 test('in-flight details preserve an optimistic owner across inventory revisions until settlement', async () => {
   const preview = { key: 'owned-album', name: 'Owned Album', preview_only: true, tracks: [] };
   const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };

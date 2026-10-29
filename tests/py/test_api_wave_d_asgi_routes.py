@@ -3855,7 +3855,7 @@ def test_asgi_cover_lookup_save_remote_keeps_action_taken_through_background_com
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.flask_app = _FatalFlaskBridge()
 
-    status, _headers, _body = _run_asgi_request(
+    status, _headers, body = _run_asgi_request(
         asgi_app,
         "POST",
         "/utilities/cover-lookup/save-remote",
@@ -3877,8 +3877,15 @@ def test_asgi_cover_lookup_save_remote_keeps_action_taken_through_background_com
     )
 
     assert status == 200
+    response_task = _decode_json(body)["task"]
+    assert response_task["status"] == "running"
+    assert response_task["result_kind"] == ""
+    assert response_task["finished_at"] is None
+    assert response_task["save_generation"]
+    assert queued_calls[0]["save_generation"] == response_task["save_generation"]
     assert queued_calls[0]["notification_action_taken"] is True
     assert queued_task["status"] == "running"
+    assert queued_task["save_generation"] == response_task["save_generation"]
     assert queued_task["notification_action_taken"] is False
     completed_task = next(
         task for task in cover_lookup_tasks.list_cover_lookup_tasks(config=app.config) if task["id"] == task_id

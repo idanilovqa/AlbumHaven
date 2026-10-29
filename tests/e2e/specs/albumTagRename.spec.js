@@ -81,6 +81,12 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
       FIXTURE_ARTIST,
       FAILURE_FIXTURE_ALBUM,
     );
+    await staleSplitSession.galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: FAILURE_FIXTURE_ALBUM,
+      year: FIXTURE_YEAR,
+    });
+    await staleSplitSession.trackModalActions.waitForInteractiveSummary();
   });
 
   await stepLogger.step('Split both tracks into distinct current releases', async () => {
@@ -116,11 +122,6 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
   });
 
   await stepLogger.step('Resolve the stale source card through the visible split selector', async () => {
-    await staleSplitSession.galleryActions.selectAlbumDetailsByIdentity({
-      artist: FIXTURE_ARTIST,
-      album: FAILURE_FIXTURE_ALBUM,
-      year: FIXTURE_YEAR,
-    });
     await staleSplitSession.trackModalActions.waitForIdentitySplitChoices([
       LINEAGE_SPLIT_ALBUM_A,
       LINEAGE_SPLIT_ALBUM_B,
@@ -141,6 +142,12 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
       FIXTURE_ARTIST,
       LINEAGE_SPLIT_ALBUM_A,
     );
+    await staleMergeSession.galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: LINEAGE_SPLIT_ALBUM_A,
+      year: FIXTURE_YEAR,
+    });
+    await staleMergeSession.trackModalActions.waitForInteractiveSummary();
   });
 
   await stepLogger.step('Merge both descendants back and follow the stale child card', async () => {
@@ -157,11 +164,6 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
     expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
     await trackModalActions.closeIfOpen();
 
-    await staleMergeSession.galleryActions.selectAlbumDetailsByIdentity({
-      artist: FIXTURE_ARTIST,
-      album: LINEAGE_SPLIT_ALBUM_A,
-      year: FIXTURE_YEAR,
-    });
     const mergedSummary = await staleMergeSession.trackModalActions.waitForInteractiveSummary();
     expect(mergedSummary.title).toBe(albumDetailsTitle(FAILURE_FIXTURE_ALBUM));
     expect(mergedSummary.trackRows).toBe(1);

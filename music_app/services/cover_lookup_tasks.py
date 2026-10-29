@@ -83,6 +83,7 @@ _COVER_LOOKUP_LIST_TASK_FIELDS = (
     "cancel_requested",
     "caa_empty_notice",
     "selected_candidate_id",
+    "save_generation",
     "best_candidate_id",
     "candidate_revision",
     "candidate_updated_at",

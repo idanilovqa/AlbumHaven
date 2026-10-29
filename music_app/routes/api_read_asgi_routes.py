@@ -1046,7 +1046,18 @@ async def album_details(request: Request) -> JSONResponse:
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         payload = None
-        if album_id is None:
+        if album_id is not None:
+            current_payload = await run_in_threadpool(
+                repository.build_album_detail_payload_by_id,
+                album_id,
+                client_surface_class=client_surface_class,
+            )
+            if current_payload is not None and (
+                not album_key
+                or str(current_payload.get("key") or "").strip() == album_key
+            ):
+                payload = current_payload
+        else:
             payload = await run_in_threadpool(
                 repository.build_album_detail_payload,
                 album_key,

@@ -415,6 +415,7 @@ class PostgresScanCacheAdapter:
                 featured_artist_rows=featured_artist_rows,
                 track_rows=track_rows,
                 existing_memberships=existing_memberships,
+                separate_release_keys=separate_release_keys,
             )
             _execute_semantic_local_album_key_adoptions(connection, album_rows)
             affected_album_keys = {
@@ -2780,6 +2781,7 @@ def _remap_targeted_album_identity_rows(
     featured_artist_rows: list[dict[str, object]],
     track_rows: list[dict[str, object]],
     existing_memberships: list[dict[str, object]],
+    separate_release_keys: set[str],
 ) -> None:
     """Keep established album keys when watcher context still names that album."""
     albums_by_key = {
@@ -2817,7 +2819,11 @@ def _remap_targeted_album_identity_rows(
             generated_artist_key, generated_title, generated_edition,
         )
         generated_year_is_unresolved = generated_key.endswith("::year::unresolved")
-        if generated_key != release_key and not generated_year_is_unresolved:
+        if (
+            generated_key != release_key
+            and not generated_year_is_unresolved
+            and release_key in separate_release_keys
+        ):
             continue
         if (
             generated_artist_key

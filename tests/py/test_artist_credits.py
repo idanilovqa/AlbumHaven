@@ -12,6 +12,17 @@ from music_app.services.artist_credits import track_artist_credit_members
         ("Maroon 5; Nipsey Hussle; YG", "Maroon 5", ["Maroon 5", "Nipsey Hussle", "YG"]),
         ("Jason Derulo; Adam Levine", "Maroon 5", ["Jason Derulo", "Adam Levine"]),
         ("Ногу Свело! feat 25 / 17", "Ногу Свело!", ["Ногу Свело!", "25/17"]),
+        ("25 / 17", "25 / 17", ["25/17"]),
+        (
+            "Charlotte Wessels / Simone Simons",
+            "Charlotte Wessels",
+            ["Charlotte Wessels", "Simone Simons"],
+        ),
+        (
+            "Jordsjø / Breidablik",
+            "Jordsjø / Breidablik",
+            ["Jordsjø", "Breidablik"],
+        ),
         ("Owner feat Guest / Partner", "Owner", ["Owner", "Guest / Partner"]),
         ("Owner feat. Fire & Ash", "Owner", ["Owner", "Fire & Ash"]),
         ("Owner feat. To/Die/For", "Owner", ["Owner", "To/Die/For"]),

@@ -9,6 +9,7 @@
   const actionButtonPresentations = new Set(['outlined', 'bare']);
   // Trusted decorative fragments; the fixed registry is mirrored by the Jinja ui_icon macro.
   const iconMarkup = Object.freeze({
+    'target-tools': '<circle cx="9" cy="9" r="7"/><circle cx="9" cy="9" r="3"/><path d="m9 9 5-5M17 13a3 3 0 0 0 4 4l-5 5-3-3 5-5a3 3 0 0 0 3-3l-2 2-2-1 1-2"/>',
     tools: '<path d="m4 3 3 1 2 3-2 2-3-2-1-3 1-1Zm4 5 12 12M15 4a5 5 0 0 0 5 7l-9 9a3 3 0 0 1-4-4l9-9a5 5 0 0 0 4-5l-3 3-3-1 1-3"/>',
     megaphone: '<path d="M4 9h5l10-5v16L9 15H4V9Zm5 6 2 6H7l-2-6M22 9v6"/>',
     calendar: '<path d="M4 5h16v15H4V5ZM8 3v4M16 3v4M4 10h16"/>',

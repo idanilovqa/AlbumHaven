@@ -1,3 +1,4 @@
+import {normalizeWeeklyRead, normalizeWeeklyPreview} from './goals-weekly-settings-model.mjs';
 // Home continuity is a delivery fence, never the ownership of account Goals.
 export const GOAL_PERIODS = Object.freeze(['week', 'month', 'six-months', 'year']);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -60,10 +61,12 @@ export function normalizeGoals(value) {
   const refs = new Set(), albums = value.albums.map(row => {
     if (!object(row) || !uuid(row.catalog_ref) || refs.has(row.catalog_ref)
       || !['title', 'artist_display'].every(key => typeof row[key] === 'string' && row[key].length > 0)
-      || !['first_release_date', 'primary_type'].every(key => row[key] === null || typeof row[key] === 'string')) fail();
+      || !['first_release_date', 'primary_type'].every(key => row[key] === null || typeof row[key] === 'string')
+      || Object.hasOwn(row, 'completion_mode') && !['manual', 'rating'].includes(row.completion_mode)) fail();
     refs.add(row.catalog_ref);
     return {catalog_ref: row.catalog_ref, title: row.title, artist_display: row.artist_display,
-      first_release_date: row.first_release_date, primary_type: row.primary_type};
+      first_release_date: row.first_release_date, primary_type: row.primary_type,
+      ...(Object.hasOwn(row, 'completion_mode') ? {completion_mode: row.completion_mode} : {})};
   });
   const periods = {};
   for (const period of GOAL_PERIODS) {
@@ -72,14 +75,23 @@ export function normalizeGoals(value) {
       || new Set(source.album_refs).size !== source.album_refs.length || source.album_refs.some(ref => !refs.has(ref))
       || source.total !== source.album_refs.length || !Number.isSafeInteger(source.completed) || source.completed < 0
       || source.completed > source.total || !object(source.manual_completed_at)) fail();
-    const marks = {};
+    const hasModes = Object.hasOwn(source, 'completion_modes');
+    if (hasModes && (!object(source.completion_modes) || Object.keys(source.completion_modes).length !== source.total
+      || source.album_refs.some(ref => !['manual', 'rating'].includes(source.completion_modes[ref])))) fail();
+    const marks = {}, ratings = {}, hasRatings = Object.hasOwn(source, 'rated_at');
+    if (hasRatings && (!object(source.rated_at) || Object.keys(source.rated_at).length !== source.total)) fail();
     for (const ref of source.album_refs) {
       const mark = source.manual_completed_at[ref];
       if (mark !== null && (typeof mark !== 'string' || !Number.isFinite(Date.parse(mark)))) fail();
       marks[ref] = mark;
+      if (hasRatings) {
+        const rating = source.rated_at[ref];
+        if (rating !== null && (typeof rating !== 'string' || !Number.isFinite(Date.parse(rating)))) fail();
+        ratings[ref] = rating;
+      }
     }
     if (Object.keys(source.manual_completed_at).length !== source.total
-      || Object.values(marks).filter(mark => mark !== null).length !== source.completed) fail();
+      || source.album_refs.filter(ref => marks[ref] !== null || hasRatings && ratings[ref] !== null).length !== source.completed) fail();
     let cycle = null;
     if (source.cycle !== null) {
       const row = source.cycle;
@@ -90,6 +102,8 @@ export function normalizeGoals(value) {
         due_date: row.due_date, timezone_name: row.timezone_name};
     } else if (source.total !== 0) fail();
     periods[period] = {period, cycle, album_refs: [...source.album_refs], manual_completed_at: marks,
+      ...(hasRatings ? {rated_at: ratings} : {}),
+      ...(hasModes ? {completion_modes: {...source.completion_modes}} : {}),
       total: source.total, completed: source.completed};
   }
   if (value.goal_ref === null && (value.revision !== '1' || albums.length || GOAL_PERIODS.some(period => periods[period].cycle))) fail();
@@ -124,7 +138,7 @@ export function normalizeBonusSettings(value) {
 }
 export function normalizeCurrentBonus(value) {
   if (!exactKeys(value, ['cycle_id', 'bonus', 'manual_count']) || !(value.cycle_id === null || uuid(value.cycle_id))
-    || !Number.isSafeInteger(value.manual_count) || value.manual_count < 0 || value.manual_count > 5) fail();
+    || !Number.isSafeInteger(value.manual_count) || value.manual_count < 0 || value.manual_count > 7) fail();
   if (value.bonus !== null && (!exactKeys(value.bonus, ['catalog_ref', 'present'])
     || !uuid(value.bonus.catalog_ref) || typeof value.bonus.present !== 'boolean' || value.cycle_id === null)) fail();
   if (value.cycle_id === null && (value.bonus !== null || value.manual_count !== 0)) fail();
@@ -189,6 +203,10 @@ export function createGoalsProvider(transport) {
     async read(options) {return normalizeGoals(await request('/account/goals', options));},
     async readAttention(options) {return normalizeGoalAttention(await request('/account/goals/attention', options));},
     async attention_ack(command, options) {return request('/account/goals/attention/ack', {...options, method: 'POST', body: command});},
+    async readWeeklySettings(options) {return normalizeWeeklyRead(await request('/account/goals/weekly-settings', options));},
+    async weekly_draw(command, options) {return request('/account/goals/weekly-draw', {...options, method: 'POST', body: command});},
+    async saveWeeklySettings(command, options) {return request('/account/goals/weekly-settings', {...options, method: 'POST', body: command});},
+    async previewWeeklySettings(command, options) {return normalizeWeeklyPreview(await request('/account/goals/weekly-preview', {...options, method: 'POST', body: command}));},
     async readBonusSettings(options) {return normalizeBonusSettings(await request('/account/goals/bonus-settings', options));},
     async readCurrentBonus(options) {return normalizeCurrentBonus(await request('/account/goals/bonus', options));},
     async bonus_settings(command, options) {return request('/account/goals/bonus-settings', {...options, method: 'POST', body: command});},

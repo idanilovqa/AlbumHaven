@@ -1,3 +1,4 @@
+import {recommendationSummary} from '../recommendations/presentation.mjs';
 import {createCurrentTopListeningView} from './current-listening-view.mjs';
 import {mountButton} from '../home-friends/native-controls.mjs';
 import {mountViewControl} from '../home-friends/view-control.mjs';
@@ -89,14 +90,14 @@ export function mountAlbumTopGallery(host, runtime, {controller, state, provider
     const canChange = albumTopActionAllowed(latestState, 'set_manual_completion') && isManualProgress(progress);
     const complete = isManualProgress(progress) && (canChange || paused), completed = complete && progress.manual_completed_at !== null;
     const busy = manualPending !== null || latestState.mutation.refreshing === true || ['loading', 'uncertain'].includes(latestState.mutation.status);
-    const remote = row.source_kind === 'remote_summary', open = !remote && row.native_album?.allowed_actions?.can_view_details === true;
+    const remote = ['remote_summary','recommendation_summary'].includes(row.source_kind), open = row.source_kind === 'recommendation_summary' || !remote && row.native_album?.allowed_actions?.can_view_details === true;
     const url = !remote ? row.native_album?.artwork_url : null;
     return {identity: row.item_ref, interaction: open || complete ? 'controlled' : 'none', actionRef: row.album_ref,
       actions: {open, complete}, openDisabled: busy || latestState.detail.refreshing === true,
       completion: complete ? {completed, disabled: busy || !canChange,
         label: `${completed ? 'Clear completion' : 'Mark completed'} in this Top: ${row.title}`} : undefined,
-      title: row.title, artist: [row.artist, remote ? 'Remote album summary · tracks unavailable' : ''].filter(Boolean).join(' · '),
-      year: row.year, displayMode: view.displayMode,
+      unavailable: row.source_kind === 'recommendation_summary', title: row.title, artist: [row.artist, remote ? 'Remote album summary · tracks unavailable' : ''].filter(Boolean).join(' · '),
+      year: row.year, displayMode: view.displayMode, recommendationLabel: recommendationSummary(row.recommended_by),
       artboxHtml: runtime.artboxHtml({state: url ? 'ready' : 'empty', label: `${row.title} artwork`,
         coverHtml: url ? `<img src="${runtime.escapeHtml(url)}" alt="" loading="lazy" decoding="async" onerror="handleUtilityAlbumArtboxError(this)">` : ''})};
   }
@@ -104,10 +105,13 @@ export function mountAlbumTopGallery(host, runtime, {controller, state, provider
     const markupFor = (row, view) => {
       const html = runtime.galleryCardHtml(cardProps(row, view));
       const presentation = albumTopStatusPresentation(statusDetail(), row);
-      if (!presentation.summary) return html;
       const container = host.ownerDocument.createElement('div');
       container.innerHTML = html;
-      appendAlbumTopStatus(container.firstElementChild, presentation);
+      if (presentation.summary) appendAlbumTopStatus(container.firstElementChild, presentation);
+      if (row.album_ref && host.ownerDocument.defaultView?.AlbumHavenRecommendations) {
+        const actions = container.firstElementChild.querySelector('.gallery-card__actions') || container.firstElementChild;
+        actions.insertAdjacentHTML('beforeend', runtime.buttonHtml({label:'Recommend',size:'small',attributes:{'data-recommend-top-item':row.item_ref}}));
+      }
       return container.innerHTML;
     };
     let baseMarkup = runtime.galleryCardHtml(cardProps(row.value,view));
@@ -144,7 +148,7 @@ export function mountAlbumTopGallery(host, runtime, {controller, state, provider
     const button = event.target.closest('[data-gallery-card-intent]'), value = row.value;
     if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true' || button.getAttribute('data-gallery-card-ref') !== value.album_ref) return;
     event.preventDefault(); event.stopPropagation();
-    if (button.getAttribute('data-gallery-card-intent') === 'open') {errorHost.hidden = true; void details.open(value); return;}
+    if (button.getAttribute('data-gallery-card-intent') === 'open') {errorHost.hidden = true; if(value.source_kind === 'recommendation_summary') {const capturedOwner=owner;void host.ownerDocument.defaultView?.AlbumHavenRecommendations?.summary(value,()=>current() && owner===capturedOwner);} else void details.open(value); return;}
     const state = controller.getSnapshot(), progress = owner.detail.top_viewer_overlay?.item_progress?.[value.album_ref];
     if (manualPending || button.getAttribute('data-gallery-card-intent') !== 'complete' || !isManualProgress(progress)
       || state.mutation.refreshing === true || ['loading', 'uncertain'].includes(state.mutation.status)
@@ -182,6 +186,23 @@ export function mountAlbumTopGallery(host, runtime, {controller, state, provider
     }
   }
   let gallery, metadata, focus, viewControl;
+  function recommend(event) {
+    if (!current() || (event.type === 'click' && !event.target.closest('[data-recommend-top-item]'))) return;
+    const card = event.target.closest('[data-listening-item-ref]');
+    if (!card || !viewport.contains(card)) return;
+    const captured = owner, row = owner.detail.items.find(item => item.item_ref === card.getAttribute('data-listening-item-ref'));
+    const ref = row?.native_album?.inventory_album_ref || `catalog-album:${row?.album_ref}`, source = row?.native_album?.inventory_album_ref ? undefined : {top_ref:owner.detail.top_ref,item_ref:row?.item_ref,revision:owner.detail.revision}, api = host.ownerDocument.defaultView?.AlbumHavenRecommendations;
+    if (!api?.available('album', ref, source)) return;
+    const isCurrent = () => current() && owner === captured && owner.detail.items.includes(row) && card.isConnected;
+    event.preventDefault(); event.stopPropagation();
+    const anchor = event.target.closest('[data-recommend-top-item]') || card.querySelector('button') || card;
+    host.ownerDocument.defaultView.AlbumHavenPlaytableUI?.actions(anchor,{label:'Album recommendations',formats:[
+      {value:'send',label:'Recommend to a friend'},{value:'manual',label:'Add to Recommended By…'}],onSelect:value=>{
+      if (!isCurrent()) return false;
+      void api.open({kind:'album',resource_ref:ref,source,manual:value==='manual',anchor,isCurrent});return true;}});
+  }
+  viewport.addEventListener('contextmenu', recommend);
+  viewport.addEventListener('click', recommend);
   function update(next) {
     if (disposed) return;
     latestState = next.state;
@@ -191,6 +212,7 @@ export function mountAlbumTopGallery(host, runtime, {controller, state, provider
       details.retire(); errorHost.hidden = true; manualPending = null;
       owner = Object.freeze({detail: next.state.detail.data, providers: next.providers, scopeKey: next.state.scopeKey});
     }
+    host.ownerDocument.defaultView?.AlbumHavenRecommendations?.reconcile();
     if (!current()) {dispose(); return;}
     const preferences = runtime.snapshot();
     snapshot = Object.freeze({scopeKey: owner.scopeKey, resourceKey: owner.detail.top_ref,
@@ -227,7 +249,7 @@ export function mountAlbumTopGallery(host, runtime, {controller, state, provider
     updateListening();
   }
   function dispose() {
-    if (disposed) return; disposed = true; manualPending = null; listening.dispose();listeningButton.dispose();intersection?.disconnect();visibleItems.clear();listeningHost.remove(); details.dispose(); readControls?.dispose(); viewControl?.dispose(); metadata?.dispose(); focus?.dispose(); gallery?.dispose();
+    if (disposed) return; disposed = true; host.ownerDocument.defaultView?.AlbumHavenRecommendations?.reconcile(); viewport.removeEventListener('contextmenu',recommend);viewport.removeEventListener('click',recommend); manualPending = null; listening.dispose();listeningButton.dispose();intersection?.disconnect();visibleItems.clear();listeningHost.remove(); details.dispose(); readControls?.dispose(); viewControl?.dispose(); metadata?.dispose(); focus?.dispose(); gallery?.dispose();
     viewTools.remove(); if (!panelHost) filters.remove();
     if (toolsHost) tools.hidden = true; else tools.remove();
     errorHost.remove(); filteredEmpty.remove(); scroll.remove(); owner = null; snapshot = null;

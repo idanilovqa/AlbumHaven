@@ -77,3 +77,12 @@
 #track-modal.is-artist-discography-sheet .track-modal-table-wrap { max-height: none; overflow-x: auto; }
 
 .track-modal.is-artist-discography-sheet > .track-modal-dialog > .album-sheet-toggle { align-self: flex-end; flex-shrink: 0; margin-inline-end: 12px; }
+
+/* Native reading forms reuse the sheet presenter, retaining their own focus/dismissal owner. */
+#app-form-modal.is-native-bottom-sheet {position:fixed;inset:0;padding:0;overflow:hidden;align-items:stretch;}
+#app-form-modal.is-native-bottom-sheet > .confirm-modal-dialog {position:fixed;left:0;right:0;bottom:auto;width:100%;max-width:none;margin:0;min-height:0;max-height:none;display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;border-radius:16px 16px 0 0;transition:transform 180ms ease-out;padding-bottom:env(safe-area-inset-bottom,0px);}
+#app-form-modal.is-native-bottom-sheet #app-form-content {flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;}
+#app-form-modal.is-native-bottom-sheet .album-sheet-handle {height:28px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;touch-action:none;user-select:none;}
+#app-form-modal.is-native-bottom-sheet[data-sheet-state="dragging"] > .confirm-modal-dialog,
+#app-form-modal.is-native-bottom-sheet[data-sheet-state="suspended"] > .confirm-modal-dialog {transition:none;}
+@media(prefers-reduced-motion:reduce) {#app-form-modal.is-native-bottom-sheet > .confirm-modal-dialog {transition:none;}}

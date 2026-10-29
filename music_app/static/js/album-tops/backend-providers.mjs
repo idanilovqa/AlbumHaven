@@ -1,3 +1,4 @@
+import {normalizeRecommenders} from '../recommendations/presentation.mjs';
 import {createCurrentTopListeningProvider} from './current-listening-provider.mjs';
 // All network replies are bound to the authenticated native context and caller scope.
 import {isProgressRevision, isManualProgress, isTopActivity, projectCompleteTopProgress} from './progress.mjs';
@@ -36,7 +37,7 @@ function top(value) {
   if (Object.hasOwn(value, 'type') && (typeof value.type !== 'string' || !/^[a-z][a-z0-9_]{0,99}$/.test(value.type))
     || Object.hasOwn(value, 'source_locked') && typeof value.source_locked !== 'boolean') throw fail('Invalid Album Top editing eligibility.');
   return {top_ref: value.top_ref, title: value.title, description: value.description,
-    revision: value.revision, visibility: value.visibility, allowed_actions: actions(value.allowed_actions), ...activityOverlay(value),
+    revision: value.revision, visibility: value.visibility, ...(value.top_kind === 'recommended_by' ? {top_kind:'recommended_by'} : {}), allowed_actions: actions(value.allowed_actions), ...activityOverlay(value),
     ...(Object.hasOwn(value, 'artist_scope') ? {artist_scope: artistScope(value.artist_scope)} : {}),
     ...(Object.hasOwn(value, 'type') ? {type: value.type} : {}),
     ...(Object.hasOwn(value, 'source_locked') ? {source_locked: value.source_locked} : {})};
@@ -672,12 +673,14 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
       requireNativeScope();
       result.items = data.items.map(row => {
         if (!uuid(row?.ref) || !uuid(row.catalog_ref) || typeof row.title !== 'string' || typeof row.artist_display !== 'string') throw fail('Invalid Album Top album.');
-        if (Object.hasOwn(row, 'source_kind') && row.source_kind !== 'remote_summary') throw remoteFail();
+        if (Object.hasOwn(row, 'source_kind') && !['remote_summary','recommendation_summary'].includes(row.source_kind)) throw remoteFail();
         const summary = row.source_kind === 'remote_summary' ? remoteSummary(row) : null;
         return {item_ref: row.ref, album_ref: row.catalog_ref, title: row.title, artist: row.artist_display,
           year: summary ? summary.first_release_date ? Number(summary.first_release_date.slice(0, 4)) : null : Number.isInteger(row.release_year) ? row.release_year : null,
           original_position: row.original_position, position: row.curator_position, ...(summary || {}),
-          ...(Object.hasOwn(row, 'native_album') ? {native_album: nativeAlbum(row.native_album, nativeScope?.[1], Boolean(summary))} : {})};
+          ...(row.source_kind === 'recommendation_summary' ? {source_kind:'recommendation_summary'} : {}),
+          ...(Object.hasOwn(row,'recommended_by') ? {recommended_by:normalizeRecommenders(row.recommended_by)} : {}),
+          ...(Object.hasOwn(row, 'native_album') ? {native_album: nativeAlbum(row.native_album, nativeScope?.[1], Boolean(summary) || row.source_kind === 'recommendation_summary')} : {})};
       });
       const remoteItems = result.items.filter(row => row.source_kind === 'remote_summary');
       if (remoteItems.length && (!remoteRevision(result.revision) || result.items.some(row => !canonicalUUID(row.item_ref) || !canonicalUUID(row.album_ref))

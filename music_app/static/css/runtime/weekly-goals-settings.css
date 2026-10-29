@@ -1,0 +1,41 @@
+/* Goals-specific layout; native controls, dialog header and source pills retain shared styling. */
+#app-form-modal.app-form-reading .weekly-goals-settings-dialog {width:min(960px,calc(100vw - 32px));max-width:960px;}
+.weekly-goals-settings {min-height:0;}
+.weekly-goals-settings__layout {display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,320px);max-height:65dvh;overflow:hidden;}
+.weekly-goals-settings__form.tag-editor-form {min-width:0;overflow:auto;overscroll-behavior:contain;display:block;padding:0;}
+.weekly-goals-settings__controls {border:0;padding:0 20px 0 0;margin:0;min-width:0;}
+.weekly-goals-settings__section {padding:16px 0;border-bottom:1px solid var(--app-border,#52605a);}
+.weekly-goals-settings__section:first-child {padding-top:0;}
+.weekly-goals-settings__section h4,.weekly-goals-settings__preview h4 {font-size:14px;margin:0 0 12px;}
+.weekly-goals-settings__form .weekly-goals-settings__field {flex-direction:row;display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0;}
+.weekly-goals-settings__form .weekly-goals-settings__field input {width:78px;min-width:0;}
+.weekly-goals-settings__filter {display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+.weekly-goals-settings__filter .weekly-goals-settings__field:last-of-type input {width:48px;}
+.weekly-goals-settings__sources {display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;}
+.weekly-goals-settings__preview {min-width:0;padding-left:20px;border-left:1px solid var(--app-border,#52605a);align-self:start;}
+.weekly-goals-settings__covers {display:flex;align-items:flex-end;padding:20px 0 12px;min-height:120px;isolation:isolate;}
+.weekly-goals-settings__cover {position:relative;flex:0 1 88px;min-width:0;aspect-ratio:1;margin-left:-38px;background:var(--app-control,#27332e);border-radius:4px;box-shadow:0 3px 9px #0006;transition:transform 260ms cubic-bezier(.2,.75,.25,1),box-shadow 260ms ease;transform-origin:center bottom;}
+.weekly-goals-settings__cover:first-child {margin-left:0;}
+.weekly-goals-settings__cover img {width:100%;height:100%;object-fit:cover;border-radius:inherit;}
+.weekly-goals-settings__cover>span {display:block;font-size:10px;overflow:hidden;padding:5px;}
+.weekly-goals-settings__cover:hover,.weekly-goals-settings__cover:focus-visible {transform:translateY(-10px) rotate(-3deg) scale(1.08);z-index:2;box-shadow:0 8px 18px #0008;}
+.weekly-goals-settings__cover--suggested {outline:2px solid var(--appearance-primary-button,#b5d28e);outline-offset:2px;}
+.weekly-goals-settings__titles {list-style:none;padding:0;margin:8px 0 16px;font-size:12px;line-height:1.6;}
+.weekly-goals-settings__titles li {white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.weekly-goals-settings__summary {font-size:12px;line-height:1.5;}
+.weekly-goals-settings__summary p {margin:0 0 7px;}
+.weekly-goals-settings__footer {display:flex;align-items:center;justify-content:flex-end;gap:8px;padding-top:12px;}
+.weekly-goals-settings__footer>[role=alert] {margin:0 auto 0 0;font-size:12px;}
+@media(max-width:720px) {
+  #app-form-modal:has(.weekly-goals-settings-dialog) {align-items:flex-end;padding:0;}
+  #app-form-modal.app-form-reading .weekly-goals-settings-dialog {width:100%;max-width:none;margin:0;border-radius:16px 16px 0 0;max-height:94dvh;padding-bottom:max(16px,env(safe-area-inset-bottom));}
+  .weekly-goals-settings__layout {display:block;overflow:auto;max-height:65dvh;}
+  .weekly-goals-settings__form.tag-editor-form {overflow:visible;}
+  .weekly-goals-settings__controls {padding:0;}
+  .weekly-goals-settings__preview {padding:16px 0 0;border-left:0;}
+  .weekly-goals-settings__footer {flex-wrap:wrap;}
+}
+@media(prefers-reduced-motion:reduce) {.weekly-goals-settings__cover {transition:none;}}
+
+#app-form-modal.is-native-bottom-sheet .weekly-goals-settings__layout {max-height:none;overflow:visible;}
+.weekly-goals-sheet-toggle {display:flex;justify-content:flex-end;}

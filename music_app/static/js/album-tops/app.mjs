@@ -179,7 +179,9 @@ export function mountAlbumTopsView(host, runtime, props) {
     if (disposed) return; pending = next; if (updating) return; updating = true;
     try {while (pending && !disposed) {const current = pending; pending = null; render(current);}} finally {updating = false;}
   }
-  function dispose() {if (disposed) return; disposed = true; pending = null; listeningSettings?.dispose(); retireGallery(); retireDialog(); inline?.dispose(); normalHeader?.dispose(); status.dispose(); notice.dispose(); for (const item of cardOwners.values()) item.host.removeEventListener('click', item.listener); cardOwners.clear(); section.remove();}
+  const recommendationsChanged=()=>{if(!disposed && host.isConnected){const selected=controller.getSnapshot().selectedTopRef;void controller.load();if(selected)void controller.open(selected);}};
+  host.ownerDocument.defaultView.addEventListener('albumhaven:recommendations-changed',recommendationsChanged);
+  function dispose() {host.ownerDocument.defaultView.removeEventListener('albumhaven:recommendations-changed',recommendationsChanged);if (disposed) return; disposed = true; pending = null; listeningSettings?.dispose(); retireGallery(); retireDialog(); inline?.dispose(); normalHeader?.dispose(); status.dispose(); notice.dispose(); for (const item of cardOwners.values()) item.host.removeEventListener('click', item.listener); cardOwners.clear(); section.remove();}
   try {update(props);} catch (error) {dispose(); throw error;}
   return {update, dispose};
 }

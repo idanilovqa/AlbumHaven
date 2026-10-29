@@ -31,7 +31,8 @@ function acceptBonusReceipt(value, pending) {
   const keys = ['ok', 'action', 'request_key', 'changed', 'reason', 'goal_ref', 'revision', 'period', 'cycle_id'];
   if (action === 'bonus_draw') keys.push('catalog_ref');
   else keys.push('previous_cycle_id', 'settings_revision', 'retained_count', 'bonus_carried',
-    ...(command.period === 'week' ? ['manual_count', 'manual_slots_available', 'bonus_slot_available'] : []));
+    ...(command.period === 'week' ? ['manual_count', 'manual_slots_available', 'bonus_slot_available',
+      ...(Object.hasOwn(value, 'manual_limit') || Object.hasOwn(value, 'weekly_suggestions_carried') ? ['manual_limit', 'weekly_suggestions_carried'] : [])] : []));
   const period = action === 'bonus_draw' ? 'week' : command.period;
   if (!exactKeys(value, keys) || value.ok !== true || value.action !== action || value.request_key !== command.request_key
     || value.period !== period || typeof value.changed !== 'boolean' || !revision(value.revision)
@@ -57,10 +58,17 @@ function acceptBonusReceipt(value, pending) {
       const expectedCarry = pending.bonus?.bonus?.present === true
         && pending.selected.manual_completed_at[pending.bonus.bonus.catalog_ref] === null
         && pending.settings.unfinished_policy === 'carry';
-      if (value.bonus_carried !== expectedCarry || !Number.isSafeInteger(value.manual_count)
-        || value.manual_count < 0 || value.manual_count > 5
-        || value.manual_count + Number(value.bonus_carried) !== value.retained_count
-        || value.manual_slots_available !== 5 - value.manual_count || value.bonus_slot_available !== !value.bonus_carried) malformed();
+      const weekly = Object.hasOwn(value, 'manual_limit');
+      const manualLimit = weekly ? value.manual_limit : 5;
+      const suggestionsCarried = weekly ? value.weekly_suggestions_carried : 0;
+      if (!Number.isSafeInteger(manualLimit) || manualLimit < 0 || manualLimit > 7
+        || !Number.isSafeInteger(suggestionsCarried) || suggestionsCarried < 0 || suggestionsCarried > 7
+        || value.bonus_carried !== expectedCarry || !Number.isSafeInteger(value.manual_count)
+        || value.manual_count < 0 || value.manual_count > (weekly ? 7 : 5)
+        || weekly && value.retained_count > 7
+        || value.manual_count + Number(value.bonus_carried) + suggestionsCarried !== value.retained_count
+        || value.manual_slots_available !== Math.max(0, manualLimit - value.manual_count)
+        || value.bonus_slot_available !== !value.bonus_carried) malformed();
     }
   }
   return Object.freeze({...value});
@@ -73,7 +81,27 @@ function bonusCoherent(data, bonus) {
     && bonus.manual_count === week.total - Number(bonus.bonus?.present === true);
 }
 
+function acceptWeeklyReceipt(value, pending) {
+  const {command, goalRef} = pending;
+  if (!exactKeys(value, ['ok', 'action', 'request_key', 'changed', 'reason', 'goal_ref', 'revision', 'period', 'cycle_id', 'catalog_refs'])
+    || value.ok !== true || value.action !== 'weekly_draw' || value.request_key !== command.request_key || value.period !== 'week'
+    || typeof value.changed !== 'boolean' || !revision(value.revision)
+    || BigInt(value.revision) !== BigInt(command.revision) + (value.changed ? 1n : 0n)
+    || !(value.goal_ref === null || uuid(value.goal_ref)) || goalRef !== null && value.goal_ref !== goalRef
+    || !Array.isArray(value.catalog_refs) || value.catalog_refs.length > 7 || pending.weekTotal + value.catalog_refs.length > 7
+    || value.catalog_refs.some(ref => !uuid(ref) || pending.allMembers.includes(ref))
+    || new Set(value.catalog_refs).size !== value.catalog_refs.length) malformed();
+  if (value.changed) {
+    if (!value.catalog_refs.length || !uuid(value.goal_ref) || !uuid(value.cycle_id) || value.reason !== ''
+      || command.expected_cycle_id !== null && value.cycle_id !== command.expected_cycle_id
+      || command.expected_cycle_id === null && pending.existingCycles.includes(value.cycle_id)) malformed();
+  } else if (value.catalog_refs.length || !['no_eligible_source', 'already_drawn', 'no_suggestion_slots'].includes(value.reason)
+    || value.goal_ref !== goalRef || value.cycle_id !== command.expected_cycle_id) malformed();
+  return Object.freeze({...value, catalog_refs: Object.freeze([...value.catalog_refs])});
+}
+
 function acceptReceipt(value, pending) {
+  if (pending.action === 'weekly_draw') return acceptWeeklyReceipt(value, pending);
   if (pending.action === 'attention_ack') {
     const event = pending.command.event;
     if (!exactKeys(value, ['ok', 'action', 'request_key', 'event', 'changed']) || value.ok !== true
@@ -86,6 +114,22 @@ function acceptReceipt(value, pending) {
   const {action, command, goalRef, total, expectedChanged} = pending;
   const keys = ['ok', 'action', 'request_key', 'changed', 'reason', 'goal_ref', 'revision', 'period', 'cycle_id'];
   if (action !== 'reset') keys.push('catalog_ref');
+  if (action === 'completion' && Object.hasOwn(value, 'top_completions')) {
+    keys.push('top_completions');
+    if (!command.completed || !Array.isArray(value.top_completions) || value.top_completions.length > 1000
+      || value.top_completions.length > 0 && value.changed !== true) malformed();
+    const tops = new Set();
+    for (const row of value.top_completions) {
+      if (!exactKeys(row, ['top_ref', 'album_ref', 'action', 'request_key', 'progress_revision', 'manual_completed_at', 'changed'])
+        || !uuid(row.top_ref) || tops.has(row.top_ref) || row.album_ref !== command.catalog_ref
+        || row.action !== 'set_manual_completion' || row.request_key !== command.request_key
+        || !revision(row.progress_revision) || typeof row.changed !== 'boolean'
+        || typeof row.manual_completed_at !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(row.manual_completed_at)
+        || !Number.isFinite(Date.parse(row.manual_completed_at))) malformed();
+      tops.add(row.top_ref);
+    }
+  }
   if (!exactKeys(value, keys) || value.ok !== true || value.action !== action
     || value.request_key !== command.request_key || value.period !== command.period
     || (action !== 'add' && value.goal_ref !== goalRef) || !revision(value.revision)
@@ -125,8 +169,9 @@ function receiptMatchesRead(data, intent, settings, bonus) {
       && (!settings || BigInt(settings.settings_revision) < BigInt(command.settings_revision))) return false;
   if (data.goal_ref !== receipt.goal_ref || BigInt(data.revision) < BigInt(receipt.revision)) return false;
   if (data.revision !== receipt.revision) return true; // A newer authorized mutation may supersede this result.
-  const selected = data.periods[action === 'bonus_draw' ? 'week' : command.period];
+  const selected = data.periods[['bonus_draw', 'weekly_draw'].includes(action) ? 'week' : command.period];
   if ((selected.cycle?.cycle_id ?? null) !== receipt.cycle_id) return false;
+  if (action === 'weekly_draw') return GOAL_PERIODS.every(period => receipt.catalog_refs.every(ref => data.periods[period].album_refs.includes(ref)));
   if (action === 'bonus_draw') return !receipt.changed ? bonus?.bonus === null : selected.album_refs.includes(receipt.catalog_ref)
     && bonus?.bonus?.catalog_ref === receipt.catalog_ref && bonus.bonus.present;
   if (action === 'transition') {
@@ -136,7 +181,7 @@ function receiptMatchesRead(data, intent, settings, bonus) {
     const allCarried = command.period === 'year' || intent.settings.unfinished_policy === 'carry';
     return selected.total === receipt.retained_count && selected.completed === 0 && validOrder
       && (!allCarried || selected.album_refs.length === intent.unfinishedRefs.length)
-      && (command.period !== 'week' || bonus.manual_count === receipt.manual_count
+      && (command.period !== 'week' || bonus.manual_count === receipt.manual_count + (receipt.weekly_suggestions_carried || 0)
         && (bonus.bonus?.present === true) === receipt.bonus_carried
         && (!receipt.bonus_carried || bonus.bonus.catalog_ref === intent.bonus.bonus.catalog_ref));
   }
@@ -194,7 +239,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       error: failure('denied', 'Goals are not available for this account.')});
   }
   const actionLabel = intent => ({add: 'Add', reset: 'Reset', completion: 'Completion', remove: 'Removal',
-    bonus_settings: 'Bonus settings', bonus_draw: 'Bonus draw', transition: 'Next period', attention_ack: 'Visit acknowledgment'})[intent?.action] || 'Goal change';
+    bonus_settings: 'Bonus settings', bonus_draw: 'Bonus draw', weekly_draw: 'Weekly suggestions', transition: 'Next period', attention_ack: 'Visit acknowledgment'})[intent?.action] || 'Goal change';
   function uncertain() {
     publish({status: snapshot.data ? 'ready' : 'unavailable', mutation: 'uncertain',
       error: failure('uncertain', `The ${actionLabel(pending)} outcome is unknown. Retry checks its saved result first.`)});
@@ -225,7 +270,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       let outcome = null;
       if (acknowledged) {
         if (!receiptMatchesRead(data, pending, settings, bonus)) throw new Error('Goals refresh does not include the saved change.');
-        if (bonusAction(pending.action)) outcome = Object.freeze({action: pending.action,
+        if (bonusAction(pending.action) || pending.action === 'weekly_draw') outcome = Object.freeze({action: pending.action,
           changed: pending.receipt.changed, reason: pending.receipt.reason || ''});
         pending = null;
       }
@@ -371,7 +416,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       return await readAcknowledged(task);
     } catch (error) {
       if (!task.current() || pending !== intent) return snapshot;
-      if (intent.action === 'bonus_draw' && error?.responseRejected === true
+      if (['bonus_draw', 'weekly_draw'].includes(intent.action) && error?.responseRejected === true
         && error.status === 403 && error.code === 'source_context_unavailable') {
         // This definitive source rejection is not account authority. Verify
         // retained account state before showing it again; a real account403
@@ -417,7 +462,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
   }
   function ready(action) {
     const capability = {add: 'can_add', reset: 'can_reset', completion: 'can_complete', remove: 'can_remove',
-      bonus_settings: 'can_add', bonus_draw: 'can_add', transition: 'can_reset'}[action];
+      bonus_settings: 'can_add', bonus_draw: 'can_add', weekly_draw: 'can_add', transition: 'can_reset'}[action];
     return !disposed && !pending && snapshot.status === 'ready' && snapshot.mutation === 'idle'
       && snapshot.data?.allowed_actions[capability] === true;
   }
@@ -479,7 +524,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     if (expected.data !== data || expected.period !== period || expected.revision !== data.revision
       || expected.cycle_id !== selected.cycle?.cycle_id || !uuid(selected.cycle?.cycle_id)
       || !selected.album_refs.includes(catalogRef)) return Promise.resolve(snapshot);
-    if (action === 'completion' && typeof completed !== 'boolean') return Promise.resolve(snapshot);
+    if (action === 'completion' && (typeof completed !== 'boolean' || (selected.completion_modes?.[catalogRef] ?? data.albums.find(row => row.catalog_ref === catalogRef)?.completion_mode) === 'rating')) return Promise.resolve(snapshot);
     return startIntent(action, data, period, selected,
       {catalog_ref: catalogRef, ...(action === 'completion' ? {completed} : {})});
   }
@@ -521,7 +566,29 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       || !bonusReady(action, expected)) return Promise.resolve(snapshot);
     pending = {action, command, goalRef: data.goal_ref, settings, bonus, selected,
       unfinishedCount: selected.total - selected.completed, acknowledged: false,
-      unfinishedRefs: selected.album_refs.filter(ref => selected.manual_completed_at[ref] === null),
+      unfinishedRefs: selected.album_refs.filter(ref => selected.manual_completed_at[ref] === null && selected.rated_at?.[ref] == null),
+      allMembers: data.albums.map(row => row.catalog_ref),
+      existingCycles: GOAL_PERIODS.map(name => data.periods[name].cycle?.cycle_id).filter(Boolean)};
+    return write(begin(), pending);
+  }
+  function drawWeekly(settingsRevision, expected) {
+    const matches = () => ready('weekly_draw') && expected?.data === snapshot.data && expected.period === snapshot.period;
+    if (!matches() || !revision(settingsRevision)) return Promise.resolve(snapshot);
+    const {data} = snapshot, selected = data.periods.week;
+    let command;
+    try {
+      const key = requestKey();
+      if (!uuid(key) || issuedKeys.has(key) || typeof timezone !== 'string' || !timezone) throw new Error();
+      new Intl.DateTimeFormat('en', {timeZone: timezone});
+      command = Object.freeze({request_key: key, revision: data.revision, settings_revision: settingsRevision,
+        expected_cycle_id: selected.cycle?.cycle_id ?? null, timezone_name: timezone});
+      issuedKeys.add(key);
+    } catch {
+      if (matches()) publish({error: failure('invalid-command', 'Weekly suggestions could not be prepared. Reload Goals and try again.')});
+      return Promise.resolve(snapshot);
+    }
+    if (!matches()) return Promise.resolve(snapshot);
+    pending = {action: 'weekly_draw', command, goalRef: data.goal_ref, weekTotal: selected.total, acknowledged: false,
       allMembers: data.albums.map(row => row.catalog_ref),
       existingCycles: GOAL_PERIODS.map(name => data.periods[name].cycle?.cycle_id).filter(Boolean)};
     return write(begin(), pending);
@@ -571,7 +638,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       return () => listeners.delete(listener);
     },
     loadAttention, createVisit, acknowledgeVisit, dismissAttentionAcknowledgment,
-    load, loadBonus, selectPeriod, reset, setCompletion, remove, add, retry, saveBonusSettings, drawBonus, transition,
+    load, loadBonus, selectPeriod, reset, setCompletion, remove, add, retry, saveBonusSettings, drawBonus, drawWeekly, transition,
     admissionFailed(error) {if (!disposed && denied(error)) clearDenied(); return snapshot;},
     dispose() {
       if (disposed) return;

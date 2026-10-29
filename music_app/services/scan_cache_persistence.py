@@ -9,6 +9,9 @@ from time import perf_counter
 from typing import Any, Protocol
 
 from config import PERSISTENCE_BACKEND_POSTGRES
+from music_app.services.album_local_cover_integrity import (
+    inferred_local_cover_belongs_to_track,
+)
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.artist_family_postgres import (
@@ -551,19 +554,9 @@ class PostgresScanCacheAdapter:
                 owner_keys: dict[str, str] = {}
                 for raw_row in complete_rows:
                     row = _row_mapping(raw_row)
-                    file_entry = _fallback_file_entry(row)
+                    file_entry = _targeted_surviving_file_entry(row)
                     if file_entry is None:
                         continue
-                    persisted_entry = row.get("file_entry")
-                    if isinstance(persisted_entry, dict):
-                        # An album cover is not evidence that this surviving
-                        # file supplies it after another member is removed.
-                        file_entry.pop("cover_path", None)
-                        file_entry.update(persisted_entry)
-                    if file_entry.get("cover_path") and not file_entry.get("cover_selection_origin"):
-                        # File serialization keeps the cover path/revision; the
-                        # owning album retains the selection's origin.
-                        file_entry["cover_selection_origin"] = row.get("cover_selection_origin")
                     files_by_album.setdefault(str(row["album_key"]), {})[str(row["private_path"])] = file_entry
                     owner_keys[str(row["album_key"])] = str(row.get("album_owner_key") or "")
                 # Entirely missing albums retain their historical credits.
@@ -3528,6 +3521,70 @@ def _fallback_file_entry(row: dict[str, object]) -> dict[str, object] | None:
     }
 
 
+def _targeted_surviving_file_entry(
+    row: dict[str, object],
+) -> dict[str, object] | None:
+    file_entry = _fallback_file_entry(row)
+    if file_entry is None:
+        return None
+    persisted_entry = row.get("file_entry")
+    if isinstance(persisted_entry, dict):
+        # Do not attribute a removed member's cover to every survivor.
+        file_entry.pop("cover_path", None)
+        file_entry.update(persisted_entry)
+    album_metadata = row.get("album_metadata")
+    if not isinstance(album_metadata, dict):
+        album_metadata = {}
+    cover_selection_origin = str(
+        file_entry.get("cover_selection_origin")
+        or row.get("cover_selection_origin")
+        or ""
+    ).casefold()
+    cover_selection_provenance = str(
+        file_entry.get("cover_selection_provenance")
+        or row.get("cover_selection_provenance")
+        or ""
+    ).casefold()
+    if (
+        file_entry.get("cover_path")
+        and cover_selection_origin == "automatic"
+        and cover_selection_provenance != "explicit"
+        and not (
+            file_entry.get("remote_cover_url")
+            or album_metadata.get("remote_cover_url")
+        )
+        and not inferred_local_cover_belongs_to_track(
+            file_entry.get("cover_path"), row.get("private_path")
+        )
+    ):
+        for field in _AUTHORITATIVE_COVER_FIELDS:
+            file_entry[field] = None
+        file_entry["cover_selection_origin"] = None
+        file_entry["cover_selection_provenance"] = None
+    if (
+        not file_entry.get("cover_path")
+        and inferred_local_cover_belongs_to_track(
+            row.get("cover_path"), row.get("private_path")
+        )
+    ):
+        # Folder art remains authoritative while its physical album survives,
+        # even when older serialized entries predate cover hydration.
+        file_entry["cover_path"] = row.get("cover_path")
+        for field in _ALBUM_COVER_METADATA_FIELDS:
+            if (
+                field != "cover_selection_repair_previous"
+                and field in album_metadata
+            ):
+                file_entry[field] = album_metadata[field]
+    if file_entry.get("cover_path") and not file_entry.get(
+        "cover_selection_origin"
+    ):
+        # File serialization keeps cover path/revision; the owning album
+        # retains the selection's origin.
+        file_entry["cover_selection_origin"] = row.get("cover_selection_origin")
+    return file_entry
+
+
 def _load_cover_mutation_revision_sql() -> str:
     return """
         with bootstrap_context as (
@@ -6167,6 +6224,11 @@ def _load_cover_selections_sql() -> str:
 
 def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
     album_filter = "and library.local_albums.album_key = any(%(album_keys)s::text[])" if targeted_albums else ""
+    album_metadata_selection = (
+        "library.local_albums.metadata as album_metadata,"
+        if targeted_albums
+        else ""
+    )
     return """
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -6202,6 +6264,7 @@ def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
           library.local_albums.title as album_title,
           library.local_albums.release_year,
           library.local_albums.cover_path,
+          __TARGETED_ALBUM_METADATA_SELECTION__
           library.local_albums.metadata ->> 'album_artist' as album_artist,
           case
             when library.local_albums.metadata ? 'is_compilation'
@@ -6228,7 +6291,11 @@ def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
           and coalesce((library.local_track_files.metadata #>> '{scan_cache,stale}')::boolean, false) is false
           __TARGETED_ALBUM_FILTER__
         order by library.local_track_files.private_path;
-    """.replace("__TARGETED_ALBUM_FILTER__", album_filter)
+    """.replace(
+        "__TARGETED_ALBUM_FILTER__", album_filter
+    ).replace(
+        "__TARGETED_ALBUM_METADATA_SELECTION__", album_metadata_selection
+    )
 
 
 def _save_scan_snapshot_sql() -> str:

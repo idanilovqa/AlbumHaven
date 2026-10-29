@@ -497,6 +497,55 @@ def test_targeted_album_upsert_preserves_existing_user_cover_authority():
     assert "cover_revision" in sql
 
 
+def test_targeted_surviving_entry_keeps_owned_folder_cover(tmp_path):
+    from music_app.services import scan_cache_persistence
+
+    track_path = tmp_path / "Artist" / "Album" / "01.flac"
+    cover_path = track_path.parent / "cover.jpg"
+    row = {
+        "private_path": str(track_path),
+        "file_entry": {"path": str(track_path), "cover_path": None},
+        "cover_path": str(cover_path),
+        "album_metadata": {
+            "cover_revision": "folder-cover-revision",
+            "cover_selection_origin": "automatic",
+        },
+    }
+
+    entry = scan_cache_persistence._targeted_surviving_file_entry(row)
+
+    assert entry["cover_path"] == str(cover_path)
+    assert entry["cover_revision"] == "folder-cover-revision"
+    assert entry["cover_selection_origin"] == "automatic"
+
+
+def test_targeted_surviving_entry_drops_removed_container_cover(tmp_path):
+    from music_app.services import scan_cache_persistence
+
+    track_path = tmp_path / "Artist" / "Retained Container" / "02.flac"
+    removed_cover = tmp_path / "Artist" / "Removed Container" / "cover.jpg"
+    row = {
+        "private_path": str(track_path),
+        "file_entry": {
+            "path": str(track_path),
+            "cover_path": str(removed_cover),
+            "cover_revision": "persisted-removed-cover-revision",
+        },
+        "cover_path": str(removed_cover),
+        "cover_selection_origin": "automatic",
+        "album_metadata": {
+            "cover_revision": "removed-cover-revision",
+            "cover_selection_origin": "automatic",
+        },
+    }
+
+    entry = scan_cache_persistence._targeted_surviving_file_entry(row)
+
+    assert entry["cover_path"] is None
+    assert entry["cover_revision"] is None
+    assert entry["cover_selection_origin"] is None
+
+
 def test_incremental_album_aggregate_keeps_the_guarded_inherited_cover_repair(monkeypatch):
     from music_app.services import scan_cache_persistence
 

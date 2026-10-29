@@ -1,4 +1,16 @@
 function handleGalleryBootstrapClick(event) {
+  const recommend = event.target.closest('[data-recommend-album]');
+  if (recommend) {
+    event.preventDefault();
+    const album = getCurrentTrackModalAlbum();
+    const current = () => getCurrentTrackModalAlbum() === album && isTrackModalSourceActionCurrent();
+    if (!album || !current() || !window.AlbumHavenRecommendations?.available('album',getAlbumPlaybackQueueRef(album))) return;
+    window.AlbumHavenPlaytableUI?.actions(recommend,{label:'Album recommendations',formats:[
+      {value:'send',label:'Recommend to a friend'},{value:'manual',label:'Add to Recommended By…'}],
+      onSelect: value => {if (!current()) return false;
+        void window.AlbumHavenRecommendations.open({kind:'album',resource_ref:getAlbumPlaybackQueueRef(album),manual:value==='manual',anchor:recommend,isCurrent:current});return true;}});
+    return;
+  }
   const privateSidebarNode = event.target.closest('[data-sidebar-artist], [data-sidebar-all-artists="1"]');
   if (privateSidebarNode && (privateSidebarNode.albumHavenPrivateSearchView || state.view?.private_search === true)) {
     return handlePrivateSearchSidebarNavigation(event, privateSidebarNode);

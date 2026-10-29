@@ -45,7 +45,7 @@
     const visited = new Set();
     while (node && !visited.has(node)) {
       visited.add(node);
-      const sheet = node.closest?.('.is-artist-discography-sheet');
+      const sheet = node.closest?.('.is-artist-discography-sheet, .is-native-bottom-sheet');
       if (sheet && mounts.has(sheet)) return sheet;
       node = ancestry.get(node)?.parent || node.parentElement;
     }
@@ -87,7 +87,8 @@
   }
   function mount(options) {
     const { overlay, panel, handle, scroller, toggle, readBounds, isCurrent,
-      requestClose, foreground, backgroundNodes = [] } = options;
+      requestClose, foreground, backgroundNodes = [], ownDismissal = true, ownFocus = true,
+      expandLabel = 'Expand album sheet', collapseLabel = 'Collapse album sheet' } = options;
     if (!overlay || !panel || !handle || !scroller || !toggle) throw new TypeError('Sheet presentation nodes required');
     mounts.get(overlay)?.dispose();
     const doc = overlay.ownerDocument;
@@ -136,7 +137,7 @@
     function syncToggle() {
       releaseAll(toggleReleases);
       toggleReleases.push(attr(toggle, 'aria-expanded', String(snap === 'expanded')),
-        attr(toggle, 'aria-label', snap === 'expanded' ? 'Collapse album sheet' : 'Expand album sheet'));
+        attr(toggle, 'aria-label', snap === 'expanded' ? collapseLabel : expandLabel));
     }
     function settle(next = snap) {
       if (!current() || !bounds) return;
@@ -280,10 +281,10 @@
       } };
     mounts.set(overlay, controller);
     const observer = typeof win.ResizeObserver === 'function' ? new win.ResizeObserver(update) : null;
-    const dismissal = scope.AlbumHavenSurfaceDismissal.bind(win, () => front() ? {
+    const dismissal = ownDismissal ? scope.AlbumHavenSurfaceDismissal.bind(win, () => front() ? {
       surface: panel, isBackdrop: target => target === overlay,
       dismiss: () => requestDismissal('backdrop')
-    } : null);
+    } : null) : () => {};
     releases.push(attr(handle, 'hidden', null), attr(toggle, 'hidden', null),
       attr(panel, 'role', 'dialog'), attr(panel, 'aria-modal', 'true'));
     listen(handle, 'pointerdown', event => {
@@ -318,7 +319,7 @@
     if (win.visualViewport) { listen(win.visualViewport, 'resize', viewportChanged); listen(win.visualViewport, 'scroll', viewportChanged); }
     listen(toggle, 'click', () => { if (snap === 'expanded') controller.collapse(); else controller.expand(); });
     listen(doc, 'keydown', event => {
-      if (event.key !== 'Tab' || !front()) return;
+      if (!ownFocus || event.key !== 'Tab' || !front()) return;
       const nodes = focusables();
       const first = nodes[0], last = nodes[nodes.length - 1];
       if (!first) { event.preventDefault(); panel.focus({ preventScroll: true }); return; }
@@ -330,7 +331,7 @@
     update(); syncToggle();
     focusFrame = win.requestAnimationFrame(() => {
       focusFrame = null;
-      if (!front() || panel.contains(doc.activeElement)) return;
+      if (!ownFocus || !front() || panel.contains(doc.activeElement)) return;
       const close = panel.querySelector('[data-close-track-modal]');
       if (front()) (close || focusables()[0] || panel).focus({ preventScroll: true });
     });

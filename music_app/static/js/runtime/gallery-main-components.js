@@ -115,5 +115,5 @@ function buildGalleryCardInfoHtml(config = {}) {
   const summary = config.listeningSummaryHtml === undefined
     ? `<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div>`
     : String(config.listeningSummaryHtml || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}${summary}</div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}${summary}${config.recommendationLabel ? `<p class="album-subtitle">${escapeHtml(config.recommendationLabel)}</p>` : ''}</div>`;
 }

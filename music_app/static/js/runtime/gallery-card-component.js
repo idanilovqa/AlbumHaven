@@ -6,7 +6,7 @@ function buildGalleryCardHtml(config = {}) {
   const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
   return `
-    <section class="album-card${config.isSearchMatch === true ? ' album-card--search-match' : ''}" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
+    <section class="album-card${config.unavailable === true ? ' album-card--unavailable' : ''}${config.isSearchMatch === true ? ' album-card--search-match' : ''}" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
       </button>
@@ -45,7 +45,7 @@ function buildControlledGalleryCardHtml(config) {
     }) : '';
   const information = displayMode === 'covers' ? `<span class="gallery-card__focus-title">${escapeHtml(title)}</span>`
     : buildGalleryCardInfoHtml({ ...config, openAttributes: '' });
-  return `<section class="album-card${config.isSearchMatch === true ? ' album-card--search-match' : ''}" data-gallery-display="${displayMode}" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${information}${open || play || completion ? `<div class="gallery-card__actions">${open}${play}${completion}</div>` : ''}</section>`;
+  return `<section class="album-card${config.unavailable === true ? ' album-card--unavailable' : ''}${config.isSearchMatch === true ? ' album-card--search-match' : ''}" data-gallery-display="${displayMode}" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${information}${displayMode === 'covers' && config.recommendationLabel ? `<p class="album-subtitle">${escapeHtml(config.recommendationLabel)}</p>` : ''}${open || play || completion ? `<div class="gallery-card__actions">${open}${play}${completion}</div>` : ''}</section>`;
 }
 
 let galleryCardMetadataMotion = null;

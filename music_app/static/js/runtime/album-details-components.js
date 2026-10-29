@@ -52,6 +52,8 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
     folderAttributes['data-open-track-modal-folder'] = '1';
   }
   return [
+    ButtonComponent.renderActionButton({ariaLabel:'Recommend album', title:'Recommend album',
+      className:'album-details-header__action', icon:'share', attributes:{'data-recommend-album':'1'}}),
     ButtonComponent.renderActionButton({ariaLabel:'Create sample playlist', title:'Create sample playlist', disabled:missing || config.sampleDisabled !== false,
       className:'album-details-header__action', iconClass:'album-details-header__action-icon',
       attributes:{'data-create-sample-playlist':'1'}}),
@@ -139,6 +141,7 @@ function syncMobileAlbumComposition(album) {
   const cover = document.getElementById('track-modal-cover');
   const body = cover?.closest('.track-modal-body');
   if (!overlay || !cover || !body || !album) return;
+  window.AlbumHavenRecommendations?.albumDetails(album, cover);
   const sheet = overlay.classList.contains('is-artist-discography-sheet');
   const mobile = (overlay.classList.contains('is-mobile-page') || sheet) && usesMobilePageLayout();
   const layout = normalizeAlbumDetailsLayout(document.documentElement.getAttribute('data-album-details-layout'));

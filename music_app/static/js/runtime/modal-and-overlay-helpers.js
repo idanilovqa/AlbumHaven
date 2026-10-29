@@ -17,6 +17,8 @@ function albumCardContextActions(album, {canQueue = true} = {}) {
     {value: marked ? 'unmark-version' : 'mark-version', label: marked ? 'Unmark as a version' : 'Mark as a version'},
   ].filter(item => allowed(item.value === 'open-explorer' ? 'library.files.open_location'
     : item.value.startsWith('move_') ? 'library.files.move' : 'library.versions.manage')).concat(
+    (window.AlbumHavenRecommendations?.available('album', getAlbumPlaybackQueueRef(album))
+      ? [{value:'recommend',label:'Recommend'}, {value:'recommend-manual',label:'Add to Recommended By…'}] : []),
     (window.AlbumHavenExplicitQueue?.timingOptions() || []).map(option => ({value: `queue:${option.value}`,
       label: option.value === 'end' ? 'Add to queue at end' : option.label + (option.reason ? ` · ${option.reason}` : ''),
       disabled: !canQueue || option.enabled !== true})),
@@ -39,6 +41,10 @@ function showAlbumCardContextMenu(_x, _y, album, anchor = document.activeElement
       const choice = albumCardContextActions(album, {canQueue: canQueue()}).find(item => item.value === action);
       if (!choice || choice.disabled) return false;
       selectedAction = true;
+      if (action === 'recommend' || action === 'recommend-manual') {
+        void window.AlbumHavenRecommendations.open({kind:'album',resource_ref:getAlbumPlaybackQueueRef(album),
+          manual:action==='recommend-manual',anchor,isCurrent:current}); return true;
+      }
       if (action === 'open-explorer') {openAlbumInExplorer(album); return true;}
       if (action === 'move_to_hoard' || action === 'move_to_library') {performAlbumMove(album, action); return true;}
       if (action === 'mark-version') {openVersionPickerModal(album); return true;}

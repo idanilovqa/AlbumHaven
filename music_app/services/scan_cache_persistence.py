@@ -347,7 +347,6 @@ class PostgresScanCacheAdapter:
                     (publication_guard or guard_destructive_library_publication)(connection, sorted(affected_roots))
                 )
             separate_release_keys = _load_separate_release_keys(connection)
-            mutation_paths = set(file_cache)
             context_seed_paths = set(file_cache)
             stale_context_paths: set[str] = set()
             for stale_targets in stale_by_root.values():
@@ -470,6 +469,11 @@ class PostgresScanCacheAdapter:
                     {"active_paths": sorted(file_cache)},
                 ).fetchall()
             ]
+            file_cache = {
+                path: entry
+                for path, entry in file_cache.items()
+                if path not in stale_context_paths or path in incoming_track_paths
+            }
             albums = self._build_albums(
                 _file_cache_with_inferred_blank_album_memberships(file_cache),
                 separate_release_keys,
@@ -491,7 +495,6 @@ class PostgresScanCacheAdapter:
                 track_rows=track_rows,
                 existing_memberships=existing_memberships,
                 separate_release_keys=separate_release_keys,
-                preferred_paths=mutation_paths,
                 excluded_paths=stale_context_paths,
             )
             _execute_semantic_local_album_key_adoptions(connection, album_rows)

@@ -29549,9 +29549,19 @@ function applyCoverLookupGalleryPayload(gallery) {
     state.coverLookup.modal.selectedRemoteId = '';
   }
   if (task) {
+    const possibleMatchCount = Math.max(0, Number(task.possible_match_count || 0) || 0);
+    const taskCandidatesHydrated = Array.isArray(task.possible_matches)
+      && task.possible_matches.length >= possibleMatchCount;
+    const candidateSnapshotHydrated = Boolean(candidateSnapshot)
+      && coverLookupCandidateGenerationKey(candidateSnapshot.search_generation)
+        === coverLookupCandidateGenerationKey(task.id)
+      && ['completed', 'failed', 'canceled'].includes(String(candidateSnapshot.status || ''))
+      && candidateSnapshot.revision > 0;
     const terminalCandidatesPending = ['completed', 'failed', 'canceled'].includes(
       String(task.status || ''),
-    ) && Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0);
+    ) && !taskCandidatesHydrated
+      && !candidateSnapshotHydrated
+      && possibleMatchCount > (candidateSource?.candidates.length || 0);
     if (!terminalCandidatesPending) applyCoverLookupTaskModalStatus(task);
     logCoverLookupTaskDebug('Gallery payload task update.', task);
   } else if (candidateSnapshot) {

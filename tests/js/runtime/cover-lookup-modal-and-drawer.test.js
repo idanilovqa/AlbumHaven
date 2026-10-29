@@ -1946,6 +1946,50 @@ require('node:test')('terminal gallery payload waits for its counted candidates 
   );
 });
 
+require('node:test')('terminal gallery payload completes after its candidate revision hydrates even when filtering reduces the visible count', () => {
+  const context = loadHelper();
+  context.renderCoverLookupModal = () => {};
+  context.window.AlbumHavenCapabilities = {
+    allowsCoverCandidate: candidate => candidate.source !== 'blocked-provider',
+  };
+  context.state.coverLookup.modal = {
+    album: { tracks: [{ path: 'C:/music/terminal/01.flac' }] },
+    taskId: 'filtered-terminal-generation',
+    statusText: 'Searching...',
+    statusTone: 'neutral',
+    possibleMatches: [],
+    selectedRemoteId: '',
+  };
+
+  context.applyCoverLookupGalleryPayload({
+    local_covers: [],
+    other_art: [],
+    task: {
+      id: 'filtered-terminal-generation',
+      status: 'completed',
+      progress_label: 'Completed',
+      possible_match_count: 3,
+      possible_matches: [],
+    },
+    candidate_snapshot: {
+      search_generation: 'filtered-terminal-generation',
+      status: 'completed',
+      revision: 4,
+      candidates: [
+        { id: 'accepted', source: 'discogs', art_kind: 'cover', url: 'https://images.example/accepted.jpg' },
+        { id: 'duplicate', source: 'discogs', art_kind: 'cover', url: 'https://images.example/accepted.jpg' },
+        { id: 'blocked', source: 'blocked-provider', art_kind: 'cover', url: 'https://images.example/blocked.jpg' },
+      ],
+    },
+  });
+
+  assert.equal(context.state.coverLookup.modal.statusText, 'Completed');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, ({ id }) => id),
+    ['accepted'],
+  );
+});
+
 require('node:test')('notification history prefetches within two visible drawer heights', async () => {
   let fetchCount = 0;
   const { context, bodyElement } = createDrawerHarness({

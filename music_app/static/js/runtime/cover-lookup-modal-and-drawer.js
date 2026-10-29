@@ -2876,8 +2876,13 @@ let coverLookupGalleryRequest = 0;
 let coverLookupModalSession = 0;
 const coverLookupGalleryCache = new Map();
 
+function buildCoverLookupGalleryCacheKey(album) {
+  const requestKey = typeof getAlbumRequestKey === 'function' ? getAlbumRequestKey(album) : '';
+  return String(requestKey || buildTrackPathSignature(album)).trim();
+}
+
 function cacheCoverLookupGalleryPayload(album, gallery) {
-  const key = buildTrackPathSignature(album);
+  const key = buildCoverLookupGalleryCacheKey(album);
   if (!key || !gallery || typeof gallery !== 'object') return;
   coverLookupGalleryCache.delete(key);
   coverLookupGalleryCache.set(key, JSON.parse(JSON.stringify(gallery)));
@@ -2887,12 +2892,12 @@ function cacheCoverLookupGalleryPayload(album, gallery) {
 }
 
 function cachedCoverLookupGalleryPayload(album) {
-  const cached = coverLookupGalleryCache.get(buildTrackPathSignature(album));
+  const cached = coverLookupGalleryCache.get(buildCoverLookupGalleryCacheKey(album));
   return cached ? JSON.parse(JSON.stringify(cached)) : null;
 }
 
 function invalidateCoverLookupGalleryCache(album) {
-  coverLookupGalleryCache.delete(buildTrackPathSignature(album));
+  coverLookupGalleryCache.delete(buildCoverLookupGalleryCacheKey(album));
 }
 const coverLookupPendingLocalMutations = new Set();
 const coverLookupPendingRemoteSaves = new Map();

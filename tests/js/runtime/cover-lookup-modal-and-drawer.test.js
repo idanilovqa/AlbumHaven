@@ -5134,6 +5134,42 @@ require('node:test')('reopening Cover Lookup renders its cached gallery before r
   await context.openCoverLookupModal(album);
 });
 
+require('node:test')('reopening Cover Lookup from a compact notification reuses the cached gallery', async () => {
+  class TestButton {}
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const fullAlbum = {
+    key: 'mastodon::crack the skye',
+    tracks: [{ path: 'N:/Music/Mastodon/Crack the Skye/01.flac' }],
+  };
+  const compactAlbum = { key: fullAlbum.key };
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    getAlbumRequestKey: (album) => String(album?.album_ref || album?.key || ''),
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': new TestButton(),
+      }[id] || null),
+    },
+    showToast: () => {},
+  });
+  context.cacheCoverLookupGalleryPayload(fullAlbum, {
+    ok: true,
+    local_covers: [{ path: 'N:/Music/Mastodon/Crack the Skye/cover.jpg' }],
+    other_art: [],
+  });
+  context.renderCoverLookupModal = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.refreshCoverLookupGallery = async (showLoading) => {
+    assert.equal(showLoading, false);
+    assert.equal(context.state.coverLookup.modal.loading, false);
+    assert.equal(context.state.coverLookup.modal.localCovers.length, 1);
+  };
+
+  await context.openCoverLookupModal(compactAlbum);
+});
+
 require('node:test')('actioned terminal notifications render source-neutral Art chosen status', () => {
   const { context, bodyElement } = createDrawerHarness();
   context.state.coverLookup.tasks = [

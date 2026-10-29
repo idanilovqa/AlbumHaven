@@ -402,11 +402,15 @@ export class CoverLookupActions {
 
   async waitForLaterProviderFixtureBlocked(options = {}) {
     let evidence = null;
+    const requireNoCoverArtArchiveRequests = options.requireNoCoverArtArchiveRequests !== false;
     await expect.poll(async () => {
       evidence = await readCoverLookupProviderEvidence(this.coverLookup.testInfo);
       return Number(evidence?.later_provider_started || 0) >= 1
         && Number(evidence?.later_provider_completed || 0) === 0
-        && Number(evidence?.cover_art_archive_requests || 0) === 0
+        && (
+          !requireNoCoverArtArchiveRequests
+          || Number(evidence?.cover_art_archive_requests || 0) === 0
+        )
         && evidence?.later_provider_released === false;
     }, {
       message: 'Expected the deterministic later cover provider to be waiting at its fixture gate.',

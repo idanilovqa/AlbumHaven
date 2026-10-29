@@ -11,7 +11,7 @@ class _LoggerStub:
         self.verbose_calls.append((message, args))
 
 
-def test_select_background_cover_refresh_jobs_queues_missing_and_skips_adequate_user_owned_covers():
+def test_select_background_cover_refresh_jobs_queues_missing_and_inadequate_user_owned_covers():
     logger = _LoggerStub()
     calls = []
     cover_cache = object()
@@ -39,6 +39,12 @@ def test_select_background_cover_refresh_jobs_queues_missing_and_skips_adequate_
 
     assert jobs == [
         {"folder": "missing", "needs_cover_fetch": True, "cover_selection_origin": None},
+        {
+            "folder": "user",
+            "track_paths": ["track-2"],
+            "needs_cover_fetch": True,
+            "cover_selection_origin": "user",
+        },
     ]
     assert calls == [(
         {"track-1": {}, "track-2": {}, "track-3": {}},
@@ -46,7 +52,7 @@ def test_select_background_cover_refresh_jobs_queues_missing_and_skips_adequate_
     )]
 
 
-def test_select_background_cover_refresh_jobs_always_excludes_user_owned_covers():
+def test_select_background_cover_refresh_jobs_skips_adequate_user_owned_covers():
     logger = _LoggerStub()
 
     jobs = cover_refresh_jobs.select_background_cover_refresh_jobs(
@@ -58,7 +64,7 @@ def test_select_background_cover_refresh_jobs_always_excludes_user_owned_covers(
             {
                 "folder": "user",
                 "track_paths": ["track-2"],
-                "needs_cover_fetch": True,
+                "needs_cover_fetch": False,
             },
         ],
         logger=logger,

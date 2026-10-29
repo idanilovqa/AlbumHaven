@@ -66,18 +66,17 @@ test.beforeEach(async ({ managedAppLifecycle, galleryActions, appBarActions }) =
 });
 
 test.afterEach(async ({ managedAppLifecycle, galleryActions, appBarActions }) => {
+  await managedAppLifecycle.stop();
   try {
     if (ownedFixture) await removeAlbumSourceOwnershipFixture(ownedFixture);
-    ownedFixture = null;
-    await galleryActions.goto();
-    await galleryActions.waitForGalleryReady();
-    await appBarActions.triggerFullRescanAndWait();
-    await appBarActions.waitForScanAndCoverRefreshIdle();
   } finally {
     ownedFixture = null;
-    await managedAppLifecycle.stop();
     await managedAppLifecycle.restart();
   }
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  await appBarActions.triggerFullRescanAndWait();
+  await appBarActions.waitForScanAndCoverRefreshIdle();
 });
 
 test('FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan', { tag: '@area:cover-providers' }, async ({

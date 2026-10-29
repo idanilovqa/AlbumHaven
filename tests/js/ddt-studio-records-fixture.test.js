@@ -277,8 +277,9 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
   assert.match(sql, /delete\s+from\s+library\.local_track_files/i);
   assert.match(sql, /delete\s+from\s+library\.local_tracks/i);
   assert.match(sql, /commit;/i);
-  assert.match(sql, /upserted_typo_artist as/);
-  assert.match(sql, /upserted_typo_album as/);
+  assert.match(sql, /seeded_typo_artist as/);
+  assert.match(sql, /seeded_typo_album as/);
+  assert.match(sql, /restored_typo_album as materialized/);
   assert.match(sql, /upserted_typo_membership as/);
   assert.match(sql, /selected_rows\.album = 'Telepathic Minds'/);
   assert.match(sql, /- array\['year', 'release_date'\]::text\[\]/);
@@ -293,15 +294,15 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
     /delete from library\.separate_releases[\s\S]*release_key like[\s\S]*lower\(/,
   );
   assert.match(sql, /deleted_orphan_albums as/);
-  assert.match(sql, /library\.local_albums\.title = 'Telepathic Minds'/);
-  assert.match(sql, /fixture_rows\.album = 'Telepathic Minds'/);
-  assert.match(sql, /library\.local_tracks\.id not in \(\s*select selected_rows\.track_id/);
-  assert.match(sql, /library\.local_artists\.name in \('Ovderhead', 'Overhead'\)/);
-  assert.match(sql, /deleted_orphan_artists as/);
   assert.match(
     sql,
-    /not exists \(\s*select 1\s*from library\.local_tracks\s*join library\.local_track_files/,
+    /deleted_orphan_albums as\s*\([\s\S]*?and not exists \(\s*select 1\s*from library\.local_tracks\s*where library\.local_tracks\.album_id = library\.local_albums\.id\s*\)\s*returning/,
+    'Expected orphan album cleanup to preserve every album that still owns a track.',
   );
+  assert.match(sql, /library\.local_albums\.title = 'Telepathic Minds'/);
+  assert.match(sql, /fixture_rows\.album = 'Telepathic Minds'/);
+  assert.match(sql, /library\.local_artists\.name in \('Ovderhead', 'Overhead'\)/);
+  assert.match(sql, /deleted_orphan_artists as/);
   assert.doesNotMatch(JSON.stringify(calls[2].args), /secret|Студийные записи/);
 });
 
@@ -353,6 +354,37 @@ test('isolates the Studio Records scenario before and after its mutations', () =
       `${hook} must restore the authoritative fixture before restarting the app`,
     );
   }
+});
+
+test('orders album identity restoration before track moves and orphan cleanup', () => {
+  const sql = fs.readFileSync(
+    path.resolve('tests/e2e/helpers/ddtStudioRecordsFixtureReset.sql'),
+    'utf8',
+  );
+  const albumRestoreIndex = sql.indexOf('insert into library.local_albums');
+  const albumRestoreStatementEnd = sql.indexOf('\\gset seeded_typo_', albumRestoreIndex);
+  const trackMoveIndex = sql.indexOf('updated_tracks as');
+  const trackMoveStatementEnd = sql.indexOf('\\gset reset_', trackMoveIndex);
+  const orphanCleanupIndex = sql.indexOf('deleted_orphan_albums as', trackMoveStatementEnd);
+
+  assert.ok(albumRestoreIndex >= 0, 'fixture reset must restore the destination album row');
+  assert.ok(
+    albumRestoreStatementEnd > albumRestoreIndex,
+    'album identity restoration must complete in an earlier statement',
+  );
+  assert.ok(
+    trackMoveIndex > albumRestoreStatementEnd,
+    'album identities must exist before track moves',
+  );
+  assert.ok(trackMoveStatementEnd > trackMoveIndex, 'track moves must complete in their own statement');
+  assert.ok(
+    orphanCleanupIndex > trackMoveStatementEnd,
+    'orphan cleanup must run only after every track identity transition completes',
+  );
+  assert.doesNotMatch(
+    sql.slice(trackMoveIndex, trackMoveStatementEnd),
+    /deleted_orphan_albums as/i,
+  );
 });
 
 test('restarts the performance app around Studio Records setup and cleanup', () => {

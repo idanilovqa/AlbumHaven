@@ -99,6 +99,118 @@ cross join fixture_context
 cross join fixture_root
 where library.library_root_settings.library_id = bootstrap_context.library_id;
 
+-- Album identity transition triggers query both album rows from the statement
+-- snapshot. Seed the optional typo identity in an earlier statement so it is
+-- visible before any track moves to it.
+with
+fixture_rows as materialized (
+  select *
+  from jsonb_to_recordset(
+    convert_from(decode(:'fixture_b64', 'base64'), 'UTF8')::jsonb
+  ) as fixture(
+    filename text,
+    private_path text,
+    artist text,
+    album_artist text,
+    album text,
+    track_number integer,
+    year integer,
+    release_date text,
+    file_size_bytes bigint,
+    modified_at_epoch double precision
+  )
+),
+target_album as materialized (
+  select
+    library.local_albums.id,
+    library.local_albums.library_id
+  from library.local_albums
+  where library.local_albums.title = 'Студийные записи'
+  order by
+    (
+      library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
+        || '::'
+        || lower('Студийные записи'::text)
+    ) desc,
+    (
+      select count(*)
+      from library.local_tracks as candidate_tracks
+      join fixture_rows
+        on candidate_tracks.title =
+          'Студийная запись ' || fixture_rows.track_number::text
+      where candidate_tracks.album_id = library.local_albums.id
+    ) desc,
+    (library.local_albums.release_year = 1999) desc,
+    library.local_albums.id
+  limit 1
+),
+seeded_typo_artist as (
+  insert into library.local_artists (
+    library_id,
+    artist_key,
+    name,
+    sort_name,
+    metadata
+  )
+  select
+    target_album.library_id,
+    lower('Ovderhead'::text),
+    'Ovderhead',
+    lower('Ovderhead'::text),
+    jsonb_build_object('source', 'runtime_scan_cache')
+  from target_album
+  where exists (
+    select 1
+    from fixture_rows
+    where fixture_rows.album = 'Telepathic Minds'
+  )
+  on conflict (library_id, artist_key) do update
+  set
+    name = excluded.name,
+    sort_name = excluded.sort_name,
+    last_seen_at = now()
+  returning library.local_artists.id, library.local_artists.library_id
+),
+seeded_typo_album as (
+  insert into library.local_albums (
+    library_id,
+    artist_id,
+    album_key,
+    title,
+    release_year,
+    metadata
+  )
+  select
+    target_album.library_id,
+    seeded_typo_artist.id,
+    lower('Ovderhead'::text) || '::' || lower('Telepathic Minds'::text),
+    'Telepathic Minds',
+    1999,
+    jsonb_build_object(
+      'source', 'runtime_scan_cache',
+      'album_artist', 'Ovderhead',
+      'artists', jsonb_build_array('Ovderhead'),
+      'release_date', '1999-01-01',
+      'is_compilation', false,
+      'featured_artists', '[]'::jsonb
+    )
+  from target_album
+  join seeded_typo_artist
+    on seeded_typo_artist.library_id = target_album.library_id
+  on conflict (library_id, album_key) do update
+  set
+    artist_id = excluded.artist_id,
+    title = excluded.title,
+    release_year = excluded.release_year,
+    metadata = coalesce(library.local_albums.metadata, '{}'::jsonb)
+      || excluded.metadata,
+    last_seen_at = now()
+  returning library.local_albums.id, library.local_albums.library_id
+)
+select
+  (select count(*) from seeded_typo_album) as album_rows
+\gset seeded_typo_
+
 with
 fixture_rows as materialized (
   select *
@@ -248,68 +360,31 @@ target_album as materialized (
     library.local_albums.id
   limit 1
 ),
-upserted_typo_artist as (
-  insert into library.local_artists (
-    library_id,
-    artist_key,
-    name,
-    sort_name,
-    metadata
-  )
+restored_typo_artist as materialized (
   select
-    target_album.library_id,
-    lower('Ovderhead'::text),
-    'Ovderhead',
-    lower('Ovderhead'::text),
-    jsonb_build_object('source', 'runtime_scan_cache')
-  from target_album
-  where exists (
-    select 1
-    from fixture_rows
-    where fixture_rows.album = 'Telepathic Minds'
-  )
-  on conflict (library_id, artist_key) do update
-  set
-    name = excluded.name,
-    sort_name = excluded.sort_name,
-    last_seen_at = now()
-  returning library.local_artists.id, library.local_artists.library_id
-),
-upserted_typo_album as (
-  insert into library.local_albums (
-    library_id,
-    artist_id,
-    album_key,
-    title,
-    release_year,
-    metadata
-  )
-  select
-    target_album.library_id,
-    upserted_typo_artist.id,
-    lower('Ovderhead'::text) || '::' || lower('Telepathic Minds'::text),
-    'Telepathic Minds',
-    1999,
-    jsonb_build_object(
-      'source', 'runtime_scan_cache',
-      'album_artist', 'Ovderhead',
-      'artists', jsonb_build_array('Ovderhead'),
-      'release_date', '1999-01-01',
-      'is_compilation', false,
-      'featured_artists', '[]'::jsonb
+    library.local_artists.id,
+    library.local_artists.library_id
+  from library.local_artists
+  join target_album
+    on target_album.library_id = library.local_artists.library_id
+  where library.local_artists.artist_key = lower('Ovderhead'::text)
+    and exists (
+      select 1
+      from fixture_rows
+      where fixture_rows.album = 'Telepathic Minds'
     )
-  from target_album
-  join upserted_typo_artist
-    on upserted_typo_artist.library_id = target_album.library_id
-  on conflict (library_id, album_key) do update
-  set
-    artist_id = excluded.artist_id,
-    title = excluded.title,
-    release_year = excluded.release_year,
-    metadata = coalesce(library.local_albums.metadata, '{}'::jsonb)
-      || excluded.metadata,
-    last_seen_at = now()
-  returning library.local_albums.id, library.local_albums.library_id
+),
+restored_typo_album as materialized (
+  select
+    library.local_albums.id,
+    library.local_albums.library_id
+  from library.local_albums
+  join target_album
+    on target_album.library_id = library.local_albums.library_id
+  join restored_typo_artist
+    on restored_typo_artist.id = library.local_albums.artist_id
+  where library.local_albums.album_key =
+    lower('Ovderhead'::text) || '::' || lower('Telepathic Minds'::text)
 ),
 upserted_typo_membership as (
   insert into library.local_album_featured_artists (
@@ -320,14 +395,14 @@ upserted_typo_membership as (
     metadata
   )
   select
-    upserted_typo_album.library_id,
-    upserted_typo_album.id,
-    upserted_typo_artist.id,
+    restored_typo_album.library_id,
+    restored_typo_album.id,
+    restored_typo_artist.id,
     'owner',
     jsonb_build_object('source', 'runtime_scan_cache')
-  from upserted_typo_album
-  join upserted_typo_artist
-    on upserted_typo_artist.library_id = upserted_typo_album.library_id
+  from restored_typo_album
+  join restored_typo_artist
+    on restored_typo_artist.library_id = restored_typo_album.library_id
   on conflict (library_id, album_id, artist_id, featured_kind) do update
   set last_seen_at = now()
   returning library.local_album_featured_artists.id
@@ -394,7 +469,7 @@ updated_tracks as (
     track_key = selected_rows.private_path,
     album_id = case
       when selected_rows.album = 'Telepathic Minds'
-      then (select upserted_typo_album.id from upserted_typo_album)
+      then (select restored_typo_album.id from restored_typo_album)
       else target_album.id
     end,
     track_number = selected_rows.track_number,
@@ -460,6 +535,106 @@ updated_track_files as (
     library.local_track_files.id,
     library.local_track_files.library_root_id
 ),
+updated_library as (
+  update library.libraries
+  set
+    metadata = jsonb_set(
+      jsonb_set(
+        coalesce(library.libraries.metadata, '{}'::jsonb),
+        '{scan_cache}',
+        coalesce(library.libraries.metadata -> 'scan_cache', '{}'::jsonb)
+          - 'relation_projection'
+          - 'relation_views'
+          - 'relations_last_built',
+        true
+      ),
+      '{inventory_mutation_revision}',
+      to_jsonb(
+        coalesce(
+          nullif(
+            library.libraries.metadata ->> 'inventory_mutation_revision',
+            ''
+          )::bigint,
+          0
+        ) + 1
+      ),
+      true
+    ),
+    updated_at = now()
+  from target_album
+  where library.libraries.id = target_album.library_id
+  returning library.libraries.id
+)
+select json_build_object(
+  'fixture_input_rows', (select count(*) from fixture_rows),
+  'matched_file_rows', (select count(*) from selected_rows),
+  'album_rows', (select count(*) from updated_album),
+  'typo_album_rows', (select count(*) from restored_typo_album),
+  'typo_membership_rows', (select count(*) from upserted_typo_membership),
+  'track_rows', (select count(*) from updated_tracks),
+  'track_file_rows', (select count(*) from updated_track_files),
+  'fixture_root_rows', (select count(*) from fixture_root),
+  'track_file_root_rows', (
+    select count(*)
+    from updated_track_files
+    cross join fixture_root
+    where updated_track_files.library_root_id = fixture_root.id
+  ),
+  'album_edition_rows', (
+    select count(*)
+    from library.local_albums
+    join target_album on target_album.id = library.local_albums.id
+    where nullif(btrim(library.local_albums.metadata ->> 'edition'), '') is not null
+  ),
+  'file_edition_rows', (
+    select count(*)
+    from library.local_track_files
+    join selected_rows
+      on selected_rows.track_file_id = library.local_track_files.id
+    where nullif(
+      btrim(
+        library.local_track_files.metadata
+          #>> '{scan_cache,file_entry,edition}'
+      ),
+      ''
+    ) is not null
+  )
+)::text as reset_json
+\gset reset_
+
+-- Track transitions are complete and both identities were visible to every
+-- trigger invocation. Orphan cleanup now runs in later statements so it cannot
+-- remove a predecessor or destination while a track is moving.
+with
+fixture_rows as materialized (
+  select *
+  from jsonb_to_recordset(
+    convert_from(decode(:'fixture_b64', 'base64'), 'UTF8')::jsonb
+  ) as fixture(
+    filename text,
+    private_path text,
+    artist text,
+    album_artist text,
+    album text,
+    track_number integer,
+    year integer,
+    release_date text,
+    file_size_bytes bigint,
+    modified_at_epoch double precision
+  )
+),
+target_album as materialized (
+  select
+    library.local_albums.id,
+    library.local_albums.library_id
+  from library.local_albums
+  where library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
+      || '::'
+      || lower('Студийные записи'::text)
+    and library.local_albums.title = 'Студийные записи'
+  order by library.local_albums.id
+  limit 1
+),
 deleted_separate_releases as (
   delete from library.separate_releases
   using target_album
@@ -504,97 +679,45 @@ deleted_orphan_albums as (
     and not exists (
       select 1
       from library.local_tracks
-      join library.local_track_files
-        on library.local_track_files.track_id = library.local_tracks.id
       where library.local_tracks.album_id = library.local_albums.id
-        and library.local_tracks.id not in (
-          select selected_rows.track_id from selected_rows
-        )
     )
-  returning library.local_albums.id, library.local_albums.artist_id
+  returning library.local_albums.id
+)
+select
+  (select count(*) from deleted_separate_releases) as separate_release_rows,
+  (select count(*) from deleted_orphan_albums) as orphan_album_rows
+\gset cleanup_
+
+with
+target_library as materialized (
+  select library.local_albums.library_id
+  from library.local_albums
+  where library.local_albums.album_key = lower('Юрий Шевчук / ДДТ'::text)
+      || '::'
+      || lower('Студийные записи'::text)
+    and library.local_albums.title = 'Студийные записи'
+  order by library.local_albums.id
+  limit 1
 ),
 deleted_orphan_artists as (
   delete from library.local_artists
-  using target_album
-  where library.local_artists.library_id = target_album.library_id
+  using target_library
+  where library.local_artists.library_id = target_library.library_id
     and library.local_artists.name in ('Ovderhead', 'Overhead')
     and not exists (
       select 1
       from library.local_albums
       where library.local_albums.artist_id = library.local_artists.id
-        and library.local_albums.id not in (
-          select deleted_orphan_albums.id from deleted_orphan_albums
-        )
     )
   returning library.local_artists.id
-),
-updated_library as (
-  update library.libraries
-  set
-    metadata = jsonb_set(
-      jsonb_set(
-        coalesce(library.libraries.metadata, '{}'::jsonb),
-        '{scan_cache}',
-        coalesce(library.libraries.metadata -> 'scan_cache', '{}'::jsonb)
-          - 'relation_projection'
-          - 'relation_views'
-          - 'relations_last_built',
-        true
-      ),
-      '{inventory_mutation_revision}',
-      to_jsonb(
-        coalesce(
-          nullif(
-            library.libraries.metadata ->> 'inventory_mutation_revision',
-            ''
-          )::bigint,
-          0
-        ) + 1
-      ),
-      true
-    ),
-    updated_at = now()
-  from target_album
-  where library.libraries.id = target_album.library_id
-  returning library.libraries.id
 )
-select json_build_object(
-  'fixture_input_rows', (select count(*) from fixture_rows),
-  'matched_file_rows', (select count(*) from selected_rows),
-  'album_rows', (select count(*) from updated_album),
-  'typo_album_rows', (select count(*) from upserted_typo_album),
-  'typo_membership_rows', (select count(*) from upserted_typo_membership),
-  'track_rows', (select count(*) from updated_tracks),
-  'track_file_rows', (select count(*) from updated_track_files),
-  'fixture_root_rows', (select count(*) from fixture_root),
-  'track_file_root_rows', (
-    select count(*)
-    from updated_track_files
-    cross join fixture_root
-    where updated_track_files.library_root_id = fixture_root.id
-  ),
-  'album_edition_rows', (
-    select count(*)
-    from library.local_albums
-    join target_album on target_album.id = library.local_albums.id
-    where nullif(btrim(library.local_albums.metadata ->> 'edition'), '') is not null
-  ),
-  'file_edition_rows', (
-    select count(*)
-    from library.local_track_files
-    join selected_rows
-      on selected_rows.track_file_id = library.local_track_files.id
-    where nullif(
-      btrim(
-        library.local_track_files.metadata
-          #>> '{scan_cache,file_entry,edition}'
-      ),
-      ''
-    ) is not null
-  ),
-  'separate_release_rows', (select count(*) from deleted_separate_releases),
-  'orphan_album_rows', (select count(*) from deleted_orphan_albums),
-  'orphan_artist_rows', (select count(*) from deleted_orphan_artists)
+select (
+  (:'reset_reset_json')::jsonb
+  || jsonb_build_object(
+    'separate_release_rows', :'cleanup_separate_release_rows'::integer,
+    'orphan_album_rows', :'cleanup_orphan_album_rows'::integer,
+    'orphan_artist_rows', (select count(*) from deleted_orphan_artists)
+  )
 )::text;
 
 commit;

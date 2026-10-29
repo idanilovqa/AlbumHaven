@@ -366,6 +366,51 @@ test('current artist hydration reaches terminal state while library-wide hydrati
   );
 });
 
+test('late artist hydration preserves completed library-wide non-album tracks', async () => {
+  const { context } = loadHelper();
+  let resolveArtistRequest;
+  let resolveLibraryRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => new Promise((resolve) => {
+    const libraryWide = new URL(url, 'http://localhost')
+      .searchParams.get('include_library_wide_non_album') === '1';
+    const respond = () => resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Neal Morse',
+        non_album_tracks: [],
+        ...(libraryWide ? {
+          library_non_album_tracks: [{ path: '/music/other/loose.flac', title: 'Library Loose' }],
+        } : {}),
+      }),
+    });
+    if (libraryWide) resolveLibraryRequest = respond;
+    else resolveArtistRequest = respond;
+  });
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+
+  const artistHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+  const libraryHydration = context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  await Promise.resolve();
+  resolveLibraryRequest();
+  await libraryHydration;
+  resolveArtistRequest();
+  await artistHydration;
+
+  assert.deepEqual(
+    Array.from(context.state.view.library_non_album_tracks, (track) => track.title),
+    ['Library Loose'],
+  );
+});
+
 test('deferred non-album hydration starts a new request after gallery identity changes', async () => {
   const { context } = loadHelper();
   const requested = [];

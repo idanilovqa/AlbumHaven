@@ -250,11 +250,12 @@ let deferredNonAlbumHydrationRequest = null;
 async function hydrateDeferredNonAlbumTracks(options = {}) {
   const view = state.view || {};
   if (!view.non_album_tracks_deferred) return view.non_album_tracks || [];
+  const libraryWide = options.libraryWide === true;
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
   requestUrl.searchParams.set('include_non_album', '1');
   const requestScopeKey = `${requestUrl.pathname}${requestUrl.search}`;
-  if (options.libraryWide === true) {
+  if (libraryWide) {
     requestUrl.searchParams.set('include_library_wide_non_album', '1');
   }
   const requestKey = `${requestUrl.pathname}${requestUrl.search}`;
@@ -284,9 +285,11 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
     state.view.non_album_tracks = Array.isArray(payload.non_album_tracks)
       ? payload.non_album_tracks
       : [];
-    state.view.library_non_album_tracks = Array.isArray(payload.library_non_album_tracks)
-      ? payload.library_non_album_tracks
-      : state.view.non_album_tracks;
+      if (libraryWide) {
+        state.view.library_non_album_tracks = Array.isArray(payload.library_non_album_tracks)
+          ? payload.library_non_album_tracks
+          : state.view.non_album_tracks;
+      }
     state.view.non_album_tracks_deferred = false;
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_tracks;

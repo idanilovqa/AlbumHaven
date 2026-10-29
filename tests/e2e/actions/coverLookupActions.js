@@ -160,12 +160,14 @@ export class CoverLookupActions {
       const subtitle = document.querySelector(selectors.modalSubtitleSelector);
       const manualInput = document.querySelector(selectors.manualInputSelector);
       const manualExtractButton = document.querySelector(selectors.manualExtractButtonSelector);
+      const initialGalleryLoading = document.querySelector(selectors.initialGalleryLoadingSelector);
       return modal instanceof HTMLElement
         && !modal.hidden
         && subtitle instanceof HTMLElement
         && (subtitle.textContent || '').trim().length > 0
         && manualInput instanceof HTMLTextAreaElement
-        && manualExtractButton instanceof HTMLButtonElement;
+        && manualExtractButton instanceof HTMLButtonElement
+        && !initialGalleryLoading;
     }, {
       timeout: options.timeout || 30000,
     }, {
@@ -173,6 +175,7 @@ export class CoverLookupActions {
       modalSubtitleSelector: this.coverLookup.modalSubtitleSelector,
       manualInputSelector: this.coverLookup.manualUrlInputSelector,
       manualExtractButtonSelector: this.coverLookup.manualExtractButtonSelector,
+      initialGalleryLoadingSelector: this.coverLookup.initialGalleryLoadingSelector,
     });
   }
 

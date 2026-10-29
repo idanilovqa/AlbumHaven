@@ -958,7 +958,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     await trackModalActions.close();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
-    await coverLookupActions.waitForTaskStatus(taskTitle, 'Art chosen', { timeout: 120000 });
+    await coverLookupActions.waitForTaskStatus(taskTitle, '1 covers found', { timeout: 120000 });
     await coverLookupActions.releaseLaterProviderFixture();
     const providerEvidence = await coverLookupActions.waitForLaterProviderCancellationEvidence();
     expect(providerEvidence).toMatchObject({
@@ -975,7 +975,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
 
   await stepLogger.step('Reload and prove delayed provider work neither appends nor clobbers the saved partial result', async () => {
     await coverLookupActions.reloadAndOpenDrawer();
-    await coverLookupActions.waitForTaskStatus(taskTitle, 'Art chosen');
+    await coverLookupActions.waitForTaskStatus(taskTitle, '1 covers found');
     await coverLookupActions.openTask(taskTitle);
     await coverLookupActions.waitForModalReady({ timeout: 10000 });
     await coverLookupActions.waitForModalResultsReady({ timeout: 10000 });
@@ -990,7 +990,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
 
     const modal = await coverLookupActions.inspectModalComponents();
 
-    expect(modal.subtitle).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' - '));
+    expect(modal.subtitle).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' · '));
     expect(modal.hasFindBetterButton).toBe(true);
     expect(modal.hasSaveButton).toBe(true);
     expect(modal.hasManualInput).toBe(true);

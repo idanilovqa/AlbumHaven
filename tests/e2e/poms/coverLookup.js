@@ -125,6 +125,10 @@ export class CoverLookup extends BasePage {
     return '[data-add-cover-lookup-remote="1"]';
   }
 
+  get initialGalleryLoadingSelector() {
+    return '#cover-lookup-modal-body .cover-lookup-gallery-resolving, #cover-lookup-modal-body [data-cover-lookup-loading-section]:not([data-cover-lookup-loading-section="pasted"])';
+  }
+
   get closeModalButtonSelector() {
     return '#cover-lookup-modal [data-close-cover-lookup-modal="1"]';
   }

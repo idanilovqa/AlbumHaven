@@ -1303,7 +1303,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   );
   assert.match(
     coverLookup,
-    /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, 'Art chosen'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
+    /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, '1 covers found'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
   );
   assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = String\(selection\.payload\?\.optimistic_cover_path[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
   assert.match(
@@ -5395,6 +5395,86 @@ test('cover lookup drawer actions use product state and the explicit close contr
   const pom = read('tests/e2e/poms/coverLookup.js');
   assert.match(pom, /drawer\.hidden/);
   assert.match(pom, /classList\.contains\('is-open'\)/);
+});
+
+test('cover lookup results readiness waits for initial gallery placeholders but not pasted-image work', async () => {
+  const moduleUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js'),
+  ).href;
+  const { CoverLookupActions } = await import(moduleUrl);
+  const { CoverLookup } = await import(pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/poms/coverLookup.js'),
+  ).href);
+  const initialGalleryLoadingSelector = Object.getOwnPropertyDescriptor(
+    CoverLookup.prototype,
+    'initialGalleryLoadingSelector',
+  ).get.call({});
+  assert.equal(
+    initialGalleryLoadingSelector,
+    '#cover-lookup-modal-body .cover-lookup-gallery-resolving, #cover-lookup-modal-body [data-cover-lookup-loading-section]:not([data-cover-lookup-loading-section="pasted"])',
+  );
+  const page = new EventEmitter();
+  page.url = () => 'http://127.0.0.1:4173/';
+
+  const originalDocument = globalThis.document;
+  const originalHTMLElement = globalThis.HTMLElement;
+  const originalHTMLTextAreaElement = globalThis.HTMLTextAreaElement;
+  const originalHTMLButtonElement = globalThis.HTMLButtonElement;
+  class TestElement {}
+  class TestTextAreaElement extends TestElement {}
+  class TestButtonElement extends TestElement {}
+  const modal = Object.assign(new TestElement(), { hidden: false });
+  const subtitle = Object.assign(new TestElement(), { textContent: 'Album' });
+  const manualInput = new TestTextAreaElement();
+  const manualExtractButton = new TestButtonElement();
+  let loadingSection = 'remote';
+  const observed = [];
+
+  globalThis.HTMLElement = TestElement;
+  globalThis.HTMLTextAreaElement = TestTextAreaElement;
+  globalThis.HTMLButtonElement = TestButtonElement;
+  globalThis.document = {
+    querySelector(selector) {
+      if (selector === '#cover-lookup-modal') return modal;
+      if (selector === '#cover-lookup-modal-subtitle') return subtitle;
+      if (selector === '#cover-lookup-pasted-urls') return manualInput;
+      if (selector === '[data-add-cover-lookup-remote="1"]') return manualExtractButton;
+      if (selector === initialGalleryLoadingSelector) {
+        return loadingSection === 'pasted' || loadingSection === '' ? null : new TestElement();
+      }
+      return null;
+    },
+  };
+
+  try {
+    const actions = new CoverLookupActions({
+      page,
+      modalSelector: '#cover-lookup-modal',
+      modalSubtitleSelector: '#cover-lookup-modal-subtitle',
+      manualUrlInputSelector: '#cover-lookup-pasted-urls',
+      manualExtractButtonSelector: '[data-add-cover-lookup-remote="1"]',
+      initialGalleryLoadingSelector,
+      async waitForPageCondition(predicate, options, selectors) {
+        assert.equal(options.timeout, 30000);
+        observed.push(predicate(selectors));
+        loadingSection = 'resolving';
+        observed.push(predicate(selectors));
+        loadingSection = '';
+        observed.push(predicate(selectors));
+        loadingSection = 'pasted';
+        observed.push(predicate(selectors));
+      },
+    });
+
+    await actions.waitForModalResultsReady();
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.HTMLElement = originalHTMLElement;
+    globalThis.HTMLTextAreaElement = originalHTMLTextAreaElement;
+    globalThis.HTMLButtonElement = originalHTMLButtonElement;
+  }
+
+  assert.deepEqual(observed, [false, false, true, true]);
 });
 
 test('utility loop summaries read the group header instead of a saved-loop title', () => {

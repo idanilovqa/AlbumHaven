@@ -2793,6 +2793,35 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     ]
 
 
+def test_exception_file_with_album_tags_stays_detached_from_album_inventory(monkeypatch):
+    from music_app.services import scan_cache_persistence
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    path = "C:/Music/Incoming/problem-file.mp3"
+    file_cache = {
+        path: {
+            "path": path,
+            "mtime": 1.0,
+            "size": 123,
+            "album": "Loose Tracks",
+            "album_artist": "Unknown Artist",
+            "artist": "Unknown Artist",
+            "title": "Problem File",
+            "track_number": None,
+            "disc_number": None,
+            "duration_seconds": None,
+            "exception_type": "missing_tags",
+        }
+    }
+
+    _artists, album_rows, _featured, track_rows, _track_files = (
+        scan_cache_persistence._inventory_rows_from_albums(file_cache, [])
+    )
+
+    assert album_rows == []
+    assert track_rows[0]["album_key"] is None
+
+
 def test_explicit_scan_publishes_family_links_before_compilation_aware_ready_metadata_on_same_transaction(monkeypatch):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
@@ -4738,6 +4767,48 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(
             'relation_projection': {**snapshot['relation_projection'], 'status': 'ready'},
         }
         assert snapshot['relation_projection']['status'] == 'stale'
+
+
+def test_targeted_preferred_paths_detects_external_retag_from_uniform_album():
+    from music_app.services.scan_cache_persistence import _targeted_preferred_paths
+
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    context = {
+        path: {"path": path, "album_artist": "Owner", "album": "Album", "year": 2000}
+        for path in paths
+    }
+    incoming = {paths[1]: {**context[paths[1]], "year": 2001}}
+    memberships = [
+        {"private_path": path, "album_key": "owner::album"}
+        for path in paths
+    ]
+
+    assert _targeted_preferred_paths(
+        incoming_entries=incoming,
+        context_entries=context,
+        existing_memberships=memberships,
+    ) == {paths[1]}
+
+
+def test_targeted_preferred_paths_ignores_refresh_of_heterogeneous_year_group():
+    from music_app.services.scan_cache_persistence import _targeted_preferred_paths
+
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    context = {
+        paths[0]: {"path": paths[0], "album_artist": "Owner", "album": "Album", "year": 2000},
+        paths[1]: {"path": paths[1], "album_artist": "Owner", "album": "Album", "year": 2001},
+    }
+    incoming = {paths[1]: {**context[paths[1]], "year": 2003}}
+    memberships = [
+        {"private_path": path, "album_key": "owner::album"}
+        for path in paths
+    ]
+
+    assert _targeted_preferred_paths(
+        incoming_entries=incoming,
+        context_entries=context,
+        existing_memberships=memberships,
+    ) == set()
 
 
 @pytest.mark.parametrize('invalidity', ['changed_source', 'stale_mismatch', 'unknown_status', 'old_builder', 'incomplete'])

@@ -461,6 +461,7 @@ class PostgresScanCacheAdapter:
                 file_cache,
                 membership_context,
             )
+            incoming_entries = dict(file_cache)
             file_cache = {**membership_context, **file_cache}
             existing_memberships = [
                 _row_mapping(row)
@@ -495,7 +496,11 @@ class PostgresScanCacheAdapter:
                 track_rows=track_rows,
                 existing_memberships=existing_memberships,
                 separate_release_keys=separate_release_keys,
-                preferred_paths=incoming_track_paths,
+                preferred_paths=_targeted_preferred_paths(
+                    incoming_entries=incoming_entries,
+                    context_entries=membership_context,
+                    existing_memberships=existing_memberships,
+                ),
                 excluded_paths=stale_context_paths,
             )
             _execute_semantic_local_album_key_adoptions(connection, album_rows)
@@ -2863,6 +2868,49 @@ def _album_cover_authority_metadata(album: object) -> dict[str, object]:
     return metadata
 
 
+def _targeted_preferred_paths(
+    *,
+    incoming_entries: dict[str, dict[str, object]],
+    context_entries: dict[str, dict[str, object]],
+    existing_memberships: list[dict[str, object]],
+) -> set[str]:
+    def structural_identity(entry: dict[str, object]) -> tuple[str, int | None]:
+        return (
+            album_separate_release_key(
+                entry.get("album_artist") or entry.get("artist"),
+                entry.get("album"),
+                entry.get("edition"),
+            ),
+            safe_int(entry.get("year")),
+        )
+
+    album_key_by_path = {
+        str(row.get("private_path") or ""): str(row.get("album_key") or "")
+        for row in existing_memberships
+        if row.get("private_path") and row.get("album_key")
+    }
+    identities_by_album: dict[str, set[tuple[str, int | None]]] = {}
+    for path, album_key in album_key_by_path.items():
+        context_entry = context_entries.get(path)
+        if context_entry is not None:
+            identities_by_album.setdefault(album_key, set()).add(
+                structural_identity(context_entry)
+            )
+
+    preferred_paths: set[str] = set()
+    for path, incoming_entry in incoming_entries.items():
+        context_entry = context_entries.get(path)
+        album_key = album_key_by_path.get(path)
+        if (
+            context_entry is not None
+            and album_key
+            and len(identities_by_album.get(album_key, set())) == 1
+            and structural_identity(incoming_entry) != structural_identity(context_entry)
+        ):
+            preferred_paths.add(path)
+    return preferred_paths
+
+
 def _remap_targeted_album_identity_rows(
     *,
     album_rows: list[dict[str, object]],
@@ -3443,7 +3491,11 @@ def _inventory_rows_from_albums(
                 str(album_title or ""),
                 str(file_entry.get("edition") or ""),
             )
-            if album_owner and album_title
+            if (
+                album_owner
+                and album_title
+                and not normalize_exception_value(file_entry.get("exception_type"))
+            )
             else None
         )
         track_artist_key = ensure_artist(

@@ -1317,7 +1317,6 @@ def _cached_cover_variant_response(
     *,
     max_size: int,
     max_age: int,
-    storage_policy,
     revision: str = "",
 ) -> Response | None:
     for _attempt in range(2):
@@ -1331,10 +1330,7 @@ def _cached_cover_variant_response(
             )
             if cached_variant is None:
                 continue
-            relocating_fallback = bool(
-                index
-                and getattr(getattr(storage_policy, "snapshot", None), "requested_mode", None)
-            )
+            relocating_fallback = bool(index)
             if not relocating_fallback:
                 return _conditional_file_response(request, cached_variant, max_age=max_age)
             try:
@@ -1395,7 +1391,6 @@ def _cover_response(
             cache_roots,
             max_size=requested_size,
             max_age=31536000,
-            storage_policy=storage_policy,
             revision=normalized_revision,
         )
         if cached_response is not None:
@@ -1432,7 +1427,6 @@ def _cover_response(
                 cache_roots,
                 max_size=requested_size,
                 max_age=31536000 if normalized_revision else 300,
-                storage_policy=storage_policy,
                 revision=normalized_revision,
             )
             if cached_response is not None:

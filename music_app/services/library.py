@@ -442,6 +442,7 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     )
     if (
         display_album_artist == "Various Artists"
+        and not explicit_various
         and persisted_compilation_state is not True
         and len(display_member_artists) <= 3
         and display_member_artists

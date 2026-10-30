@@ -1321,7 +1321,7 @@ def _cached_cover_variant_response(
 ) -> Response | None:
     for _attempt in range(2):
         retry = False
-        for index, cache_root in enumerate(cache_roots):
+        for cache_root in cache_roots:
             cached_variant = find_existing_cover_display_variant(
                 source_path,
                 cache_root=cache_root,
@@ -1330,9 +1330,6 @@ def _cached_cover_variant_response(
             )
             if cached_variant is None:
                 continue
-            relocating_fallback = bool(index)
-            if not relocating_fallback:
-                return _conditional_file_response(request, cached_variant, max_age=max_age)
             try:
                 with cached_variant.open("rb") as handle:
                     stat_result = os.fstat(handle.fileno())

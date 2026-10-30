@@ -354,6 +354,12 @@ function cleanupMobilePage(descriptor) {
     original.placeholder.replaceWith(element);
     mobilePageState.originals.delete(descriptor.kind);
   }
+  if (descriptor.kind === 'album' && state.coverLookup?.returnToDrawerAfterAlbumDetails) {
+    state.coverLookup.returnToDrawerAfterAlbumDetails = false;
+    state.coverLookup.drawerOpen = true;
+    renderCoverLookupDrawer();
+    restoreCoverLookupDrawerScroll();
+  }
   return original?.returnFocus;
 }
 function dismissMobilePage(kind) {
@@ -617,7 +623,10 @@ function promoteVisibleMobileDialogs() {
   // Capture visibility before moving surfaces: presenting a child hides its parent.
   const visible = kinds.filter(kind => {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
-    return element && !element.hidden && !mobilePageState.originals.has(kind);
+    return element
+      && !element.hidden
+      && !(kind === 'cover-lookup' && element.classList.contains('is-mobile-sheet'))
+      && !mobilePageState.originals.has(kind);
   });
   for (const kind of visible) {
     if (kind === 'utilities' && !mobileUtilityTabAllowed(state.utility.activeTab)) {

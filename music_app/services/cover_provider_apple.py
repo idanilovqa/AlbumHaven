@@ -390,7 +390,7 @@ def extract_apple_album_links_from_search_html(html: str) -> list[str]:
 
 def _extract_album_part_marker(value: str) -> int | None:
     match = re.search(
-        r"\b(?:pt|part|volume|vol)\.?\s*([0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b",
+        r"\b(?:pt|part|volume|vol|book)\.?\s*([0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b",
         value or "",
         flags=re.IGNORECASE,
     )
@@ -463,7 +463,7 @@ def album_query_part_variants(value: str) -> list[str]:
         if marker in word_lookup:
             replacements.extend([f"Part {word_lookup[marker]}"])
         normalized_replacements = list(dict.fromkeys(replacements))
-        variant_pattern = r"\b(?:pt|part|volume|vol)\.?\s*(?:[0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
+        variant_pattern = r"\b(?:pt|part|volume|vol|book)\.?\s*(?:[0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
         for replacement in normalized_replacements:
             replaced = re.sub(variant_pattern, replacement, raw, count=1, flags=re.IGNORECASE)
             if replaced and replaced not in variants:
@@ -1259,7 +1259,7 @@ def search_apple(
                 if best_candidate:
                     return best_candidate
             log_miss(artist, album, year, matches, query_mode, raw_results, parse_year=parse_year, log_event=log_event, logger=logger)
-            if api_only:
+            if api_only or query_mode.startswith("album"):
                 continue
             artist_lookup_matches, artist_lookup_raw_results = collect_artist_lookup_matches(
                 query_artist,
@@ -1496,7 +1496,7 @@ def search_apple_candidates(
                 ):
                     return dedupe_candidates(candidates)
                 found_viable_matches = True
-            else:
+            elif not query_mode.startswith("album"):
                 log_miss(artist, album, year, matches, query_mode, raw_results, parse_year=parse_year, log_event=log_event, logger=logger)
                 artist_lookup_matches, artist_lookup_raw_results = collect_artist_lookup_matches(
                     query_artist,
@@ -1671,6 +1671,9 @@ def _build_search_queries(
     if query_year:
         queries.append((f"{query_artist} {query_album_text} {query_year}", f"artist+album+year:{query_suffix}", True))
     queries.append((f"{query_artist} {query_album_text}", f"artist+album:{query_suffix}", False))
+    if query_year:
+        queries.append((f"{query_album_text} {query_year}", f"album+year:{query_suffix}", True))
+    queries.append((query_album_text, f"album:{query_suffix}", False))
     return queries
 
 

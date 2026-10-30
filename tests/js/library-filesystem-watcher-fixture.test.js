@@ -11,6 +11,21 @@ const helperPath = path.resolve(__dirname, '../e2e/helpers/libraryFilesystemWatc
 const load = () => import(pathToFileURL(helperPath).href);
 const mediaRootHelperPath = path.resolve(__dirname, '../e2e/helpers/fixtureMediaRoot.js');
 
+test('watcher fixture forwards custom titles artists and discs through atomic album materialization', () => {
+  const source = fs.readFileSync(helperPath, 'utf8');
+
+  assert.match(source, /trackTitles\s*=\s*\['Watcher First Signal', 'Watcher Second Signal'\]/);
+  assert.match(source, /trackArtists\s*=\s*null/);
+  assert.match(source, /discNumbers\s*=\s*null/);
+  assert.match(source, /removeEmbeddedArtwork\s*=\s*false/);
+  assert.match(source, /createLocalArt\s*=\s*false/);
+  assert.match(source, /if \(createLocalArt\)[\s\S]*?CREATE_LOCAL_ART_SCRIPT/);
+  assert.match(source, /async function retag\(trackPath,\s*\{[\s\S]*?trackArtist,[\s\S]*?albumArtist,[\s\S]*?discTag\s*=\s*'1\/1'/);
+  assert.match(source, /trackTitles:\s*titles[\s\S]*?trackArtist:\s*defaultTrackArtist[\s\S]*?trackArtists:\s*albumTrackArtists[\s\S]*?albumArtist:\s*albumOwner[\s\S]*?discNumbers:\s*albumDiscNumbers/);
+  assert.match(source, /trackArtist:\s*albumTrackArtists\?\.\[index\]\s*\|\|\s*defaultTrackArtist/);
+  assert.match(source, /discTotal\s*>\s*1[\s\S]*?`CD\$\{discNumber\}`/);
+});
+
 function fixture(t, ownedDirectoryName = 'watcher-reconciliation') {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-cleanup-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));

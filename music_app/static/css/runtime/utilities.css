@@ -922,7 +922,7 @@
 .utility-detail-cover-image {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: var(--album-art-fit);
   display: block;
 }
 .utility-detail-cover-placeholder {
@@ -1373,7 +1373,7 @@
   z-index: 96;
 }
 #cover-lookup-delete-confirm-modal {
-  z-index: 130;
+  z-index: 4700;
 }
 #repair-confirm-modal {
   z-index: 120;
@@ -1685,7 +1685,7 @@
   height: 52px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  object-fit: cover;
+  object-fit: var(--album-art-fit);
   background: rgba(255,255,255,0.04);
 }
 .tag-editor-artwork-placeholder {
@@ -1727,8 +1727,21 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.tag-editor-exception-field::after {
+  content: '';
+  position: absolute;
+  right: 13px;
+  bottom: 14px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--appearance-interaction-outline, #93c5fd);
+  border-bottom: 2px solid var(--appearance-interaction-outline, #93c5fd);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
 #tag-editor-modal .tag-editor-exception-field input,
 #tag-editor-modal .tag-editor-exception-field input:focus {
+  padding-right: 34px;
   border-color: var(--border);
   box-shadow: none;
   background: rgba(255,255,255,0.03);

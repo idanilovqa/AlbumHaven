@@ -11,7 +11,7 @@ class _LoggerStub:
         self.verbose_calls.append((message, args))
 
 
-def test_select_background_cover_refresh_jobs_queues_missing_and_skips_adequate_user_owned_covers():
+def test_select_background_cover_refresh_jobs_queues_missing_and_inadequate_user_owned_covers():
     logger = _LoggerStub()
     calls = []
     cover_cache = object()
@@ -27,7 +27,7 @@ def test_select_background_cover_refresh_jobs_queues_missing_and_skips_adequate_
             {
                 "folder": "user",
                 "track_paths": ["track-2"],
-                "needs_cover_fetch": False,
+                "needs_cover_fetch": True,
                 "cover_selection_origin": None,
             },
             {"folder": "automatic", "needs_cover_fetch": False, "cover_selection_origin": "automatic"},
@@ -39,11 +39,39 @@ def test_select_background_cover_refresh_jobs_queues_missing_and_skips_adequate_
 
     assert jobs == [
         {"folder": "missing", "needs_cover_fetch": True, "cover_selection_origin": None},
+        {
+            "folder": "user",
+            "track_paths": ["track-2"],
+            "needs_cover_fetch": True,
+            "cover_selection_origin": "user",
+        },
     ]
     assert calls == [(
         {"track-1": {}, "track-2": {}, "track-3": {}},
         {"cover_cache": cover_cache},
     )]
+
+
+def test_select_background_cover_refresh_jobs_skips_adequate_user_owned_covers():
+    logger = _LoggerStub()
+
+    jobs = cover_refresh_jobs.select_background_cover_refresh_jobs(
+        file_cache={"track-1": {}, "track-2": {}},
+        user_owned_track_paths={"track-2"},
+        cover_cache=object(),
+        build_cover_jobs=lambda *_args, **_kwargs: [
+            {"folder": "missing", "needs_cover_fetch": True},
+            {
+                "folder": "user",
+                "track_paths": ["track-2"],
+                "needs_cover_fetch": False,
+            },
+        ],
+        logger=logger,
+        scan_generation=1,
+    )
+
+    assert jobs == [{"folder": "missing", "needs_cover_fetch": True}]
 
 
 def test_select_manual_track_cover_refresh_jobs_filters_requested_paths():

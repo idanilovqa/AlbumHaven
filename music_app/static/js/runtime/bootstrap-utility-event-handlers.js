@@ -60,7 +60,7 @@ async function handleUtilityBootstrapClick(event) {
     renderProblemFilterControls(getUtilityModalElements());
   }
   if (
-    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox')
+    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal')
     && state.coverLookup.drawerOpen
   ) {
     state.coverLookup.drawerOpen = false;
@@ -779,7 +779,9 @@ async function handleUtilityBootstrapClick(event) {
     event.stopPropagation();
     const taskId = retryCoverLookupTaskButton.getAttribute('data-retry-cover-lookup-task') || '';
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
-    if (task?.album_payload) startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true });
+    if (task?.album_payload) {
+      startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true, taskId });
+    }
     return;
   }
 
@@ -794,9 +796,10 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
     if (task?.album_payload) {
-      state.coverLookup.drawerOpen = false;
-      renderCoverLookupDrawer();
-      openCoverLookupModal(task.album_payload, { taskId });
+      state.coverLookup.drawerScrollTop = Number(
+        document.getElementById?.('cover-lookup-drawer-body')?.scrollTop || 0,
+      );
+      openCoverLookupModal(task.album_payload, { taskId, mobileSheet: true });
     }
     return;
   }
@@ -830,6 +833,19 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-open-cover-lookup-album-details="1"]')) {
+    event.preventDefault();
+    openCoverLookupAlbumDetails();
+    return;
+  }
+
+  if (event.target.closest('[data-dismiss-cover-lookup-notice="1"]')) {
+    event.preventDefault();
+    state.coverLookup.modal.failureNotice = '';
+    renderCoverLookupModal();
+    return;
+  }
+
   if (event.target.closest('[data-start-cover-lookup="1"]')) {
     event.preventDefault();
     startCoverLookupForAlbum(state.coverLookup.modal.album);
@@ -850,7 +866,9 @@ async function handleUtilityBootstrapClick(event) {
 
   if (event.target.closest('[data-choose-cover-lookup-files="1"]')) {
     event.preventDefault();
-    document.querySelector('[data-cover-lookup-file-input]')?.click?.();
+    const coverLookupFileInput = document.querySelector('[data-cover-lookup-file-input]');
+    bindCoverLookupFileInput(coverLookupFileInput);
+    coverLookupFileInput?.click?.();
     return;
   }
 
@@ -888,6 +906,7 @@ async function handleUtilityBootstrapClick(event) {
     openImageLightbox(
       coverLookupLightboxButton.getAttribute('data-cover-src'),
       coverLookupLightboxButton.getAttribute('data-cover-alt'),
+      { previewSrc: coverLookupLightboxButton.getAttribute('data-cover-preview-src') },
     );
     return;
   }
@@ -934,6 +953,22 @@ async function handleUtilityBootstrapClick(event) {
     selectRemoteCoverFromLookup(candidateId);
     return;
   }
+  const currentReleaseButton = event.target.closest('[data-cover-lookup-current-release]');
+  if (currentReleaseButton) {
+    event.preventDefault();
+    void chooseCoverLookupCurrentRelease(
+      currentReleaseButton.getAttribute('data-cover-lookup-current-release') || '',
+    );
+    return;
+  }
+    const trackModalCurrentRelease = event.target.closest('[data-track-modal-current-release]');
+    if (trackModalCurrentRelease) {
+      event.preventDefault();
+      selectTrackModalCurrentRelease(
+        trackModalCurrentRelease.getAttribute('data-track-modal-current-release') || '',
+      );
+      return;
+    }
 
   const trackProblematicButton = event.target.closest('[data-open-track-problematic="1"]');
   if (trackProblematicButton) {
@@ -1121,8 +1156,8 @@ async function handleUtilityBootstrapDrop(event) {
   try {
     await addCoverLookupFiles(event.dataTransfer?.files || []);
   } catch (error) {
-    state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
-    state.coverLookup.modal.statusTone = 'error';
+    state.coverLookup.modal.manualStatusText = String(error?.message || 'Unable to add image.');
+    state.coverLookup.modal.manualStatusTone = 'error';
     renderCoverLookupModal();
   }
   return true;
@@ -1134,16 +1169,30 @@ function handleUtilityBootstrapDragEnd() {
   return true;
 }
 
+function stageCoverLookupFiles(coverLookupFiles) {
+  if (!coverLookupFiles) return Promise.resolve();
+  return addCoverLookupFiles(coverLookupFiles.files || [])
+    .catch((error) => {
+      state.coverLookup.modal.manualStatusText = String(error?.message || 'Unable to add image.');
+      state.coverLookup.modal.manualStatusTone = 'error';
+      renderCoverLookupModal();
+    })
+    .finally(() => { coverLookupFiles.value = ''; });
+}
+
+function bindCoverLookupFileInput(coverLookupFiles) {
+  if (!coverLookupFiles || coverLookupFiles.dataset.coverLookupChangeBound === '1') return;
+  coverLookupFiles.dataset.coverLookupChangeBound = '1';
+  coverLookupFiles.addEventListener('change', (event) => {
+    event.stopPropagation();
+    void stageCoverLookupFiles(coverLookupFiles);
+  });
+}
+
 function handleUtilityBootstrapChange(event) {
   const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
   if (coverLookupFiles) {
-    addCoverLookupFiles(coverLookupFiles.files || [])
-      .catch((error) => {
-        state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
-        state.coverLookup.modal.statusTone = 'error';
-        renderCoverLookupModal();
-      })
-      .finally(() => { coverLookupFiles.value = ''; });
+    void stageCoverLookupFiles(coverLookupFiles);
     return;
   }
   if (handleLibrarySettingsChange(event)) {

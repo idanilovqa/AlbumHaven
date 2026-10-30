@@ -11,10 +11,10 @@ const EXPECTED_CONFIGS = Object.freeze([
   'playwright.non-album-rescan.config.js',
 ]);
 const EXPECTED_SHARDS = Object.freeze([
-  ['gallery-search-visual', 53],
-  ['cover-providers-1', 12],
-  ['cover-providers-2', 12],
-  ['metadata-mutations', 14],
+  ['gallery-search-visual', 67],
+  ['cover-providers-1', 22],
+  ['cover-providers-2', 14],
+  ['metadata-mutations', 16],
   ['playback-utilities-1', 14],
   ['playback-utilities-2', 14],
   ['playback-utilities-3', 14],
@@ -209,7 +209,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 133) errors.push(`functional contract owns ${owned.length} cases; expected 133`);
+  if (owned.length !== 161) errors.push(`functional contract owns ${owned.length} cases; expected 161`);
   return errors;
 }
 
@@ -244,7 +244,11 @@ function loadFunctionalCaseMatrix(repoRoot) {
 }
 
 function executionWavesForShard(shard, matrixRows) {
-  const maximumWave = shard.name.startsWith('playback-utilities-') ? 5 : 3;
+  const maximumWave = shard.name.startsWith('playback-utilities-')
+    ? 5
+    : shard.name === 'metadata-mutations'
+      ? 3
+      : 4;
   const matrixByCase = new Map(matrixRows.map((row) => [caseKey(row), row]));
   const waves = new Map();
   for (const invocation of shard.invocations || []) {

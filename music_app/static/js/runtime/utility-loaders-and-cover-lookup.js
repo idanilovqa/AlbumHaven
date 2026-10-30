@@ -106,7 +106,8 @@ async function loadProblematicFiles(force = false, options = {}) {
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
         previousSummaryItems = summaryItems;
-        state.utility.loaded = true;
+      state.utility.loaded = true;
+      state.utility.problematicLoadError = '';
         stateCommitMs += roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
         return { selectedKey, selectedDetail,
           selectedSummary: (continuation && unchangedSelection) ? null : selectedSummary,
@@ -164,6 +165,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
       state.utility.loaded = false;
       state.utility.problematicFilesComplete = false;
+      state.utility.problematicLoadError = loadError;
       showToast('Unable to load problematic files.', 'error', 3200);
       return null;
     } finally {
@@ -1220,10 +1222,26 @@ function resumeDeferredUtilityViewRequest() {
     ...(deferredRequest.options || {}),
     interruptCurrent: false,
   };
+  let resumeUrl = deferredRequest.url;
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  const selectedArtistSource = String(
+    state.view?.search_context?.selected_artist_source || '',
+  ).trim();
+  if (selectedArtist && selectedArtistSource === 'auto_top_match') {
+    const parsedUrl = new URL(resumeUrl, window.location?.origin || 'http://localhost');
+    if (
+      parsedUrl.pathname === '/view-data'
+      && parsedUrl.searchParams.get('q') === String(state.view?.query || '').trim()
+      && !parsedUrl.searchParams.has('artist')
+    ) {
+      parsedUrl.searchParams.set('artist', selectedArtist);
+      resumeUrl = `${parsedUrl.pathname}${parsedUrl.search}`;
+    }
+  }
   if (state.busy || String(state.ui.activeViewRequestUrl || '').trim()) {
     if (state.ui.pendingViewRequest) return false;
     state.ui.pendingViewRequest = {
-      url: deferredRequest.url,
+      url: resumeUrl,
       push: deferredRequest.push,
       options: resumeOptions,
       originatingViewStateRevision,
@@ -1234,7 +1252,7 @@ function resumeDeferredUtilityViewRequest() {
     return true;
   }
   const restartPromise = fetchAndRender(
-    deferredRequest.url,
+    resumeUrl,
     deferredRequest.push,
     resumeOptions,
   );
@@ -1731,9 +1749,12 @@ function getTrackTagInitialValues(track, album) {
     year: String(track?.year ?? album?.year ?? ''),
     track_number: String(track?.track_number ?? ''),
     disc_number: String(track?.disc_number ?? ''),
+    total_discs: String(track?.total_discs ?? ''),
+    disc_subtitle: String(track?.disc_subtitle || ''),
     exception_type: String(track?.exception_type || ''),
     custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
+    album_type: String(track?.album_type || ''),
     album_rating: String(track?.album_rating ?? album?.album_rating ?? ''),
   };
 }
@@ -1823,7 +1844,7 @@ function applyTagEditsToNonAlbumView(album, updates) {
 
 function normalizeCommittedTrackTagValues(values) {
   const nextValues = { ...(values || {}) };
-  ['year', 'track_number', 'disc_number', 'album_rating'].forEach((field) => {
+  ['year', 'track_number', 'disc_number', 'total_discs', 'album_rating'].forEach((field) => {
     if (Object.prototype.hasOwnProperty.call(nextValues, field)) {
       nextValues[field] = parseOptionalInteger(nextValues[field]);
     }
@@ -1912,6 +1933,13 @@ function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoi
 
 let tagEditorExceptionMenuCleanup = null;
 
+function getTagEditorExceptionMenuHeight(menu) {
+  return Math.max(
+    Number(menu?.scrollHeight || 0),
+    Number(menu?.getBoundingClientRect?.().height || 0),
+  );
+}
+
 function getTagEditorExceptionMenuLayout(inputRect, menuHeight, boundaryRect, viewportWidth, viewportHeight) {
   const inset = 8;
   const maxMenuHeight = Math.min(240, Math.floor(viewportHeight * 0.4));
@@ -1927,7 +1955,7 @@ function getTagEditorExceptionMenuLayout(inputRect, menuHeight, boundaryRect, vi
   const width = Math.min(inputRect.width, viewportWidth - (inset * 2));
   const left = Math.max(inset, Math.min(inputRect.left, viewportWidth - inset - width));
   const top = placement === 'below' ? inputRect.bottom - 1 : inputRect.top - height + 1;
-  return { placement, top, left, width, maxHeight: height };
+  return { placement, top, left, width, maxHeight: height, scrolling: height < menuHeight };
 }
 
 function positionTagEditorExceptionMenu(input, menu) {
@@ -1939,7 +1967,7 @@ function positionTagEditorExceptionMenu(input, menu) {
   const footerRect = footer?.getBoundingClientRect();
   const layout = getTagEditorExceptionMenuLayout(
     input.getBoundingClientRect(),
-    menu.scrollHeight,
+    getTagEditorExceptionMenuHeight(menu),
     {
       top: dialogRect?.top ?? 0,
       bottom: footerRect?.top ?? dialogRect?.bottom ?? viewportHeight,
@@ -1953,6 +1981,7 @@ function positionTagEditorExceptionMenu(input, menu) {
   menu.style.left = `${layout.left}px`;
   menu.style.width = `${layout.width}px`;
   menu.style.maxHeight = `${layout.maxHeight}px`;
+  menu.style.overflowY = layout.scrolling ? 'auto' : 'visible';
 }
 
 function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
@@ -1964,7 +1993,7 @@ function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
   tagEditorExceptionMenuCleanup = null;
   menu.hidden = true;
   delete menu.dataset.placement;
-  ['position', 'top', 'left', 'width', 'max-height'].forEach((name) => menu.style.removeProperty(name));
+  ['position', 'top', 'left', 'width', 'max-height', 'overflow-y'].forEach((name) => menu.style.removeProperty(name));
   input?.setAttribute('aria-expanded', 'false');
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
   if (restoreFocus) input?.focus?.({ preventScroll: true });
@@ -2107,7 +2136,11 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   const sourceTrackPaths = new Set(
     sourceTracks.map((track) => String(track?.path || '')).filter(Boolean),
   );
-  const visibleSourceAlbum = findVisibleAlbumByTrackPaths(sourceTrackPaths);
+  const rememberedSourceAlbum = typeof findRememberedRuntimeAlbumCoverAuthority === 'function'
+    ? findRememberedRuntimeAlbumCoverAuthority(album)
+    : null;
+  const visibleSourceAlbum = findVisibleAlbumByTrackPaths(sourceTrackPaths) || album;
+  const coverSourceAlbum = rememberedSourceAlbum || visibleSourceAlbum;
   const sourceAlbumPreference = album?.album_preference
     || visibleSourceAlbum?.album_preference
     || null;
@@ -2127,13 +2160,25 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       };
     }
     const hasYearEdit = Object.prototype.hasOwnProperty.call(edits, 'year');
+    const hasDiscNumberEdit = Object.prototype.hasOwnProperty.call(edits, 'disc_number');
+    const hasTotalDiscsEdit = Object.prototype.hasOwnProperty.call(edits, 'total_discs');
+    const discNumber = hasDiscNumberEdit ? parseOptionalInteger(edits.disc_number) : track.disc_number;
+    const totalDiscs = hasTotalDiscsEdit ? parseOptionalInteger(edits.total_discs) : track.total_discs;
     return {
       ...track,
       ...edits,
       year: hasYearEdit ? parseOptionalInteger(edits.year) : parseOptionalInteger(track?.year ?? album?.year),
       track_number: Object.prototype.hasOwnProperty.call(edits, 'track_number') ? parseOptionalInteger(edits.track_number) : track.track_number,
-      disc_number: Object.prototype.hasOwnProperty.call(edits, 'disc_number') ? parseOptionalInteger(edits.disc_number) : track.disc_number,
+      disc_number: discNumber,
+      disc_number_raw: hasDiscNumberEdit || hasTotalDiscsEdit
+        ? `${discNumber ?? ''}${totalDiscs == null ? '' : `/${totalDiscs}`}`
+        : track.disc_number_raw,
+      total_discs: totalDiscs,
+      disc_subtitle: Object.prototype.hasOwnProperty.call(edits, 'disc_subtitle') ? String(edits.disc_subtitle || '').trim() : track.disc_subtitle,
       album_rating: Object.prototype.hasOwnProperty.call(edits, 'album_rating') ? parseOptionalInteger(edits.album_rating) : track.album_rating,
+      album_type: Object.prototype.hasOwnProperty.call(edits, 'album_type')
+        ? String(edits.album_type || '').trim()
+        : String(track?.album_type || '').trim(),
       edition: Object.prototype.hasOwnProperty.call(edits, 'edition')
         ? String(edits.edition || '').trim()
         : (inheritedEdition || null),
@@ -2199,16 +2244,18 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         key: canonicalKeyParts.join('::'),
         name: albumName,
         album_artist: albumArtist,
-        cover_path: track?.cover_path || album?.cover_path || null,
-        remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || null,
-        remote_cover_thumbnail_url: track?.remote_cover_thumbnail_url || album?.remote_cover_thumbnail_url || null,
-        remote_cover_source: track?.remote_cover_source || album?.remote_cover_source || null,
-        remote_cover_source_label: track?.remote_cover_source_label || album?.remote_cover_source_label || null,
-        remote_cover_album_url: track?.remote_cover_album_url || album?.remote_cover_album_url || null,
-        remote_cover_width: track?.remote_cover_width || album?.remote_cover_width || null,
-        remote_cover_height: track?.remote_cover_height || album?.remote_cover_height || null,
+        cover_path: track?.cover_path || album?.cover_path || coverSourceAlbum?.cover_path || null,
+        cover_preview_url: track?.cover_preview_url || album?.cover_preview_url || coverSourceAlbum?.cover_preview_url || null,
+        remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || coverSourceAlbum?.remote_cover_url || null,
+        remote_cover_thumbnail_url: track?.remote_cover_thumbnail_url || album?.remote_cover_thumbnail_url || coverSourceAlbum?.remote_cover_thumbnail_url || null,
+        remote_cover_source: track?.remote_cover_source || album?.remote_cover_source || coverSourceAlbum?.remote_cover_source || null,
+        remote_cover_source_label: track?.remote_cover_source_label || album?.remote_cover_source_label || coverSourceAlbum?.remote_cover_source_label || null,
+        remote_cover_album_url: track?.remote_cover_album_url || album?.remote_cover_album_url || coverSourceAlbum?.remote_cover_album_url || null,
+        remote_cover_width: track?.remote_cover_width || album?.remote_cover_width || coverSourceAlbum?.remote_cover_width || null,
+        remote_cover_height: track?.remote_cover_height || album?.remote_cover_height || coverSourceAlbum?.remote_cover_height || null,
         year,
         release_date: String(album?.release_date || '').trim(),
+        release_type: String(track?.album_type || album?.release_type || 'ALBUM').trim() || 'ALBUM',
         edition: edition || null,
         album_rating: normalizedRating ?? 0,
         album_preference: albumPreference,

@@ -16,6 +16,7 @@ class RecordingRepository:
         return {
             "inventory_mutation_revision": 12,
             "affected_album_keys": ["broadcast::tender buttons"],
+            "new_track_paths": list(kwargs["active_file_entries"]),
         }
 
 
@@ -136,7 +137,8 @@ def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     assert parsed == [requested]
     assert result.revision == 12
     assert result.affected_album_keys == ("broadcast::tender buttons",)
-    assert not hasattr(result, "paths")
+    assert result.active_track_paths == (str(requested),)
+    assert result.new_track_paths == (str(requested),)
     assert repository.calls[0]["root_id"] == "main"
     entries = repository.calls[0]["active_file_entries"]
     assert list(entries) == [str(requested)]
@@ -838,6 +840,12 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     invalidated: list[str] = []
     monkeypatch.setattr(
         state,
+        "schedule_gallery_projection_refresh",
+        lambda config: invalidated.append("gallery"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        state,
         "invalidate_problematic_albums_payload_cache",
         lambda library_state: invalidated.append("problems"),
         raising=False,
@@ -869,7 +877,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     assert library_state["_view_payload_root_browse_cache"] == {}
     assert library_state["inventory_mutation_revision"] == 4
     assert library_state["targeted_inventory_album_keys"] == ("artist::album",)
-    assert invalidated == ["problems", "rules", "postgres"]
+    assert invalidated == ["gallery", "problems", "rules", "postgres"]
 
 
 def test_committed_inventory_callbacks_publish_monotonic_revisions(monkeypatch):
@@ -1485,3 +1493,33 @@ def test_unreadable_reconciliation_subtree_never_publishes_partial_deletion(tmp_
         reconciler.reconcile(request)
 
     assert repository.calls == []
+def test_targeted_reconciliation_rejects_shared_art_for_multiple_releases_in_one_folder(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    folder = root / "Loose tracks"
+    folder.mkdir(parents=True)
+    first = folder / "first.mp3"
+    second = folder / "second.mp3"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    (folder / "AlbumArt_{GUID}_Large.jpg").write_bytes(b"image")
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".mp3"}, "IMAGE_EXTENSIONS": {".jpg"}},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root, "category": "main_library_roots"}],
+        metadata_reader=lambda path: {
+            "path": str(path), "album": f"{path.stem} album",
+            "album_artist": f"{path.stem} artist", "artist": f"{path.stem} artist",
+            "title": path.stem, "mtime": path.stat().st_mtime, "size": path.stat().st_size,
+        },
+    )
+
+    reconciler.reconcile(_request(paths=(first,)))
+
+    entries = repository.calls[0]["active_file_entries"]
+    assert set(entries) == {str(first), str(second)}
+    assert all(entry["cover_path"] is None for entry in entries.values())
+
+

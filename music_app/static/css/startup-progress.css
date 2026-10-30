@@ -3,7 +3,7 @@
   position: fixed; inset: 0; z-index: 6000; visibility: visible;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 24px; padding: 24px; box-sizing: border-box;
-  background: var(--appearance-main-surface, var(--login-night));
+  background: #07101d;
   color: var(--appearance-ink, var(--login-ink));
 }
 .startup-progress[hidden], .startup-progress [hidden] { display: none; }

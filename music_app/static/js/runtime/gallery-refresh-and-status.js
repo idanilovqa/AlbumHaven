@@ -1544,6 +1544,24 @@ async function fetchAndRender(url, push = true, options = {}) {
         'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source'].every(
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
+    const responseInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    if (Number.isSafeInteger(responseInventoryMutationRevision) && responseInventoryMutationRevision >= 0) {
+      [
+        payloadToApply?.primary_artist_groups,
+        payloadToApply?.family_artist_groups,
+        payloadToApply?.artist_groups,
+      ].forEach((groups) => {
+        if (!Array.isArray(groups)) return;
+        groups.forEach((group) => {
+          if (!Array.isArray(group?.albums)) return;
+          group.albums.forEach((album) => {
+            if (album && typeof album === 'object') {
+              album.identity_revision = responseInventoryMutationRevision;
+            }
+          });
+        });
+      });
+    }
     applyViewPayload(payloadToApply, responseApplyOptions);
     const previousAppliedInventoryMutationRevision = Number(
       state.ui.appliedViewInventoryMutationRevision,

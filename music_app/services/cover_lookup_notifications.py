@@ -22,6 +22,13 @@ def load_cover_lookup_notifications(config: dict[str, object]) -> list[dict[str,
     )
 
 
+def load_cover_lookup_notification(
+    config: dict[str, object],
+    task_id: str,
+) -> dict[str, object] | None:
+    return _cover_lookup_notifications_adapter(config).load_notification(task_id)
+
+
 def load_cover_lookup_notification_summaries(
     config: dict[str, object],
 ) -> list[dict[str, object]]:
@@ -32,7 +39,7 @@ def load_cover_lookup_notification_summaries(
     return _filter_notification_tasks(adapter.load_notifications())
 
 
-def count_cover_lookup_notifications(config: dict[str, object]) -> dict[str, int]:
+def count_cover_lookup_notifications(config: dict[str, object]) -> dict[str, int | str]:
     return _cover_lookup_notifications_adapter(config).count_notifications()
 
 
@@ -54,11 +61,17 @@ def load_cover_lookup_notification_summary_page(
     limit: int,
     cursor: str | None,
     active_only: bool,
+    task_ids: tuple[str, ...] = (),
 ) -> dict[str, object]:
+    kwargs = {
+        "limit": limit,
+        "cursor": cursor,
+        "active_only": active_only,
+    }
+    if task_ids:
+        kwargs["task_ids"] = task_ids
     return _cover_lookup_notifications_adapter(config).load_notification_summary_page(
-        limit=limit,
-        cursor=cursor,
-        active_only=active_only,
+        **kwargs,
     )
 
 

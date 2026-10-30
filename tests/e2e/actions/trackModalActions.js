@@ -162,6 +162,25 @@ export class TrackModalActions {
     await this.trackModal.waitForHidden(this.trackModal.dialog, { timeout: options.timeout || 60000 });
   }
 
+  async waitForIdentitySplitChoices(albumNames, options = {}) {
+    const expectedNames = Array.isArray(albumNames) ? albumNames : [];
+    await expect(this.trackModal.subtitle).toHaveText(
+      'This album was split—choose the current release',
+      { timeout: options.timeout || 60000 },
+    );
+    await expect(this.trackModal.currentReleaseChoices).toHaveCount(expectedNames.length);
+    const titles = await this.trackModal.currentReleaseChoiceTitles.allTextContents();
+    expect(titles.map((title) => title.trim()).sort()).toEqual([...expectedNames].sort());
+    return titles;
+  }
+
+  async chooseCurrentRelease(albumName) {
+    const choice = this.trackModal.currentReleaseChoiceByTitle(albumName);
+    await expect(choice).toHaveCount(1);
+    await choice.click();
+    return this.waitForInteractiveSummary();
+  }
+
   async clickClose(options = {}) {
     await this.trackModal.closeButton.click(options);
   }
@@ -206,6 +225,9 @@ export class TrackModalActions {
 
   async readSummary() {
     const albumCoverImage = this.trackModal.detailedCoverImage;
+    const subtitle = await this.trackModal.mobilePage?.isVisible?.()
+      ? this.trackModal.mobileSummary
+      : this.trackModal.subtitle;
     // parity-check: allow-read-only-measurement-evaluate -- atomic decoded visible album-cover state only
     const coverLoaded = await albumCoverImage.evaluateAll((images) => images.some((image) => (
       image instanceof HTMLImageElement
@@ -220,7 +242,7 @@ export class TrackModalActions {
     ) || await this.trackModal.missingArtbox.isVisible();
     return {
       title: String(await this.trackModal.title.textContent() || '').trim(),
-      subtitle: String(await this.trackModal.subtitle.textContent() || '').trim(),
+      subtitle: String(await subtitle.textContent() || '').trim(),
       footer: String(await this.trackModal.footer.textContent() || '').trim(),
       total: String(await this.trackModal.albumTrackTable.total.textContent() || '').trim(),
       playButtons: await this.trackModal.playButtons.count(),
@@ -403,16 +425,24 @@ export class TrackModalActions {
     const expectedTrackTitles = Array.isArray(expected.trackTitles)
       ? expected.trackTitles.map((title) => String(title || '').trim())
       : [];
-    await this.waitForTitle(expectedTitle, options);
-    await expect(this.trackModal.trackRows).toHaveCount(expectedTrackTitles.length, {
+    const expectedSnapshot = {
+      title: expectedTitle,
+      trackRowCount: expectedTrackTitles.length,
+      trackTitles: expectedTrackTitles,
+      ...(Array.isArray(expected.displayedTrackNumbers)
+        ? { displayedTrackNumbers: expected.displayedTrackNumbers }
+        : {}),
+    };
+    await expect.poll(async () => {
+      const snapshot = await this.trackModal.readExactAlbumDetailsSnapshot();
+      if (!Array.isArray(expected.displayedTrackNumbers)) {
+        delete snapshot.displayedTrackNumbers;
+      }
+      return snapshot;
+    }, {
       timeout: options.timeout || 30000,
-    });
-    expect(await this.readTrackTitles()).toEqual(expectedTrackTitles);
-    if (Array.isArray(expected.displayedTrackNumbers)) {
-      expect(await this.trackModal.readDisplayedTrackNumbers()).toEqual(
-        expected.displayedTrackNumbers,
-      );
-    }
+      intervals: [100, 250, 500],
+    }).toEqual(expectedSnapshot);
     return this.readSummary();
   }
 
@@ -748,8 +778,49 @@ export class TrackModalActions {
     await expect(this.trackModal.lightboxNextButton).toBeEnabled({ timeout });
   }
 
+  async expectCoverLightboxKeyboardFocusPresentation(options = {}) {
+    const timeout = options.timeout || 15000;
+    const controls = [
+      this.trackModal.lightboxCloseButton,
+      this.trackModal.lightboxPreviousButton,
+      this.trackModal.lightboxNextButton,
+    ];
+    for (const control of controls) {
+      await expect(control).toHaveCSS('outline-style', 'none', { timeout });
+    }
+
+    const expectKeyboardRing = async (control) => {
+      await expect(control).toBeFocused({ timeout });
+      await expect(control).toHaveCSS('outline-style', 'solid', { timeout });
+      await expect(control).toHaveCSS('outline-width', '2px', { timeout });
+      await expect(control).toHaveCSS('outline-offset', '2px', { timeout });
+      await expect(control).not.toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)', { timeout });
+    };
+
+    await this.trackModal.lightboxCloseButton.press('Tab');
+    await expectKeyboardRing(this.trackModal.lightboxPreviousButton);
+    await this.trackModal.lightboxPreviousButton.press('Tab');
+    await expectKeyboardRing(this.trackModal.lightboxNextButton);
+    await this.trackModal.lightboxNextButton.press('Tab');
+    await expectKeyboardRing(this.trackModal.lightboxCloseButton);
+  }
+
   async readCoverLightboxSources() {
     return this.trackModal.readCoverLightboxSources();
+  }
+
+  async expectCoverLightboxRetryAvailable(options = {}) {
+    const timeout = options.timeout || 15000;
+    await expect(this.trackModal.lightboxRetryButton).toBeVisible({ timeout });
+    await expect(this.trackModal.lightboxRetryButton).toBeEnabled({ timeout });
+  }
+
+  async retryCoverLightbox() {
+    await this.trackModal.lightboxRetryButton.click();
+  }
+
+  async expectCoverLightboxRetryHidden(options = {}) {
+    await expect(this.trackModal.lightboxRetryButton).toBeHidden({ timeout: options.timeout || 15000 });
   }
 
   async zoomCoverLightbox(options = {}) {
@@ -781,6 +852,33 @@ export class TrackModalActions {
     }, { timeout: options.timeout || 15000 }, {
       selector: this.trackModal.lightboxImageSelector,
       finalZoom: expectedZoom,
+    });
+  }
+
+  async doubleTapCoverLightboxAt(options = {}) {
+    const box = await this.trackModal.lightboxImage.boundingBox();
+    if (!box) throw new Error('Full-size cover art is not visible');
+    const xRatio = Number(options.xRatio ?? 0.5);
+    const yRatio = Number(options.yRatio ?? 0.5);
+    const position = {
+      x: Math.max(1, Math.min(box.width - 1, box.width * xRatio)),
+      y: Math.max(1, Math.min(box.height - 1, box.height * yRatio)),
+    };
+    await this.trackModal.lightboxImage.tap({ position });
+    await this.trackModal.lightboxImage.tap({ position });
+  }
+
+  async readCoverLightboxZoomState() {
+    // parity-check: allow-read-only-measurement-evaluate -- reads rendered production zoom state only
+    return this.trackModal.lightboxImage.evaluate((image) => {
+      const [originX, originY] = image.style.transformOrigin.split(' ').map(value => Number.parseFloat(value));
+      return {
+        originX,
+        originY,
+        touchAction: getComputedStyle(image).touchAction,
+        transform: image.style.transform,
+        zoom: Number(image.dataset.lightboxZoom || 1),
+      };
     });
   }
 

@@ -12,6 +12,7 @@ from music_app.services.exception_overrides import apply_exception_override
 from music_app.services.covers import image_dimensions
 from music_app.services.cover_workflow import cover_revision_for_path
 from music_app.services.library_hydration import find_cover_for_track_folder
+from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_roots import library_category_slug, root_definition_for_path
 from music_app.services.metadata import (
@@ -840,5 +841,6 @@ def scan_library_file_cache(
     library_state["scan_bytes_processed"] = total_bytes
     library_state["scan_album_folders_processed"] = album_folders_total
     finish_scan_stage(library_state, "metadata")
+    clear_ambiguous_folder_covers(updated_file_cache)
     _publish_partial_scan_albums(publication_target, updated_file_cache)
     return updated_file_cache, last_scan

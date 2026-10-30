@@ -5,8 +5,10 @@ export class CoverLookup extends BasePage {
     super(page, testInfo);
     this.modal = page.locator(this.modalSelector);
     this.mobilePage = page.locator('#cover-lookup-modal.is-mobile-page');
+    this.mobileSheet = page.locator('#cover-lookup-modal.is-mobile-sheet');
     this.mobileBackButton = page.locator('#mobile-back-button');
     this.modalDialog = page.locator(this.modalDialogSelector);
+    this.modalHeader = this.modal.locator('.cover-lookup-modal-header');
     this.modalBody = page.locator(this.modalBodySelector);
     this.modalSubtitle = page.locator(this.modalSubtitleSelector);
     this.modalStatus = page.locator(this.modalStatusSelector);
@@ -15,8 +17,10 @@ export class CoverLookup extends BasePage {
     this.modalActions = page.locator(this.modalActionsSelector);
     this.findBetterButton = page.locator(this.findBetterButtonSelector);
     this.saveRemoteButton = page.locator(this.saveRemoteButtonSelector);
+    this.cancelButton = this.modal.getByRole('button', { name: 'Cancel', exact: true });
     this.manualUrlInput = page.locator(this.manualUrlInputSelector);
     this.manualExtractButton = page.locator(this.manualExtractButtonSelector);
+    this.manualStatus = this.modal.locator('.cover-lookup-manual-status');
     this.addImageButton = this.modal.getByRole('button', { name: 'Add image', exact: true });
     this.manualDropZone = this.modal.locator('[data-cover-lookup-drop-zone]');
     this.pendingAttachments = this.modal.locator('[data-cover-lookup-pending-attachment]');
@@ -27,6 +31,9 @@ export class CoverLookup extends BasePage {
     this.sectionTitles = this.modalBody.locator('.cover-lookup-section-title');
     this.subsectionTitles = this.modalBody.locator('.cover-lookup-subsection-title');
     this.localCoverCards = this.modalBody.locator('[data-select-local-cover]');
+    this.deleteConfirm = page.locator('#cover-lookup-delete-confirm-modal');
+    this.deleteConfirmDialog = this.deleteConfirm.getByRole('dialog');
+    this.deleteConfirmButton = this.deleteConfirm.getByRole('button', { name: 'Delete', exact: true });
     this.activeLocalCoverCard = this.modalBody
       .locator('[data-select-local-cover][data-cover-lookup-local-active]')
       .first();
@@ -49,13 +56,17 @@ export class CoverLookup extends BasePage {
     this.drawerTitle = this.drawer.locator('.cover-lookup-drawer-title');
     this.drawerBadge = page.locator(this.drawerBadgeSelector);
     this.drawerBody = page.locator(this.drawerBodySelector);
+    this.taskOpenButtons = this.drawer.locator(this.taskOpenButtonWithinCardSelector);
     this.drawerCloseButton = page.locator(this.drawerCloseButtonSelector);
     this.drawerClearCompletedButton = page.locator(this.drawerClearCompletedButtonSelector);
     this.drawerEmptyState = page.locator(this.drawerEmptyStateSelector);
     this.coverLookupStartedToast = page
       .locator(this.toastSelector)
-      .filter({ hasText: 'Cover art lookup started.' })
+      .filter({ hasText: 'Cover search started.' })
       .last();
+    this.notificationClearedToast = page
+      .locator(this.toastSelector)
+      .filter({ hasText: 'Notification cleared.' });
     this.toolbarRight = page.locator(this.toolbarRightSelector);
     this.coverLookupStartedToastMessage = this.coverLookupStartedToast.locator('.on-page-alert__message');
   }
@@ -112,6 +123,10 @@ export class CoverLookup extends BasePage {
 
   get manualExtractButtonSelector() {
     return '[data-add-cover-lookup-remote="1"]';
+  }
+
+  get initialGalleryLoadingSelector() {
+    return '#cover-lookup-modal-body .cover-lookup-gallery-resolving, #cover-lookup-modal-body [data-cover-lookup-loading-section]:not([data-cover-lookup-loading-section="pasted"])';
   }
 
   get closeModalButtonSelector() {
@@ -221,11 +236,19 @@ export class CoverLookup extends BasePage {
 
   async observeStartedToastEntrance(options = {}) {
     // parity-check: allow-read-only-measurement-evaluate -- observe running-layout geometry through native toast entrance; no application state or DOM mutations
-    return this.page.evaluateHandle(({ modalSelector, toastSelector, timeout }) => {
+    return this.page.evaluateHandle(({
+      findBetterButtonSelector,
+      modalSelector,
+      modalStatusSelector,
+      toastSelector,
+      timeout,
+    }) => {
       let frame;
       let timer;
       let finish;
       let baseline;
+      let busyButtonSeen = false;
+      let startedStatusSeen = false;
       let settledFrames = 0;
       let sampledFrames = 0;
       const delta = { height: 0, width: 0, x: 0, y: 0 };
@@ -238,9 +261,17 @@ export class CoverLookup extends BasePage {
         const sample = () => {
           const modal = document.querySelector(modalSelector);
           const progress = modal?.querySelector('.cover-lookup-search-progress');
+          const findBetterButton = document.querySelector(findBetterButtonSelector);
+          const modalStatus = document.querySelector(modalStatusSelector);
+          busyButtonSeen = busyButtonSeen || (
+            findBetterButton instanceof HTMLButtonElement
+            && findBetterButton.disabled
+          );
+          startedStatusSeen = startedStatusSeen
+            || String(modalStatus?.textContent || '').includes('Cover search started.');
           const toast = Array.from(document.querySelectorAll(toastSelector)).findLast(
             (candidate) => candidate.querySelector('.on-page-alert__message')
-              ?.textContent?.trim() === 'Cover art lookup started.',
+              ?.textContent?.trim() === 'Cover search started.',
           );
           if (modal && progress?.getBoundingClientRect().height > 0 && toast) {
             const style = getComputedStyle(toast);
@@ -261,7 +292,13 @@ export class CoverLookup extends BasePage {
             sampledFrames += 1;
             settledFrames = settled ? settledFrames + 1 : 0;
             if (settledFrames >= 2) {
-              finish({ delta, sampledFrames, baselineUnsettled: true });
+              finish({
+                busyButtonSeen,
+                delta,
+                sampledFrames,
+                startedStatusSeen,
+                baselineUnsettled: true,
+              });
               return;
             }
           } else if (baseline) {
@@ -276,7 +313,52 @@ export class CoverLookup extends BasePage {
       return { result, cancel: () => finish({ error: 'Toast entrance observation cancelled.' }) };
     }, {
       modalSelector: this.modalDialogSelector,
+      modalStatusSelector: this.modalStatusSelector,
+      findBetterButtonSelector: this.findBetterButtonSelector,
       toastSelector: this.toastSelector,
+      timeout: options.timeout || 30000,
+    });
+  }
+
+  async observeDrawerInitialLoad(options = {}) {
+    // parity-check: allow-read-only-measurement-evaluate -- observe transient notification loading markup without changing app state
+    return this.page.evaluateHandle(({ bodySelector, timeout }) => {
+      const body = document.querySelector(bodySelector);
+      if (!(body instanceof HTMLElement)) throw new Error('Notification drawer body is unavailable.');
+      let loadingSeen = false;
+      let falseEmptySeen = false;
+      let observer;
+      let timer;
+      let finish;
+      const result = new Promise((resolve) => {
+        finish = (value) => {
+          observer?.disconnect();
+          clearTimeout(timer);
+          resolve(value);
+        };
+        const sample = () => {
+          const loading = Boolean(body.querySelector('.cover-lookup-task-card.is-loading'));
+          loadingSeen = loadingSeen || loading;
+          falseEmptySeen = falseEmptySeen || (
+            !loadingSeen
+            && /not looking for anything at the moment/i.test(body.textContent || '')
+          );
+          const settled = loadingSeen
+            && !loading
+            && Boolean(body.querySelector('.cover-lookup-task-card:not(.is-loading), .cover-lookup-drawer-empty'));
+          if (settled) finish({ loadingSeen, falseEmptySeen });
+        };
+        observer = new MutationObserver(sample);
+        observer.observe(body, { childList: true, subtree: true, characterData: true });
+        sample();
+        timer = setTimeout(
+          () => finish({ error: 'Timed out observing notification history loading.', loadingSeen, falseEmptySeen }),
+          timeout,
+        );
+      });
+      return { result, cancel: () => finish({ error: 'Notification loading observation cancelled.' }) };
+    }, {
+      bodySelector: this.drawerBodySelector,
       timeout: options.timeout || 30000,
     });
   }
@@ -297,7 +379,7 @@ export class CoverLookup extends BasePage {
         && !toast.getAnimations().some((animation) => animation.playState === 'running');
     }, { timeout }, {
       toastSelector: this.toastSelector,
-      toastText: 'Cover art lookup started.',
+      toastText: 'Cover search started.',
     });
 
     // parity-check: allow-read-only-measurement-evaluate -- two paints prove settled toast transform and rectangle
@@ -393,6 +475,42 @@ export class CoverLookup extends BasePage {
     return card.locator(this.localCoverActionWithinCardSelector).first();
   }
 
+  localCoverDeleteWithin(card) {
+    return card.locator('[data-delete-local-cover]').first();
+  }
+
+  async readDeleteConfirmStacking() {
+    // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns its confirmation stacking evidence
+    return this.deleteConfirmDialog.evaluate((dialog) => {
+      const confirmation = dialog.closest('#cover-lookup-delete-confirm-modal');
+      const lookup = document.querySelector('#cover-lookup-modal');
+      const bounds = dialog.getBoundingClientRect();
+      const topmost = document.elementFromPoint(
+        bounds.left + (bounds.width / 2),
+        bounds.top + (bounds.height / 2),
+      );
+      return {
+        confirmationZIndex: Number(getComputedStyle(confirmation).zIndex) || 0,
+        lookupZIndex: Number(getComputedStyle(lookup).zIndex) || 0,
+        confirmationOwnsTopElement: Boolean(topmost?.closest('#cover-lookup-delete-confirm-modal')),
+      };
+    });
+  }
+
+  async readMobileSheetStacking() {
+    // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns its mobile-sheet stacking evidence
+    return this.mobileSheet.evaluate((sheet) => {
+      const dialog = sheet.querySelector('.cover-lookup-modal-dialog');
+      const drawer = document.getElementById('cover-lookup-drawer');
+      const sheetBox = dialog?.getBoundingClientRect();
+      return {
+        bottomGap: sheetBox ? Math.abs(window.innerHeight - sheetBox.bottom) : Number.POSITIVE_INFINITY,
+        sheetZ: Number.parseInt(getComputedStyle(sheet).zIndex, 10) || 0,
+        drawerZ: drawer ? Number.parseInt(getComputedStyle(drawer).zIndex, 10) || 0 : 0,
+      };
+    });
+  }
+
   localCoverResolutionWithin(card) {
     return card.locator(this.localCoverResolutionWithinCardSelector).first();
   }
@@ -425,14 +543,115 @@ export class CoverLookup extends BasePage {
     ).first();
   }
 
+  async startRemoteCandidateContinuityObservation(expectedIds) {
+    // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns candidate-card continuity evidence
+    return this.modalBody.evaluateHandle((body, expectedCandidateIds) => {
+      const cards = () => Array.from(body.querySelectorAll('[data-select-remote-cover]'));
+      const readIds = () => cards().map(
+        (card) => String(card.getAttribute('data-select-remote-cover') || '').trim(),
+      );
+      const observation = {
+        body,
+        expectedIds: expectedCandidateIds,
+        originalCards: new Map(cards().map(
+          (card) => [String(card.getAttribute('data-select-remote-cover') || '').trim(), card],
+        )),
+        samples: [],
+      };
+      const sample = () => observation.samples.push(readIds());
+      observation.observer = new MutationObserver(sample);
+      observation.observer.observe(body, { childList: true, subtree: true });
+      sample();
+      return observation;
+    }, expectedIds);
+  }
+
+  async finishRemoteCandidateContinuityObservation(observationHandle) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns candidate-card continuity evidence
+      return await observationHandle.evaluate((observation) => {
+        observation?.observer?.disconnect();
+        const currentCards = new Map(Array.from(
+          observation.body.querySelectorAll('[data-select-remote-cover]'),
+          (card) => [String(card.getAttribute('data-select-remote-cover') || '').trim(), card],
+        ));
+        return {
+          samples: observation.samples,
+          retainedNodes: observation.expectedIds.every(
+            (id) => observation.originalCards.get(id) === currentCards.get(id),
+          ),
+        };
+      });
+    } finally {
+      await observationHandle.dispose();
+    }
+  }
+
   taskCardByTitle(taskTitle) {
     return this.page.locator(this.taskCardSelector).filter({
       has: this.page.locator(this.taskTitleWithinCardSelector).filter({ hasText: taskTitle }),
     }).first();
   }
 
+  taskCardById(taskId) {
+    return this.page.locator(
+      `[data-open-cover-lookup-task="${String(taskId || '').replaceAll('"', '\\"')}"]`,
+    ).locator('..');
+  }
+
+  readTaskCardEvidenceById(taskId) {
+    // parity-check: allow-read-only-measurement-evaluate -- atomically bind card identity, click target, and rendered art
+    return this.taskCardById(taskId).evaluate((element) => {
+      const opener = element.querySelector('[data-open-cover-lookup-task]');
+      const image = element.querySelector('img.cover-lookup-task-cover');
+      return {
+        taskId: String(opener?.getAttribute('data-open-cover-lookup-task') || ''),
+        title: String(element.querySelector('.cover-lookup-task-title')?.textContent || '').trim(),
+        byline: String(element.querySelector('.cover-lookup-task-byline')?.textContent || '').trim(),
+        imageSrc: image instanceof HTMLImageElement
+          ? String(image.currentSrc || image.getAttribute('src') || '').trim()
+          : '',
+      };
+    });
+  }
+
+  taskOpenButtonById(taskId) {
+    return this.taskCardById(taskId).locator('.cover-lookup-task-open');
+  }
+
+  readVisibleTaskIds() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the rendered notification order from POM-owned task controls
+    return this.taskOpenButtons.evaluateAll((elements) => elements
+      .map((element) => String(element.getAttribute('data-open-cover-lookup-task') || '').trim())
+      .filter(Boolean));
+  }
+
+  readFirstVisibleTaskAnchor() {
+    // parity-check: allow-read-only-measurement-evaluate -- read visible notification identity and exact pixel offset
+    return this.taskOpenButtons.evaluateAll((elements, drawerBodySelector) => {
+      const body = document.querySelector(drawerBodySelector);
+      const bodyRect = body?.getBoundingClientRect();
+      if (!bodyRect) return null;
+      const task = elements.find((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.bottom > bodyRect.top && rect.top < bodyRect.bottom;
+      });
+      const taskRect = task?.getBoundingClientRect();
+      const taskId = String(task?.getAttribute('data-open-cover-lookup-task') || '').trim();
+      return taskId && taskRect ? { taskId, offset: taskRect.top - bodyRect.top } : null;
+    }, this.drawerBodySelector);
+  }
+
+  taskCoverById(taskId) {
+    return this.taskCardById(taskId).locator('img.cover-lookup-task-cover').first();
+  }
+
   taskInfoByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-open');
+  }
+
+  taskCoverByTitle(taskTitle) {
+    return this.taskCardByTitle(taskTitle).locator('img.cover-lookup-task-cover').first();
   }
 
   async readTaskClearHoverStyle(taskTitle) {
@@ -454,8 +673,18 @@ export class CoverLookup extends BasePage {
     return this.taskCardByTitle(taskTitle).getByRole('button', { name: 'Delete notification', exact: true });
   }
 
+  taskRetryIconByTitle(taskTitle) {
+    return this.taskCardByTitle(taskTitle)
+      .getByRole('button', { name: 'Retry lookup', exact: true })
+      .locator('.ui-icon');
+  }
+
   taskStatusByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator(this.taskStatusWithinCardSelector).first();
+  }
+
+  taskStatusById(taskId) {
+    return this.taskCardById(taskId).locator(this.taskStatusWithinCardSelector).first();
   }
 
   taskBylineByTitle(taskTitle) {

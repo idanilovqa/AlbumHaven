@@ -91,5 +91,53 @@ def test_apply_cover_path_wrapper_forwards_linked_remote_cover_fields(monkeypatc
         "library_state": library_state,
         "cover_revision": None,
         "schedule_cache_update": True,
+        "include_problematic_album": True,
         "manual_selection": True,
     }
+
+
+def test_cover_selection_does_not_build_global_problematic_files_payload(
+    monkeypatch, tmp_path
+):
+    from music_app.routes import api_cover_helpers
+
+    track_path = str(tmp_path / "song.mp3")
+    library_state = {
+        "albums": [],
+        "file_cache": {track_path: {"path": track_path}},
+    }
+    monkeypatch.setattr(
+        api_cover_helpers,
+        "build_problematic_albums_payload",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Cover selection must not build the global Problematic Files payload")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        api_cover_helpers,
+        "find_albums_by_track_paths_in_albums",
+        lambda *_args: [{"key": "album-1"}],
+    )
+    detail_calls = []
+    monkeypatch.setattr(
+        api_cover_helpers,
+        "build_problematic_album_detail_payload",
+        lambda album_key, **_kwargs: detail_calls.append(album_key)
+        or {"key": album_key},
+    )
+
+    updated_albums, updated_problematic_album = (
+        api_cover_helpers.apply_cover_selection_for_tracks(
+            {track_path},
+            remote_cover_url="https://images.example/cover.jpg",
+            config={"CACHE_PATH": tmp_path / "cache.json"},
+            logger=object(),
+            library_state=library_state,
+            schedule_cache_update=False,
+        )
+    )
+
+    assert updated_albums == [{"key": "album-1"}]
+    assert updated_problematic_album == {"key": "album-1"}
+    assert detail_calls == ["album-1"]

@@ -10,6 +10,7 @@ from music_app.routes.api_rules_helpers import (
     year_problem_reason,
 )
 from music_app.services.covers import image_dimensions
+from music_app.services.edition_title_normalization import reviewable_edition_title
 from music_app.services.library import album_separate_release_key
 from music_app.services.metadata import build_text_repairs_for_entry
 from music_app.services.problematic_albums import (
@@ -279,6 +280,10 @@ def _collect_track_level_problem_reasons(
         if year_reason and year_reason not in reasons:
             reasons.append(year_reason)
 
+        if reviewable_edition_title(entry.get("album"), entry.get("edition")):
+            if "Edition descriptor in album name" not in reasons:
+                reasons.append("Edition descriptor in album name")
+
         if track_number in (None, ""):
             if "Missing track number" not in reasons:
                 reasons.append("Missing track number")
@@ -359,6 +364,9 @@ def _collect_track_problem_rows(
 
         if _album_tag_contains_disc_marker(entry.get("album")):
             add_reason("Disc marker in album name")
+
+        if reviewable_edition_title(entry.get("album"), entry.get("edition")):
+            add_reason("Edition descriptor in album name")
 
         artist_alias_reason = _artist_alias_problem_reason(entry.get("album_artist"), alias_to_canonical)
         if artist_alias_reason and not _is_ignored_problem(ignored_row_keys, path, "album_artist"):

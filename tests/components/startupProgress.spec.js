@@ -25,6 +25,7 @@ for (const width of [390, 1280]) {
     await loadProgress(page, 50);
 
     const overlay = page.locator('[data-startup-progress]');
+    await expect(overlay).toHaveCSS('background-color', 'rgb(7, 16, 29)');
     await expect(overlay).toContainText('Just a sec');
     await expect(overlay.locator('[data-startup-percent]')).toHaveText('50%');
     await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');

@@ -396,6 +396,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
     closeGalleryMainSurface(true);
     return false;
   }
+  if (key === 'sources') hydrateDeferredNonAlbumTracksForAlbumTypes();
   if (previous) closeGalleryMainSurface(false, { immediate: true });
   galleryMainSurfaceCloseCallbacks.get(surface)?.();
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
@@ -433,6 +434,10 @@ function updateGalleryMainControls() {
   if (familyTrigger) familyTrigger.hidden = !hasSelectedArtist;
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
+  }
+  if (galleryMainSurfaceController?.current?.()?.key === 'album-types'
+      || document.getElementById?.('gallery-album-types-menu')?.hidden === false) {
+    hydrateDeferredNonAlbumTracksForAlbumTypes();
   }
   document.querySelectorAll('[data-gallery-source]').forEach((button) => {
     button.setAttribute('aria-checked', mainState.sources[button.dataset.gallerySource] === false ? 'false' : 'true');
@@ -487,6 +492,13 @@ function updateGalleryMainControls() {
       onSelect: view => transitionGalleryMain({ type: 'set-view', view }),
     }).select(mainState.view);
   }
+}
+
+function hydrateDeferredNonAlbumTracksForAlbumTypes() {
+  if (!state.view?.non_album_tracks_deferred || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
+  void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
+    console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+  });
 }
 
 function buildGalleryFamilyPanelBody() {
@@ -739,11 +751,7 @@ function handleGalleryMainClick(event) {
   if (typeAnchor) {
     event.preventDefault();
     openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu'));
-    if (state.view?.non_album_tracks_deferred && typeof hydrateDeferredNonAlbumTracks === 'function') {
-      void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
-        console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
-      });
-    }
+    hydrateDeferredNonAlbumTracksForAlbumTypes();
     return true;
   }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');

@@ -170,7 +170,7 @@ function Prepare-EditTagsWritableMedia {
     if (-not (Test-Path -LiteralPath $sourceArtistRoot -PathType Container)) {
         throw "Edit Tags performance source media is missing: $sourceArtistRoot"
     }
-    $writableMediaRoot = Join-Path $profileSessionRoot 'media\writable'
+    $writableMediaRoot = Join-Path $profileSessionRoot 'edit-tags-writable-media'
     if (Test-Path -LiteralPath $writableMediaRoot) {
         throw "Edit Tags writable media already exists: $writableMediaRoot"
     }

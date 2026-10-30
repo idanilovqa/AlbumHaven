@@ -8,8 +8,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="album-haven-version" content="{{ app_version }}">
   <title>{{ app_name }} v{{ app_version }}</title>
-  <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script">
-  <link rel="preload" href="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" as="script">
+  <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script" fetchpriority="high">
+  <link rel="preload" href="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" as="script" fetchpriority="high">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/base-layout.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/account-menu.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}?v={{ runtime_asset_version }}">

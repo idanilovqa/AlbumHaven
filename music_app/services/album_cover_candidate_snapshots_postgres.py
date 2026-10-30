@@ -80,6 +80,36 @@ class AlbumCoverCandidateSnapshotRepository:
         except (TypeError, ValueError):
             return None
 
+    def resolve_album_track_context(
+        self,
+        *,
+        album_id: int | None,
+        album_key: str | None,
+    ) -> dict[str, object] | None:
+        normalized_key = str(album_key or "").strip() or None
+        if album_id is None and normalized_key is None:
+            return None
+        with self._connect_to_database() as connection:
+            row = _first_row(
+                connection.execute(
+                    _resolve_album_track_context_sql(),
+                    {"album_id": album_id, "album_key": normalized_key},
+                )
+            )
+        payload = _row_mapping(row)
+        track_paths = [
+            str(path).strip()
+            for path in list(payload.get("track_paths") or [])
+            if str(path or "").strip()
+        ]
+        if payload.get("album_id") is None or not track_paths:
+            return None
+        return {
+            "album_id": int(payload["album_id"]),
+            "album_key": str(payload.get("album_key") or ""),
+            "track_paths": track_paths,
+        }
+
     def publish_generation(
         self,
         *,
@@ -270,25 +300,80 @@ def _resolve_album_id_for_track_paths_sql() -> str:
         resolved_tracks as (
           select
             requested_paths.private_path,
-            library.local_tracks.album_id
+            library.local_tracks.album_id,
+            library.local_track_files.scan_cache_stale as scan_cache_stale
           from requested_paths
           join library.local_track_files
             on library.local_track_files.private_path = requested_paths.private_path
-           and library.local_track_files.scan_cache_stale is false
           join library.local_tracks
             on library.local_tracks.id = library.local_track_files.track_id
           join active_library
             on active_library.library_id = library.local_tracks.library_id
+          join library.local_albums as resolved_albums
+            on resolved_albums.id = library.local_tracks.album_id
+           and resolved_albums.library_id = active_library.library_id
+          left join library.local_artists as resolved_artists
+            on resolved_artists.id = resolved_albums.artist_id
           where library.local_tracks.album_id is not null
+            and not (
+              lower(btrim(coalesce(resolved_albums.title, ''))) in (
+                '', 'unknown', 'unknown artist', 'unknown album', 'none', 'null'
+              )
+              and lower(btrim(coalesce(resolved_artists.name, ''))) in (
+                '', 'unknown', 'unknown artist', 'unknown album', 'none', 'null'
+              )
+            )
         )
         select case
           when count(distinct resolved_tracks.album_id) = 1
            and count(distinct resolved_tracks.private_path)
                = cardinality(%(track_paths)s::text[])
+           and bool_or(resolved_tracks.scan_cache_stale is false)
             then min(resolved_tracks.album_id)
           else null
         end as album_id
         from resolved_tracks;
+    """
+
+
+def _resolve_album_track_context_sql() -> str:
+    return """
+        with active_library as (
+            select library.libraries.id as library_id
+            from app.bootstrap_owners
+            join library.libraries
+              on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+             and library.libraries.name = 'Local Library'
+             and library.libraries.library_kind = 'local'
+            where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+            limit 1
+        ),
+        selected_album as (
+            select albums.id, albums.album_key
+            from active_library
+            join library.local_albums as albums
+              on albums.library_id = active_library.library_id
+            where (%(album_id)s::bigint is null or albums.id = %(album_id)s::bigint)
+              and (%(album_key)s::text is null or albums.album_key = %(album_key)s::text)
+        ),
+        resolved_album as (
+            select min(id) as album_id, min(album_key) as album_key
+            from selected_album
+            having count(*) = 1
+        )
+        select
+            resolved_album.album_id,
+            resolved_album.album_key,
+            array_agg(distinct files.private_path order by files.private_path) as track_paths
+        from active_library
+        join resolved_album on true
+        join library.local_tracks as tracks
+          on tracks.album_id = resolved_album.album_id
+         and tracks.library_id = active_library.library_id
+        join library.local_track_files as files
+          on files.track_id = tracks.id
+         and files.scan_cache_stale is false
+        group by resolved_album.album_id, resolved_album.album_key;
     """
 
 

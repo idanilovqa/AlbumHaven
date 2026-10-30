@@ -3844,7 +3844,7 @@ test('managed watcher cleanup derives its only path from runner media ownership'
     assert.ok(calls[0].options.timeout > 0);
     calls.length = 0;
     await _private.cleanupManagedWatcherFixture(environment, {
-      ownedDirectoryName: 'gallery-native-response-overlap',
+      ownedDirectoryName: 'watcher-grouped-feature-credit',
       runCommandFn(command, args, options) {
         calls.push({ command, args, options });
         return { status: 0, signal: null };
@@ -3852,7 +3852,7 @@ test('managed watcher cleanup derives its only path from runner media ownership'
     });
     assert.deepEqual(calls[0].args, [
       '-m', 'tests.e2e.support.watcherFixture', '--owned-root',
-      path.join(ownedRoot, 'media', 'cases', 'gallery-native-response-overlap'),
+      path.join(ownedRoot, 'media', 'cases', 'watcher-grouped-feature-credit'),
     ]);
     await assert.rejects(
       _private.cleanupManagedWatcherFixture(environment, { ownedDirectoryName: 'not-runner-owned' }),

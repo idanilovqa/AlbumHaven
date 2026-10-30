@@ -388,6 +388,7 @@ document.addEventListener('contextmenu', (event) => {
   const albumCard = event.target.closest('.album-card');
   if (!albumCard) return;
   event.preventDefault();
+  clearAlbumCardLongPressGesture();
   const trigger = albumCard.querySelector('[data-album-key]');
   const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
   showAlbumCardContextMenu(event.clientX, event.clientY, album);

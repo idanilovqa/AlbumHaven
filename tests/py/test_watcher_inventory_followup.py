@@ -110,9 +110,9 @@ def test_live_in_place_retag_reconciles_previous_album_credits(watcher_repair_in
     credits = {}
     for row in rows:
         credits.setdefault(row["album_key"], set()).add(row["name"])
-    assert credits["owner::repair album"] == {"Owner", "Retained Guest"}
-    assert credits["owner::destination album"] == {"Owner", "Departing Guest"}
-    assert credits["owner::unrelated"] == {"Owner", "Unrelated Guest"}
+    assert credits["owner::repair album"] == {"Retained Guest"}
+    assert credits["owner::destination album"] == {"Departing Guest"}
+    assert credits["owner::unrelated"] == {"Unrelated Guest"}
     memberships = {row["private_path"]: row for row in tracks}
     assert memberships[changed["path"]]["album_key"] == "owner::destination album"
     assert memberships[retained["path"]]["album_key"] == "owner::repair album"

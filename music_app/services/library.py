@@ -16,6 +16,8 @@ from music_app.services.album_note_read_seams import (
     build_visible_album_notes_payload,
 )
 from music_app.services.album_display_metadata import (
+    album_display_title,
+    album_display_year,
     build_album_display_metadata_payload,
     has_album_display_metadata_values,
 )
@@ -279,31 +281,88 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     def compilation_state(inferred_state: bool) -> bool:
         if persisted_compilation_state is None:
             return inferred_state
-        return persisted_compilation_state
+        return inferred_state and persisted_compilation_state
 
     album_artist_values = [
         _normalize_display_artist_name(entry.get("album_artist")).strip()
         for entry in entries
         if str(entry.get("album_artist") or "").strip()
     ]
-    track_artist_values = [
-        _normalize_display_artist_name(entry.get("artist")).strip()
+    disc_numbers = {
+        disc_number
         for entry in entries
-        if str(entry.get("artist") or "").strip()
+        if (disc_number := safe_int(entry.get("disc_number"))) is not None
+    }
+    main_disc_album_artist_values = [
+        _normalize_display_artist_name(entry.get("album_artist")).strip()
+        for entry in _main_disc_entries(entries)
+        if str(entry.get("album_artist") or "").strip()
     ]
+    main_disc_album_artist_keys = {
+        _normalize_artist_key(value)
+        for value in main_disc_album_artist_values
+        if value
+    }
+    main_disc_album_artist = (
+        main_disc_album_artist_values[0]
+        if (
+            len(disc_numbers) > 1
+            and len(main_disc_album_artist_keys) == 1
+            and main_disc_album_artist_values
+            and not _is_various_artist(main_disc_album_artist_values[0])
+        )
+        else ""
+    )
+    track_artist_values = []
+    for entry in entries:
+        structured_artists = entry.get("artists")
+        if isinstance(structured_artists, (list, tuple)):
+            track_artist_values.extend(
+                _normalize_display_artist_name(artist).strip()
+                for artist in structured_artists
+                if str(artist or "").strip()
+            )
+        elif str(entry.get("artist") or "").strip():
+            track_artist_values.append(
+                _normalize_display_artist_name(entry.get("artist")).strip()
+            )
     canonical_track_artists, track_artist_counts = _canonicalize_artist_names(track_artist_values)
     distinct_track_artists = [artist for artist in canonical_track_artists if artist]
     total_tracks = sum(track_artist_counts.values())
     top_artist_count = max(track_artist_counts.values()) if track_artist_counts else 0
     top_artist_share = (top_artist_count / total_tracks) if total_tracks else 1
     significant_artist_count = sum(1 for count in track_artist_counts.values() if count >= 2)
-    explicit_various = any(_is_various_artist(value) for value in album_artist_values)
-    album_artist_members = split_album_artist_members(album_artist_values[0]) if len({_normalize_artist_key(value) for value in album_artist_values if value}) <= 1 and album_artist_values else []
+    normalized_album_artist_keys = {
+        _normalize_artist_key(value)
+        for value in album_artist_values
+        if value
+    }
+    unanimous_album_artist = (
+        main_disc_album_artist
+        if main_disc_album_artist
+        else (
+            album_artist_values[0]
+            if len(normalized_album_artist_keys) == 1 and album_artist_values
+            else ""
+        )
+    )
+    explicit_various = (
+        not main_disc_album_artist
+        and any(_is_various_artist(value) for value in album_artist_values)
+    )
+    album_artist_members = (
+        split_album_artist_members(unanimous_album_artist)
+        if unanimous_album_artist
+        else []
+    )
     matched_album_artist_members = [
         member for member in album_artist_members
         if any(_normalize_artist_key(member) == _normalize_artist_key(track_artist) or _are_probable_artist_typos(member, track_artist) for track_artist in distinct_track_artists)
     ]
-    primary_artist = next((value for value in album_artist_values if value.strip()), "")
+    primary_artist = main_disc_album_artist or next(
+        (value for value in album_artist_values if value.strip()),
+        "",
+    )
     if not primary_artist and distinct_track_artists:
         primary_artist = distinct_track_artists[0]
     dominant_track_artist = _dominant_track_artist(track_artist_counts)
@@ -311,11 +370,30 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     if not override_primary_artist or _is_various_artist(override_primary_artist):
         override_primary_artist = dominant_track_artist
 
-    if dominant_track_artist and _one_off_guest_album_override(dominant_track_artist, track_artist_counts):
+    allow_dominant_artist_override = (
+        not unanimous_album_artist
+        or len(matched_album_artist_members) >= 2
+        or (
+            not explicit_various
+            and _normalize_artist_key(unanimous_album_artist)
+            == _normalize_artist_key(dominant_track_artist)
+        )
+    )
+    if (
+        allow_dominant_artist_override
+        and dominant_track_artist
+        and _one_off_guest_album_override(dominant_track_artist, track_artist_counts)
+    ):
         return compilation_state(False), dominant_track_artist, [dominant_track_artist]
 
     if (
-        override_primary_artist
+        not explicit_various
+        and override_primary_artist
+        and (
+            not unanimous_album_artist
+            or _normalize_artist_key(override_primary_artist)
+            == _normalize_artist_key(unanimous_album_artist)
+        )
         and _feature_style_album_override(entries, override_primary_artist, distinct_track_artists)
     ):
         return compilation_state(False), override_primary_artist, [override_primary_artist]
@@ -342,15 +420,47 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
             [primary_artist or "Unknown Artist"],
         )
 
-    member_artists = matched_album_artist_members or distinct_track_artists
-    display_album_artist = "Various Artists" if explicit_various else _format_shared_album_artist(member_artists)
-    if display_album_artist == "Various Artists" and len(member_artists) <= 3 and member_artists:
-        display_album_artist = _format_shared_album_artist(member_artists)
-    normalized_members = member_artists if display_album_artist != "Various Artists" else member_artists
+    album_artist_matches_track = any(
+        _normalize_artist_key(unanimous_album_artist) == _normalize_artist_key(track_artist)
+        for track_artist in distinct_track_artists
+    )
+    honor_unanimous_album_artist = bool(unanimous_album_artist) and (
+        persisted_compilation_state is not False
+        or explicit_various
+        or (len(album_artist_members) < 2 and not album_artist_matches_track)
+    )
+    display_member_artists = matched_album_artist_members or distinct_track_artists
+    member_artists = display_member_artists
+    if honor_unanimous_album_artist:
+        if len(album_artist_members) >= 2:
+            member_artists = album_artist_members
+        elif explicit_various:
+            member_artists = []
+        else:
+            member_artists = [unanimous_album_artist]
+    display_album_artist = (
+        unanimous_album_artist
+        if (
+            honor_unanimous_album_artist
+            and not explicit_various
+        )
+        else "Various Artists"
+        if explicit_various
+        else _format_shared_album_artist(display_member_artists)
+    )
+    if (
+        display_album_artist == "Various Artists"
+        and not explicit_various
+        and persisted_compilation_state is not True
+        and len(display_member_artists) <= 3
+        and display_member_artists
+    ):
+        display_album_artist = _format_shared_album_artist(display_member_artists)
+        member_artists = display_member_artists
     return (
         compilation_state(True),
         display_album_artist or "Various Artists",
-        normalized_members,
+        member_artists,
     )
 
 
@@ -368,16 +478,6 @@ def album_separate_release_key(album_artist: str, album_name: str, edition: str 
     return _album_key(album_artist, album_name, edition)
 
 
-def _entry_album_container(entry: dict[str, object]) -> str:
-    raw_path = str(entry.get("path") or "").strip()
-    if not raw_path:
-        return ""
-    parent = Path(os.path.normpath(raw_path)).parent
-    if _DISC_FOLDER_RE.search(parent.name) and parent.parent != parent:
-        parent = parent.parent
-    return str(parent).strip().lower()
-
-
 def _track_album_container(path_value: object) -> str:
     raw_path = str(path_value or "").strip()
     if not raw_path:
@@ -390,6 +490,77 @@ def _track_album_container(path_value: object) -> str:
     return str(parent).strip()
 
 
+def _album_bucket_metadata(album_name: object, edition: object) -> tuple[str, str]:
+    raw_album_name = str(album_name or "")
+    display_album_name = repair_display_text(raw_album_name) or raw_album_name
+    raw_edition = str(edition or "").strip()
+    display_edition = (repair_display_text(raw_edition) or raw_edition) if raw_edition else ""
+    return display_album_name.strip().casefold(), display_edition.strip().casefold()
+
+
+def _contextual_album_containers(
+    rows: list[tuple[object, object, object, object]],
+) -> list[str]:
+    containers: list[str] = []
+    containers_by_literal_parent: dict[tuple[bool, str], str] = {}
+    for path, _disc, _album, _edition in rows:
+        raw_path = str(path)
+        separator_index = max(raw_path.rfind("/"), raw_path.rfind("\\"))
+        literal_parent = (
+            separator_index >= 0,
+            raw_path[:separator_index] if separator_index >= 0 else raw_path,
+        )
+        if literal_parent not in containers_by_literal_parent:
+            containers_by_literal_parent[literal_parent] = _track_album_container(path)
+        containers.append(containers_by_literal_parent[literal_parent])
+    numeric_groups: dict[
+        tuple[str, str, str],
+        dict[str, list[tuple[int, int, bool]]],
+    ] = {}
+    parent_paths: dict[tuple[str, str, str], str] = {}
+
+    for index, (path_value, disc_number, album_name, edition) in enumerate(rows):
+        raw_path = str(path_value or "").strip()
+        if not raw_path:
+            continue
+        normalized_path = os.path.normpath(raw_path)
+        path = path_value if isinstance(path_value, Path) and str(path_value) == normalized_path else Path(normalized_path)
+        folder = path.parent
+        folder_name = folder.name.strip()
+        if not folder_name.isdigit() or folder.parent == folder:
+            continue
+
+        ordinal = int(folder_name)
+        parent_path = str(folder.parent).strip()
+        album_key, edition_key = _album_bucket_metadata(album_name, edition)
+        group_key = (os.path.normcase(parent_path), album_key, edition_key)
+        folder_key = os.path.normcase(str(folder))
+        numeric_groups.setdefault(group_key, {}).setdefault(folder_key, []).append(
+            (index, ordinal, safe_int(disc_number) == ordinal)
+        )
+        parent_paths.setdefault(group_key, parent_path)
+
+    for group_key, folders in numeric_groups.items():
+        ordinals = {
+            ordinal
+            for folder_rows in folders.values()
+            for _index, ordinal, _matches in folder_rows
+        }
+        if len(folders) < 2 or len(ordinals) < 2:
+            continue
+        if not all(
+            matches
+            for folder_rows in folders.values()
+            for _index, _ordinal, matches in folder_rows
+        ):
+            continue
+        for folder_rows in folders.values():
+            for index, _ordinal, _matches in folder_rows:
+                containers[index] = parent_paths[group_key]
+
+    return containers
+
+
 
 
 def _track_to_dict(track: Track) -> dict[str, object]:
@@ -399,6 +570,8 @@ def _track_to_dict(track: Track) -> dict[str, object]:
         "track_number": track.track_number,
         "disc_number": track.disc_number,
         "disc_number_raw": track.disc_number_raw,
+        "total_discs": getattr(track, "total_discs", None),
+        "disc_subtitle": getattr(track, "disc_subtitle", None),
         "artist": track.artist,
         "album": track.album,
         "album_artist": track.album_artist,
@@ -406,6 +579,7 @@ def _track_to_dict(track: Track) -> dict[str, object]:
         "year": track.year,
         "release_date": getattr(track, "release_date", None),
         "edition": track.edition,
+        "album_type": getattr(track, "album_type", None),
         "album_rating": int(track.album_rating or 0),
         "exception_type": track.exception_type,
         "custom_collection_name": getattr(track, "custom_collection_name", ""),
@@ -440,9 +614,17 @@ def _build_album_detail_track_payloads(
     tracks = album.tracks
     sources = get_album_duplicate_sources(album)
     if sources:
-        own_folders = {os.path.normcase(_track_album_container(track.path)) for track in tracks}
+        track_containers = _contextual_album_containers([
+            (track.path, track.disc_number, track.album, track.edition)
+            for track in tracks
+        ])
+        own_folders = {os.path.normcase(container) for container in track_containers}
         folder = next(os.path.normcase(source["folder_path"]) for source in sources if os.path.normcase(source["folder_path"]) in own_folders)
-        tracks = [track for track in tracks if os.path.normcase(_track_album_container(track.path)) == folder]
+        tracks = [
+            track
+            for track, container in zip(tracks, track_containers)
+            if os.path.normcase(container) == folder
+        ]
     track_payloads = [_track_to_dict(track) for track in tracks]
     track_rows = build_track_rows(
         tracks,
@@ -585,8 +767,17 @@ def _preview_open_directory_paths(album: Album) -> list[str]:
 
     paths: list[str] = []
     seen: set[str] = set()
-    for track in getattr(album, "tracks", []) or []:
-        directory = _track_album_container(getattr(track, "path", ""))
+    tracks = list(getattr(album, "tracks", []) or [])
+    directories = _contextual_album_containers([
+        (
+            getattr(track, "path", None),
+            getattr(track, "disc_number", None),
+            getattr(track, "album", None),
+            getattr(track, "edition", None),
+        )
+        for track in tracks
+    ])
+    for directory in directories:
         directory_key = directory.casefold()
         if not directory or directory_key in seen:
             continue
@@ -692,6 +883,8 @@ def _album_payload_track_signature(track: Track) -> tuple[object, ...]:
         getattr(track, "track_number", None),
         getattr(track, "disc_number", None),
         getattr(track, "disc_number_raw", None),
+        getattr(track, "total_discs", None),
+        getattr(track, "disc_subtitle", None),
         getattr(track, "artist", None),
         getattr(track, "album", None),
         getattr(track, "album_artist", None),
@@ -861,6 +1054,7 @@ def _build_album_base_payload(
         "key": album.key,
         "album_ref": album_ref,
         "name": album.name,
+        "display_name": album_display_title(album.name),
         "album_artist": _album_artist_display_value(album.album_artist),
         "artists": list(getattr(album, "artists", []) or []),
         "is_compilation": bool(getattr(album, "is_compilation", False)),
@@ -879,7 +1073,9 @@ def _build_album_base_payload(
         "remote_cover_height": getattr(album, "remote_cover_height", None),
         "year": album.year,
         "release_date": getattr(album, "release_date", None),
+        "display_year": album_display_year(album),
         "edition": album.edition,
+        "release_type": getattr(album, "release_type", None) or "ALBUM",
         "album_rating": int(album.album_rating or 0),
         "album_preference": album_preference,
         "top_viewer_overlay": _top_viewer_overlay_to_dict(),
@@ -908,6 +1104,8 @@ def _normalize_album_preview_payload(
 ) -> dict[str, object]:
     album_key = str(payload.get("key") or "").strip()
     payload["album_artist"] = _album_artist_display_value(payload.get("album_artist"))
+    payload["display_name"] = payload.get("display_name") or album_display_title(payload.get("name"))
+    payload["display_year"] = payload.get("display_year") or album_display_year(payload)
     payload.setdefault("album_ref", album_key)
     payload.setdefault("artists", list(payload.get("artists") or []))
     payload.setdefault("is_compilation", bool(payload.get("is_compilation", False)))
@@ -1075,26 +1273,51 @@ def get_album_duplicate_sources(album: Album) -> list[dict[str, object]]:
 def _ordered_album_duplicate_track_groups(
     tracks: list[Track],
 ) -> list[tuple[str, list[Track]]]:
+    ordered_groups = _ordered_album_track_groups(tracks)
+    if len(ordered_groups) <= 1:
+        return []
+    identities = [_duplicate_album_identity(group) for _, group in ordered_groups]
+    counts = Counter(identities)
+    qualifying_indexes = {
+        index
+        for index, identity in enumerate(identities)
+        if identity is not None and counts[identity] > 1
+    }
+    for index, (_, tracks) in enumerate(ordered_groups):
+        if index in qualifying_indexes:
+            continue
+        if any(
+            _equivalent_duplicate_track_groups(tracks, other_tracks)
+            for other_index, (_, other_tracks) in enumerate(ordered_groups)
+            if other_index != index
+        ):
+            qualifying_indexes.add(index)
+    return [group for index, group in enumerate(ordered_groups) if index in qualifying_indexes]
+
+
+def _ordered_album_track_groups(tracks: list[Track]) -> list[tuple[str, list[Track]]]:
     grouped_tracks: dict[str, list[Track]] = {}
     folder_paths: dict[str, str] = {}
-    for track in tracks:
-        container = _track_album_container(getattr(track, "path", ""))
+    containers = _contextual_album_containers([
+        (
+            getattr(track, "path", None),
+            getattr(track, "disc_number", None),
+            getattr(track, "album", None),
+            getattr(track, "edition", None),
+        )
+        for track in tracks
+    ])
+    for track, container in zip(tracks, containers):
         if not container:
             return []
         key = os.path.normcase(container)
         folder_paths.setdefault(key, container)
         grouped_tracks.setdefault(key, []).append(track)
 
-    if len(grouped_tracks) <= 1:
-        return []
-
-    ordered_groups = sorted(
+    return sorted(
         ((folder_paths[key], group) for key, group in grouped_tracks.items()),
         key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold()),
     )
-    identities = [_duplicate_album_identity(group) for _, group in ordered_groups]
-    counts = Counter(identities)
-    return [group for group, identity in zip(ordered_groups, identities) if identity is not None and counts[identity] > 1]
 
 
 def _duplicate_album_identity_values(
@@ -1143,6 +1366,228 @@ def _duplicate_track_coverage_identity(track: Track) -> tuple[object, ...]:
     return ("title", title)
 
 
+_RELEASE_TYPE_EDITIONS = {"ep", "single", "maxi single"}
+
+
+def _normalized_duplicate_card_text(value: object) -> str:
+    text = unicodedata.normalize("NFKD", str(value or "").casefold())
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    text = text.replace("'", "").replace("’", "")
+    return " ".join(re.sub(r"[\W_]+", " ", text, flags=re.UNICODE).split())
+
+
+def _duplicate_card_track_signature(tracks: list[Track]) -> tuple[tuple[object, ...], ...] | None:
+    signatures = set()
+    for _, group in _ordered_album_track_groups(tracks):
+        signature = []
+        for track in group:
+            track_number = safe_int(track.track_number)
+            duration = safe_int(track.duration_seconds)
+            title = _normalized_duplicate_card_text(track.title)
+            if track_number is None or duration is None or duration <= 0 or not title:
+                return None
+            signature.append((safe_int(track.disc_number) or 1, track_number, title, duration))
+        if len(signature) < 2:
+            return None
+        signatures.add(tuple(sorted(signature)))
+    return next(iter(signatures)) if len(signatures) == 1 else None
+
+
+def _duplicate_card_album_identity(album: Album) -> tuple[str, str, int, str, str] | None:
+    artist = _normalized_duplicate_card_text(album.album_artist)
+    title = _normalized_duplicate_card_text(album.name)
+    year = safe_int(album.year)
+    if not artist or not title or year is None or not 1000 <= year <= 9999:
+        return None
+    edition = _normalized_duplicate_card_text(album.edition)
+    release_date = str(album.release_date or "").strip()
+    return artist, title, year, edition, release_date
+
+
+def _duplicate_card_editions_are_compatible(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    editions = {left, right}
+    return "" in editions and bool((editions - {""}) & _RELEASE_TYPE_EDITIONS)
+
+
+def _one_track_incomplete_duplicate(
+    left: tuple[tuple[object, ...], ...],
+    right: tuple[tuple[object, ...], ...],
+) -> bool:
+    shorter, longer = sorted((left, right), key=len)
+    # shortcut: recognize one missing track only, broaden after stronger source evidence exists.
+    return (
+        len(longer) == len(shorter) + 1
+        and len(shorter) >= 2
+        and len(set(longer)) == len(longer)
+        and set(shorter).issubset(longer)
+    )
+
+
+def _duplicate_track_group_card_identity(tracks: list[Track]) -> tuple[str, str, int, str, str] | None:
+    album_identity = _duplicate_album_identity(tracks)
+    if album_identity is None:
+        return None
+    editions = {
+        _normalized_duplicate_card_text(track.edition)
+        for track in tracks
+    }
+    release_dates = {str(track.release_date or "").strip() for track in tracks}
+    if len(editions) != 1 or len(release_dates) != 1:
+        return None
+    artist, title, year = album_identity
+    return (
+        _normalized_duplicate_card_text(artist),
+        _normalized_duplicate_card_text(title),
+        year,
+        next(iter(editions)),
+        next(iter(release_dates)),
+    )
+
+
+def _equivalent_duplicate_track_groups(left: list[Track], right: list[Track]) -> bool:
+    left_identity = _duplicate_track_group_card_identity(left)
+    right_identity = _duplicate_track_group_card_identity(right)
+    if left_identity is None or right_identity is None:
+        return False
+    left_artist, left_title, left_year, left_edition, left_release_date = left_identity
+    right_artist, right_title, right_year, right_edition, right_release_date = right_identity
+    if left_artist != right_artist or left_year != right_year:
+        return False
+    if left_title.removeprefix("the ") != right_title.removeprefix("the "):
+        return False
+    if not _duplicate_card_editions_are_compatible(left_edition, right_edition):
+        return False
+    if left_release_date and right_release_date and left_release_date != right_release_date:
+        return False
+    return _duplicate_card_track_signature(left) == _duplicate_card_track_signature(right) is not None
+
+
+def _collapse_equivalent_duplicate_album_cards(albums: list[Album]) -> list[Album]:
+    collapsed: list[Album] = []
+    candidates: dict[
+        tuple[object, ...],
+        list[
+            tuple[
+                int,
+                Album,
+                str,
+                str,
+                tuple[tuple[object, ...], ...],
+                list[Track],
+            ]
+        ],
+    ] = {}
+    for album in albums:
+        identity = _duplicate_card_album_identity(album)
+        signature = _duplicate_card_track_signature(album.tracks)
+        if identity is None or signature is None:
+            collapsed.append(album)
+            continue
+        artist, title, year, edition, release_date = identity
+        key = (artist, title.removeprefix("the "), year)
+        bucket = candidates.setdefault(key, [])
+        match_index = next(
+            (
+                index
+                for index, (
+                    _,
+                    _,
+                    candidate_edition,
+                    candidate_release_date,
+                    candidate_signature,
+                    _,
+                ) in enumerate(bucket)
+                if _duplicate_card_editions_are_compatible(candidate_edition, edition)
+                and (
+                    not candidate_release_date
+                    or not release_date
+                    or candidate_release_date == release_date
+                )
+                and (
+                    candidate_signature == signature
+                    or _one_track_incomplete_duplicate(candidate_signature, signature)
+                )
+            ),
+            None,
+        )
+        if match_index is None:
+            collapsed.append(album)
+            bucket.append((
+                len(collapsed) - 1,
+                album,
+                edition,
+                release_date,
+                signature,
+                list(album.tracks),
+            ))
+            continue
+        (
+            collapsed_index,
+            match,
+            _,
+            candidate_release_date,
+            candidate_signature,
+            candidate_source_tracks,
+        ) = bucket[match_index]
+        incoming_tracks = list(album.tracks)
+        is_incomplete_copy = candidate_signature != signature
+        if is_incomplete_copy:
+            canonical, duplicate = (
+                (match, album)
+                if len(candidate_signature) > len(signature)
+                else (album, match)
+            )
+        else:
+            canonical, duplicate = sorted(
+                (match, album),
+                key=lambda candidate: (
+                    not bool(str(candidate.edition or "").strip()),
+                    str(candidate.name or "").casefold().startswith("the "),
+                    not bool(re.search(r"[-–—:]\s*$", str(candidate.name or ""))),
+                    len(str(candidate.name or "")),
+                ),
+                reverse=True,
+            )
+            canonical.tracks.extend(duplicate.tracks)
+            canonical.total_duration_seconds += duplicate.total_duration_seconds
+        source_tracks = [*candidate_source_tracks, *incoming_tracks]
+        canonical.artists = list(dict.fromkeys([*canonical.artists, *duplicate.artists]))
+        canonical.is_compilation = canonical.is_compilation or duplicate.is_compilation
+        canonical.release_date = canonical.release_date or duplicate.release_date
+        canonical.tracks.sort(key=lambda track: (
+            safe_int(track.disc_number) or 999,
+            safe_int(track.track_number) or 999,
+            str(track.title or "").casefold(),
+            str(track.path).casefold(),
+        ))
+        source_groups = _ordered_album_track_groups(source_tracks)
+        canonical._cached_duplicate_sources = (
+            _build_duplicate_source_payloads(source_groups)
+            if len(source_groups) > 1
+            else []
+        )
+        canonical.root_provenance = summarize_root_provenance_payloads([
+            track.root_provenance or build_root_provenance_payload(
+                track.library_root_id,
+                track.library_root_category,
+            )
+            for track in source_tracks
+        ])
+        collapsed[collapsed_index] = canonical
+        canonical_identity = _duplicate_card_album_identity(canonical)
+        bucket[match_index] = (
+            collapsed_index,
+            canonical,
+            canonical_identity[3],
+            candidate_release_date or release_date,
+            max((candidate_signature, signature), key=len),
+            source_tracks,
+        )
+    return collapsed
+
+
 def _summarize_duplicate_album_provenance(
     own_tracks: list[Track],
     linked_tracks: list[Track],
@@ -1179,20 +1624,14 @@ def _link_duplicate_album_sources(
     """Link physical copies across edition records without changing their queues."""
     containers: dict[str, dict[str, Track]] = {}
     folder_paths: dict[str, str] = {}
-    containers_by_literal_parent: dict[tuple[bool, str], str] = {}
     album_folder_keys: list[list[str]] = []
     for album in albums:
         folder_keys: list[str] = []
-        for track in album.tracks:
-            raw_path = str(track.path)
-            separator_index = max(raw_path.rfind("/"), raw_path.rfind("\\"))
-            literal_parent = (
-                separator_index >= 0,
-                raw_path[:separator_index] if separator_index >= 0 else raw_path,
-            )
-            if literal_parent not in containers_by_literal_parent:
-                containers_by_literal_parent[literal_parent] = _track_album_container(track.path)
-            folder = containers_by_literal_parent[literal_parent]
+        album_containers = _contextual_album_containers([
+            (track.path, track.disc_number, track.album, track.edition)
+            for track in album.tracks
+        ])
+        for track, folder in zip(album.tracks, album_containers):
             key = os.path.normcase(folder)
             folder_keys.append(key)
             folder_paths.setdefault(key, folder)
@@ -1256,23 +1695,45 @@ def _link_duplicate_album_sources(
         if duplicate_identities:
             linked_tracks = [track for tracks in source_track_groups for track in tracks]
             album.root_provenance = _summarize_duplicate_album_provenance(album.tracks, linked_tracks)
+        fallback_groups = [] if duplicate_identities else _ordered_album_duplicate_track_groups(album.tracks)
+
         if defer_source_payloads:
             album._cached_duplicate_sources = []
 
             def deferred_materializer(
                 duplicate_identities=duplicate_identities,
+                fallback_groups=fallback_groups,
             ) -> list[dict[str, object]]:
+                if fallback_groups:
+                    return _build_duplicate_source_payloads(fallback_groups)
                 return materialize_sources(duplicate_identities)
 
             contexts.append({
-                "has_duplicate_files": bool(duplicate_identities),
-                "linked_tracks": linked_tracks,
+                "has_duplicate_files": bool(duplicate_identities or fallback_groups),
+                "linked_tracks": linked_tracks or [track for _, tracks in fallback_groups for track in tracks],
                 "materialize_sources": deferred_materializer,
-                "source_track_groups": source_track_groups,
+                "source_track_groups": source_track_groups or [tracks for _, tracks in fallback_groups],
             })
         else:
-            album._cached_duplicate_sources = materialize_sources(duplicate_identities)
+            album._cached_duplicate_sources = (
+                _build_duplicate_source_payloads(fallback_groups)
+                if fallback_groups
+                else materialize_sources(duplicate_identities)
+            )
     return contexts
+
+
+def _build_duplicate_source_payloads(
+    groups: list[tuple[str, list[Track]]],
+) -> list[dict[str, object]]:
+    return [
+        _build_album_duplicate_source_payload(
+            index=index,
+            folder_path=folder,
+            tracks=tracks,
+        )
+        for index, (folder, tracks) in enumerate(groups)
+    ]
 
 
 def _build_album_duplicate_source_payload(
@@ -1300,11 +1761,12 @@ def _build_album_duplicate_source_payload(
     }
 
 
-def _shared_album_bucket_key(entry: dict[str, object]) -> tuple[str, str, str]:
-    album_name = repair_display_text(str(entry.get("album") or "")) or str(entry.get("album") or "")
-    raw_edition = str(entry.get("edition") or "").strip()
-    edition = (repair_display_text(raw_edition) or raw_edition) if raw_edition else ""
-    return (_entry_album_container(entry), album_name.strip().casefold(), edition.strip().casefold())
+def _shared_album_bucket_key(
+    entry: dict[str, object],
+    album_container: str,
+) -> tuple[str, str, str]:
+    album_name, edition = _album_bucket_metadata(entry.get("album"), entry.get("edition"))
+    return (album_container.strip().lower(), album_name, edition)
 
 
 def _normalized_release_date(value: object) -> str:
@@ -1380,6 +1842,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             root_provenance_cache[cache_key] = cached
         return cached
 
+    groupable_entries: list[dict[str, object]] = []
     for grouping_count, entry in enumerate(file_cache.values(), start=1):
         _cooperative_album_build_yield(grouping_count, enabled=cooperative_yields_enabled)
         if str(entry.get("path") or "") in rejected_paths:
@@ -1389,9 +1852,34 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
         album_name = cached_display_text(entry["album"])
         if _is_loose_track_album_value(album_name):
             continue
-        grouped_entries.setdefault(_shared_album_bucket_key(entry), []).append(entry)
+        groupable_entries.append(entry)
 
-    construction_count = 0
+    album_containers = _contextual_album_containers([
+        (entry.get("path"), entry.get("disc_number"), entry.get("album"), entry.get("edition"))
+        for entry in groupable_entries
+    ])
+    for entry, album_container in zip(groupable_entries, album_containers):
+        grouped_entries.setdefault(
+            _shared_album_bucket_key(entry, album_container),
+            [],
+        ).append(entry)
+
+    classified_buckets: list[
+        tuple[
+            list[dict[str, object]],
+            bool,
+            str,
+            list[str],
+            str,
+            str,
+            str | None,
+            str,
+            int | None,
+            bool,
+        ]
+    ] = []
+    release_years_by_base_key: dict[str, set[int]] = {}
+    conflicting_year_release_keys: set[str] = set()
     for bucket_entries in grouped_entries.values():
         is_compilation, display_album_artist, member_artists = _classify_album_artists(bucket_entries)
         identity_album_artist = display_album_artist
@@ -1414,13 +1902,65 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             ):
                 identity_album_artist = raw_album_artist
 
+        first_entry = bucket_entries[0]
+        album_name = cached_display_text(first_entry["album"])
+        raw_edition = str(first_entry.get("edition") or "").strip()
+        edition = cached_display_text(raw_edition) if raw_edition else None
+        base_key = album_separate_release_key(identity_album_artist, album_name, edition)
+        bucket_years = {
+            year
+            for entry in bucket_entries
+            if (year := safe_int(entry.get("year"))) is not None and 1000 <= year <= 9999
+        }
+        bucket_release_year = next(iter(bucket_years)) if len(bucket_years) == 1 else None
+        bucket_has_conflicting_years = len(bucket_years) > 1
+        if bucket_release_year is not None:
+            release_years_by_base_key.setdefault(base_key, set()).add(bucket_release_year)
+        elif bucket_has_conflicting_years:
+            conflicting_year_release_keys.add(base_key)
+        classified_buckets.append(
+            (
+                bucket_entries,
+                is_compilation,
+                display_album_artist,
+                member_artists,
+                identity_album_artist,
+                album_name,
+                edition,
+                base_key,
+                bucket_release_year,
+                bucket_has_conflicting_years,
+            )
+        )
+
+    year_distinct_release_keys = {
+        base_key
+        for base_key, release_years in release_years_by_base_key.items()
+        if len(release_years) > 1
+    } | conflicting_year_release_keys
+    construction_count = 0
+    for (
+        bucket_entries,
+        is_compilation,
+        display_album_artist,
+        member_artists,
+        identity_album_artist,
+        album_name,
+        edition,
+        base_key,
+        bucket_release_year,
+        bucket_has_conflicting_years,
+    ) in classified_buckets:
         for entry in bucket_entries:
             construction_count += 1
-            album_name = cached_display_text(entry["album"])
-            raw_edition = str(entry.get('edition') or '').strip()
-            edition = cached_display_text(raw_edition) if raw_edition else None
-            base_key = album_separate_release_key(identity_album_artist, album_name, edition)
-            key = _album_key(identity_album_artist, album_name, edition, entry.get("year")) if base_key in separate_release_keys else base_key
+            if base_key in separate_release_keys:
+                key = _album_key(identity_album_artist, album_name, edition, entry.get("year"))
+            elif bucket_has_conflicting_years:
+                key = f"{base_key}::year::unresolved"
+            elif base_key in year_distinct_release_keys and bucket_release_year is not None:
+                key = _album_key(identity_album_artist, album_name, edition, bucket_release_year)
+            else:
+                key = base_key
             track_root_provenance = cached_root_provenance(
                 entry.get("library_root_id"),
                 entry.get("library_root_category"),
@@ -1451,9 +1991,18 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                     remote_cover_album_url=str(entry.get("remote_cover_album_url") or "").strip() or None,
                     remote_cover_width=safe_int(entry.get("remote_cover_width")),
                     remote_cover_height=safe_int(entry.get("remote_cover_height")),
-                    year=safe_int(entry.get("year")),
-                    release_date=str(entry.get("release_date") or "").strip() or None,
+                    year=(
+                        None
+                        if bucket_has_conflicting_years and base_key not in separate_release_keys
+                        else safe_int(entry.get("year"))
+                    ),
+                    release_date=(
+                        None
+                        if bucket_has_conflicting_years and base_key not in separate_release_keys
+                        else str(entry.get("release_date") or "").strip() or None
+                    ),
                     edition=edition,
+                    release_type=str(entry.get("album_type") or "").strip() or None,
                     album_rating=safe_int(entry.get("album_rating")),
                     library_root_id=str(entry.get("library_root_id") or "").strip() or None,
                     library_root_category=str(entry.get("library_root_category") or "").strip() or None,
@@ -1469,12 +2018,18 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             duration = safe_int(entry.get("duration_seconds")) or 0
             album = albums[key]
             album.total_duration_seconds += duration
-            if album.year is None:
+            if album.year is None and not bucket_has_conflicting_years:
                 album.year = safe_int(entry.get("year"))
-            if not getattr(album, "release_date", None) and entry.get("release_date"):
+            if (
+                not bucket_has_conflicting_years
+                and not getattr(album, "release_date", None)
+                and entry.get("release_date")
+            ):
                 album.release_date = str(entry.get("release_date")).strip() or None
             if album.edition is None and entry.get('edition'):
                 album.edition = str(entry.get('edition')).strip() or None
+            if album.release_type is None and entry.get("album_type"):
+                album.release_type = str(entry.get("album_type")).strip() or None
             if album.album_rating is None:
                 album.album_rating = safe_int(entry.get("album_rating"))
             if album.cover_path is None and entry.get("cover_path"):
@@ -1518,6 +2073,8 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                 path=cached_path(entry["path"]), title=cached_display_text(entry["title"]),
                 track_number=safe_int(entry.get("track_number")), disc_number=safe_int(entry.get("disc_number")),
                 disc_number_raw=str(entry.get("disc_number_raw")) if entry.get("disc_number_raw") else None,
+                total_discs=safe_int(entry.get("total_discs")),
+                disc_subtitle=str(entry.get("disc_subtitle") or "").strip() or None,
                 artist=cached_display_text(entry["artist"]) if entry.get("artist") else None,
                 album=album_name,
                 album_artist=cached_display_text(entry["album_artist"]),
@@ -1525,6 +2082,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                 year=safe_int(entry.get("year")),
                 release_date=str(entry.get("release_date") or "").strip() or None,
                 edition=str(entry.get("edition")).strip() if entry.get("edition") else None,
+                album_type=str(entry.get("album_type")).strip() if entry.get("album_type") else None,
                 album_rating=safe_int(entry.get("album_rating")),
                 exception_type=normalize_exception_value(entry.get("exception_type")) or None,
                 custom_collection_name=str(entry.get("custom_collection_name") or "").strip() or None,
@@ -1560,8 +2118,9 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
             t.title.lower(),
         ))
         _cooperative_album_build_yield(finalization_count, enabled=cooperative_yields_enabled)
-    album_list.sort(key=album_sort_key)
     _link_duplicate_album_sources(album_list)
+    album_list = _collapse_equivalent_duplicate_album_cards(album_list)
+    album_list.sort(key=album_sort_key)
     return album_list
 
 

@@ -112,6 +112,78 @@ def test_multidisc_album_is_one_physical_source():
     ) == []
 
 
+def test_numeric_disc_folders_matching_disc_tags_are_one_physical_source():
+    assert _sources(
+        _track("main/original/1", disc_number=1, title="Disc One Track"),
+        _track("main/original/2", disc_number=2, title="Disc Two Track"),
+        _track("main/original/3", disc_number=3, title="Disc Three Track"),
+        _track("main/original/4", disc_number=4, title="Disc Four Track"),
+    ) == []
+
+
+def test_single_numeric_album_folders_do_not_collapse_from_matching_disc_tags():
+    sources = _sources(
+        _track("main/1", disc_number=1),
+        _track("hoard/1", disc_number=1),
+    )
+
+    assert len(sources) == 2
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/1")),
+        str(Path("hoard/1")),
+    }
+
+
+def test_numeric_disc_folders_do_not_collapse_with_mixed_disc_tags():
+    sources = _sources(
+        _track("main/original/1", 1, disc_number=1),
+        _track("main/original/1", 2, disc_number=2),
+        _track("main/original/2", 1, disc_number=2),
+    )
+
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/original/1")),
+        str(Path("main/original/2")),
+    }
+
+
+def test_numeric_disc_folders_build_one_album_with_all_discs():
+    tracks = [
+        _track(f"main/original/{disc_number}", disc_number=disc_number)
+        for disc_number in range(1, 5)
+    ]
+
+    albums = build_albums_from_file_cache(
+        {str(track.path): asdict(track) for track in tracks}
+    )
+
+    assert len(albums) == 1
+    assert [track.disc_number for track in albums[0].tracks] == [1, 2, 3, 4]
+
+
+def test_postgres_projection_keeps_numeric_disc_folders_out_of_duplicates():
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    tracks = [
+        _track(f"main/original/{disc_number}", disc_number=disc_number)
+        for disc_number in range(1, 5)
+    ]
+    rows = [
+        {
+            "album_key": "album",
+            "file_private_path": str(track.path),
+            "file_entry": asdict(track),
+            "duration_seconds": track.duration_seconds,
+        }
+        for track in tracks
+    ]
+
+    projection = _duplicate_sources_from_rows(rows)["album"]
+
+    assert projection["has_duplicate_files"] is False
+    assert projection["duplicate_sources"] == []
+
+
 def test_separate_tagged_releases_in_sibling_disc_folders_are_not_mixed_metadata():
     entries = [
         {**asdict(_track("main/release/CD1", album="Main Album")), "library_root_id": 1},
@@ -166,6 +238,155 @@ def test_separate_edition_records_cross_reference_all_duplicate_sources():
         assert len(album.tracks) == 1, "Linking duplicate copies must preserve the album's own queue"
 
 
+def test_release_type_misfiled_as_edition_does_not_create_a_second_card():
+    tracks = [
+        _track("main/original", number, album="Edge of Eternity")
+        for number in range(1, 3)
+    ] + [
+        _track("hoard/copy", number, album="Edge of Eternity", edition="EP")
+        for number in range(1, 3)
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert albums[0].edition is None
+    assert len(albums[0].tracks) == 4
+    assert albums[0].total_duration_seconds == 720
+    assert len(get_album_duplicate_sources(albums[0])) == 2
+
+
+def test_optional_leading_article_variant_does_not_create_a_second_card():
+    tracks = [
+        _track("main/original", number, album="The Serpent's Egg")
+        for number in range(1, 3)
+    ] + [
+        _track("hoard/copy", number, album="Serpent's Egg")
+        for number in range(1, 3)
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert albums[0].name == "The Serpent's Egg"
+    assert len(get_album_duplicate_sources(albums[0])) == 2
+
+
+def test_article_variant_joins_an_existing_multi_source_duplicate_card():
+    tracks = [
+        _track(folder, number, album=album)
+        for folder, album in (
+            ("main/original", "The Serpent's Egg"),
+            ("hoard/exact-copy", "The Serpent's Egg"),
+            ("arrivals/article-variant", "Serpent's Egg"),
+        )
+        for number in range(1, 3)
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert len(get_album_duplicate_sources(albums[0])) == 3
+
+
+def test_punctuation_and_diacritic_variants_do_not_create_a_second_card():
+    tracks = [
+        _track(
+            "main/original",
+            number,
+            album="Kivenpyörittäjä — Tales and Travels",
+            title="Suomenmaa (Samba da Finlandia)" if number == 1 else "Hääpolska",
+        )
+        for number in range(1, 3)
+    ] + [
+        _track(
+            "hoard/tag-variant",
+            number,
+            album="Kivenpyörittäjä - Tales And Travels -",
+            title="Suomenmaa (Samba da Finlândia)" if number == 1 else "Hääpolska",
+        )
+        for number in range(1, 3)
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert albums[0].name == "Kivenpyörittäjä — Tales and Travels"
+    assert len(get_album_duplicate_sources(albums[0])) == 2
+
+
+def test_incomplete_copy_uses_complete_source_for_card_and_keeps_both_sources():
+    tracks = [
+        _track(
+            "main/complete",
+            number,
+            album="Touch the Sky: Volume II",
+            title=f"Movement {number}",
+        )
+        for number in range(1, 12)
+    ] + [
+        _track(
+            "hoard/incomplete",
+            number,
+            album="Touch The Sky - Volume II",
+            title=f"Movement {number}",
+        )
+        for number in range(1, 12)
+        if number != 6
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert albums[0].name == "Touch the Sky: Volume II"
+    assert len(albums[0].tracks) == 11
+    assert {Path(track.path).parent for track in albums[0].tracks} == {Path("main/complete")}
+    assert sorted(source["track_count"] for source in get_album_duplicate_sources(albums[0])) == [10, 11]
+
+
+def test_multiple_incomplete_copies_remain_visible_without_entering_the_card_queue():
+    tracks = [
+        _track("main/complete", number, album="Touch the Sky: Volume II")
+        for number in range(1, 12)
+    ] + [
+        _track(folder, number, album=album)
+        for folder, album, missing in (
+            ("hoard/incomplete-a", "Touch The Sky - Volume II", 6),
+            ("arrivals/incomplete-b", "Touch The Sky — Volume II", 7),
+        )
+        for number in range(1, 12)
+        if number != missing
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 1
+    assert len(albums[0].tracks) == 11
+    assert sorted(source["track_count"] for source in get_album_duplicate_sources(albums[0])) == [10, 10, 11]
+
+
+def test_leading_article_variant_with_different_track_evidence_stays_separate():
+    tracks = [
+        _track("main/original", album="The Serpent's Egg"),
+        _track("hoard/copy", album="Serpent's Egg", duration_seconds=240),
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 2
+
+
+def test_leading_article_variant_with_conflicting_release_dates_stays_separate():
+    tracks = [
+        _track("main/original", album="The Serpent's Egg", release_date="1988-10-24"),
+        _track("hoard/reissue", album="Serpent's Egg", release_date="2008-06-02"),
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 2
+
+
 def test_postgres_projection_uses_album_identity_not_repeated_track_ids():
     from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
 
@@ -181,6 +402,78 @@ def test_postgres_projection_uses_album_identity_not_repeated_track_ids():
     assert sources["original"]["has_duplicate_files"] is True
     rows[1]["file_entry"]["year"] = 2002
     assert all(not item["has_duplicate_files"] for item in _duplicate_sources_from_rows(rows).values())
+
+
+def test_postgres_projection_keeps_article_variant_sources_on_the_canonical_card():
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    rows = [
+        {
+            "album_key": "canonical",
+            "album_title": "The Serpent's Egg",
+            "album_metadata": {"album_artist": "Artist One"},
+            "file_private_path": str(track.path),
+            "file_entry": asdict(track),
+            "duration_seconds": track.duration_seconds,
+        }
+        for track in [
+            *(
+                _track("main/original", number, album="The Serpent's Egg")
+                for number in range(1, 3)
+            ),
+            *(
+                _track("hoard/article-variant", number, album="Serpent's Egg")
+                for number in range(1, 3)
+            ),
+        ]
+    ]
+
+    result = _duplicate_sources_from_rows(rows)["canonical"]
+
+    assert result["has_duplicate_files"] is True
+    assert len(result["duplicate_sources"]) == 2
+
+
+def test_postgres_projection_keeps_punctuation_variant_sources_on_the_canonical_card():
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    rows = [
+        {
+            "album_key": "canonical",
+            "album_title": "Kivenpyörittäjä — Tales and Travels",
+            "album_metadata": {"album_artist": "Juha Kujanpää"},
+            "file_private_path": str(track.path),
+            "file_entry": asdict(track),
+            "duration_seconds": track.duration_seconds,
+        }
+        for track in [
+            *(
+            _track(
+                "main/original",
+                number,
+                album_artist="Juha Kujanpää",
+                album="Kivenpyörittäjä — Tales and Travels",
+                title="Suomenmaa (Samba da Finlandia)" if number == 1 else "Hääpolska",
+            )
+            for number in range(1, 3)
+            ),
+            *(
+            _track(
+                "hoard/tag-variant",
+                number,
+                album_artist="Juha Kujanpää",
+                album="Kivenpyörittäjä - Tales And Travels -",
+                title="Suomenmaa (Samba da Finlândia)" if number == 1 else "Hääpolska",
+            )
+            for number in range(1, 3)
+            ),
+        ]
+    ]
+
+    result = _duplicate_sources_from_rows(rows)["canonical"]
+
+    assert result["has_duplicate_files"] is True
+    assert len(result["duplicate_sources"]) == 2
 
 
 def test_duplicate_projection_excludes_rejected_sources_without_changing_diagnostic_rows():
@@ -289,8 +582,44 @@ def test_partial_duplicate_group_preserves_all_own_source_categories():
         _track("arrivals/other-year", year=2002, library_root_category="new_arrivals_roots"),
     ]
     albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
-    assert len(albums) == 1
-    assert set(albums[0].root_provenance["categories"]) == {"main_library", "hoard", "new_arrivals"}
+    assert len(albums) == 2
+    albums_by_year = {album.year: album for album in albums}
+    assert set(albums_by_year) == {2001, 2002}
+    assert set(albums_by_year[2001].root_provenance["categories"]) == {"main_library", "hoard"}
+    assert set(albums_by_year[2002].root_provenance["categories"]) == {"new_arrivals"}
+
+
+def test_year_distinct_release_uses_the_bucket_year_when_its_first_track_has_none():
+    tracks = [
+        _track("main/original", year=None),
+        _track("main/original", 2),
+        _track("main/reissue", year=2002),
+        _track("main/reissue", 2, year=2002),
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert {album.year for album in albums} == {2001, 2002}
+    assert {album.key.rsplit("::year::", 1)[-1] for album in albums} == {"2001", "2002"}
+
+
+def test_conflicting_year_bucket_does_not_merge_into_resolved_release():
+    tracks = [
+        _track("main/clean"),
+        _track("main/clean", 2),
+        _track("main/clean", 3, year=None),
+        _track("main/conflicting", 4),
+        _track("main/conflicting", 5, year=2002),
+    ]
+
+    albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
+
+    assert len(albums) == 2
+    albums_by_key = {album.key.rsplit("::year::", 1)[-1]: album for album in albums}
+    assert set(albums_by_key) == {"2001", "unresolved"}
+    assert albums_by_key["2001"].year == 2001
+    assert albums_by_key["unresolved"].year is None
+    assert {track.year for track in albums_by_key["unresolved"].tracks} == {2001, 2002}
 
 
 @pytest.mark.parametrize(

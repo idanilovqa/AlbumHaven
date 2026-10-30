@@ -6,6 +6,7 @@ from urllib.parse import quote, urlencode
 from config import PERSISTENCE_BACKEND_POSTGRES
 from markupsafe import Markup, escape
 
+from music_app.services.album_display_metadata import album_display_title, album_display_year
 from music_app.services.gallery_display import (
     DEFAULT_GALLERY_DISPLAY_MODE,
     DEFAULT_GALLERY_SCALE_PERCENT,
@@ -111,8 +112,10 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
         "key": source_album.get("key"),
         **build_album_ref_seam(source_album.get("key")),
         "name": source_album.get("name"),
+        "display_name": source_album.get("display_name") or album_display_title(source_album.get("name")),
         "album_artist": source_album.get("album_artist"),
         "artists": list(source_album.get("artists") or []),
+        "artist_relationship": source_album.get("artist_relationship"),
         "is_compilation": bool(source_album.get("is_compilation")),
         "cover_path": source_album.get("cover_path"),
         "cover_revision": source_album.get("cover_revision"),
@@ -126,6 +129,7 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
         "remote_cover_height": source_album.get("remote_cover_height"),
         "year": source_album.get("year"),
         "release_date": source_album.get("release_date"),
+        "display_year": source_album.get("display_year") or album_display_year(source_album),
         "edition": source_album.get("edition"),
         "root_provenance": dict(root_provenance) if isinstance(root_provenance, dict) else {},
         "library_root_category": source_album.get("library_root_category"),
@@ -313,7 +317,7 @@ def build_startup_related_html(view: dict[str, object]) -> Markup:
 
 def build_startup_album_card_html(album: dict[str, object], eager_cover: bool = False) -> str:
     album_key = str(album.get("key") or "").strip()
-    album_name = str(album.get("name") or "Album")
+    album_name = str(album.get("display_name") or album.get("name") or "Album")
     album_artist = str(album.get("album_artist") or "")
     cover_url = build_startup_cover_url(album)
     cover_path = str(album.get("cover_path") or "").strip()
@@ -380,7 +384,7 @@ def build_startup_album_card_html(album: dict[str, object], eager_cover: bool = 
         album_name=escape(album_name),
         cover_markup=cover_markup,
         album_artist=escape(album_artist),
-        album_year=escape(str(album.get("year") or "")),
+        album_year=escape(str(album.get("display_year") or album.get("year") or "")),
         rating_markup=rating_markup,
         track_count=track_count,
         track_plural="" if track_count == 1 else "s",

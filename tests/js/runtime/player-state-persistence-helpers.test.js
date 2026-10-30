@@ -530,6 +530,71 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
   });
 }
 
+test('restore accepts a legacy path-signature album ref before same-name resolution', () => {
+  const currentTrackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
+  const queueSnapshot = {
+    key: 'featured-on-relationship-42',
+    album_ref: 'various-artists::featured-signal-collection',
+    name: 'Featured Signal Collection',
+    album_artist: 'Various Artists',
+    tracks: [{ path: currentTrackPath }],
+  };
+  const legacyAlbumRef = currentTrackPath;
+  const sameNameFallback = {
+    key: 'wrong-same-name-release',
+    album_ref: 'wrong-same-name-release',
+    name: queueSnapshot.name,
+    album_artist: queueSnapshot.album_artist,
+    tracks: [{ path: currentTrackPath }],
+  };
+  let resolveCalls = 0;
+  const context = loadHelper({
+    getLocalStorageItem: () => JSON.stringify({
+      track: {
+        src: `/track?path=${encodeURIComponent(currentTrackPath)}`,
+        path: currentTrackPath,
+        title: 'Signal',
+        artist: 'Solo Voice',
+        album: queueSnapshot.name,
+        coverPath: '',
+      },
+      playbackQueue: {
+        tracks: [{
+          src: `/track?path=${encodeURIComponent(currentTrackPath)}`,
+          path: currentTrackPath,
+          title: 'Signal',
+          artist: 'Solo Voice',
+          album: queueSnapshot.name,
+          coverPath: '',
+        }],
+        currentIndex: 0,
+        albumRef: legacyAlbumRef,
+        albumSnapshot: queueSnapshot,
+      },
+      currentTime: 0,
+      paused: true,
+      loop: { active: false, start: 0, end: 0 },
+    }),
+    getAlbumRequestKey: (album) => String(album?.album_ref || album?.key || ''),
+    getAlbumIdentity: (album) => (Array.isArray(album?.tracks)
+      ? album.tracks.map((track) => String(track?.path || '')).filter(Boolean).sort().join('|')
+      : ''),
+    resolveAlbumForPlayerTrack() {
+      resolveCalls += 1;
+      return sameNameFallback;
+    },
+  });
+
+  context.restorePlayerState();
+
+  assert.equal(resolveCalls, 0);
+  assert.equal(context.state.player.playbackQueue.albumRef, queueSnapshot.album_ref);
+  context.state.player.current = context.state.player.playbackQueue.tracks[0];
+  const persistedState = JSON.parse(JSON.stringify(context.buildPersistedPlayerState()));
+  assert.equal(persistedState.playbackQueue.albumRef, queueSnapshot.album_ref);
+  assert.equal(context.state.player.playbackQueue.albumSnapshot.album_ref, queueSnapshot.album_ref);
+});
+
 test('restore normalizes a persisted queue before opening the fresh streaming role', async () => {
   const calls = {
     setCurrentPlayerTrack: [],

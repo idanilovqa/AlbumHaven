@@ -403,7 +403,7 @@ function resolveGalleryPlaybackContext(playbackContext) {
 function resolveAlbumPlaybackContextFromView(album) {
   const playbackContext = state?.view?.playback_context;
   if (!playbackContext || typeof playbackContext !== 'object') return null;
-  const albumRef = String(getAlbumIdentity(album) || album?.key || '').trim();
+  const albumRef = String(getAlbumRequestKey(album) || album?.key || '').trim();
   if (!albumRef) return null;
   const orderedAlbumRefs = Array.isArray(playbackContext.ordered_album_refs)
     ? playbackContext.ordered_album_refs.map((value) => String(value || '').trim()).filter(Boolean)
@@ -426,33 +426,92 @@ function attachGalleryPlaybackContextToAlbum(album) {
 async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return null;
-  const response = await fetch(`/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`, {
+  const albumId = Number(options.albumId || 0);
+  const albumIdQuery = Number.isInteger(albumId) && albumId > 0
+    ? `&album_id=${encodeURIComponent(String(albumId))}`
+    : '';
+  const lineageQuery = options.resolveLineage === true ? '&resolve_lineage=1' : '';
+  const albumKeyUrl = `/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`;
+  const requestOptions = {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
-  });
+  };
+  let response = await fetch(`${albumKeyUrl}${albumIdQuery}${lineageQuery}`, requestOptions);
   let payload = null;
   try {
     payload = await response.json();
   } catch (_error) {
     payload = null;
   }
+  if (
+    albumIdQuery
+    && response.status === 400
+    && payload?.error === 'Unsupported album-details query parameter'
+    && Array.isArray(payload.unsupported_parameters)
+    && payload.unsupported_parameters.includes('album_id')
+  ) {
+    response = await fetch(albumKeyUrl, requestOptions);
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = null;
+    }
+  }
   if (!response.ok || !payload?.ok || !payload?.album) {
-    throw new Error(payload?.error || `Album detail request failed: ${response.status}`);
+    const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
+    if (
+      payload?.resolution_kind === 'album_split'
+      && Array.isArray(payload.current_releases)
+    ) error.currentReleases = payload.current_releases;
+    throw error;
   }
   return payload.album;
+}
+
+function renderTrackModalIdentitySplitChoices(releases) {
+  const choices = Array.isArray(releases) ? releases : [];
+  if (choices.length < 2) return false;
+  const els = getTrackModalElements();
+  state.ui.trackModalIdentitySplitChoices = choices;
+  els.subtitle.textContent = 'This album was split—choose the current release';
+  els.list.innerHTML = `<li class="cover-lookup-current-release-list" role="group" aria-label="Current releases">
+    ${choices.map((release) => `<button class="cover-lookup-current-release" type="button" data-track-modal-current-release="${escapeHtml(release.album_id || '')}">
+      <span>${escapeHtml(release.name || release.album_key || 'Album')}</span>
+      <span class="cover-lookup-current-release-count">${escapeHtml(String(release.track_count || 0))} tracks</span>
+    </button>`).join('')}
+  </li>`;
+  return true;
+}
+
+function selectTrackModalCurrentRelease(albumId) {
+  const choice = (state.ui.trackModalIdentitySplitChoices || []).find(
+    (candidate) => String(candidate?.album_id || '') === String(albumId || ''),
+  );
+  if (!choice) return false;
+  openTrackModal({
+    ...choice,
+    key: choice.album_key || choice.key,
+    preview_only: true,
+    tracks: [],
+  });
+  return true;
 }
 
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return Promise.resolve(null);
-  const cachedAlbum = getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
+  const requiresIdentityResolution = options.canonicalRefresh === true
+    || options.resolveLineage === true;
+  const cachedAlbum = requiresIdentityResolution
+    ? null
+    : getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
   if (cachedAlbum) return Promise.resolve(cachedAlbum);
   const requestAliases = getTrackModalAlbumKeyAliases(normalizedAlbumKey);
   const existingLoad = requestAliases
     .map((alias) => trackModalAlbumDetailsLoads.get(alias))
     .find(Boolean);
-  if (existingLoad) {
+  if (existingLoad && !requiresIdentityResolution) {
     const speculativeController = trackModalSpeculativeAlbumDetailsLoadControllers.get(existingLoad);
     if (options.speculative === true || !speculativeController) return existingLoad;
     trackModalSpeculativeAlbumDetailsLoadControllers.delete(existingLoad);
@@ -509,7 +568,18 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+  renderTrackModalLoadingState(openAlbum);
+  let refreshedAlbum = null;
+  let loadError = null;
+  try {
+    refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
+      albumId: openAlbum.album_id || openAlbum.id,
+      canonicalRefresh: true,
+      resolveLineage: true,
+    });
+  } catch (error) {
+    loadError = error;
+  }
   const currentAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
   if (
     els.overlay.hidden
@@ -519,6 +589,10 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
       && getTrackModalAlbumVersionKey(currentAlbum) !== albumVersionKey
     )
   ) return false;
+  if (loadError) {
+    if (renderTrackModalIdentitySplitChoices(loadError.currentReleases)) return true;
+    throw loadError;
+  }
   refreshOpenTrackModalVersionState(albumKey, refreshedAlbum);
   return true;
 }
@@ -548,6 +622,7 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
   if (controller) trackModalSpeculativePrewarmControllers.add(controller);
   trackModalActiveSpeculativePrewarms += 1;
   loadTrackModalAlbumDetails(normalizedAlbumKey, {
+    albumId: indexedAlbum.album_id || indexedAlbum.id,
     controller,
     signal: controller?.signal,
     speculative: true,
@@ -620,7 +695,10 @@ function openTrackModal(album, options = {}) {
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
     openTrackModalShell(albumWithPlaybackContext, options.releaseSet);
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
-    const detailsPromise = loadTrackModalAlbumDetails(albumKey);
+    const detailsPromise = loadTrackModalAlbumDetails(albumKey, {
+      albumId: albumWithPlaybackContext.album_id || albumWithPlaybackContext.id,
+      resolveLineage: albumWithPlaybackContext.resolve_lineage === true,
+    });
     detailsPromise.then((hydratedAlbum) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       const refreshedAlbum = getIndexedAlbum(albumKey);
@@ -633,6 +711,7 @@ function openTrackModal(album, options = {}) {
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
+      if (renderTrackModalIdentitySplitChoices(error.currentReleases)) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
       showToast('Unable to load album details.', 'error', 3200);
     }).finally(() => {
@@ -705,6 +784,18 @@ function resolveTrackModalActionAlbum(button) {
   const albumVersionKey = String(getTrackModalButtonAlbumVersionKey(button) || '').trim();
   const currentAlbum = getCurrentTrackModalAlbum();
   const fallbackAlbum = parseTrackModalButtonAlbumFallback(button);
+  const renderedIdentityRevision = Number(fallbackAlbum?.identity_revision);
+  const currentIdentityRevision = Number(state?.status?.inventory_mutation_revision || 0);
+  if (
+    fallbackAlbum
+    && fallbackAlbum.identity_revision !== null
+    && fallbackAlbum.identity_revision !== undefined
+    && Number.isSafeInteger(renderedIdentityRevision)
+    && renderedIdentityRevision >= 0
+    && currentIdentityRevision > renderedIdentityRevision
+  ) {
+    return { ...fallbackAlbum, resolve_lineage: true };
+  }
   if (albumVersionKey) {
     const currentAlbumVersionKey = getTrackModalAlbumVersionKey(currentAlbum);
     if (currentAlbum && !albumRequiresHydration(currentAlbum) && currentAlbumVersionKey === albumVersionKey) {
@@ -746,7 +837,10 @@ async function resolveHydratedTrackModalActionAlbum(button) {
   ).trim();
   if (!albumKey) return null;
   try {
-    return await loadTrackModalAlbumDetails(albumKey);
+    return await loadTrackModalAlbumDetails(albumKey, {
+      albumId: album.album_id || album.id,
+      resolveLineage: album.resolve_lineage === true,
+    });
   } catch (error) {
     console.error('[AlbumHaven][AlbumDetails] Failed to load full album details for action.', error);
     showToast('Unable to load album details.', 'error', 3200);
@@ -762,9 +856,12 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
   if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= duplicateSources.length) {
     return album;
   }
+  const source = duplicateSources[sourceIndex];
+  const folderPath = String(source?.folder_path || '').trim();
   return {
     ...album,
-    tracks: Array.isArray(duplicateSources[sourceIndex]?.tracks) ? duplicateSources[sourceIndex].tracks : [],
+    tracks: Array.isArray(source?.tracks) ? source.tracks : [],
+    open_directory_paths: folderPath ? [folderPath] : [],
   };
 }
 
@@ -884,16 +981,15 @@ function closeImageLightbox() {
   state.lightbox.activeSourceIndex = -1;
   state.lightbox.activeFullSource = '';
   state.lightbox.activeAlt = '';
+  state.lightbox.fullSizeRetryAttempted = false;
   state.lightbox.loadToken = Number(state.lightbox.loadToken || 0) + 1;
-  if (state.lightbox.activePreloader) {
-    state.lightbox.activePreloader.onload = null;
-    state.lightbox.activePreloader.onerror = null;
-    state.lightbox.activePreloader = null;
-  }
+  cancelActiveLightboxPreloader();
   setLightboxZoom(1);
   els.image.onload = null;
   els.image.onerror = null;
   if (els.loading) els.loading.hidden = true;
+  if (els.error) els.error.hidden = true;
+  if (els.retry) els.retry.hidden = true;
   els.image.hidden = true;
   if (els.image.classList?.remove) els.image.classList.remove('is-unavailable');
   els.image.removeAttribute('src');

@@ -201,7 +201,13 @@ function handleGalleryBootstrapClick(event) {
     const closeButton = event.target.closest('#image-lightbox-close');
     const prevButton = event.target.closest('#image-lightbox-prev');
     const nextButton = event.target.closest('#image-lightbox-next');
+    const retryButton = event.target.closest('#image-lightbox-retry');
     const image = event.target.closest('#image-lightbox-image');
+    if (retryButton) {
+      event.preventDefault();
+      retryActiveLightboxImage();
+      return;
+    }
     if (prevButton) {
       event.preventDefault();
       stepLightbox(-1);
@@ -824,6 +830,105 @@ function handleGalleryBootstrapWheel(event) {
   setLightboxZoom(state.lightbox.zoom + (direction * step), { originX, originY });
 }
 
+const LIGHTBOX_DOUBLE_TAP_INTERVAL_MS = 360;
+const LIGHTBOX_DOUBLE_TAP_DISTANCE_PX = 32;
+const LIGHTBOX_TAP_MOVE_TOLERANCE_PX = 12;
+const LIGHTBOX_SYNTHETIC_DOUBLE_CLICK_GUARD_MS = 700;
+let activeLightboxTouchTap = null;
+let previousLightboxTouchTap = null;
+let suppressLightboxDoubleClickUntil = 0;
+
+function getLightboxPointerTimestamp(event) {
+  const timestamp = Number(event?.timeStamp);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now();
+}
+
+function toggleLightboxPointZoom(lightboxImage, clientX, clientY) {
+  if (state.lightbox.zoom > 1) {
+    setLightboxZoom(1);
+    return true;
+  }
+  const { originX, originY } = getStableLightboxZoomOrigin(
+    lightboxImage,
+    clientX,
+    clientY,
+  );
+  setLightboxZoom(2, { originX, originY });
+  return true;
+}
+
+function beginLightboxTouchTap(event, lightboxImage) {
+  const overlay = document.getElementById('image-lightbox');
+  if (
+    String(event?.pointerType || '').toLowerCase() !== 'touch'
+    || event?.isPrimary === false
+    || !lightboxImage
+    || !overlay
+    || overlay.hidden
+  ) {
+    activeLightboxTouchTap = null;
+    if (String(event?.pointerType || '').toLowerCase() === 'touch') previousLightboxTouchTap = null;
+    return;
+  }
+  activeLightboxTouchTap = {
+    pointerId: event.pointerId,
+    image: lightboxImage,
+    x: Number(event.clientX || 0),
+    y: Number(event.clientY || 0),
+  };
+}
+
+function updateLightboxTouchTap(event) {
+  const tap = activeLightboxTouchTap;
+  if (!tap || tap.pointerId !== event.pointerId) return;
+  const distance = Math.hypot(
+    Number(event.clientX || 0) - tap.x,
+    Number(event.clientY || 0) - tap.y,
+  );
+  if (distance > LIGHTBOX_TAP_MOVE_TOLERANCE_PX) activeLightboxTouchTap = null;
+}
+
+function finishLightboxTouchTap(event) {
+  const tap = activeLightboxTouchTap;
+  activeLightboxTouchTap = null;
+  if (
+    !tap
+    || tap.pointerId !== event.pointerId
+    || event.target?.closest?.('#image-lightbox-image') !== tap.image
+  ) return false;
+
+  const currentTap = {
+    image: tap.image,
+    x: Number(event.clientX || 0),
+    y: Number(event.clientY || 0),
+    time: getLightboxPointerTimestamp(event),
+  };
+  const previousTap = previousLightboxTouchTap;
+  previousLightboxTouchTap = currentTap;
+  if (
+    !previousTap
+    || previousTap.image !== currentTap.image
+    || currentTap.time - previousTap.time > LIGHTBOX_DOUBLE_TAP_INTERVAL_MS
+    || Math.hypot(currentTap.x - previousTap.x, currentTap.y - previousTap.y)
+      > LIGHTBOX_DOUBLE_TAP_DISTANCE_PX
+  ) return false;
+
+  previousLightboxTouchTap = null;
+  suppressLightboxDoubleClickUntil = currentTap.time + LIGHTBOX_SYNTHETIC_DOUBLE_CLICK_GUARD_MS;
+  event.preventDefault?.();
+  return toggleLightboxPointZoom(tap.image, currentTap.x, currentTap.y);
+}
+
+function handleGalleryBootstrapDoubleClick(event) {
+  const lightboxImage = event.target?.closest?.('#image-lightbox-image');
+  const overlay = document.getElementById('image-lightbox');
+  if (!lightboxImage || !overlay || overlay.hidden) return false;
+
+  event.preventDefault();
+  if (getLightboxPointerTimestamp(event) <= suppressLightboxDoubleClickUntil) return true;
+  return toggleLightboxPointZoom(lightboxImage, event.clientX, event.clientY);
+}
+
 const ARTIST_TREE_LONG_PRESS_DELAY_MS = 500;
 const ARTIST_TREE_LONG_PRESS_MOVE_TOLERANCE_PX = 12;
 const ARTIST_TREE_LONG_PRESS_CLICK_GUARD_MS = 1000;
@@ -907,10 +1012,93 @@ function consumeArtistTreeLongPressClick(event) {
   return true;
 }
 
+let albumCardLongPressGesture = null;
+let albumCardLongPressClickGuard = null;
+
+function getAlbumCardLongPressTarget(target) {
+  const card = target?.closest?.('.album-card');
+  const trigger = card?.querySelector?.('[data-album-key]');
+  const key = String(trigger?.getAttribute?.('data-album-key') || '').trim();
+  const album = key && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  return album ? { key } : null;
+}
+
+function clearAlbumCardLongPressGesture() {
+  if (albumCardLongPressGesture?.timeoutId) {
+    clearBrowserTimeout(albumCardLongPressGesture.timeoutId);
+  }
+  albumCardLongPressGesture = null;
+}
+
+function beginAlbumCardLongPress(event) {
+  if (String(event?.pointerType || '').toLowerCase() !== 'touch' || event?.isPrimary === false) return false;
+  const target = getAlbumCardLongPressTarget(event.target);
+  if (!target) return false;
+  clearAlbumCardLongPressGesture();
+  const gesture = {
+    ...target,
+    pointerId: event.pointerId,
+    x: Number(event.clientX || 0),
+    y: Number(event.clientY || 0),
+    opened: false,
+    timeoutId: 0,
+  };
+  albumCardLongPressGesture = gesture;
+  gesture.timeoutId = scheduleBrowserTimeout(() => {
+    if (albumCardLongPressGesture !== gesture) return;
+    const currentAlbum = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(gesture.key) : null;
+    if (!currentAlbum) {
+      clearAlbumCardLongPressGesture();
+      return;
+    }
+    gesture.opened = true;
+    gesture.timeoutId = 0;
+    if (albumCardLongPressClickGuard?.timeoutId) clearBrowserTimeout(albumCardLongPressClickGuard.timeoutId);
+    albumCardLongPressClickGuard = { key: gesture.key, timeoutId: 0 };
+    albumCardLongPressClickGuard.timeoutId = scheduleBrowserTimeout(() => {
+      if (albumCardLongPressClickGuard?.key === gesture.key) albumCardLongPressClickGuard = null;
+    }, ARTIST_TREE_LONG_PRESS_CLICK_GUARD_MS);
+    showAlbumCardContextMenu(gesture.x, gesture.y, currentAlbum);
+  }, ARTIST_TREE_LONG_PRESS_DELAY_MS);
+  return true;
+}
+
+function updateAlbumCardLongPress(event) {
+  const gesture = albumCardLongPressGesture;
+  if (!gesture || gesture.pointerId !== event.pointerId || gesture.opened) return;
+  const deltaX = Number(event.clientX || 0) - gesture.x;
+  const deltaY = Number(event.clientY || 0) - gesture.y;
+  if (Math.hypot(deltaX, deltaY) > ARTIST_TREE_LONG_PRESS_MOVE_TOLERANCE_PX) {
+    clearAlbumCardLongPressGesture();
+  }
+}
+
+function finishAlbumCardLongPress(event) {
+  const gesture = albumCardLongPressGesture;
+  if (!gesture || gesture.pointerId !== event.pointerId) return false;
+  const opened = gesture.opened;
+  clearAlbumCardLongPressGesture();
+  if (opened) event.preventDefault?.();
+  return opened;
+}
+
+function consumeAlbumCardLongPressClick(event) {
+  const guard = albumCardLongPressClickGuard;
+  if (!guard) return false;
+  if (getAlbumCardLongPressTarget(event.target)?.key !== guard.key) return false;
+  if (guard.timeoutId) clearBrowserTimeout(guard.timeoutId);
+  albumCardLongPressClickGuard = null;
+  event.preventDefault?.();
+  event.stopPropagation?.();
+  return true;
+}
+
 function handleGalleryBootstrapPointerDown(event) {
   if (event.target?.closest?.('#albums-scroll')) cancelRootGalleryArtistAlignment();
   beginArtistTreeLongPress(event);
+  beginAlbumCardLongPress(event);
   const lightboxImage = event.target.closest('#image-lightbox-image');
+  beginLightboxTouchTap(event, lightboxImage);
   if (!lightboxImage || state.lightbox.zoom <= 1) return;
   event.preventDefault();
   startLightboxDrag(event);
@@ -919,6 +1107,8 @@ function handleGalleryBootstrapPointerDown(event) {
 
 function handleGalleryBootstrapPointerMove(event) {
   updateArtistTreeLongPress(event);
+  updateAlbumCardLongPress(event);
+  updateLightboxTouchTap(event);
   updateLightboxDrag(event);
   if (String(event?.pointerType || '').toLowerCase() !== 'mouse') return;
   const albumCard = event.target?.closest?.('.album-card');
@@ -934,11 +1124,15 @@ function handleGalleryBootstrapPointerMove(event) {
 
 function handleGalleryBootstrapPointerUp(event) {
   finishArtistTreeLongPress(event);
+  finishAlbumCardLongPress(event);
   stopLightboxDrag();
+  return finishLightboxTouchTap(event);
 }
 
 function handleGalleryBootstrapPointerCancel() {
   clearArtistTreeLongPressGesture();
+  clearAlbumCardLongPressGesture();
+  activeLightboxTouchTap = null;
   stopLightboxDrag();
 }
 

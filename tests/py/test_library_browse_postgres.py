@@ -396,6 +396,44 @@ def _browse_album_row(*, artist: str, album_id: int, album_key: str, title: str)
     }
 
 
+def test_root_and_search_artist_groups_ignore_leading_punctuation_for_sorting():
+    from music_app.services import library_browse_postgres as browse
+
+    names = ["IZZ", "'Til Tuesday", "I'm with Her", "!Air"]
+    rows = [
+        _browse_album_row(
+            artist=artist,
+            album_id=index,
+            album_key=f"album-{index}",
+            title=f"Album {index}",
+        )
+        for index, artist in enumerate(names, start=1)
+    ]
+    expected = ["!Air", "I'm with Her", "IZZ", "'Til Tuesday"]
+
+    groups = browse._root_album_browse_artist_groups(rows)
+    search_names = ["'Bravo", "Alpha"]
+    search_order = sorted(
+        search_names,
+        key=lambda artist: browse._search_artist_group_sort_key(artist, query=""),
+    )
+
+    assert [group["artist"] for group in groups] == expected
+    assert search_order == ["Alpha", "'Bravo"]
+
+
+def test_root_startup_sql_ignores_leading_punctuation_before_artist_limits():
+    from music_app.services import library_browse_postgres as browse
+
+    candidate_sql = browse._root_startup_preview_artist_names_sql(8)
+    payload_sql = browse._root_startup_payload_sql(6)
+
+    for sql in (candidate_sql, payload_sql):
+        normalized = " ".join(sql.casefold().split())
+        assert "regexp_replace(" in normalized
+        assert "'^[[:punct:][:space:]]+'" in normalized
+
+
 @pytest.mark.parametrize("guest_name", ["Guest", "Guest Alias"])
 def test_exact_artist_search_recanonicalization_keeps_guest_role_and_source_identity(guest_name):
     from music_app.services import library_browse_postgres as browse
@@ -614,6 +652,30 @@ def test_postgres_selected_full_and_preview_payloads_use_owned_precedence():
     assert browse._selected_artist_album_payloads(
         [featured, owner], "Solo One"
     )[0]["artist_relationship"] == "owned"
+
+
+def test_selected_artist_album_payload_preserves_disc_total_and_subtitle():
+    from music_app.services import library_browse_postgres as browse
+
+    row = _browse_album_row(
+        artist="Sherlock",
+        album_id=84,
+        album_key="sherlock-bonus",
+        title="Sherlock",
+    )
+    row["disc_number"] = 2
+    row["file_entry"] = {
+        "disc_number_raw": "2/2",
+        "total_discs": 2,
+        "disc_subtitle": "Bonus",
+    }
+
+    track = browse._selected_artist_album_payloads([row], "Sherlock")[0]["tracks"][0]
+
+    assert track["disc_number"] == 2
+    assert track["disc_number_raw"] == "2/2"
+    assert track["total_discs"] == 2
+    assert track["disc_subtitle"] == "Bonus"
 
 
 def test_postgres_featured_track_artist_remains_featured_with_member_relation():
@@ -1294,6 +1356,54 @@ def test_compact_non_album_metadata_projection_preserves_shaper_fallbacks():
     assert entry["cover_revision"] == 7
 
 
+def test_track_metadata_preserves_raw_semicolon_credit_for_display():
+    from music_app.services.library_browse_postgres import (
+        _non_album_entry_from_inventory_candidate,
+    )
+
+    entry = _non_album_entry_from_inventory_candidate(
+        {
+            "track_id": 42,
+            "track_title": "Convince Me Otherwise",
+            "track_metadata": {
+                "artist": "Jason Derulo; Adam Levine",
+                "artists": ["Jason Derulo", "Adam Levine"],
+            },
+            "artist_name": "Jason Derulo",
+            "album_id": None,
+            "private_path": r"D:\Music\JORDI\14.flac",
+            "file_entry": {},
+        }
+    )
+
+    assert entry["artist"] == "Jason Derulo; Adam Levine"
+
+
+def test_album_track_metadata_preserves_raw_semicolon_credit_for_display():
+    from music_app.services.library_browse_postgres import (
+        _selected_artist_album_payloads,
+    )
+
+    row = _exception_album_row(
+        track_id=42,
+        track_key="jordi-14",
+        title="Lifestyle",
+        track_number=14,
+        duration_seconds=180,
+        private_path=r"D:\Music\JORDI\14.flac",
+    )
+    row["file_entry"] = {}
+    row["track_artist_name"] = "Jason Derulo"
+    row["track_metadata"] = {
+        "artist": "Jason Derulo; Adam Levine",
+        "artists": ["Jason Derulo", "Adam Levine"],
+    }
+
+    albums = _selected_artist_album_payloads([row], "Exception Artist")
+
+    assert albums[0]["tracks"][0]["artist"] == "Jason Derulo; Adam Levine"
+
+
 def test_non_album_candidate_batch_builds_normalized_alias_lookup_once(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
@@ -1336,6 +1446,35 @@ def test_non_album_candidate_batch_builds_normalized_alias_lookup_once(monkeypat
     assert len(normalized_lookups) == 2
     assert normalized_lookups[0] is normalized_lookups[1]
     assert normalized_lookups[0] == {"alias artist": "Canonical Artist"}
+
+
+def test_non_album_candidate_uses_private_path_when_relative_path_is_missing():
+    from music_app.services import library_browse_postgres as browse_module
+
+    path = (
+        r"N:\Music New\Folk Rock, Flamenco, etc\Начало Века"
+        r"\2009 - Тебя ждала (single)\nv_helavisa_tebyazhdala_full.mp3"
+    )
+    row = _inventory_non_album_candidate(
+        track_id=1,
+        title="Тебя ждала (полная версия)",
+        private_path=path,
+        track_number=1,
+        raw_artist="Начало Века и Хелависа",
+        raw_album_artist="Начало Века и Хелависа",
+        exception_type="",
+    )
+    row.update(relative_path="", raw_file_album="")
+
+    entries = browse_module._non_album_entries_from_inventory_candidates(
+        [row],
+        visible_library_categories=[],
+        alias_to_canonical={},
+        canonical_to_aliases={},
+        visible_artist_names=["Начало Века"],
+    )
+
+    assert [entry["path"] for entry in entries] == [path]
 
 
 def test_inventory_backed_root_sidebar_uses_visible_non_album_candidate_scope(
@@ -2021,7 +2160,7 @@ def test_postgres_library_browse_builds_root_sidebar_payload_from_rows(monkeypat
     assert tender_buttons["album_preference"]["rating"] == 9
     assert tender_buttons["album_preference"]["provenance"] == "explicit_import"
     assert tender_buttons["album_preference"]["can_edit"] is True
-    assert queued_covers == [(r"covers/tender.jpg", str(Path("covers") / ".album-haven"), 480)]
+    assert queued_covers == [(r"covers/tender.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480)]
     assert len(connections) == 1
     assert connections[0].rollback_count == 1
     assert connections[0].close_count == 1
@@ -2982,6 +3121,8 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
                 "cover_revision": None,
                 "disc_number": 1,
                 "disc_number_raw": None,
+            "total_discs": None,
+            "disc_subtitle": None,
             "track_number": 1,
             "duration_seconds": 215,
             "duration_display": "3m 35s",
@@ -3011,15 +3152,16 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
     assert "library.local_track_files" in sql
     assert "lower(library.local_artists.name)" not in sql
     assert "root_provenance,primary_category" in sql
-    stale_predicate = (
-        "coalesce((library.local_track_files.metadata #>> '{scan_cache,stale}')::boolean, false) is false"
-    )
+    stale_predicate = "library.local_track_files.scan_cache_stale is false"
     assert sql.count(stale_predicate) == 1
+    assert "metadata #>> '{scan_cache,stale}'" not in sql
     compact_sql = " ".join(sql.split())
     assert (
-        "left join library.local_track_files on library.local_track_files.track_id = library.local_tracks.id "
+        "join library.local_track_files on library.local_track_files.track_id = library.local_tracks.id "
         f"and {stale_predicate}"
     ) in compact_sql
+    assert "left join library.local_tracks" not in compact_sql
+    assert "left join library.local_track_files" not in compact_sql
 
 
 def test_postgres_selected_artist_payload_uses_featured_artist_identity_but_keeps_album_artist_credit():
@@ -4059,7 +4201,7 @@ def test_root_startup_preview_selects_the_canonical_sidebar_prefix(monkeypatch, 
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     names = ["東京", "Élan", "[Stömb]", "2Cellos", "10 Years", "...And Oceans", "-", "(Sandy) Alex G", "& Co", "#4", "#2"]
-    expected = sorted(names, key=lambda name: (name.casefold(), name.casefold()))
+    expected = sorted(names, key=browse.artist_collation_key)
     aliases = {"Alias Number": "#2"} if with_alias else {}
     if with_alias:
         names.append("Alias Number")
@@ -4086,7 +4228,12 @@ def test_root_startup_preview_selects_the_canonical_sidebar_prefix(monkeypatch, 
     monkeypatch.setattr(repository, "_apply_private_album_rating_overlays", lambda *_args, **_kwargs: None)
 
     payload = repository.build_root_startup_preview_payload()
-    assert requested == [["#2", "Alias Number", *expected[1:6]] if with_alias else expected[:6]]
+    expected_requested = []
+    for artist in expected[:6]:
+        expected_requested.append(artist)
+        if with_alias and artist == "#2":
+            expected_requested.append("Alias Number")
+    assert requested == [expected_requested]
     assert [item["artist"] for item in payload["artists_sidebar"]] == expected
     assert [group["artist"] for group in payload["artist_groups"]] == expected[:6]
     full_groups = browse._root_album_browse_artist_groups(browse._canonicalize_artist_rows(rows, aliases))
@@ -8010,8 +8157,8 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     ]
     assert payload["artist_count"] == 3
     assert queued_covers == [
-        ("covers/neal.jpg", str(Path("covers") / ".album-haven"), 480),
-        ("covers/transatlantic.jpg", str(Path("covers") / ".album-haven"), 480),
+        ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        ("covers/transatlantic.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
     ]
     assert "delegate" in event_order
     assert event_order.index("delegate") < event_order.index("queue")
@@ -8838,7 +8985,7 @@ def test_postgres_selected_artist_payload_queues_visible_display_cover_variants(
     )
 
     assert payload["selected_artist"] == "Broadcast"
-    assert queued_covers == [(r"covers/tender.jpg", str(Path("covers") / ".album-haven"), 480)]
+    assert queued_covers == [(r"covers/tender.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480)]
     assert not hasattr(library_browse_postgres_module, "_prewarm_display_cover_variants_for_groups")
 
 
@@ -8878,8 +9025,8 @@ def test_postgres_cover_variant_queue_uses_preview_and_full_card_sizes(monkeypat
     )
 
     assert queued_covers == [
-        ("covers/preview.jpg", str(Path("covers") / ".album-haven"), 480),
-        ("covers/full.jpg", str(Path("covers") / ".album-haven"), 480),
+        ("covers/preview.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        ("covers/full.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
     ]
     assert queued_recorders == [recorder, recorder]
 
@@ -8913,8 +9060,8 @@ def test_postgres_cover_variant_queue_deduplicates_without_consuming_limit(monke
     )
 
     assert queued_covers == [
-        ("covers/shared.jpg", str(Path("covers") / ".album-haven"), 480),
-        ("covers/full.jpg", str(Path("covers") / ".album-haven"), 480),
+        ("covers/shared.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        ("covers/full.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
     ]
 
 
@@ -8946,8 +9093,8 @@ def test_postgres_search_all_artists_cover_variant_queue_is_bounded_to_two(monke
     )
 
     assert queued_covers == [
-        ("covers/artist-0.jpg", str(Path("covers") / ".album-haven"), 480),
-        ("covers/artist-1.jpg", str(Path("covers") / ".album-haven"), 480),
+        ("covers/artist-0.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        ("covers/artist-1.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
     ]
     assert all(path != "covers/artist-2.jpg" for path, _cache_root, _size in queued_covers)
 
@@ -9019,7 +9166,7 @@ def test_postgres_root_album_browse_payload_queues_visible_display_cover_variant
     )
 
     assert payload["artist_count"] == 1
-    assert queued_covers == [(r"covers/tender.jpg", str(Path("covers") / ".album-haven"), 480)]
+    assert queued_covers == [(r"covers/tender.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480)]
     assert not hasattr(library_browse_postgres_module, "_prewarm_display_cover_variants_for_groups")
 
 
@@ -9141,8 +9288,8 @@ def test_postgres_selected_artist_preview_payload_queues_reusable_family_cover_v
         "Trish Keenan"
     ]
     assert queued_covers == [
-        (r"covers/tender.jpg", str(Path("covers") / ".album-haven"), 480),
-        (r"covers/trish.jpg", str(Path("covers") / ".album-haven"), 480),
+        (r"covers/tender.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
+        (r"covers/trish.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
     ]
     assert not hasattr(library_browse_postgres_module, "_prewarm_display_cover_variants_for_groups")
 
@@ -9731,6 +9878,7 @@ def test_postgres_track_file_entry_batch_uses_effective_persisted_exception_valu
         track_number=1,
         private_path=selected_path,
     )
+    selected_row["album_metadata"]["cover_revision"] = "revision-1"
     unrelated_row = _exception_album_row(
         track_id=9692,
         track_key="exception-album-9692",
@@ -9755,6 +9903,8 @@ def test_postgres_track_file_entry_batch_uses_effective_persisted_exception_valu
     assert entries[selected_path]["exception_type"] == "Non-album rarity"
     assert entries[selected_path]["album"] == "Exception Album"
     assert entries[selected_path]["album_artist"] == "Exception Artist"
+    assert entries[selected_path]["cover_path"] == "covers/exception.jpg"
+    assert entries[selected_path]["cover_revision"] == "revision-1"
 
 
 def test_postgres_track_file_entry_batch_resolves_detached_non_album_paths(
@@ -10196,6 +10346,19 @@ def test_album_detail_sql_excludes_tracks_without_an_active_file():
         "library.local_tracks.id and library.local_track_files.scan_cache_stale is false"
     ) in detail_joins
     assert "metadata #>> '{{scan_cache,stale}}'" not in detail_joins
+
+
+def test_album_detail_sql_keeps_joint_credit_album_without_synthetic_owner_artist():
+    from music_app.services.library_browse_postgres import _album_detail_sql
+
+    sql = " ".join(_album_detail_sql().split()).lower()
+    detail_joins = sql.split("from library.local_albums", 1)[1]
+
+    assert (
+        "left join library.local_artists on "
+        "library.local_artists.library_id = library.local_albums.library_id "
+        "and library.local_artists.id = library.local_albums.artist_id"
+    ) in detail_joins
 
 
 def test_postgres_album_detail_preserves_raw_featured_title_and_projects_track_artist_credit(monkeypatch):
@@ -10709,6 +10872,8 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
                         "cover_revision": None,
                         "disc_number": 1,
                         "disc_number_raw": None,
+                    "total_discs": None,
+                    "disc_subtitle": None,
                         "track_number": 1,
                         "duration_seconds": 120,
                         "duration_display": "2m 00s",
@@ -10874,6 +11039,8 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
                     "cover_revision": None,
                     "disc_number": 1,
                     "disc_number_raw": None,
+                        "total_discs": None,
+                        "disc_subtitle": None,
                     "track_number": 2,
                     "duration_seconds": 122,
                     "duration_display": "2m 02s",
@@ -10991,6 +11158,27 @@ def test_current_membership_classification_clears_a_stale_persisted_problem():
     assert _problematic_file_entry_from_row(row)["local_album_membership_problem"] is None
     row.pop("local_album_membership_problem")
     assert _problematic_file_entry_from_row(row)["local_album_membership_problem"] == "Duplicate track outside album folder"
+
+
+def test_problematic_file_entry_preserves_disc_total_and_subtitle():
+    from music_app.services.library_browse_postgres import _problematic_file_entry_from_row
+
+    row = {
+        "file_private_path": "Sherlock/Album/bonus.flac",
+        "disc_number": 2,
+        "file_entry": {
+            "disc_number_raw": "2/2",
+            "total_discs": 2,
+            "disc_subtitle": "Bonus",
+        },
+    }
+
+    entry = _problematic_file_entry_from_row(row)
+
+    assert entry["disc_number"] == 2
+    assert entry["disc_number_raw"] == "2/2"
+    assert entry["total_discs"] == 2
+    assert entry["disc_subtitle"] == "Bonus"
 
 
 def test_postgres_library_browse_builds_problematic_files_projection_from_rows():
@@ -15244,6 +15432,34 @@ def test_structured_encoding_exclusion_suppresses_generated_suggestion(scope):
     assert not any(item['id'] == proposal['id'] for item in detail['suggested_edits'])
 
 
+def test_postgres_problem_detail_exposes_reviewable_edition_title_proposal():
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_detail_payload,
+        _problematic_album_projection_payloads,
+    )
+
+    row = _healthy_problematic_order_rows([1])[0]
+    row["album_title"] = "300 (The Collector's Edition)"
+    row["file_entry"] = {
+        **row["file_entry"],
+        "album": "300 (The Collector's Edition)",
+        "edition": "",
+    }
+    album = _problematic_album_projection_payloads([row])[0]
+
+    detail = _problematic_album_detail_payload(album)
+
+    assert detail is not None
+    proposal = next(
+        item for item in detail["suggested_edits"]
+        if item["field"] == "album_edition"
+    )
+    assert proposal["updates"] == {
+        "album": "300",
+        "edition": "The Collector's Edition",
+    }
+
+
 def test_split_release_album_exclusion_round_trips_unsplit_postgres_album_identity_into_rules():
     from music_app.services.library_browse_postgres import (
         _problematic_album_detail_payload,
@@ -17617,6 +17833,43 @@ def test_postgres_cover_variant_queue_uses_local_revision_cache(monkeypatch):
             r"N:\Music\Artist\Album\cover.jpg",
             str(Path(r"C:\AlbumHavenData") / "display-cover-cache"),
             "d" * 64,
+        )
+    ]
+
+
+def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypatch):
+    from music_app.services import covers as covers_module
+    from music_app.services.library_browse_postgres import (
+        _queue_display_cover_variants_for_groups,
+    )
+
+    queued: list[tuple[str, str, str | None]] = []
+    monkeypatch.setattr(
+        covers_module,
+        "queue_cover_display_variant_generation",
+        lambda source_path, *, cache_root, max_size, revision=None, **_kwargs: queued.append(
+            (str(source_path), str(cache_root), revision)
+        ),
+    )
+
+    class AlbumFolderStoragePolicy:
+        def write_cache_root(self, source_path):
+            return Path(source_path).parent / ".album-haven"
+
+    _queue_display_cover_variants_for_groups(
+        {
+            "DATA_DIR": r"C:\AlbumHavenData",
+            "_GENERATED_PREVIEW_STORAGE_POLICY": AlbumFolderStoragePolicy(),
+        },
+        [{"albums": [{"cover_path": r"N:\Music\Artist\Album\Art\Front.jpg"}]}],
+        limit=1,
+    )
+
+    assert queued == [
+        (
+            r"N:\Music\Artist\Album\Art\Front.jpg",
+            str(Path(r"C:\AlbumHavenData") / "display-cover-cache"),
+            None,
         )
     ]
 

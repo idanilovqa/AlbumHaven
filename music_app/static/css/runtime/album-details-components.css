@@ -51,7 +51,15 @@
 .album-details-header[data-album-details-layout="editorial_canvas"] { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
 .album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__identity { display: grid; grid-column: 1 / -1; grid-row: 2; gap: 7px; padding-top: 10px; }
 .album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__actions { grid-column: 2; grid-row: 1; }
-.album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__primary { font-size: clamp(1.35rem, 2.5vw, 2rem); }
+.album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__primary {
+  font-size: clamp(1.35rem, 2.5vw, 2rem);
+  line-height: 1.15;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 
 @media (max-width: 720px) {
   .album-details-header__tags { display: none; }

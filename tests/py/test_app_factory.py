@@ -628,9 +628,13 @@ def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
     class FakeWorker:
         def __init__(self, repository, *, logger, on_state, **_kwargs):
             self.on_state = on_state
+            self.wake_count = 0
 
         def start(self):
             return None
+
+        def wake(self):
+            self.wake_count += 1
 
         async def stop(self, *, timeout_seconds=30.0):
             return None
@@ -670,6 +674,7 @@ def test_create_asgi_app_lifespan_exposes_preview_inventory_recorder(
 
     assert messages[-1] == {"type": "lifespan.shutdown.complete"}
     assert len(recorded) == 2
+    assert asgi_app.state.generated_preview_relocation.wake_count == 2
     assert recorded[0]["managed_relative_path"] == "v1/cover_variants/aa/aabb.jpg"
 
 

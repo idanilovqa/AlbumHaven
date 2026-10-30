@@ -85,6 +85,8 @@ ORDINARY_TRACK_CREDIT_ALBUM = "Штиль Feature Credit"
 ORDINARY_TRACK_CREDIT_TITLE = "Штиль (feat. U.D.O.)"
 ORDINARY_ARTIST_MARKER_TRACK_TITLE = "Штиль"
 ORDINARY_ARTIST_MARKER_TRACK_ARTIST = "Ария, U.D.O."
+ORDINARY_GROUPED_FEATURE_TRACK_TITLE = "Grouped Feature Signal"
+ORDINARY_GROUPED_FEATURE_TRACK_ARTIST = "Ария / Guest One / Guest Two / Guest One"
 RATING_FIXTURE_ARTIST = "Album Rating Contract"
 RATING_FIXTURE_YEAR = 2026
 RATING_FIXTURES = (
@@ -356,6 +358,9 @@ PLAYBACK_START_BITRATE_KBPS = 128
 COVER_MATCHING_ARTIST = "Metallica"
 COVER_MATCHING_ALBUM = "Kill 'Em All"
 COVER_MATCHING_YEAR = 1983
+REUSED_FIXTURE09_ARTIST = "Mastodon"
+REUSED_FIXTURE09_ALBUM = "Crack The Skye"
+REUSED_FIXTURE09_YEAR = 2009
 COMPILATION_FAMILY_SOURCE_ARTIST = "Compilation Signal Lead"
 COMPILATION_FAMILY_ALBUM = "Compilation Cross-Credits"
 COMPILATION_FAMILY_MEMBERS = (
@@ -1287,6 +1292,10 @@ def materialize_cover_lookup_album_art(
         album_dir / "cover.jpg",
     )
     _materialize_independent_album_image(
+        back_source,
+        album_dir / "album-haven-preview.jpg",
+    )
+    _materialize_independent_album_image(
         disc_source,
         album_dir / "Art" / "Back.jpg",
     )
@@ -1360,8 +1369,8 @@ def restore_reused_fixture09_user_owned_cover(
         )
     persisted_cover_path = (
         library_root
-        / "Mastodon"
-        / "Crack The Skye Fixture 09"
+        / REUSED_FIXTURE09_ARTIST
+        / f"{REUSED_FIXTURE09_ALBUM} Fixture 09"
         / "cover.jpg"
     )
     if not persisted_cover_path.is_file():
@@ -1419,6 +1428,13 @@ def build_file_cache(
 ) -> tuple[dict[str, dict[str, object]], Path, int, int]:
     if not cover_specs:
         raise RuntimeError("The isolated E2E inventory requires at least one staged cover.")
+    cover_specs = [dict(spec) for spec in cover_specs]
+    # Functional fixture identities must not inherit sanitized asset-catalog labels.
+    cover_specs[0].update({
+        "artist": REUSED_FIXTURE09_ARTIST,
+        "album": REUSED_FIXTURE09_ALBUM,
+        "year": REUSED_FIXTURE09_YEAR,
+    })
     file_cache: dict[str, dict[str, object]] = {}
     cover_revisions_by_source: dict[Path, str] = {}
     album_count = 0
@@ -2173,6 +2189,10 @@ def build_file_cache(
                     title = ORDINARY_ARTIST_MARKER_TRACK_TITLE
                     track_artist = ORDINARY_ARTIST_MARKER_TRACK_ARTIST
                     track_path = album_dir / "02 - Artist Marker Signal.mp3"
+                elif is_ordinary_track_credit_fixture and track_index == 2:
+                    title = ORDINARY_GROUPED_FEATURE_TRACK_TITLE
+                    track_artist = ORDINARY_GROUPED_FEATURE_TRACK_ARTIST
+                    track_path = album_dir / "03 - Grouped Feature Signal.mp3"
                 if artist == SNOW_WHITE_RAW_ARTIST and album == SNOW_WHITE_ALBUM:
                     track_artist = SNOW_WHITE_TRACK_ARTISTS[
                         track_index % len(SNOW_WHITE_TRACK_ARTISTS)
@@ -2274,7 +2294,10 @@ def build_file_cache(
                             )
                         )
                         else "Bonus Disc"
-                        if is_bonus_duration_control_fixture and track_index >= 3
+                        if (
+                            is_bonus_duration_false_positive_fixture
+                            or (is_bonus_duration_control_fixture and track_index >= 3)
+                        )
                         else "2"
                         if (
                             is_bonus_duration_numeric_multidisc_fixture
@@ -2314,6 +2337,8 @@ def build_file_cache(
                             or is_progressive_candidate_fixture
                             or is_automatic_candidate_fixture
                         )
+                        else 600
+                        if is_primary_manifest_cover_lookup_album
                         else 640
                         if is_user_owned_improvement_fixture
                         else cover.get("width")
@@ -2325,6 +2350,8 @@ def build_file_cache(
                             or is_progressive_candidate_fixture
                             or is_automatic_candidate_fixture
                         )
+                        else 600
+                        if is_primary_manifest_cover_lookup_album
                         else 640
                         if is_user_owned_improvement_fixture
                         else cover.get("height")
@@ -3544,22 +3571,22 @@ def persist_fixture_artist_family_compilation_contract(setup_database_url: str) 
         }
         expected_contract = {
             COMPILATION_FAMILY_ALBUM: {
-                "album_artist": " / ".join(COMPILATION_FAMILY_MEMBERS),
+                "album_artist": COMPILATION_FAMILY_SOURCE_ARTIST,
                 "is_compilation": True,
-                "owner_artists": (" / ".join(COMPILATION_FAMILY_MEMBERS),),
-                "member_artists": tuple(sorted(COMPILATION_FAMILY_MEMBERS)),
+                "owner_artists": (COMPILATION_FAMILY_SOURCE_ARTIST,),
+                "member_artists": tuple(sorted(COMPILATION_FAMILY_MEMBERS[1:])),
             },
             CONTROL_FAMILY_ALBUM: {
-                "album_artist": " / ".join(CONTROL_FAMILY_MEMBERS),
+                "album_artist": CONTROL_FAMILY_SOURCE_ARTIST,
                 "is_compilation": False,
-                "owner_artists": (" / ".join(CONTROL_FAMILY_MEMBERS),),
-                "member_artists": tuple(sorted(CONTROL_FAMILY_MEMBERS)),
+                "owner_artists": (CONTROL_FAMILY_SOURCE_ARTIST,),
+                "member_artists": tuple(sorted(CONTROL_FAMILY_MEMBERS[1:])),
             },
             SOUNDTRACK_FAMILY_ALBUM: {
-                "album_artist": " / ".join(SOUNDTRACK_FAMILY_MEMBERS),
+                "album_artist": SOUNDTRACK_FAMILY_SOURCE_ARTIST,
                 "is_compilation": False,
-                "owner_artists": (" / ".join(SOUNDTRACK_FAMILY_MEMBERS),),
-                "member_artists": tuple(sorted(SOUNDTRACK_FAMILY_MEMBERS)),
+                "owner_artists": (SOUNDTRACK_FAMILY_SOURCE_ARTIST,),
+                "member_artists": tuple(sorted(SOUNDTRACK_FAMILY_MEMBERS[1:])),
             },
         }
         if actual_contract != expected_contract:
@@ -3953,6 +3980,15 @@ def _cover_matching_provider_specs(
         ),
         build_spec(
             larger_source,
+            cover_id="metallica-kill-em-all-false-remastered",
+            artist=COVER_MATCHING_ARTIST,
+            album="Kill 'Em All (Remastered)",
+            width=3700,
+            height=3700,
+            fixture_role="false-remastered-version",
+        ),
+        build_spec(
+            larger_source,
             cover_id="metallica-kill-em-all-false-single",
             artist=COVER_MATCHING_ARTIST,
             album='Kill "Em" All (feat. Discrepancies) - Single',
@@ -3977,6 +4013,24 @@ def _cover_matching_provider_specs(
             width=3200,
             height=3200,
             fixture_role="false-remix",
+        ),
+        build_spec(
+            larger_source,
+            cover_id="metallica-kill-em-all-false-truncated-title",
+            artist=COVER_MATCHING_ARTIST,
+            album="Kill 'Em",
+            width=4300,
+            height=4300,
+            fixture_role="false-truncated-title",
+        ),
+        build_spec(
+            larger_source,
+            cover_id="metallica-kill-em-all-false-sequence-title",
+            artist=COVER_MATCHING_ARTIST,
+            album="Kill 'Em All II",
+            width=4400,
+            height=4400,
+            fixture_role="false-sequence-title",
         ),
         build_spec(
             larger_source,
@@ -4084,6 +4138,16 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 1800,
             "candidate_fixture_mode": "automatic-candidate",
         })
+        self.cover_lookup_watcher_candidate_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "cover_id": "watcher-automatic-candidate",
+            "artist": "Watcher Automatic Cover Artist",
+            "album": "Watcher Automatic Cover Album",
+            "year": 2006,
+            "width": 2000,
+            "height": 2000,
+            "candidate_fixture_mode": "watcher-automatic-candidate",
+        })
         neutral_user_cover_source = cover_specs[1] if len(cover_specs) > 1 else cover_specs[0]
         neutral_user_cover_source_path = Path(
             str(
@@ -4157,15 +4221,77 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 1800,
             "candidate_fixture_mode": "artist-conjunction",
         })
+        split_source_root = derivative_root or Path(str(cover_specs[0]["staged_path"])).parent
+        split_source_root.mkdir(parents=True, exist_ok=True)
+        split_source_path = split_source_root / "ddt-studio-recordings-split-source.jpg"
+        split_other_art_path = split_source_root / "ddt-studio-recordings-split-other.jpg"
+        from PIL import Image
+
+        split_source = Image.new("RGB", (96, 96), (15, 28, 47))
+        try:
+            split_source.paste((198, 53, 39), (0, 0, 48, 48))
+            split_source.paste((242, 183, 5), (48, 0, 96, 48))
+            split_source.paste((28, 148, 96), (0, 48, 48, 96))
+            split_source.paste((54, 93, 173), (48, 48, 96, 96))
+            split_source.save(split_source_path, format="JPEG", quality=95)
+            split_other_art = split_source.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            try:
+                split_other_art.save(split_other_art_path, format="JPEG", quality=95)
+            finally:
+                split_other_art.close()
+        finally:
+            split_source.close()
+        self.cover_lookup_split_identity_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "staged_path": str(split_source_path),
+            "other_art_staged_path": str(split_other_art_path),
+            "cover_id": "ddt-studio-recordings-split",
+            "artist": "ДДТ",
+            "album": "Студийные записи",
+            "year": 1999,
+            "width": 1600,
+            "height": 1600,
+            "candidate_fixture_mode": "split-identity",
+        })
+        self.cover_lookup_selection_concurrency_specs = [
+            prepare_provider_artwork_spec({
+                **dict(source),
+                "cover_id": f"selection-concurrency-{generation}",
+                "artist": "Mastodon",
+                "album": "Crack The Skye Fixture 07",
+                "year": 2009,
+                "width": 1800,
+                "height": 1800,
+                "candidate_fixture_mode": f"selection-concurrency-{generation}",
+            })
+            for generation, source in (
+                ("a", cover_specs[0]),
+                ("b", cover_specs[3] if len(cover_specs) > 3 else cover_specs[-1]),
+            )
+        ]
+        self.cover_lookup_normal_specs = [
+            prepare_provider_artwork_spec({
+                **dict(cover_specs[(index - 2) % len(cover_specs)]),
+                "cover_id": f"normal-crack-the-skye-{index:02d}",
+                "artist": "Mastodon",
+                "album": f"Crack The Skye Fixture {index:02d}",
+                "year": 2009,
+            })
+            for index in range(2, 11)
+        ]
         self.cover_specs = [
             *(dict(spec) for spec in cover_specs),
+            *self.cover_lookup_normal_specs,
             *(dict(spec) for spec in self.cover_lookup_matching_specs),
             self.cover_lookup_automatic_candidate_spec,
+            self.cover_lookup_watcher_candidate_spec,
             self.cover_lookup_neutral_user_cover_spec,
             self.cover_lookup_user_improvement_spec,
             self.cover_lookup_same_art_improvement_spec,
             self.cover_lookup_alternate_improvement_spec,
             self.cover_lookup_artist_conjunction_spec,
+            self.cover_lookup_split_identity_spec,
+            *self.cover_lookup_selection_concurrency_specs,
         ]
         self.itunes_search_delay_lock = threading.Lock()
         self.itunes_search_delay_seconds = 0.0
@@ -4195,9 +4321,12 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.cover_lookup_evidence_lock = threading.Lock()
         self.cover_lookup_evidence = {
             "apple_search_requests": 0,
+            "apple_artwork_requests": 0,
             "apple_search_terms": [],
             "manual_page_requests": 0,
             "manual_image_requests": 0,
+            "later_provider_started": 0,
+            "later_provider_completed": 0,
             "musicbrainz_started": 0,
             "musicbrainz_queries": [],
             "musicbrainz_completed": 0,
@@ -4298,9 +4427,12 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         with self.cover_lookup_evidence_lock:
             self.cover_lookup_evidence = {
                 "apple_search_requests": 0,
+                "apple_artwork_requests": 0,
                 "apple_search_terms": [],
                 "manual_page_requests": 0,
                 "manual_image_requests": 0,
+                "later_provider_started": 0,
+                "later_provider_completed": 0,
                 "musicbrainz_started": 0,
                 "musicbrainz_queries": [],
                 "musicbrainz_completed": 0,
@@ -4327,11 +4459,22 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             self.cover_lookup_evidence["candidate_image_requests"] += 1
         self.cover_lookup_candidate_image_gate.wait()
 
-    def wait_for_cover_lookup_later_provider(self, query: str) -> None:
+    def wait_for_cover_lookup_later_provider(
+        self,
+        query: str,
+        *,
+        provider: str = "musicbrainz",
+    ) -> None:
         with self.cover_lookup_evidence_lock:
-            self.cover_lookup_evidence["musicbrainz_started"] += 1
-            self.cover_lookup_evidence["musicbrainz_queries"].append(str(query or ""))
+            self.cover_lookup_evidence["later_provider_started"] += 1
+            if provider == "musicbrainz":
+                self.cover_lookup_evidence["musicbrainz_started"] += 1
+                self.cover_lookup_evidence["musicbrainz_queries"].append(str(query or ""))
         self.cover_lookup_later_provider_gate.wait()
+
+    def record_cover_lookup_later_provider_completed(self) -> None:
+        with self.cover_lookup_evidence_lock:
+            self.cover_lookup_evidence["later_provider_completed"] += 1
 
     def set_cover_lookup_mode(self, mode: str) -> None:
         normalized_mode = str(mode or "").strip()
@@ -4339,14 +4482,18 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "normal",
             "no-results",
             "failed",
+            "failed-image",
             "metallica-mismatch",
             "service-deadline",
             "artist-conjunction",
+            "split-identity",
             "automatic-coverless",
             "automatic-scan",
             "same-art-improvement",
             "alternate-improvement",
             "owned-legacy-repair",
+            "selection-concurrency-a",
+            "selection-concurrency-b",
         }:
             raise ValueError(f"Unsupported cover lookup fixture mode: {normalized_mode}")
         with self.cover_lookup_mode_lock:
@@ -4400,6 +4547,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
     def record_musicbrainz_completed(self) -> None:
         with self.cover_lookup_evidence_lock:
             self.cover_lookup_evidence["musicbrainz_completed"] += 1
+            self.cover_lookup_evidence["later_provider_completed"] += 1
 
     def snapshot_cover_lookup_evidence(self) -> dict[str, Any]:
         with self.cover_lookup_evidence_lock:
@@ -4742,11 +4890,29 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             return [dict(spec) for spec in self.server.cover_lookup_matching_specs]
         if mode == "artist-conjunction":
             return [dict(self.server.cover_lookup_artist_conjunction_spec)]
+        if mode == "split-identity":
+            return [dict(self.server.cover_lookup_split_identity_spec)]
+        if mode in {"selection-concurrency-a", "selection-concurrency-b"}:
+            index = 0 if mode.endswith("-a") else 1
+            if _normalize_provider_query("E2E Rarity Artist Queued Album Rename Fixture") in normalized_query:
+                return [{
+                    **dict(self.server.cover_lookup_selection_concurrency_specs[index]),
+                    "artist": "E2E Rarity Artist",
+                    "album": "Queued Album Rename Fixture",
+                    "year": 2026,
+                }]
+            if _normalize_provider_query("Mastodon Crack The Skye Fixture 07") in normalized_query:
+                return [dict(self.server.cover_lookup_selection_concurrency_specs[index])]
+            return []
         if mode == "automatic-coverless":
             if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
                 return [dict(self.server.cover_lookup_automatic_candidate_spec)]
             if _normalize_provider_query("Mastodon Crack The Skye Fixture 09") in normalized_query:
                 return [dict(self.server.cover_lookup_neutral_user_cover_spec)]
+            if _normalize_provider_query(
+                "Watcher Automatic Cover Album"
+            ) in normalized_query:
+                return [dict(self.server.cover_lookup_watcher_candidate_spec)]
             return []
         if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
             return [dict(self.server.cover_lookup_automatic_candidate_spec)]
@@ -4884,8 +5050,14 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         provider: str,
         include_body: bool,
     ) -> None:
-        if cover_id == "provider-storage-policy-cover" and provider == "apple":
+        if self.server.get_cover_lookup_mode() == "failed-image":
+            self.send_error(404)
+            return
+        if (
+            cover_id == "provider-storage-policy-cover" and provider == "apple"
+        ) or cover_id == "selection-concurrency-b":
             self.server.wait_for_cover_lookup_candidate_image()
+        self.server.record_cover_lookup_request("apple_artwork_requests")
         payload = self.server.apple_artwork_payload(cover_id)
         if payload is None:
             self.send_error(404)
@@ -4955,6 +5127,8 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
 
     def _serve_cover_image(self, filename: str, *, include_body: bool) -> None:
         cover_id = Path(filename).stem
+        if cover_id == "selection-concurrency-b":
+            self.server.wait_for_cover_lookup_candidate_image()
         cover_path = self.server.cover_paths.get(cover_id)
         if cover_path is None or not cover_path.is_file():
             self.send_error(404)
@@ -4967,11 +5141,15 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         *,
         include_body: bool,
     ) -> None:
-        self.server.record_cover_lookup_request("discogs_search_requests")
         query_text = " ".join(
             str(value)
             for key in ("artist", "release_title", "q", "year")
             for value in query.get(key, [])
+        )
+        self.server.record_cover_lookup_request("discogs_search_requests")
+        self.server.wait_for_cover_lookup_later_provider(
+            query_text,
+            provider="discogs",
         )
         matching_specs = self._matching_specs(query_text)
         release_id_by_cover_id = {
@@ -4999,6 +5177,7 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                 "format": ["Album"],
                 "country": "US",
             })
+        self.server.record_cover_lookup_later_provider_completed()
         self._send_json({"pagination": {"items": len(results)}, "results": results}, include_body=include_body)
 
     def _serve_discogs_release(self, release_id: str, *, include_body: bool) -> None:

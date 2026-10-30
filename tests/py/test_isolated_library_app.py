@@ -1299,6 +1299,73 @@ def test_reset_accepts_pristine_database_without_application_tables(monkeypatch)
     isolatedPostgres.reset_application_tables("setup")
 
 
+def test_reset_restores_generated_preview_storage_singleton_defaults(monkeypatch):
+    statements = []
+
+    class Result:
+        @staticmethod
+        def fetchall():
+            return [
+                {"schemaname": "app", "tablename": "generated_preview_storage"},
+                {"schemaname": "app", "tablename": "generated_preview_inventory"},
+                {"schemaname": "app", "tablename": "generated_preview_relocation_items"},
+            ]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, statement, *_args):
+            rendered = (
+                statement.as_string(None)
+                if hasattr(statement, "as_string")
+                else str(statement)
+            )
+            statements.append(" ".join(rendered.split()).casefold())
+            return Result()
+
+    monkeypatch.setattr(isolatedPostgres, "_connect", lambda _url: Connection())
+    monkeypatch.setattr(
+        isolatedPostgres, "_assert_connected_role", lambda *_args: None
+    )
+
+    isolatedPostgres.reset_application_tables("setup")
+
+    truncate_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("truncate table")
+    )
+    reset_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("update app.generated_preview_storage")
+    )
+    assert truncate_index < reset_index
+    reset = statements[reset_index]
+    for default in (
+        "mode = 'album_folders'",
+        "active_root = null",
+        "requested_mode = null",
+        "requested_root = null",
+        "operation_id = null",
+        "operation_state = 'idle'",
+        "revision = 0",
+        "total_count = 0",
+        "completed_count = 0",
+        "failed_count = 0",
+        "total_bytes = 0",
+        "completed_bytes = 0",
+        "cancel_requested = false",
+        "failure_summary = '[]'::jsonb",
+    ):
+        assert default in reset
+    assert "where storage_key = 1" in reset
+
+
 @pytest.mark.parametrize(
     ("probe_error", "expected_state"),
     [
@@ -1873,6 +1940,8 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "height": 800,
         },
     ]
+
+
     persisted_user_cover_path = isolatedLibraryApp.materialize_user_owned_cover(
         temp_root / "media" / "Mastodon" / "Crack The Skye Fixture 09",
         staged_user_cover_source_path,
@@ -2064,6 +2133,47 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
         ]
 
 
+def test_provider_storage_policy_candidates_ignore_source_spec_identity(monkeypatch):
+    recorded_calls = []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params):
+            recorded_calls.append((str(sql), params))
+            return SimpleNamespace(rowcount=1)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _url: FakeConnection()),
+    )
+
+    isolatedLibraryApp.persist_provider_storage_policy_candidates(
+        "postgresql://fixture",
+        4175,
+        {
+            "cover_id": "provider-storage-policy-cover",
+            "artist": "Profile Artist",
+            "album": "Profile Album",
+            "year": 2026,
+        },
+        fixture_profile="functional-core",
+    )
+
+    _sql, params = recorded_calls[0]
+    expected_identity = ("Mastodon", "Crack The Skye", 2009)
+    assert params[-3:] == expected_identity
+    assert {
+        (candidate["artist"], candidate["album"], candidate["year"])
+        for candidate in json.loads(params[0])
+    } == {expected_identity}
+
+
 def test_real_cover_pool_reuses_staged_metadata_without_copying_sources(
     tmp_path: Path,
     monkeypatch,
@@ -2176,6 +2286,68 @@ def test_materialized_album_art_is_independent_and_restart_reuse_preserves_promo
     assert rematerialized_cover == first_cover
     assert rematerialized_cover.read_bytes() == promoted_cover_bytes
     assert rematerialized_other_art == first_other_art
+
+
+def test_generated_fixture_keeps_cover_scenario_identity_separate_from_asset_labels(
+    tmp_path,
+    monkeypatch,
+):
+    cover_paths = []
+    for name, payload in (
+        ("primary.jpg", b"primary"),
+        ("primary-other.jpg", b"primary-other"),
+        ("secondary.jpg", b"secondary"),
+        ("secondary-other.jpg", b"secondary-other"),
+    ):
+        path = tmp_path / name
+        path.write_bytes(payload)
+        cover_paths.append(path)
+    cover_specs = [
+        {
+            "cover_id": "synthetic-primary",
+            "staged_path": str(cover_paths[0]),
+            "other_art_staged_path": str(cover_paths[1]),
+            "artist": "Synthetic Cover Artist",
+            "album": "Canonical Cover Fixture",
+            "year": 2026,
+        },
+        {
+            "cover_id": "synthetic-secondary",
+            "staged_path": str(cover_paths[2]),
+            "other_art_staged_path": str(cover_paths[3]),
+            "artist": "Synthetic Cover Artist",
+            "album": "Secondary Cover Fixture",
+            "year": 2026,
+        },
+    ]
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "ensure_playable_loop_source",
+        lambda path: path.parent.mkdir(parents=True, exist_ok=True) or path.write_bytes(b"loop"),
+    )
+    _stub_joseph_cover(monkeypatch)
+
+    isolatedLibraryApp.build_file_cache(
+        isolatedLibraryApp.load_fixture_config(),
+        tmp_path / "media",
+        cover_specs,
+    )
+    assert cover_specs[0]["artist"] == "Synthetic Cover Artist"
+    assert cover_specs[0]["album"] == "Canonical Cover Fixture"
+    assert cover_specs[0]["year"] == 2026
+
+    expected = (
+        tmp_path
+        / "media"
+        / "Mastodon"
+        / "Crack The Skye Fixture 09"
+        / "cover.jpg"
+    ).resolve()
+    assert expected.is_file()
+    assert isolatedLibraryApp.restore_reused_fixture09_user_owned_cover(
+        tmp_path / "media",
+        cover_specs,
+    ) == expected
 
 
 def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_tracks(tmp_path, monkeypatch):
@@ -2496,6 +2668,13 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
         isolatedLibraryApp.ORDINARY_TRACK_CREDIT_TITLE,
         isolatedLibraryApp.ORDINARY_TRACK_CREDIT_ARTIST,
     )
+    assert (
+        ordinary_track_credit_entries[2]["title"],
+        ordinary_track_credit_entries[2]["artist"],
+    ) == (
+        isolatedLibraryApp.ORDINARY_GROUPED_FEATURE_TRACK_TITLE,
+        isolatedLibraryApp.ORDINARY_GROUPED_FEATURE_TRACK_ARTIST,
+    )
     compilation_entries = sorted(
         (
             entry
@@ -2588,17 +2767,17 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
     compilation_album = built_albums[isolatedLibraryApp.COMPILATION_FAMILY_ALBUM]
     control_album = built_albums[isolatedLibraryApp.CONTROL_FAMILY_ALBUM]
     assert compilation_album.is_compilation is True
-    assert compilation_album.album_artist == " / ".join(
-        isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS
+    assert (
+        compilation_album.album_artist
+        == isolatedLibraryApp.COMPILATION_FAMILY_SOURCE_ARTIST
     )
     assert compilation_album.album_artist != isolatedLibraryApp.TRACK_CREDIT_ALBUM_ARTIST
-    assert set(compilation_album.artists) == set(
-        isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS
-    )
+    assert compilation_album.artists == [
+        isolatedLibraryApp.COMPILATION_FAMILY_SOURCE_ARTIST
+    ]
     assert control_album.is_compilation is True
-    assert control_album.album_artist == " / ".join(
-        isolatedLibraryApp.CONTROL_FAMILY_MEMBERS
-    )
+    assert control_album.album_artist == isolatedLibraryApp.CONTROL_FAMILY_SOURCE_ARTIST
+    assert control_album.artists == [isolatedLibraryApp.CONTROL_FAMILY_SOURCE_ARTIST]
     rating_fixture_albums = {
         str(entry["album"]): entry["album_rating"]
         for entry in file_cache.values()
@@ -3119,24 +3298,24 @@ def test_artist_family_fixture_separates_owner_and_members_and_overrides_control
     rows = [
         (
             isolatedLibraryApp.COMPILATION_FAMILY_ALBUM,
-            " / ".join(isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS),
+            isolatedLibraryApp.COMPILATION_FAMILY_SOURCE_ARTIST,
             True,
-            [" / ".join(isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS)],
-            sorted(isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS),
+            [isolatedLibraryApp.COMPILATION_FAMILY_SOURCE_ARTIST],
+            sorted(isolatedLibraryApp.COMPILATION_FAMILY_MEMBERS[1:]),
         ),
         (
             isolatedLibraryApp.CONTROL_FAMILY_ALBUM,
-            " / ".join(isolatedLibraryApp.CONTROL_FAMILY_MEMBERS),
+            isolatedLibraryApp.CONTROL_FAMILY_SOURCE_ARTIST,
             False,
-            [" / ".join(isolatedLibraryApp.CONTROL_FAMILY_MEMBERS)],
-            sorted(isolatedLibraryApp.CONTROL_FAMILY_MEMBERS),
+            [isolatedLibraryApp.CONTROL_FAMILY_SOURCE_ARTIST],
+            sorted(isolatedLibraryApp.CONTROL_FAMILY_MEMBERS[1:]),
         ),
         (
             isolatedLibraryApp.SOUNDTRACK_FAMILY_ALBUM,
-            " / ".join(isolatedLibraryApp.SOUNDTRACK_FAMILY_MEMBERS),
+            isolatedLibraryApp.SOUNDTRACK_FAMILY_SOURCE_ARTIST,
             False,
-            [" / ".join(isolatedLibraryApp.SOUNDTRACK_FAMILY_MEMBERS)],
-            sorted(isolatedLibraryApp.SOUNDTRACK_FAMILY_MEMBERS),
+            [isolatedLibraryApp.SOUNDTRACK_FAMILY_SOURCE_ARTIST],
+            sorted(isolatedLibraryApp.SOUNDTRACK_FAMILY_MEMBERS[1:]),
         ),
     ]
 
@@ -4281,6 +4460,13 @@ def test_provider_fixture_serves_music_service_musicbrainz_and_cover_archive_sha
         assert response.getheader("Content-Type") == "image/jpeg"
         assert response.read() == b"fixture-image"
 
+        service._server.set_cover_lookup_mode("failed-image")
+        connection.request("GET", urlparse(page_candidates[0]).path)
+        response = connection.getresponse()
+        assert response.status == 404
+        response.read()
+        service._server.set_cover_lookup_mode("normal")
+
         connection.request("GET", urlparse(artist_url).path)
         response = connection.getresponse()
         assert response.status == 200
@@ -4458,7 +4644,8 @@ def test_provider_fixture_defaults_to_no_results_until_provider_scenarios_opt_in
             )
             response = connection.getresponse()
             assert response.status == 200
-            assert json.loads(response.read())["resultCount"] == 1
+            expected_count = 2 if target.endswith("07") else 1
+            assert json.loads(response.read())["resultCount"] == expected_count
     finally:
         if connection is not None:
             connection.close()
@@ -4615,6 +4802,21 @@ def test_provider_fixture_automatic_coverless_primes_fixture09_without_improving
             "automatic-candidate-primary",
         ]
 
+        watcher_specs = handler._matching_specs(
+            "Watcher Automatic Cover Album"
+        )
+        assert [spec["cover_id"] for spec in watcher_specs] == [
+            "watcher-automatic-candidate",
+        ]
+        assert watcher_specs[0]["width"] >= 2000
+        assert watcher_specs[0]["height"] >= 2000
+        watcher_payload = service._server.apple_artwork_payload(
+            "watcher-automatic-candidate"
+        )
+        assert watcher_payload
+        with Image.open(io.BytesIO(watcher_payload)) as watcher_image:
+            assert watcher_image.size == (2000, 2000)
+
         fixture09_specs = handler._matching_specs(
             "Mastodon Crack The Skye Fixture 09",
         )
@@ -4714,17 +4916,97 @@ def test_provider_fixture_later_request_returns_candidates_before_terminal_mode_
         assert "error" not in request_result
         assert request_result["status"] == 200
         assert request_result["payload"] == {
-            "count": 1,
-            "releases": [{
-                "id": "fixture-07",
-                "title": "Crack The Skye Fixture 07",
-                "date": "2009-01-01",
-                "artist-credit": [{"name": "Mastodon"}],
-            }],
+            "count": 2,
+            "releases": [
+                {
+                    "id": "fixture-07",
+                    "title": "Crack The Skye Fixture 07",
+                    "date": "2009-01-01",
+                    "artist-credit": [{"name": "Mastodon"}],
+                },
+                {
+                    "id": "normal-crack-the-skye-07",
+                    "title": "Crack The Skye Fixture 07",
+                    "date": "2009-01-01",
+                    "artist-credit": [{"name": "Mastodon"}],
+                },
+            ],
         }
 
         service._server.set_cover_lookup_mode("no-results")
         assert service._server.get_cover_lookup_mode() == "no-results"
+    finally:
+        service._server.release_cover_lookup_later_provider()
+        request_thread.join(timeout=2)
+        service.stop()
+
+
+def test_provider_fixture_later_gate_also_holds_discogs_requests(tmp_path):
+    cover_path = tmp_path / "fixture.jpg"
+    cover_path.write_bytes(b"fixture-image")
+    other_art_path = tmp_path / "fixture-other-art.jpg"
+    other_art_path.write_bytes(b"fixture-other-art-image")
+    service = isolatedLibraryApp.ProviderFixtureService(
+        0,
+        [{
+            "cover_id": "fixture-07",
+            "staged_path": str(cover_path),
+            "other_art_staged_path": str(other_art_path),
+            "artist": "Mastodon",
+            "album": "Crack The Skye Fixture 07",
+            "year": 2009,
+            "width": 1200,
+            "height": 1200,
+        }],
+        itunes_search_delay_seconds=0,
+    )
+    service.start()
+    port = service._server.server_address[1]
+    request_result: dict[str, object] = {}
+
+    def request_discogs_candidates() -> None:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        try:
+            connection.request(
+                "GET",
+                "/discogs/database/search?"
+                "artist=Mastodon&release_title=Crack%20The%20Skye%20Fixture%2007",
+            )
+            response = connection.getresponse()
+            request_result["status"] = response.status
+            request_result["payload"] = json.loads(response.read())
+        except Exception as exc:  # pragma: no cover - asserted on the owner thread
+            request_result["error"] = exc
+        finally:
+            connection.close()
+
+    request_thread = threading.Thread(target=request_discogs_candidates)
+    try:
+        service._server.set_cover_lookup_mode("normal")
+        service._server.hold_cover_lookup_later_provider()
+        request_thread.start()
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            evidence = service._server.snapshot_cover_lookup_evidence()
+            if evidence["later_provider_started"] == 1:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("Discogs fixture request never reached the held provider gate")
+
+        assert request_thread.is_alive(), "held Discogs provider returned before release"
+        assert evidence["later_provider_completed"] == 0
+
+        service._server.release_cover_lookup_later_provider()
+        request_thread.join(timeout=2)
+        assert not request_thread.is_alive(), "released Discogs response did not complete"
+        assert "error" not in request_result
+        assert request_result["status"] == 200
+        assert request_result["payload"]["pagination"]["items"] == 2
+        assert service._server.snapshot_cover_lookup_evidence()[
+            "later_provider_completed"
+        ] == 1
     finally:
         service._server.release_cover_lookup_later_provider()
         request_thread.join(timeout=2)
@@ -5366,6 +5648,48 @@ def test_provider_fixture_prepares_generated_apple_artwork_before_start(
         service._server.server_close()
 
 
+def test_split_identity_provider_artwork_does_not_reuse_another_album_cover(tmp_path):
+    from PIL import Image
+
+    cover_specs = []
+    colors = ((32, 64, 96), (96, 64, 32), (32, 96, 64), (64, 32, 96))
+    for index, color in enumerate(colors):
+        cover_path = tmp_path / f"fixture-{index}.jpg"
+        with Image.new("RGB", (64, 64), color) as cover:
+            cover.save(cover_path, format="JPEG")
+        other_art_path = tmp_path / f"fixture-{index}-other-art.jpg"
+        with Image.new("RGB", (32, 48), color) as other_art:
+            other_art.save(other_art_path, format="JPEG")
+        cover_specs.append({
+            "cover_id": f"fixture-{index}",
+            "staged_path": str(cover_path),
+            "other_art_staged_path": str(other_art_path),
+            "artist": f"Fixture Artist {index}",
+            "album": f"Fixture Album {index}",
+            "year": 2024,
+            "width": 64,
+            "height": 64,
+        })
+
+    service = isolatedLibraryApp.ProviderFixtureService(
+        0,
+        cover_specs,
+        derivative_root=tmp_path / "provider-artwork",
+    )
+    try:
+        split_spec = service._server.cover_lookup_split_identity_spec
+        source_hashes = {
+            hashlib.sha256(Path(spec["staged_path"]).read_bytes()).hexdigest()
+            for spec in cover_specs
+        }
+        assert split_spec["original_source_sha256"] not in source_hashes
+        assert hashlib.sha256(
+            Path(split_spec["other_art_staged_path"]).read_bytes()
+        ).hexdigest() not in source_hashes
+    finally:
+        service._server.server_close()
+
+
 def test_provider_fixture_serves_every_cover_matching_candidate_image(tmp_path):
     cover_specs = []
     for index, payload in enumerate((b"large-fixture-image", b"small-fixture-image")):
@@ -5396,9 +5720,12 @@ def test_provider_fixture_serves_every_cover_matching_candidate_image(tmp_path):
     } == {
         "metallica-kill-em-all-base",
         "metallica-kill-em-all-deluxe",
+        "metallica-kill-em-all-false-remastered",
         "metallica-kill-em-all-false-single",
         "metallica-kill-em-all-false-tribute",
         "metallica-kill-em-all-false-remix",
+        "metallica-kill-em-all-false-truncated-title",
+        "metallica-kill-em-all-false-sequence-title",
         "metallica-kill-em-all-false-featuring",
         "metallica-kill-em-all-false-other-band",
         "metallica-kill-em-all-false-featured-artist",

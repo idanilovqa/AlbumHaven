@@ -9,7 +9,7 @@
   },
   "relativeDurationBalanceUnits": {
     "gallery-search-visual": 45,
-    "cover-providers-1": 20,
+    "cover-providers-1": 21,
     "cover-providers-2": 20,
     "metadata-mutations": 26,
     "playback-utilities-1": 18,
@@ -91,9 +91,37 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+              "case": "FTC-TAGS-027 loads every disc when expanding an indexed album folder",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
               "case": "FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release",
               "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
+              "case": "FTC-ALBUM-DETAILS-026 rebuild drops track subtitle and part frames from album editions",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/numericDiscFolderProjection.spec.js",
+              "case": "FTC-ALBUM-DETAILS-027 numeric disc folders remain one release without duplicate versions",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/yearDistinctReleaseProjection.spec.js",
+              "case": "FTC-ALBUM-DETAILS-028 year-distinct folders remain separate releases",
+              "area": "album-details"
             },
             {
               "config": "playwright.config.js",
@@ -161,7 +189,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTrackCredits.spec.js",
-              "case": "FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words",
+              "case": "FTC-ALBUM-DETAILS-005 ignores a sole bonus-labeled group",
               "area": "album-details"
             },
             {
@@ -245,6 +273,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/galleryCoverStability.spec.js",
+              "case": "FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-size art is unavailable",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/galleryCoverStability.spec.js",
               "case": "FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album",
               "area": "playback"
             },
@@ -268,6 +303,78 @@
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
               "case": "FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete",
               "area": "gallery-search"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity",
+              "area": "gallery-search"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
+              "area": "gallery-search"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On",
+              "area": "gallery-search"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing display names",
+              "area": "gallery-search"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both constituent artists",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-ALBUM-TRACK-CREDITS-003 groups repeated featured artists under one marker",
+              "area": "album-details"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-034 keeps empty artist-scoped Non-album tracks disabled after hydration",
+              "area": "gallery-search"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/offlineDeletionReconciliation.spec.js",
+              "case": "FTC-LIBROOTS-019 reconciles offline legacy deletions without stale active tracks",
+              "area": "library-roots"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
+              "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
+              "area": "library-roots",
+              "relatedAreas": ["album-details"]
             },
             {
               "config": "playwright.config.js",
@@ -439,6 +546,27 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-032 current 1200px cover clears stale poor-quality alert",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-028 pasted cover revision reconciles album details, gallery, and mobile caches",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-031 a prior-generation choice survives a newer active lookup and saves unchanged",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-022 cover gallery loading starts before the task list responds",
               "area": "cover-providers"
             },
@@ -454,6 +582,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-040 failed accepted save restores prior art and keeps its notification",
               "area": "cover-providers"
             },
             {
@@ -509,7 +644,42 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
-              "case": "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+              "case": "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
+              "area": "cover-providers"
+            },
+          {
+            "config": "playwright.config.js",
+            "project": "functional",
+            "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+            "case": "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
+            "area": "cover-providers"
+          },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-034 watcher prefers front-named local art over a larger booklet image",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan",
               "area": "cover-providers"
             }
           ]
@@ -524,6 +694,13 @@
               "project": "cover-rescan",
               "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-011 selected local art remains authoritative after rescan and app restart",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.cover-rescan.config.js",
+              "project": "cover-rescan",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-035 persisted notification candidates remain visible and save after app restart",
               "area": "cover-providers"
             }
           ]
@@ -556,7 +733,21 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
-              "case": "FTC-COVERS-007 notification states and bulk clear preserve active work",
+              "case": "FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-036 notification cards keep independent album identity after cover save",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-039 stale split identity stays open and chooses an exact current release",
               "area": "cover-providers"
             },
             {
@@ -674,6 +865,20 @@
               "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
               "case": "FTC-TAGS-008 completes an album rename before reporting the save task complete",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-COVERS-038 persisted lookup survives an album identity rename and app restart",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits",
               "area": "tag-edit"
             },
             {

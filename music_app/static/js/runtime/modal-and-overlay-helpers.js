@@ -245,43 +245,76 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
-let deferredNonAlbumHydrationPromise = null;
+let deferredNonAlbumHydrationRequest = null;
+
+function getDeferredNonAlbumScopeKey(url) {
+  const entries = Array.from(url.searchParams.entries()).sort(([leftKey, leftValue], [rightKey, rightValue]) => (
+    leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue)
+  ));
+  const query = entries
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  return `${url.pathname}${query ? `?${query}` : ''}`;
+}
 
 async function hydrateDeferredNonAlbumTracks(options = {}) {
   const view = state.view || {};
-  if (!view.non_album_tracks_deferred) return view.non_album_tracks || [];
-  if (deferredNonAlbumHydrationPromise) return deferredNonAlbumHydrationPromise;
-
+  const libraryWide = options.libraryWide === true;
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
   requestUrl.searchParams.set('include_non_album', '1');
-  if (options.libraryWide === true) {
+  const requestScopeKey = getDeferredNonAlbumScopeKey(requestUrl);
+  if (!view.non_album_tracks_deferred
+      && (!libraryWide || view.library_non_album_tracks_hydrated_scope === requestScopeKey)) {
+    return view.non_album_tracks || [];
+  }
+  if (libraryWide) {
     requestUrl.searchParams.set('include_library_wide_non_album', '1');
   }
-  deferredNonAlbumHydrationPromise = (async () => {
-    const response = await fetch(`${requestUrl.pathname}${requestUrl.search}`, {
+  const requestKey = `${requestUrl.pathname}${requestUrl.search}`;
+  const requestIdentity = getDeferredNonAlbumScopeKey(requestUrl);
+  if (deferredNonAlbumHydrationRequest?.key === requestIdentity) {
+    return deferredNonAlbumHydrationRequest.promise;
+  }
+  const request = { key: requestIdentity, promise: null };
+  request.promise = (async () => {
+    const response = await fetch(requestKey, {
       headers: { Accept: 'application/json' },
     });
     const payload = await response.json();
     if (!response.ok || payload?.ok === false) {
       throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
     }
-    if (String(state.view?.selected_artist || '') !== requestedArtist) {
+    const currentView = state.view || {};
+    const currentScopeUrl = new URL(
+      buildApiUrl(currentView, { omitSidebar: true }),
+      'http://localhost',
+    );
+    currentScopeUrl.searchParams.set('include_non_album', '1');
+    const currentScopeKey = getDeferredNonAlbumScopeKey(currentScopeUrl);
+    if (String(currentView.selected_artist || '') !== requestedArtist
+        || currentScopeKey !== requestScopeKey) {
       return state.view?.non_album_tracks || [];
     }
     state.view.non_album_tracks = Array.isArray(payload.non_album_tracks)
       ? payload.non_album_tracks
       : [];
-    state.view.library_non_album_tracks = Array.isArray(payload.library_non_album_tracks)
-      ? payload.library_non_album_tracks
-      : state.view.non_album_tracks;
+    if (libraryWide) {
+      state.view.library_non_album_tracks = Array.isArray(payload.library_non_album_tracks)
+        ? payload.library_non_album_tracks
+        : state.view.non_album_tracks;
+      state.view.library_non_album_tracks_hydrated_scope = requestScopeKey;
+    }
     state.view.non_album_tracks_deferred = false;
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_tracks;
   })().finally(() => {
-    deferredNonAlbumHydrationPromise = null;
+    if (deferredNonAlbumHydrationRequest === request) {
+      deferredNonAlbumHydrationRequest = null;
+    }
   });
-  return deferredNonAlbumHydrationPromise;
+  deferredNonAlbumHydrationRequest = request;
+  return request.promise;
 }
 
 function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
@@ -688,6 +721,10 @@ function closeNonAlbumModal() {
   }
 }
 
+const OPEN_ALBUM_LOCATION_SUCCESS_COOLDOWN_MS = 750;
+const openAlbumLocationRequestsInFlight = new Set();
+const openAlbumLocationRecentSuccesses = new Map();
+
 async function openAlbumInExplorer(album) {
   if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
     && !window.AlbumHavenCapabilities.allows('library.files.open_location')) return;
@@ -695,19 +732,32 @@ async function openAlbumInExplorer(album) {
     showToast('No album payload found for File Explorer action.', 'error', 3200);
     return;
   }
+  const requestBody = JSON.stringify({ album });
+  const now = Date.now();
+  for (const [key, openedAt] of openAlbumLocationRecentSuccesses) {
+    if (now - openedAt >= OPEN_ALBUM_LOCATION_SUCCESS_COOLDOWN_MS) {
+      openAlbumLocationRecentSuccesses.delete(key);
+    }
+  }
+  if (openAlbumLocationRequestsInFlight.has(requestBody)
+      || openAlbumLocationRecentSuccesses.has(requestBody)) return;
+  openAlbumLocationRequestsInFlight.add(requestBody);
   try {
     const response = await fetch('/open-album-location', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album }),
+      body: requestBody,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || 'Failed to open album location');
     }
+    openAlbumLocationRecentSuccesses.set(requestBody, Date.now());
   } catch (error) {
     console.error(`${ALBUM_MENU_LOG_PREFIX} Open in File Explorer failed:`, error);
     showToast(error.message || 'Failed to open album location.', 'error', 3200);
+  } finally {
+    openAlbumLocationRequestsInFlight.delete(requestBody);
   }
 }
 
@@ -737,6 +787,9 @@ function getLightboxElements() {
     overlay: document.getElementById('image-lightbox'),
     image: document.getElementById('image-lightbox-image'),
     loading: document.getElementById('image-lightbox-loading'),
+    error: document.getElementById('image-lightbox-error'),
+    status: document.getElementById('image-lightbox-status'),
+    retry: document.getElementById('image-lightbox-retry'),
     close: document.getElementById('image-lightbox-close'),
     prev: document.getElementById('image-lightbox-prev'),
     next: document.getElementById('image-lightbox-next'),
@@ -848,6 +901,10 @@ function handleAlbumDisplayCoverImageLoad(imageElement) {
   imageElement.setAttribute('data-cover-visual-state', 'ready');
   imageElement.removeAttribute('data-gallery-cover-object-retry');
   imageElement.removeAttribute('aria-hidden');
+  const loadedCoverPath = imageElement.getAttribute('data-cover-path') || '';
+  if (coverPreviewUrlMatchesAlbum(imageElement.currentSrc || imageElement.src, loadedCoverPath)) {
+    clearFailedLocalDisplayCoverPath(loadedCoverPath);
+  }
   const releaseObjectUrl = () => {
     if (
       typeof galleryCoverPreviewCache !== 'undefined'
@@ -1030,6 +1087,7 @@ function albumHasDisplayCover(album) {
   const localCoverPath = String(album?.cover_path || '').trim();
   return Boolean(
     (optimistic && optimistic.src)
+    || String(album?.cover_preview_url || '').trim()
     || (localCoverPath && !isKnownFailedLocalDisplayCoverPath(localCoverPath))
     || String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim()
   );
@@ -1042,9 +1100,10 @@ function buildAlbumDisplayCoverUrl(album) {
     return optimistic.src;
   }
   const localCoverPath = String(album?.cover_path || '').trim();
+  const canonicalPreviewUrl = String(album?.cover_preview_url || '').trim();
+  if (!localCoverPath && canonicalPreviewUrl) return canonicalPreviewUrl;
   if (localCoverPath && !isKnownFailedLocalDisplayCoverPath(localCoverPath)) {
     const coverRevision = String(album?.cover_revision || '').trim();
-    const canonicalPreviewUrl = String(album?.cover_preview_url || '').trim();
     const rememberedStartupUrls = globalThis.__ALBUM_HAVEN_STARTUP_COVER_URLS__ instanceof Map
       ? globalThis.__ALBUM_HAVEN_STARTUP_COVER_URLS__
       : new Map();
@@ -1139,7 +1198,41 @@ function getLightboxItemSources(item) {
   return sources.filter((source, index) => sources.indexOf(source) === index);
 }
 
+const LIGHTBOX_SOURCE_TIMEOUT_MS = 8000;
+const LOCAL_FULL_SIZE_LIGHTBOX_RETRY_DELAY_MS = 150;
+
+function isLocalFullSizeLightboxSource(source) {
+  return String(source || '').trim().startsWith('/cover?');
+}
+
+function buildLightboxCoverRetryUrl(source) {
+  const normalizedSource = String(source || '').trim();
+  if (!normalizedSource) return '';
+  const hashIndex = normalizedSource.indexOf('#');
+  const sourceWithoutHash = hashIndex >= 0 ? normalizedSource.slice(0, hashIndex) : normalizedSource;
+  const hash = hashIndex >= 0 ? normalizedSource.slice(hashIndex) : '';
+  const separator = sourceWithoutHash.includes('?') ? '&' : '?';
+  const retryNonce = Number(state.lightbox.fullSizeRetryNonce || 0) + 1;
+  state.lightbox.fullSizeRetryNonce = retryNonce;
+  return `${sourceWithoutHash}${separator}_album_haven_retry=${encodeURIComponent(`${Date.now()}-${retryNonce}`)}${hash}`;
+}
+
+function showLightboxRetryControl(label = 'Retry cover') {
+  const { retry } = getLightboxElements();
+  if (!retry) return;
+  retry.textContent = label;
+  retry.setAttribute?.('aria-label', label);
+  retry.hidden = false;
+}
+
+function clearActiveLightboxSourceTimeout() {
+  const timeoutId = state.lightbox.activeSourceTimeoutId;
+  if (timeoutId != null) clearBrowserTimeout(timeoutId);
+  state.lightbox.activeSourceTimeoutId = null;
+}
+
 function cancelActiveLightboxPreloader() {
+  clearActiveLightboxSourceTimeout();
   const activePreloader = state.lightbox.activePreloader;
   if (!activePreloader) return;
   activePreloader.onload = null;
@@ -1148,7 +1241,10 @@ function cancelActiveLightboxPreloader() {
 }
 
 function setLightboxLoadingPresentation(imageElement, loadingElement, isLoading, alt = '') {
+  const { error, retry } = getLightboxElements();
   if (loadingElement) loadingElement.hidden = !isLoading;
+  if (error) error.hidden = true;
+  if (retry) retry.hidden = true;
   if (!imageElement) return;
   if (isLoading) {
     imageElement.hidden = true;
@@ -1167,12 +1263,21 @@ function startLightboxSourcePreload(imageElement, loadToken) {
   const sourceIndex = Number(state.lightbox.activeSourceIndex || 0);
   const expectedSource = String(sources[sourceIndex] || '').trim();
   if (!expectedSource) {
-    const { loading } = getLightboxElements();
+    const { loading, error, status, retry } = getLightboxElements();
     if (loading) loading.hidden = true;
-    if (typeof imageElement.removeAttribute === 'function') imageElement.removeAttribute('src');
-    imageElement.hidden = true;
-    imageElement.alt = '';
-    if (typeof imageElement.setAttribute === 'function') imageElement.setAttribute('aria-hidden', 'true');
+    if (error) error.hidden = false;
+    if (status) status.textContent = 'Cover could not be loaded.';
+    if (retry) showLightboxRetryControl(
+      isLocalFullSizeLightboxSource(state.lightbox.activeFullSource)
+        ? 'Retry full-size cover'
+        : 'Retry cover',
+    );
+    if (imageElement.hidden || !String(imageElement.src || '').trim()) {
+      if (typeof imageElement.removeAttribute === 'function') imageElement.removeAttribute('src');
+      imageElement.hidden = true;
+      imageElement.alt = '';
+      if (typeof imageElement.setAttribute === 'function') imageElement.setAttribute('aria-hidden', 'true');
+    }
     if (imageElement.classList?.add) imageElement.classList.add('is-unavailable');
     return false;
   }
@@ -1185,11 +1290,28 @@ function startLightboxSourcePreload(imageElement, loadToken) {
     && Number(state.lightbox.activeSourceIndex || 0) === sourceIndex
     && String(state.lightbox.activeSources?.[sourceIndex] || '').trim() === expectedSource
   );
-  const continueToNextSource = () => {
+  const continueToNextSource = (reason = 'error') => {
     if (!isCurrentLoad()) return;
+    clearActiveLightboxSourceTimeout();
     preloader.onload = null;
     preloader.onerror = null;
     state.lightbox.activePreloader = null;
+    if (
+      reason === 'error'
+      && sourceIndex === 0
+      && isLocalFullSizeLightboxSource(state.lightbox.activeFullSource)
+      && !state.lightbox.fullSizeRetryAttempted
+    ) {
+      state.lightbox.fullSizeRetryAttempted = true;
+      state.lightbox.activeSourceTimeoutId = scheduleBrowserTimeout(() => {
+        if (Number(loadToken || 0) !== Number(state.lightbox.loadToken || 0)) return;
+        if (Number(state.lightbox.activeSourceIndex || 0) !== sourceIndex) return;
+        state.lightbox.activeSourceTimeoutId = null;
+        state.lightbox.activeSources[0] = buildLightboxCoverRetryUrl(state.lightbox.activeFullSource);
+        startLightboxSourcePreload(imageElement, loadToken);
+      }, LOCAL_FULL_SIZE_LIGHTBOX_RETRY_DELAY_MS);
+      return;
+    }
     state.lightbox.activeSourceIndex = sourceIndex + 1;
     startLightboxSourcePreload(imageElement, loadToken);
   };
@@ -1202,6 +1324,7 @@ function startLightboxSourcePreload(imageElement, loadToken) {
       : Promise.resolve();
     Promise.resolve(decodeResult).then(() => {
       if (!isCurrentLoad()) return;
+      clearActiveLightboxSourceTimeout();
       state.lightbox.activePreloader = null;
       imageElement.src = expectedSource;
       const { loading } = getLightboxElements();
@@ -1212,15 +1335,45 @@ function startLightboxSourcePreload(imageElement, loadToken) {
         state.lightbox.activeAlt || 'Full-size album cover',
       );
       if (imageElement.classList?.remove) imageElement.classList.remove('is-unavailable');
+      if (sourceIndex > 0 && isLocalFullSizeLightboxSource(state.lightbox.activeFullSource)) {
+        showLightboxRetryControl('Retry full-size cover');
+      }
     }).catch(() => {
       continueToNextSource();
     });
   };
   preloader.onerror = () => {
-    continueToNextSource();
+    continueToNextSource('error');
   };
+  state.lightbox.activeSourceTimeoutId = scheduleBrowserTimeout(
+    () => continueToNextSource('timeout'),
+    LIGHTBOX_SOURCE_TIMEOUT_MS,
+  );
   preloader.src = expectedSource;
   return true;
+}
+
+function retryActiveLightboxImage() {
+  const els = getLightboxElements();
+  if (!els.image || !Array.isArray(state.lightbox.activeSources) || !state.lightbox.activeSources.length) {
+    return false;
+  }
+  cancelActiveLightboxPreloader();
+  const loadToken = Number(state.lightbox.loadToken || 0) + 1;
+  state.lightbox.loadToken = loadToken;
+  state.lightbox.fullSizeRetryAttempted = true;
+  state.lightbox.activeSourceIndex = 0;
+  state.lightbox.activeSources[0] = buildLightboxCoverRetryUrl(state.lightbox.activeFullSource);
+  const preserveVisibleImage = !els.image.hidden && Boolean(String(els.image.src || '').trim());
+  if (els.error) els.error.hidden = true;
+  if (els.retry) els.retry.hidden = true;
+  if (els.loading) els.loading.hidden = preserveVisibleImage;
+  if (!preserveVisibleImage) {
+    setLightboxLoadingPresentation(els.image, els.loading, true);
+    if (typeof els.image.removeAttribute === 'function') els.image.removeAttribute('src');
+  }
+  if (els.image.classList?.remove) els.image.classList.remove('is-unavailable');
+  return startLightboxSourcePreload(els.image, loadToken);
 }
 
 function applyLightboxImageItem(item) {
@@ -1230,6 +1383,7 @@ function applyLightboxImageItem(item) {
   const loadToken = Number(state.lightbox.loadToken || 0) + 1;
   state.lightbox.loadToken = loadToken;
   state.lightbox.activeFullSource = String(item?.src || '').trim();
+  state.lightbox.fullSizeRetryAttempted = false;
   state.lightbox.activeAlt = item.alt || 'Full-size album cover';
   const sources = getLightboxItemSources(item);
   state.lightbox.activeSources = sources;

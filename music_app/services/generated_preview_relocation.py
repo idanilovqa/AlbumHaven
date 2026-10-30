@@ -163,7 +163,6 @@ class GeneratedPreviewRelocationWorker:
                 for item in items:
                     result = _relocate_item(item, operation_id=operation_id)
                     source_to_delete = result.pop("source_to_delete", None)
-                    self._repository.complete_item(operation_id=operation_id, **result)
                     if source_to_delete is not None and _matches(
                         source_to_delete,
                         int(item["expected_bytes"]),
@@ -172,15 +171,13 @@ class GeneratedPreviewRelocationWorker:
                         try:
                             source_to_delete.unlink()
                         except OSError as exc:
-                            self._repository.fail_item_cleanup(
-                                operation_id=operation_id,
-                                item_id=int(item["id"]),
-                                error=str(exc),
-                            )
+                            result["status"] = "failed"
+                            result["error"] = str(exc)
                             self._logger.exception(
                                 "Generated preview source cleanup failed for %s.",
                                 source_to_delete,
                             )
+                    self._repository.complete_item(operation_id=operation_id, **result)
                     if self._stop_requested.is_set():
                         return False
                 state = self._repository.load()

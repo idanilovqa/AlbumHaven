@@ -14,6 +14,8 @@ function getAlbumCardVersionKey(album) {
 }
 
 function albumCardHtml(album, options = {}) {
+  const displayName = album?.display_name || album?.name || '';
+  const displayYear = album?.display_year || album?.year || '';
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
   const rating = getAlbumCardRating(album);
@@ -25,16 +27,23 @@ function albumCardHtml(album, options = {}) {
   const albumKey = getAlbumRequestKey(album);
   const albumVersionKey = getAlbumCardVersionKey(album);
   const albumFallback = JSON.stringify({
+    album_id: album?.album_id || album?.id || null,
     key: getAlbumRequestKey(album),
     name: String(album?.name || ''),
     album_artist: String(album?.album_artist || ''),
     year: album?.year ?? '',
     edition: String(album?.edition || ''),
+    identity_revision: album?.identity_revision !== null
+      && album?.identity_revision !== undefined
+      && Number.isSafeInteger(Number(album.identity_revision))
+      ? Number(album.identity_revision)
+      : null,
     preview_only: Boolean(album?.preview_only),
     track_count_preview: Number(album?.track_count_preview || 0),
     total_duration_seconds: Number(album?.total_duration_seconds || 0),
     total_duration_display: String(album?.total_duration_display || ''),
     cover_path: String(album?.cover_path || ''),
+    cover_preview_url: String(album?.cover_preview_url || ''),
     cover_revision: String(album?.cover_revision || ''),
     remote_cover_url: String(album?.remote_cover_url || ''),
     remote_cover_thumbnail_url: String(album?.remote_cover_thumbnail_url || ''),
@@ -64,8 +73,8 @@ function albumCardHtml(album, options = {}) {
   const artboxHtml = buildAlbumArtboxHtml({
     state: albumMissing ? 'missing' : (albumHasDisplayCover(album) ? 'ready' : 'empty'),
     label: albumMissing
-      ? `${album.name} artwork unavailable. Album not found.`
-      : `Album cover for ${album.name}`,
+      ? `${displayName} artwork unavailable. Album not found.`
+      : `Album cover for ${displayName}`,
     coverHtml,
     actionHtml,
   });
@@ -75,10 +84,10 @@ function albumCardHtml(album, options = {}) {
     albumKey,
     albumVersionKey,
     albumFallback,
-    openLabel: `Open ${album.name} tracklist${albumMissing ? '. Album not found' : ''}`,
-    title: album.name,
+    openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
+    title: displayName,
     artist: album.album_artist,
-    year: album.year,
+    year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
@@ -110,8 +119,10 @@ function getAlbumCardRenderKey(album) {
     getAlbumCardNodeIdentity(album),
     getAlbumCardVersionKey(album),
     String(album?.name || ''),
+    String(album?.display_name || ''),
     String(album?.album_artist || ''),
     String(album?.year || ''),
+    String(album?.display_year || ''),
     getAlbumCardRating(album),
     Number(summary.trackCount || 0),
     String(summary.lengthDisplay || ''),
@@ -181,7 +192,7 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   const remoteCoverUrl = typeof options.remoteCoverUrl === 'string'
     ? options.remoteCoverUrl
     : escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
-  const coverAlt = escapeHtml(`Album cover for ${album.name}`);
+  const coverAlt = escapeHtml(`Album cover for ${album.display_name || album.name}`);
   return `<img loading="${loadingAttribute}" fetchpriority="${fetchPriorityAttribute}" decoding="async" data-gallery-cover-priority="${coverPriority}" data-gallery-cover-src="${coverSrc}" data-production-cover-src="${coverSrc}" data-cover-visual-state="pending" aria-hidden="true" alt="${coverAlt}" data-cover-path="${localCoverPath}" data-remote-cover-url="${remoteCoverUrl}" onload="handleAlbumDisplayCoverImageLoad(this)" onerror="handleAlbumDisplayCoverImageError(this)">`;
 }
 
@@ -227,7 +238,7 @@ function refreshRenderedAlbumCoverOnly(updatedAlbum) {
 }
 
 function getAlbumRequestKey(album) {
-  return String(album?.key || album?.album_ref || '').trim() || getAlbumPathSignature(album);
+  return String(album?.album_ref || album?.key || '').trim() || getAlbumPathSignature(album);
 }
 
 function getAlbumIdentity(album) {
@@ -2479,7 +2490,7 @@ class VirtualArtistGrid {
       if (block.kind === 'subheading') {
                 const count = Math.max(0, Number(block.count || 0));
                 const countLabel = `${count} ${count === 1 ? 'album' : 'albums'}`;
-                return `<div class="artist-subsection-label"><span class="artist-subsection-title">${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="gallery-divider__line" aria-hidden="true"></span><span class="artist-subsection-separator" aria-hidden="true">•</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
+                return `<div class="artist-subsection-label"><span class="artist-subsection-title">${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="gallery-divider__line" aria-hidden="true"></span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);

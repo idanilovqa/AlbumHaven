@@ -20,18 +20,24 @@ const ALLOWED_MATCH_RESOLUTIONS = new Set([
 const FALSE_MATCH_NAMES = [
   'Kill "Em" All (feat. Discrepancies) - Single',
   "Kill 'Em All (Featuring Discrepancies)",
+  "Kill 'Em All (Remastered)",
   "Kill 'Em All - Remixed",
+  "Kill 'Em",
+  "Kill 'Em All II",
 ];
 const FALSE_MATCH_RESOLUTIONS = new Set([
   '3000x3000',
   '3200x3200',
   '3400x3400',
   '3600x3600',
+  '3700x3700',
   '3800x3800',
   '3900x3900',
   '4000x4000',
   '4100x4100',
   '4200x4200',
+  '4300x4300',
+  '4400x4400',
 ]);
 const FALSE_ARTIST_IDENTITIES = [
   'Metallica feat. Discrepancies',
@@ -43,9 +49,12 @@ const FALSE_ARTIST_IDENTITIES = [
 const EXPECTED_PROVIDER_ROLES = [
   'base',
   'deluxe',
+  'false-remastered-version',
   'false-single-feature',
   'false-tribute-artist',
   'false-remix',
+  'false-truncated-title',
+  'false-sequence-title',
   'false-album-identity-featuring',
   'false-other-band',
   'false-artist-identity-featured',
@@ -74,7 +83,7 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
       .toBe(Object.values(TARGET).join(' • '));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
-    expect(await coverLookupActions.readModalSubtitle()).toBe(Object.values(TARGET).join(' - '));
+    expect(await coverLookupActions.readModalSubtitle()).toBe(Object.values(TARGET).join(' · '));
     taskTitle = TARGET.album;
     baselineLocalCover = await coverLookupActions.readActiveLocalCoverEvidence();
     expect(baselineLocalCover.isActive).toBe(true);

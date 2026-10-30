@@ -24,10 +24,18 @@ def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inven
                 from library.libraries where library_kind = 'local' and name = 'Local Library'
             """)
     previous = {item["path"]: item for item in (changed, retained)}
+    initial_albums = build_albums_from_file_cache(previous, separate_keys)
+    assert len(initial_albums) == 1
+    initial_album_key = initial_albums[0].key
     fixture.adapter.save_snapshot(
         Path("unused-watcher-identity.json"), previous, "watcher-identity", 1.0,
         separate_release_keys=separate_keys, observed_library_root_ids={"repair-main"},
     )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        established_album_id = connection.execute(
+            "select id from library.local_albums where album_key = %s",
+            (initial_album_key,),
+        ).fetchone()["id"]
     replacement = {**changed, **({"edition": "Deluxe"} if retag == "edition" else {"year": 2001})}
     expected_albums = build_albums_from_file_cache(
         {**previous, changed["path"]: replacement}, separate_keys,
@@ -38,18 +46,30 @@ def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inven
     )
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         rows = connection.execute("""
-            select file.private_path, album.album_key, album.release_year, album.metadata
+            select file.private_path, album.id as album_id, album.album_key,
+                   album.release_year, album.metadata
             from library.local_track_files file
             join library.local_tracks track on track.id = file.track_id
             join library.local_albums album on album.id = track.album_id
             where file.scan_cache_stale is false order by file.private_path
         """).fetchall()
+        repair_album_ids = {
+            row["id"] for row in connection.execute("""
+                select id from library.local_albums
+                where lower(btrim(title)) = 'repair album'
+            """).fetchall()
+        }
     assert {row["private_path"]: row["album_key"] for row in rows} == expected_membership
     by_key = {album.key: album for album in expected_albums}
     for row in rows:
         assert row["metadata"].get("edition") == by_key[row["album_key"]].edition
     if retag == "separated_year":
         assert {row["release_year"] for row in rows} == {2000, 2001}
+    if retag in {"separated_year", "ordinary_year"}:
+        resulting_album_ids = {row["album_id"] for row in rows}
+        assert established_album_id in resulting_album_ids
+        assert len(resulting_album_ids) == 2
+        assert repair_album_ids == resulting_album_ids
 
 
 @pytest.mark.parametrize("other_root", [False, True])
@@ -132,6 +152,107 @@ def test_targeted_album_metadata_uses_every_retained_member(watcher_repair_inven
     assert set(album["metadata"]["root_provenance"]["categories"]) == categories
     assert album["artist_id"] == before["owner::repair album"]["artist_id"]
     assert after["owner::unrelated"] == before["owner::unrelated"]
+
+
+@pytest.mark.parametrize("stage_first_track", [False, True])
+def test_targeted_additions_publish_tagged_or_inferred_album_artist_identity(
+    watcher_repair_inventory,
+    stage_first_track,
+):
+    fixture = watcher_repair_inventory
+    additions = [
+        (
+            "Various Artists/Rain Man",
+            "Rain Man",
+            "Various Artists",
+            ("Belle Stars", "Watcher Compilation Performer"),
+        ),
+        ("!Air/Collation Air", "Watcher Collation Air", "!Air", ("!Air",)),
+        (
+            "I'm with Her/Collation Apostrophe",
+            "Watcher Collation Apostrophe",
+            "I'm with Her",
+            ("I'm with Her",),
+        ),
+        ("IZZ/Collation IZZ", "Watcher Collation IZZ", "IZZ", ("IZZ",)),
+        (
+            "'Til Tuesday/Collation Til",
+            "Watcher Collation Til",
+            "'Til Tuesday",
+            ("'Til Tuesday",),
+        ),
+        (
+            "Jordsjø and Breidablik/Joint Credit",
+            "Watcher Joint Credit Release",
+            "Jordsjø / Breidablik",
+            ("Jordsjø", "Breidablik"),
+        ),
+    ]
+
+    for addition_index, (folder, album, album_artist, track_artists) in enumerate(
+        additions
+    ):
+        entries = []
+        for index, track_artist in enumerate(track_artists, start=1):
+            entry = fixture.entry(
+                f"{folder}/{index:02}.flac",
+                artist=track_artist,
+                album=album,
+            )
+            entry["album_artist"] = album_artist
+            entry["track_number"] = index
+            if album == "Rain Man":
+                entry["is_compilation"] = True
+            entries.append(entry)
+        if stage_first_track and addition_index == 0:
+            fixture.adapter.persist_targeted_inventory_mutation(
+                root_id="repair-main",
+                active_file_entries={entries[0]["path"]: entries[0]},
+            )
+        fixture.adapter.persist_targeted_inventory_mutation(
+            root_id="repair-main",
+            active_file_entries={entry["path"]: entry for entry in entries},
+        )
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albums = connection.execute(
+            """
+            select album.title, album.metadata, owner.name as owner_name,
+                   array_agg(distinct featured_artist.name order by featured_artist.name)
+                     filter (where featured.featured_kind = 'featured_track_artist')
+                     as featured_names
+            from library.local_albums album
+            left join library.local_artists owner on owner.id = album.artist_id
+            left join library.local_album_featured_artists featured
+              on featured.album_id = album.id
+            left join library.local_artists featured_artist
+              on featured_artist.id = featured.artist_id
+            where exists (
+              select 1
+              from library.local_tracks track
+              join library.local_track_files file on file.track_id = track.id
+              where track.album_id = album.id and file.scan_cache_stale is false
+            )
+            group by album.id, owner.name
+            order by album.title
+            """
+        ).fetchall()
+
+    by_title = {row["title"]: row for row in albums}
+    assert set(by_title) == {album for _folder, album, _owner, _artists in additions}
+    assert by_title["Rain Man"]["owner_name"] is None
+    assert by_title["Rain Man"]["metadata"]["album_artist"] == "Various Artists"
+    assert set(by_title["Rain Man"]["featured_names"]) == {
+        "Belle Stars",
+        "Watcher Compilation Performer",
+    }
+    for _folder, album, album_artist, _track_artists in additions[1:5]:
+        assert by_title[album]["owner_name"] == album_artist
+    assert by_title["Watcher Joint Credit Release"]["owner_name"] is None
+    assert set(by_title["Watcher Joint Credit Release"]["featured_names"]) == {
+        "Breidablik",
+        "Jordsjø",
+    }
 
 
 @pytest.mark.parametrize("owned_directory_name", [

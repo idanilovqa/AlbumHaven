@@ -161,6 +161,56 @@ def test_satisfactory_local_cover_skips_remote_without_lookup_cache(tmp_path):
     assert detail["reason"] == "satisfactory_local_cover_present"
 
 
+def test_background_refresh_prefers_viable_front_art_before_remote_search(tmp_path, monkeypatch):
+    image_module = pytest.importorskip("PIL.Image")
+    monkeypatch.setattr(
+        cover_refresh_provider,
+        "automatic_cover_repair_minimum_edge",
+        lambda: 2000,
+    )
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    front = folder / "front-scan.jpg"
+    image_module.new("RGB", (1200, 1200), "navy").save(front)
+    image_module.new("RGB", (2400, 2400), "red").save(folder / "booklet-page.jpg")
+
+    resolved, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2007, {".jpg"},
+        CoverSearchCache(tmp_path / "lookup.json"), "AlbumHavenTests/1.0",
+        search_remote_cover_func=lambda *_args, **_kwargs: pytest.fail(
+            "viable release-local front art must prevent remote search"
+        ),
+    )
+
+    assert (resolved, downloaded) == (front, False)
+    assert detail["reason"] == "satisfactory_local_cover_present"
+
+
+@pytest.mark.parametrize("local_art", ["absent", "invalid"])
+def test_background_refresh_still_searches_when_local_art_is_not_viable(tmp_path, local_art):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    if local_art == "invalid":
+        (folder / "front-scan.jpg").write_bytes(b"not an image")
+    searches = []
+
+    resolved, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2007, {".jpg"},
+        CoverSearchCache(tmp_path / "lookup.json"), "AlbumHavenTests/1.0",
+        search_remote_cover_func=lambda *_args, **_kwargs: (
+            searches.append("remote") or None,
+            [{"resolver": "_search_apple", "status": "no_candidate"}],
+        ),
+    )
+
+    assert searches == ["remote"]
+    assert (resolved, downloaded) == (
+        folder / "front-scan.jpg" if local_art == "invalid" else None,
+        False,
+    )
+    assert detail["reason"] == "remote_search_returned_no_candidate"
+
+
 def test_search_primary_remote_cover_keeps_apple_provider_threshold(monkeypatch):
     calls: list[str] = []
 
@@ -871,6 +921,51 @@ def test_automatic_deezer_probe_stops_after_satisfactory_candidate(monkeypatch):
     assert seen == ["https://example.test/first.jpg"]
 
 
+def test_automatic_probe_prefers_exact_album_title_over_partial(monkeypatch):
+    monkeypatch.setattr(
+        cover_refresh_provider,
+        "_LOGGER",
+        type("Logger", (), {"verbose": lambda self, *_args: None})(),
+    )
+    monkeypatch.setattr(
+        cover_refresh_provider,
+        "_probe_candidate_metrics",
+        lambda *_args, **_kwargs: {
+            "raw_bytes": b"cover",
+            "width": 1400,
+            "height": 1400,
+            "area": 1960000,
+            "sharpness": 1.0,
+        },
+    )
+
+    candidates = cover_refresh_provider._probe_match_candidates(
+        source="deezer",
+        matches=[
+            (
+                1.0,
+                "https://example.test/parade-live.jpg",
+                {"artist": "Miriodor", "album": "Parade + Live at NEARfest"},
+            ),
+            (
+                1.0,
+                "https://example.test/parade.jpg",
+                {"artist": "Miriodor", "album": "Parade"},
+            ),
+        ],
+        user_agent="AlbumHavenTests/1.0",
+        query_mode="artist+album",
+        artist="Miriodor",
+        album="Parade",
+        year=2005,
+        probe_limit=None,
+    )
+
+    assert [candidate.url for candidate in candidates] == [
+        "https://example.test/parade.jpg"
+    ]
+
+
 def test_automatic_probe_keeps_smaller_candidate_on_later_timeout(monkeypatch):
     from music_app.services.cover_provider_deadline import AutomaticCoverDeadlineExceeded, automatic_cover_budget
     monkeypatch.setattr(cover_refresh_provider, "_LOGGER", type("Logger", (), {"verbose": lambda self, *_args: None})())
@@ -1249,6 +1344,7 @@ def test_automatic_cover_write_guard_blocks_before_write_or_commits_with_origin(
     monkeypatch.setattr(cover_refresh_provider, "image_area", lambda *_args: 160_000)
     monkeypatch.setattr(cover_refresh_provider, "image_sharpness", lambda *_args: 1.0)
     monkeypatch.setattr(cover_refresh_provider, "measure_image_sharpness", lambda *_args: 2.0)
+    monkeypatch.setattr(cover_refresh_provider, "images_are_visually_similar", lambda *_args: True)
 
     def fake_search(**_kwargs):
         return candidate, []

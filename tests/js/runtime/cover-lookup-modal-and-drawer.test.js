@@ -33,6 +33,7 @@ function loadHelper(overrides = {}) {
     },
     URLSearchParams,
     console,
+    markCoverLookupTaskActionTaken: () => {},
     ...overrides,
   };
   vm.createContext(context);
@@ -40,6 +41,105 @@ function loadHelper(overrides = {}) {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
+
+require('node:test')('Cover Lookup subtitle makes only the album name interactive', () => {
+  const context = loadHelper({ escapeHtml: value => String(value || '') });
+  const markup = context.buildCoverLookupAlbumSubtitleHtml({
+    album_artist: 'Artist',
+    name: 'Album',
+    year: 2026,
+  });
+
+  assert.match(markup, /cover-lookup-modal-subtitle-meta[^>]*>Artist<\/span>/);
+  assert.match(markup, /cover-lookup-modal-album-link[^>]*data-open-cover-lookup-album-details="1"[^>]*>Album<\/button>/);
+  assert.match(markup, /cover-lookup-modal-subtitle-meta[^>]*>2026<\/span>/);
+  assert.equal((markup.match(/data-open-cover-lookup-album-details/g) || []).length, 1);
+});
+
+require('node:test')('mobile Cover Lookup sheet dismisses from body only when gallery is at top', () => {
+  const eventTarget = (extra = {}) => {
+    const listeners = {};
+    return {
+      ...extra,
+      dataset: {},
+      addEventListener(type, listener) { listeners[type] = listener; },
+      dispatch(type, event = {}) { listeners[type]?.(event); },
+    };
+  };
+  const header = eventTarget();
+  const body = eventTarget({ scrollTop: 0 });
+  const overlay = {
+    classList: { contains: (name) => name === 'is-mobile-sheet' },
+    style: { setProperty() {}, removeProperty() {} },
+    querySelector(selector) {
+      return selector === '.cover-lookup-modal-header' ? header : body;
+    },
+  };
+  const context = loadHelper();
+  let closeCount = 0;
+  context.closeCoverLookupModal = () => { closeCount += 1; };
+
+  context.bindCoverLookupMobileSheetSwipe(overlay);
+  body.dispatch('touchstart', { touches: [{ clientX: 20, clientY: 20 }] });
+  body.dispatch('touchmove', {
+    touches: [{ clientX: 20, clientY: 100 }],
+    preventDefault() {},
+  });
+  body.dispatch('touchend');
+  assert.equal(closeCount, 1);
+
+  body.scrollTop = 10;
+  body.dispatch('touchstart', { touches: [{ clientX: 20, clientY: 20 }] });
+  body.dispatch('touchmove', {
+    touches: [{ clientX: 20, clientY: 100 }],
+    preventDefault() {},
+  });
+  body.dispatch('touchend');
+  assert.equal(closeCount, 1, 'normal body scrolling must not dismiss the sheet');
+});
+
+require('node:test')('desktop Cover Lookup album link keeps Notifications open and hydrates partial album details', () => {
+  const album = { key: 'current::album', album_artist: 'Current Artist', name: 'Current Album', year: 2026 };
+  const calls = [];
+  const context = loadHelper({
+    openTrackModal: (value) => calls.push(['open', value]),
+    usesMobilePageLayout: () => false,
+  });
+  context.state.coverLookup.drawerOpen = true;
+  context.state.coverLookup.modal.album = album;
+  context.closeCoverLookupModal = () => calls.push(['close']);
+
+  context.openCoverLookupAlbumDetails();
+
+  assert.equal(context.state.coverLookup.drawerOpen, true);
+  assert.equal(calls[0][0], 'close');
+  assert.equal(calls[1][0], 'open');
+  assert.equal(calls[1][1].key, album.key);
+  assert.equal(calls[1][1].preview_only, true);
+});
+
+require('node:test')('mobile Cover Lookup album link closes Notifications and remembers its position', () => {
+  const album = { key: 'current::album', album_artist: 'Current Artist', name: 'Current Album', tracks: [{ path: '01.flac' }] };
+  const calls = [];
+  const drawerBody = { scrollTop: 384 };
+  const context = loadHelper({
+    document: { getElementById: (id) => id === 'cover-lookup-drawer-body' ? drawerBody : null },
+    openTrackModal: (value) => calls.push(['open', value]),
+    renderCoverLookupDrawer: () => calls.push(['render']),
+    usesMobilePageLayout: () => true,
+  });
+  context.state.coverLookup.drawerOpen = true;
+  context.state.coverLookup.modal.album = album;
+  context.renderCoverLookupDrawer = () => calls.push(['render']);
+  context.closeCoverLookupModal = () => calls.push(['close']);
+
+  context.openCoverLookupAlbumDetails();
+
+  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerScrollTop, 384);
+  assert.equal(context.state.coverLookup.returnToDrawerAfterAlbumDetails, true);
+  assert.deepEqual(calls, [['render'], ['close'], ['open', album]]);
+});
 
 for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', 'Cover Art Archive'], ['spotify', 'SPOTIFY']]) {
   require('node:test')(`remote ${source} cover cards separate semantic labels from decorative badges`, () => {
@@ -57,18 +157,54 @@ for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', '
   });
 }
 
-require('node:test')('completed lookup counts covers while retaining every other artwork alternative', () => {
+require('node:test')('local Cover Lookup cards retain their loaded preview as the full-size fallback', () => {
+  const context = loadHelper({
+    escapeHtml: value => String(value ?? ''),
+    buildCoverUrl: (path, options = {}) => `/cover?path=${path}${options.size ? `&size=${options.size}` : ''}`,
+  });
+  const card = context.buildCoverLookupCard({
+    path: 'N:/Music/Dissection/cover.jpg',
+    filename: 'cover.jpg',
+    cover_revision: 'dissection-cover',
+  }, 'local');
+
+  assert.match(card, /data-cover-preview-src="[^"]*size=480[^"]*"/);
+});
+
+require('node:test')('only the active automatic suggestion receives suggested styling', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  context.state.coverLookup.modal = {
+    selectedRemoteId: 'suggested-cover',
+    suggestedRemoteId: 'suggested-cover',
+    remoteSelectionOverrideGeneration: '',
+  };
+  const suggested = context.buildCoverLookupCard({
+    id: 'suggested-cover',
+    source: 'discogs',
+    url: 'https://images.example/suggested.jpg',
+  }, 'remote');
+  assert.match(suggested, /cover-lookup-art-card is-active is-suggested/);
+
+  context.state.coverLookup.modal.remoteSelectionOverrideGeneration = 'manual-choice';
+  const manuallySelected = context.buildCoverLookupCard({
+    id: 'suggested-cover',
+    source: 'discogs',
+    url: 'https://images.example/suggested.jpg',
+  }, 'remote');
+  assert.doesNotMatch(manuallySelected, /is-suggested/);
+});
+
+require('node:test')('completed lookup counts every selectable artwork candidate', () => {
   const { context, bodyElement } = createDrawerHarness();
   const covers = [{ id: 'cover-default' }, ...['one', 'two', 'three'].map(id => ({ id, art_kind: 'cover' }))];
-  const alternatives = ['booklet', 'back', 'disc'].map(art_kind => ({ id: art_kind, art_kind }));
+  const alternatives = ['booklet', 'back', 'disc'].map(id => ({ id, art_kind: 'other' }));
   const matches = [...covers, ...alternatives];
   const before = JSON.stringify(matches);
   context.state.coverLookup.tasks = [{
     id: 'mixed-artwork', status: 'completed', artist: 'Artist', album: 'Album', possible_matches: matches,
   }];
   context.renderCoverLookupDrawer();
-  assert.match(bodyElement.innerHTML, />4 covers found</);
-  assert.doesNotMatch(bodyElement.innerHTML, />7 covers found</);
+  assert.match(bodyElement.innerHTML, />7 covers found</);
   assert.equal(JSON.stringify(matches), before);
   assert.strictEqual(context.state.coverLookup.tasks[0].possible_matches, matches);
   for (const alternative of alternatives) {
@@ -81,7 +217,8 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
     buildAlbumDisplayCoverUrl: () => '/images/notification-cover.jpg',
   });
   context.state.coverLookup.tasks = [{
-    id: 'thumbnail-task', status: 'completed', artist: 'Artist', album: 'Album', album_payload: {},
+    id: 'thumbnail-task', status: 'completed', artist: 'Artist', album: 'Album',
+    current_user_cover_preview_url: '/images/notification-cover.jpg',
   }];
 
   context.renderCoverLookupDrawer();
@@ -89,6 +226,654 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
   assert.match(
     bodyElement.innerHTML,
     /class="cover-lookup-task-cover"[^>]*loading="lazy"[^>]*decoding="async"/,
+  );
+});
+
+require('node:test')('notification rerenders keep unchanged card nodes mounted', () => {
+  const retained = {
+    outerHTML: '<article data-open-cover-lookup-task="stable-task">Stable</article>',
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'stable-task' : '',
+    querySelector: () => null,
+  };
+  const replacement = {
+    outerHTML: retained.outerHTML,
+    getAttribute: retained.getAttribute,
+    querySelector: () => null,
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  let rendered = false;
+  const body = {
+    querySelectorAll: () => [rendered ? replacement : retained],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '',
+    set: () => { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<article data-open-cover-lookup-task="stable-task">Stable</article>');
+
+  assert.strictEqual(replacement.replacedWith, retained);
+});
+
+require('node:test')('targeted notification update inserts a visible card without rebuilding mounted siblings', () => {
+  const incomingCard = { id: 'incoming-card' };
+  const incomingTarget = {
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'prior-generation' : '',
+    closest: () => incomingCard,
+  };
+  const detached = {
+    innerHTML: '',
+    querySelectorAll: () => [incomingTarget],
+  };
+  let renderedMarkup = '';
+  let insertedCard = null;
+  const body = {
+    querySelectorAll: () => [],
+    insertBefore: (card) => { insertedCard = card; },
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => renderedMarkup,
+    set: (value) => { renderedMarkup = value; },
+  });
+  const context = loadHelper({
+    document: {
+      createElement: () => detached,
+      getElementById: () => null,
+    },
+  });
+
+  context.replaceCoverLookupDrawerMarkup(
+    body,
+    '<article data-open-cover-lookup-task="prior-generation">Art chosen</article>',
+    ['prior-generation'],
+  );
+
+  assert.equal(renderedMarkup, '');
+  assert.strictEqual(insertedCard, incomingCard);
+});
+
+require('node:test')('notification rerenders retain only each task\'s own unchanged image node', () => {
+  const retainedFirst = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=1' : '',
+  };
+  const retainedSecond = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=1' : '',
+  };
+  const retainedFailed = {
+    complete: true,
+    naturalWidth: 0,
+    getAttribute: (name) => name === 'src' ? '/cover?album=retry&v=1' : '',
+  };
+  const replacementFirst = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=1' : '',
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  const replacementSecond = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=shared&v=2' : '',
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  const replacementFailed = {
+    getAttribute: (name) => name === 'src' ? '/cover?album=retry&v=1' : '',
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  const taskNode = (taskId, image) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? taskId : '',
+    querySelector: () => image,
+  });
+  let rendered = false;
+  const body = {
+    innerHTML: '',
+    querySelectorAll() {
+      return rendered
+        ? [
+          taskNode('first-task', replacementFirst),
+          taskNode('second-task', replacementSecond),
+          taskNode('failed-task', replacementFailed),
+        ]
+        : [
+          taskNode('first-task', retainedFirst),
+          taskNode('second-task', retainedSecond),
+          taskNode('failed-task', retainedFailed),
+        ];
+    },
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated cards</div>');
+
+  assert.strictEqual(replacementFirst.replacedWith, retainedFirst);
+  assert.equal(replacementSecond.replacedWith, undefined);
+  assert.equal(replacementFailed.replacedWith, undefined);
+});
+
+require('node:test')('updating one notification does not rerender its sibling cards', () => {
+  const retainedOuters = ['task-1', 'task-2', 'task-3'].map((taskId) => ({
+    taskId,
+    innerHTML: `${taskId}-before`,
+    getAttributeNames: () => [],
+    querySelector: () => null,
+    replaceWith(value) { this.replacedWith = value; },
+  }));
+  const retainedCards = retainedOuters.map((outer) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? outer.taskId : '',
+    closest: () => outer,
+  }));
+  const incomingOuters = ['task-1', 'task-2', 'task-3'].map((taskId) => ({
+    taskId,
+    innerHTML: `${taskId}-after`,
+    getAttributeNames: () => [],
+    querySelector: () => null,
+  }));
+  const incomingCards = incomingOuters.map((outer) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? outer.taskId : '',
+    closest: () => outer,
+  }));
+  let fullRenders = 0;
+  const body = { querySelectorAll: () => retainedCards };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '',
+    set: () => { fullRenders += 1; },
+  });
+  const detached = { innerHTML: '', querySelectorAll: () => incomingCards };
+  const context = loadHelper({ document: {
+    getElementById: () => null,
+    createElement: () => detached,
+  } });
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated cards</div>', ['task-2']);
+
+  assert.equal(fullRenders, 0, 'the live notification list must not be rebuilt');
+  assert.equal(retainedOuters[0].replacedWith, undefined);
+  assert.equal(retainedOuters[1].replacedWith, undefined, 'the updated card node must stay mounted');
+  assert.equal(retainedOuters[1].innerHTML, 'task-2-after');
+  assert.equal(retainedOuters[2].replacedWith, undefined);
+  assert.equal(retainedOuters[0].innerHTML, 'task-1-before');
+  assert.equal(retainedOuters[2].innerHTML, 'task-3-before');
+});
+
+require('node:test')('deleting one notification removes only that card without rebuilding siblings or moving scroll', () => {
+  const cards = ['task-1', 'task-2', 'task-3'].map((taskId) => ({
+    taskId,
+    removed: false,
+    remove() { this.removed = true; },
+  }));
+  const taskNodes = cards.map((card) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? card.taskId : '',
+    closest: () => card,
+  }));
+  const incomingTaskNodes = [0, 2].map((index) => ({
+    getAttribute: taskNodes[index].getAttribute,
+    closest: () => ({ taskId: cards[index].taskId }),
+  }));
+  let fullRenders = 0;
+  const body = {
+    scrollTop: 420,
+    querySelectorAll: () => taskNodes,
+    querySelector: () => null,
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '<div>mounted cards</div>',
+    set: () => { fullRenders += 1; },
+  });
+  const detached = {
+    innerHTML: '',
+    querySelectorAll: (selector) => selector === '[data-open-cover-lookup-task]'
+      ? incomingTaskNodes : [],
+    querySelector: () => null,
+  };
+  const context = loadHelper({ document: {
+    getElementById: () => null,
+    createElement: () => detached,
+  } });
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>remaining cards</div>', ['task-2']);
+
+  assert.equal(fullRenders, 0);
+  assert.equal(cards[0].removed, false);
+  assert.equal(cards[1].removed, true);
+  assert.equal(cards[2].removed, false);
+  assert.equal(body.scrollTop, 420);
+});
+
+require('node:test')('targeted deletion fills the vacated virtualized row without rebuilding retained cards', () => {
+  const retainedCards = Array.from({ length: 60 }, (_, index) => ({
+    taskId: `task-${index}`,
+    removed: false,
+    remove() { this.removed = true; },
+    getAttributeNames: () => [],
+    querySelector: () => null,
+  }));
+  let mountedCards = retainedCards.slice();
+  const taskNode = (card) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? card.taskId : '',
+    closest: () => card,
+  });
+  const incomingCards = [
+    ...retainedCards.filter((card) => card.taskId !== 'task-20'),
+    {
+      taskId: 'task-60',
+      getAttributeNames: () => [],
+      querySelector: () => null,
+    },
+  ];
+  const body = {
+    querySelectorAll: (selector) => selector === '[data-open-cover-lookup-task]'
+      ? mountedCards.filter((card) => !card.removed).map(taskNode)
+      : [],
+    querySelector: () => null,
+    insertBefore(card) { mountedCards.push(card); },
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '<div>mounted cards</div>',
+    set: () => { throw new Error('targeted deletion must not rebuild the drawer'); },
+  });
+  const detached = {
+    innerHTML: '',
+    querySelectorAll: (selector) => selector === '[data-open-cover-lookup-task]'
+      ? incomingCards.map(taskNode)
+      : [],
+    querySelector: () => null,
+  };
+  const context = loadHelper({ document: {
+    getElementById: () => null,
+    createElement: () => detached,
+  } });
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>next window</div>', ['task-20']);
+
+  mountedCards = mountedCards.filter((card) => !card.removed);
+  assert.equal(mountedCards.length, 60);
+  assert.equal(mountedCards.at(-1).taskId, 'task-60');
+  assert.strictEqual(mountedCards[0], retainedCards[0]);
+  assert.strictEqual(mountedCards[20], retainedCards[21]);
+});
+
+require('node:test')('targeted art update keeps the card and old pixels mounted until the new image decodes', async () => {
+  let finishDecode;
+  const listeners = {};
+  const oldImage = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=stable&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const newImage = {
+    complete: false,
+    naturalWidth: 0,
+    getAttribute: (name) => name === 'src' ? '/cover?album=stable&v=2' : '',
+    addEventListener(type, handler) { listeners[type] = handler; },
+    decode() { return new Promise((resolve) => { finishDecode = resolve; }); },
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  let currentImage = oldImage;
+  const currentCard = {
+    getAttributeNames: () => [],
+    querySelector: () => currentImage,
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  Object.defineProperty(currentCard, 'innerHTML', {
+    get: () => '<img src="old">',
+    set: () => { currentImage = newImage; },
+  });
+  const incomingCard = {
+    innerHTML: '<img src="new">',
+    getAttributeNames: () => [],
+    querySelector: () => newImage,
+  };
+  const taskNode = (card) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'stable-task' : '',
+    closest: () => card,
+  });
+  let fullRenders = 0;
+  const body = { querySelectorAll: () => [taskNode(currentCard)] };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '<div>mounted</div>',
+    set: () => { fullRenders += 1; },
+  });
+  const detached = {
+    innerHTML: '',
+    querySelectorAll: () => [taskNode(incomingCard)],
+  };
+  const context = loadHelper({ document: {
+    getElementById: () => null,
+    createElement: () => detached,
+  } });
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated</div>', ['stable-task']);
+
+  assert.equal(fullRenders, 0);
+  assert.equal(currentCard.replacedWith, undefined);
+  assert.strictEqual(newImage.replacedWith, oldImage);
+  newImage.complete = true;
+  newImage.naturalWidth = 320;
+  listeners.load();
+  assert.equal(oldImage.replacedWith, undefined);
+  finishDecode();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(oldImage.replacedWith, newImage);
+});
+
+require('node:test')('notification insertion preserves the visible task pixel anchor', () => {
+  let afterInsert = false;
+  const anchoredTask = {
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'visible-task' : '',
+    getBoundingClientRect: () => ({ top: afterInsert ? 220 : 120, bottom: afterInsert ? 300 : 200 }),
+  };
+  const body = {
+    scrollTop: 500,
+    getBoundingClientRect: () => ({ top: 100, bottom: 700 }),
+    querySelectorAll: () => [anchoredTask],
+  };
+  const context = loadHelper();
+
+  const anchor = context.captureCoverLookupDrawerScrollAnchor(body);
+  afterInsert = true;
+  assert.equal(context.restoreCoverLookupDrawerScrollAnchor(body, anchor), true);
+  assert.equal(body.scrollTop, 600);
+});
+
+require('node:test')('notification render window follows the visible anchor when its task is reordered', () => {
+  const { context } = createDrawerHarness();
+  const tasks = Array.from({ length: 200 }, (_, index) => ({ id: `task-${index}` }));
+  const body = { innerHTML: '<div>rendered</div>', scrollTop: 50 * 96 };
+
+  const renderWindow = context.getCoverLookupTaskRenderWindow(
+    tasks,
+    body,
+    { taskId: 'task-150', offset: 12 },
+  );
+
+  assert.ok(renderWindow.start <= 150);
+  assert.ok(renderWindow.end > 150);
+});
+
+require('node:test')('notification URL transition keeps its decoded task image until the replacement loads', () => {
+  const listeners = {};
+  const retained = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const replacement = {
+    complete: false,
+    naturalWidth: 0,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=2' : '',
+    addEventListener(type, handler) { listeners[type] = handler; },
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  let rendered = false;
+  const taskNode = (image) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'angels-task' : '',
+    querySelector: () => image,
+  });
+  const body = {
+    querySelectorAll: () => [taskNode(rendered ? replacement : retained)],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated card</div>');
+
+  assert.strictEqual(replacement.replacedWith, retained);
+  assert.equal(retained.replacedWith, undefined);
+  replacement.complete = true;
+  replacement.naturalWidth = 320;
+  listeners.load();
+  assert.strictEqual(retained.replacedWith, replacement);
+});
+
+require('node:test')('notification URL transition keeps its decoded task image until replacement pixels decode', async () => {
+  let finishDecode;
+  const retained = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const listeners = {};
+  const replacement = {
+    complete: false,
+    naturalWidth: 0,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=2' : '',
+    addEventListener(type, handler) { listeners[type] = handler; },
+    decode() {
+      return new Promise((resolve) => { finishDecode = resolve; });
+    },
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  let rendered = false;
+  const taskNode = (image) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'angels-task' : '',
+    querySelector: () => image,
+  });
+  const body = {
+    querySelectorAll: () => [taskNode(rendered ? replacement : retained)],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated card</div>');
+  replacement.complete = true;
+  replacement.naturalWidth = 320;
+  listeners.load();
+
+  assert.equal(retained.replacedWith, undefined);
+  finishDecode();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(retained.replacedWith, replacement);
+});
+
+require('node:test')('notification URL transition keeps its decoded task image when replacement decoding fails', async () => {
+  const retained = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const listeners = {};
+  const replacement = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=2' : '',
+    addEventListener(type, handler) { listeners[type] = handler; },
+    decode: () => Promise.reject(new Error('decode failed')),
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  let rendered = false;
+  const taskNode = (image) => ({
+    getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'angels-task' : '',
+    querySelector: () => image,
+  });
+  const body = {
+    querySelectorAll: () => [taskNode(rendered ? replacement : retained)],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, '<div>updated card</div>');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(retained.replacedWith, undefined);
+  assert.equal(retained.__coverLookupReplacementSrc, undefined);
+});
+
+require('node:test')('notification URL transition rejects an older replacement after a newer URL wins', () => {
+  const retained = {
+    complete: true,
+    naturalWidth: 320,
+    getAttribute: (name) => name === 'src' ? '/cover?album=angels&v=1' : '',
+    replaceWith(image) { this.replacedWith = image; },
+  };
+  const replacement = (src) => {
+    const listeners = {};
+    return {
+      complete: false,
+      naturalWidth: 0,
+      listeners,
+      getAttribute: (name) => name === 'src' ? src : '',
+      addEventListener(type, handler) { listeners[type] = handler; },
+      replaceWith(image) { this.replacedWith = image; },
+    };
+  };
+  const first = replacement('/cover?album=angels&v=2');
+  const second = replacement('/cover?album=angels&v=3');
+  const render = (nextImage) => {
+    let rendered = false;
+    const taskNode = (image) => ({
+      getAttribute: (name) => name === 'data-open-cover-lookup-task' ? 'angels-task' : '',
+      querySelector: () => image,
+    });
+    const body = {
+      querySelectorAll: () => [taskNode(rendered ? nextImage : retained)],
+    };
+    Object.defineProperty(body, 'innerHTML', {
+      get() { return ''; },
+      set() { rendered = true; },
+    });
+    return body;
+  };
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(render(first), '<div>v2 card</div>');
+  context.replaceCoverLookupDrawerMarkup(render(second), '<div>v3 card</div>');
+  first.complete = true;
+  first.naturalWidth = 320;
+  first.listeners.load();
+  assert.equal(retained.replacedWith, undefined);
+  second.complete = true;
+  second.naturalWidth = 320;
+  second.listeners.load();
+  assert.strictEqual(retained.replacedWith, second);
+});
+
+require('node:test')('notification thumbnails prefer the current user cover over stale lookup artwork', () => {
+  const { context, bodyElement } = createDrawerHarness({
+    buildAlbumDisplayCoverUrl: () => '/images/stale-lookup-cover.jpg',
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'angels-task',
+    status: 'completed',
+    artist: 'Чёрный Обелиск',
+    album: 'Ангелы',
+    album_payload: { cover_preview_url: '/images/stale-lookup-cover.jpg' },
+    current_user_cover_preview_url: '/cover?album=angels&v=user-selection',
+    best_candidate_preview_url: 'https://images.example/angels-candidate.jpg',
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, /src="\/cover\?album=angels&v=user-selection"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /stale-lookup-cover|angels-candidate/);
+});
+
+require('node:test')('notification thumbnails show the best candidate when no user cover exists', () => {
+  const { context, bodyElement } = createDrawerHarness({
+    buildAlbumDisplayCoverUrl: () => '/images/automatic-or-stale-cover.jpg',
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'revelations-task',
+    status: 'completed',
+    artist: 'Susanne Sundfør',
+    album: 'Revelations of Divine Love',
+    album_payload: { cover_preview_url: '/images/automatic-or-stale-cover.jpg' },
+    current_cover_preview_url: '/cover?album=revelations&v=current-art',
+    best_candidate_id: 'revelations-best',
+    best_candidate_preview_url: 'https://images.example/revelations-best.jpg',
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(
+    bodyElement.innerHTML,
+    /src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages.example%2Frevelations-best.jpg&key=revelations-best"/,
+  );
+  assert.doesNotMatch(bodyElement.innerHTML, /automatic-or-stale-cover|is-placeholder/);
+  assert.doesNotMatch(bodyElement.innerHTML, /current-art/);
+});
+
+require('node:test')('notification thumbnails fall back to current album art when lookup found nothing', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  context.state.coverLookup.tasks = [{
+    id: 'kuryokhin-task',
+    status: 'completed',
+    result_kind: 'no-results',
+    artist: 'Аквариум',
+    album: 'Сергей Курёхин в «Аквариуме»',
+    current_cover_preview_url: '/cover?album=kuryokhin&v=current-art',
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, /src="\/cover\?album=kuryokhin&v=current-art"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /is-placeholder/);
+});
+
+require('node:test')('cover updates preserve unrelated pathless notification artwork', () => {
+  const selectedAlbum = {
+    album_id: 41,
+    id: 'shared-legacy-id',
+    key: 'black-obelisk::angels::2005',
+    album_artist: 'Чёрный Обелиск',
+    name: 'Ангелы',
+  };
+  const unrelatedAlbum = {
+    key: 'altin-gun::garip::2026',
+    album_artist: 'Altın Gün',
+    name: 'Garip',
+    cover_path: 'C:/music/Altin Gun/Garip/cover.jpg',
+  };
+  const secondUnrelatedAlbum = {
+    key: 'susanne-sundfor::revelations::2026',
+    album_artist: 'Susanne Sundfør',
+    name: 'Revelations of Divine Love',
+    cover_path: 'C:/music/Susanne Sundfor/Revelations/cover.jpg',
+  };
+  const updatedSelectedAlbum = {
+    ...selectedAlbum,
+    cover_path: 'C:/music/Black Obelisk/Angels/cover.jpg',
+  };
+  const conflictingLegacyIdAlbum = {
+    album_id: 999,
+    id: selectedAlbum.id,
+    key: 'unrelated::album::2026',
+    cover_path: 'C:/music/Unrelated/cover.jpg',
+  };
+  const context = loadHelper({ persistCoverLookupNotificationTasks: () => {} });
+  context.state.coverLookup.modal = { album: selectedAlbum };
+  context.state.coverLookup.tasks = [
+    { id: 'angels-task', album_payload: selectedAlbum },
+    { id: 'garip-task', album_payload: unrelatedAlbum },
+    { id: 'revelations-task', album_payload: secondUnrelatedAlbum },
+  ];
+
+  context.syncCoverLookupAlbumReferences([conflictingLegacyIdAlbum, updatedSelectedAlbum]);
+
+  assert.strictEqual(context.state.coverLookup.modal.album, updatedSelectedAlbum);
+  assert.strictEqual(context.state.coverLookup.tasks[0].album_payload, updatedSelectedAlbum);
+  assert.strictEqual(
+    context.state.coverLookup.tasks[1].album_payload,
+    unrelatedAlbum,
+    'an album without track paths must not match every other pathless notification',
+  );
+  assert.strictEqual(
+    context.state.coverLookup.tasks[2].album_payload,
+    secondUnrelatedAlbum,
+    'each unrelated pathless notification must retain its own album and artwork',
   );
 });
 
@@ -151,6 +936,233 @@ require('node:test')('polling preserves a pressed task before selection exists a
     'Explicit user removal must not be blocked by interaction preservation');
 });
 
+require('node:test')('ordinary drawer close resets virtualization to the newest card', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const drawerElement = context.document.getElementById('cover-lookup-drawer');
+  let drawerHidden = false;
+  Object.defineProperty(drawerElement, 'hidden', {
+    configurable: true,
+    get: () => drawerHidden,
+    set(value) {
+      drawerHidden = value;
+      if (value) bodyElement.scrollTop = 0;
+    },
+  });
+  const task = { id: 'saved-task', status: 'running', artist: 'Artist', album: 'Album' };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, />Searching</);
+
+  context.state.coverLookup.drawerOpen = false;
+  bodyElement.scrollTop = 222;
+  context.hasActiveCoverLookupDrawerAction = () => true;
+  task.status = 'completed';
+  task.result_kind = 'cover-updated';
+  task.notification_action_taken = true;
+  context.renderCoverLookupDrawer();
+
+  assert.equal(bodyElement.innerHTML, '');
+  assert.equal(context.state.coverLookup.drawerScrollTop, 0);
+  context.state.coverLookup.drawerOpen = true;
+  context.renderCoverLookupDrawer();
+  assert.equal(bodyElement.scrollTop, 0);
+  assert.match(bodyElement.innerHTML, />Art chosen</);
+});
+
+require('node:test')('open drawer preserves its exact scroll position across task rerenders', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const task = { id: 'stable-task', status: 'running', artist: 'Artist', album: 'Album' };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+
+  let markup = bodyElement.innerHTML;
+  bodyElement.scrollTop = 71;
+  Object.defineProperty(bodyElement, 'innerHTML', {
+    configurable: true,
+    get: () => markup,
+    set(value) {
+      markup = value;
+      bodyElement.scrollTop = 15;
+    },
+  });
+
+  task.status = 'completed';
+  task.result_kind = 'matches-found';
+  context.renderCoverLookupDrawer();
+
+  assert.equal(bodyElement.scrollTop, 71);
+});
+
+require('node:test')('mobile notification scrolling defers virtual-window rerender until scrolling settles', async () => {
+  const scheduled = [];
+  const { context, bodyElement } = createDrawerHarness({
+    window: {
+      setTimeout(callback, delay) {
+        scheduled.push({ callback, delay });
+        return scheduled.length;
+      },
+      clearTimeout() {},
+      setInterval() { return 1; },
+      clearInterval() {},
+    },
+  });
+  context.state.coverLookup.tasks = Array.from({ length: 120 }, (_, index) => ({
+    id: `task-${index}`,
+    status: 'completed',
+  }));
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  bodyElement.innerHTML = '<div>rendered cards</div>';
+  bodyElement.scrollTop = 4000;
+  bodyElement.scrollHeight = 12000;
+  bodyElement.clientHeight = 600;
+  bodyElement.getBoundingClientRect = () => ({ top: 0, bottom: 600 });
+  bodyElement.querySelectorAll = () => [{
+    getAttribute: () => 'task-40',
+    getBoundingClientRect: () => ({ top: 100, bottom: 196 }),
+  }];
+  let renderCount = 0;
+  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+
+  const anchor = context.captureCoverLookupDrawerScrollAnchor(bodyElement);
+  assert.equal(anchor.taskId, 'task-40');
+  assert.equal(anchor.offset, 100);
+
+  await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+
+  assert.equal(renderCount, 0, 'active swipe must not replace the scrolling DOM');
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].delay, 120);
+  scheduled[0].callback();
+  assert.equal(renderCount, 1);
+});
+
+require('node:test')('mobile notification scrolling immediately replaces an uncovered virtual window', async () => {
+  const scheduled = [];
+  const { context, bodyElement } = createDrawerHarness({
+    window: {
+      setTimeout(callback, delay) {
+        scheduled.push({ callback, delay });
+        return scheduled.length;
+      },
+      clearTimeout() {},
+      setInterval() { return 1; },
+      clearInterval() {},
+    },
+  });
+  context.state.coverLookup.tasks = Array.from({ length: 120 }, (_, index) => ({
+    id: `task-${index}`,
+    status: 'completed',
+  }));
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  bodyElement.innerHTML = '<div>rendered cards</div>';
+  bodyElement.scrollTop = 4000;
+  bodyElement.scrollHeight = 12000;
+  bodyElement.clientHeight = 600;
+  bodyElement.getBoundingClientRect = () => ({ top: 0, bottom: 600 });
+  bodyElement.querySelectorAll = () => [{
+    getAttribute: () => 'task-0',
+    getBoundingClientRect: () => ({ top: -196, bottom: -100 }),
+  }];
+  let renderCount = 0;
+  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+
+  await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+
+  assert.equal(renderCount, 1, 'a blank viewport must render its replacement window immediately');
+  assert.equal(scheduled.length, 0);
+});
+
+require('node:test')('accepted remote save keeps its finished card in place without looking like another search', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const before = [
+    { id: 'newer-finished', status: 'completed', artist: 'Artist', album: 'Newer' },
+    { id: 'garip', status: 'completed', artist: 'Altın Gün', album: 'Garip', result_kind: 'matches-found' },
+    { id: 'older-finished', status: 'completed', artist: 'Artist', album: 'Older' },
+  ];
+  context.state.coverLookup.tasks = before;
+
+  const merged = context.mergeCoverLookupTaskSummaries([{
+    ...before[1],
+    status: 'running',
+    progress: 92,
+    progress_label: 'Saving selected cover art...',
+    job_kind: 'save_remote_selection',
+  }], 'active');
+  context.state.coverLookup.tasks = merged;
+  context.state.coverLookup.notificationCounts = {
+    total_count: 3,
+    active_count: 0,
+    finished_count: 3,
+  };
+  context.renderCoverLookupDrawer();
+
+  assert.deepEqual(Array.from(merged, (task) => task.id), before.map((task) => task.id));
+  assert.match(bodyElement.innerHTML, /Garip[\s\S]*>Saving art…</);
+  assert.doesNotMatch(bodyElement.innerHTML, /Garip[\s\S]*>Searching</);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task="garip"/);
+  assert.equal(context.document.getElementById('cover-lookup-drawer-summary').textContent, '3 finished');
+});
+
+require('node:test')('poll refreshes mounted terminal notification metadata without reordering the drawer', async () => {
+  const requestedUrls = [];
+  const mountedTerminal = {
+    id: 'mounted-terminal',
+    status: 'completed',
+    artist: 'Mastodon',
+    album: 'Crack The Skye',
+    notification_action_taken: false,
+  };
+  const untouchedTerminal = {
+    id: 'untouched-terminal',
+    status: 'completed',
+    artist: 'Artist',
+    album: 'Older',
+    notification_action_taken: false,
+  };
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      const requestedUrl = String(url);
+      requestedUrls.push(requestedUrl);
+      const trackedTaskIds = new URL(
+        requestedUrl,
+        'http://album-haven.test',
+      ).searchParams.get('task_ids')?.split(',') || [];
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: trackedTaskIds.includes('mounted-terminal')
+            ? [{ ...mountedTerminal, notification_action_taken: true }]
+            : [],
+          next_cursor: null,
+          total_count: 2,
+          active_count: 0,
+          finished_count: 2,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [mountedTerminal, untouchedTerminal];
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  context.state.coverLookup.drawerOpen = true;
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=mounted-terminal%2Cuntouched-terminal',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['mounted-terminal', 'untouched-terminal'],
+  );
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
+  assert.strictEqual(
+    context.state.coverLookup.tasks[1],
+    untouchedTerminal,
+    'an unaffected notification must keep its existing object and image-node owner',
+  );
+});
+
 for (const interaction of ['focus', 'hover']) {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'cancel-transition', status: 'running', artist: 'Artist', album: 'Album' };
@@ -173,6 +1185,38 @@ for (const interaction of ['focus', 'hover']) {
   assert.match(bodyElement.innerHTML, />Canceled</, `${interaction}: terminal poll must retire the stale Cancel action`);
   assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/);
 }
+
+require('node:test')('a hovered running task does not hide another task terminal publication', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const savedTask = {
+    id: 'saved-task', status: 'running', artist: 'Saved Artist', album: 'Saved Album',
+  };
+  const activeTask = {
+    id: 'active-task', status: 'running', artist: 'Active Artist', album: 'Active Album',
+  };
+  context.state.coverLookup.tasks = [savedTask, activeTask];
+  context.renderCoverLookupDrawer();
+
+  const activeCancelButton = {
+    closest: (selector) => selector === '.cover-lookup-task-actions' ? {} : activeCancelButton,
+    getAttribute: () => activeTask.id,
+  };
+  bodyElement.contains = (element) => element === activeCancelButton;
+  bodyElement.querySelector = selector => (
+    selector === '.cover-lookup-task-actions :hover' ? activeCancelButton : null
+  );
+
+  savedTask.status = 'completed';
+  savedTask.result_kind = 'cover-updated';
+  savedTask.notification_action_taken = true;
+  context.renderCoverLookupDrawer();
+
+  assert.match(
+    bodyElement.innerHTML,
+    /Saved Album[\s\S]*>Art chosen</,
+    'an unrelated running Cancel action must not freeze a completed save notification',
+  );
+});
 
 {
   const { context, bodyElement } = createDrawerHarness();
@@ -232,8 +1276,20 @@ function createDrawerHarness(overrides = {}) {
     classList: { contains: name => drawerClasses.has(name),
       toggle: (name, enabled) => enabled ? drawerClasses.add(name) : drawerClasses.delete(name) },
   };
-  const bodyElement = { innerHTML: '' };
+  const bodyClasses = new Set();
+  const bodyElement = {
+    innerHTML: '',
+    attributes: {},
+    classList: {
+      contains: (name) => bodyClasses.has(name),
+      toggle: (name, enabled) => enabled ? bodyClasses.add(name) : bodyClasses.delete(name),
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+  };
   const badgeElement = { hidden: false, textContent: '' };
+  const summaryElement = { textContent: '' };
   const buttonClasses = new Set();
   const buttonElement = {
     classList: {
@@ -271,6 +1327,7 @@ function createDrawerHarness(overrides = {}) {
         'cover-lookup-drawer': drawerElement,
         'cover-lookup-drawer-body': bodyElement,
         'cover-lookup-drawer-badge': badgeElement,
+        'cover-lookup-drawer-summary': summaryElement,
         'cover-lookup-drawer-button': buttonElement,
         'cover-lookup-drawer-clear': clearElement,
         'cover-lookup-modal': modalElement,
@@ -281,6 +1338,8 @@ function createDrawerHarness(overrides = {}) {
   });
   context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.modal = { taskId: '' };
+  context.state.coverLookup.tasksHydrated = true;
+  context.state.coverLookup.tasksLoadFailed = false;
   context.state.coverLookup.pollingTimer = 0;
   context.state.coverLookup.elapsedTimer = 0;
   return {
@@ -319,6 +1378,124 @@ function createDrawerHarness(overrides = {}) {
   process.exitCode = 1;
 });
 
+require('node:test')('pasted cover updates its notification before the save response settles', async () => {
+  const album = {
+    key: 'various artists::aladdin',
+    album_artist: 'Various Artists',
+    name: 'Aladdin',
+    tracks: [{ path: 'C:/Music/Aladdin/01.mp3' }],
+  };
+  const markCalls = [];
+  const lifecycleCalls = [];
+  const drawerRenderCalls = [];
+  let resolveRequest;
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    getAlbumPathSignature: (value) => (value?.tracks || []).map((track) => track.path).join('::'),
+    showToast: () => {},
+  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.tasks = [{
+    id: 'aladdin-task',
+    status: 'completed',
+    notification_action_taken: false,
+  }];
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'aladdin-task',
+    pastedImages: [{
+      id: 'third-cover',
+      data_url: 'data:image/jpeg;base64,third-cover',
+      mime_type: 'image/jpeg',
+      filename: 'third-cover.jpg',
+    }],
+  };
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.closeCoverLookupModal = () => lifecycleCalls.push('close');
+  context.renderCoverLookupDrawer = (options) => {
+    drawerRenderCalls.push(options || {});
+    lifecycleCalls.push('render');
+  };
+  context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum, options) => {
+    markCalls.push({ taskId, selectedAlbum, options });
+    const task = context.state.coverLookup.tasks.find((item) => item.id === taskId);
+    if (task) task.notification_action_taken = true;
+  };
+  context.fetch = () => new Promise((resolve) => {
+    resolveRequest = resolve;
+  });
+
+  const savePromise = context.savePastedCoverFromLookup('third-cover');
+  await Promise.resolve();
+
+  assert.equal(markCalls.length, 1);
+  assert.equal(markCalls[0].taskId, 'aladdin-task');
+  assert.equal(markCalls[0].selectedAlbum.name, 'Aladdin');
+  assert.equal(markCalls[0].options.persist, false);
+  assert.deepEqual(lifecycleCalls, ['render', 'close']);
+  assert.deepEqual(Array.from(drawerRenderCalls[0].taskIds), ['aladdin-task']);
+
+  resolveRequest({
+    ok: false,
+    json: async () => ({ ok: false, error: 'save failed' }),
+  });
+  await savePromise;
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
+  assert.deepEqual(lifecycleCalls, ['render', 'close', 'render']);
+  assert.deepEqual(Array.from(drawerRenderCalls[1].taskIds), ['aladdin-task']);
+});
+
+require('node:test')('pasted cover applies server-actioned notification when opened from album details', async () => {
+  const album = {
+    name: 'Aladdin',
+    tracks: [{ path: 'C:/Music/Aladdin/01.mp3' }],
+  };
+  const markCalls = [];
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    getAlbumPathSignature: (value) => (value?.tracks || []).map((track) => track.path).join('::'),
+    showToast: () => {},
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        updated_album: album,
+        notification_action_taken_task_ids: ['aladdin-task'],
+      }),
+    }),
+  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.modal = {
+    album,
+    taskId: '',
+    pastedImages: [{
+      id: 'new-cover',
+      data_url: 'data:image/jpeg;base64,new-cover',
+      mime_type: 'image/jpeg',
+      filename: 'new-cover.jpg',
+    }],
+  };
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.closeCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum, options) => {
+    markCalls.push({ taskId, selectedAlbum, options });
+  };
+
+  await context.savePastedCoverFromLookup('new-cover');
+
+  assert.equal(markCalls.length, 1);
+  assert.equal(markCalls[0].taskId, 'aladdin-task');
+  assert.equal(markCalls[0].selectedAlbum.name, 'Aladdin');
+  assert.equal(markCalls[0].options.persist, false);
+});
+
 require('node:test')('notification startup loads authoritative counts without loading history', async () => {
   const requestedUrls = [];
   const { context, badgeElement } = createDrawerHarness({
@@ -343,6 +1520,97 @@ require('node:test')('notification startup loads authoritative counts without lo
   assert.equal(context.state.coverLookup.notificationCounts.total_count, 528);
   assert.equal(badgeElement.textContent, '528');
   assert.deepEqual(context.state.coverLookup.tasks || [], []);
+});
+
+require('node:test')('targeted count hydration preserves the notification card update scope', async () => {
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        total_count: 3,
+        active_count: 0,
+        finished_count: 3,
+      }),
+    }),
+  });
+  const renderCalls = [];
+  context.renderCoverLookupDrawer = (options) => renderCalls.push(options || {});
+
+  await context.loadCoverLookupNotificationCounts({
+    toast: false,
+    taskIds: ['changed-task'],
+  });
+
+  assert.equal(renderCalls.length, 1);
+  assert.deepEqual(Array.from(renderCalls[0].taskIds), ['changed-task']);
+});
+
+require('node:test')('open drawer shows a loading card until the first history response succeeds', async () => {
+  let resolveRequest;
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: () => new Promise((resolve) => {
+      resolveRequest = () => resolve({
+        ok: true,
+        json: async () => ({ ok: true, tasks: [], total_count: 0, active_count: 0, finished_count: 0 }),
+      });
+    }),
+  });
+  context.state.coverLookup.tasksHydrated = false;
+
+  const request = context.loadCoverLookupTasks({ toast: false });
+
+  assert.match(bodyElement.innerHTML, /cover-lookup-task-card is-loading/);
+  assert.match(bodyElement.innerHTML, /Loading notifications/);
+  assert.doesNotMatch(bodyElement.innerHTML, /not looking for anything/i);
+
+  resolveRequest();
+  await request;
+
+  assert.equal(context.state.coverLookup.tasksHydrated, true);
+  assert.equal(context.state.coverLookup.tasksLoadFailed, false);
+  assert.match(bodyElement.innerHTML, /not looking for anything/i);
+});
+
+require('node:test')('first history response clears loading after an unchanged active poll wins the race', async () => {
+  let resolveActiveRequest;
+  let resolveHistoryRequest;
+  const response = () => ({
+    ok: true,
+    json: async () => ({ ok: true, tasks: [], total_count: 0, active_count: 0, finished_count: 0 }),
+  });
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: (url) => new Promise((resolve) => {
+      if (String(url).includes('active_only=true')) resolveActiveRequest = () => resolve(response());
+      else resolveHistoryRequest = () => resolve(response());
+    }),
+  });
+  context.state.coverLookup.tasksHydrated = false;
+
+  const historyRequest = context.loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
+  const activeRequest = context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  resolveActiveRequest();
+  await activeRequest;
+  resolveHistoryRequest();
+  await historyRequest;
+
+  assert.equal(context.state.coverLookup.tasksHydrated, true);
+  assert.doesNotMatch(bodyElement.innerHTML, /Loading notifications/);
+  assert.match(bodyElement.innerHTML, /not looking for anything/i);
+});
+
+require('node:test')('failed first history request replaces loading card with a readable error', async () => {
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: async () => { throw new Error('network unavailable'); },
+  });
+  context.state.coverLookup.tasksHydrated = false;
+
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(context.state.coverLookup.tasksHydrated, false);
+  assert.equal(context.state.coverLookup.tasksLoadFailed, true);
+  assert.match(bodyElement.innerHTML, /Could not load notifications/);
+  assert.doesNotMatch(bodyElement.innerHTML, /not looking for anything/i);
 });
 
 require('node:test')('stale notification counts cannot hide a locally accepted lookup', () => {
@@ -408,7 +1676,7 @@ require('node:test')('first-page refresh retains its next cursor for drawer pagi
   assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
 });
 
-require('node:test')('active-only polling merges updates without replacing loaded history', async () => {
+require('node:test')('active-only polling appends new tasks without moving loaded history', async () => {
   const requestedUrls = [];
   const { context } = createDrawerHarness({
     fetch: async (url) => {
@@ -430,10 +1698,748 @@ require('node:test')('active-only polling merges updates without replacing loade
 
   await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
 
-  assert.equal(requestedUrls[0], '/utilities/cover-lookup/tasks?limit=50&active_only=true');
+  assert.equal(
+    requestedUrls[0],
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=history',
+  );
   assert.deepEqual(
     Array.from(context.state.coverLookup.tasks, task => task.id),
-    ['active', 'history'],
+    ['history', 'active'],
+  );
+});
+
+require('node:test')('active-only polling drops completed cards cleared by another client', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [],
+          next_cursor: null,
+          total_count: 0,
+          active_count: 0,
+          finished_count: 0,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'cleared-in-another-client',
+    status: 'completed',
+    notification_action_taken: true,
+  }];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 1,
+    active_count: 0,
+    finished_count: 1,
+  };
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=cleared-in-another-client',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(Array.from(context.state.coverLookup.tasks), []);
+});
+
+require('node:test')('authoritative refresh drops a completed cross-tab deletion while an active task finishes', async () => {
+  const responses = [
+    {
+      tasks: [],
+      next_cursor: null,
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+    },
+    {
+      tasks: [
+        { id: 'active-to-complete', status: 'completed' },
+        { id: 'retained', status: 'completed' },
+      ],
+      next_cursor: null,
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+    },
+  ];
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, ...responses.shift() }),
+    }),
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'active-to-complete', status: 'running' },
+    { id: 'deleted-in-another-client', status: 'completed' },
+    { id: 'retained', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 3,
+    active_count: 1,
+    finished_count: 2,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['active-to-complete', 'retained'],
+  );
+});
+
+require('node:test')('authoritative refresh reconciles a cross-tab deletion from a loaded later page', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `first-page-${index}`,
+    status: 'completed',
+  }));
+  const requestedUrls = [];
+  const responses = [
+    { tasks: [], next_cursor: null, total_count: 51, active_count: 0, finished_count: 51 },
+    { tasks: firstPage, next_cursor: 'page-two', total_count: 51, active_count: 0, finished_count: 51 },
+    {
+      tasks: [{ id: 'retained-page-two', status: 'completed' }],
+      next_cursor: null,
+      total_count: 51,
+      active_count: 0,
+      finished_count: 51,
+    },
+  ];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-active-task', status: 'running' },
+    ...firstPage,
+    { id: 'deleted-page-two', status: 'completed' },
+    { id: 'retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 53,
+    active_count: 1,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 3);
+  assert.match(requestedUrls[2], /cursor=page-two/);
+  assert.equal(context.state.coverLookup.tasks.length, 51);
+  assert.equal(context.state.coverLookup.tasks.at(-1).id, 'retained-page-two');
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('authoritative reconciliation retries after a later-page request fails', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `retry-first-page-${index}`,
+    status: 'completed',
+  }));
+  const responses = [
+    { data: { ok: true, tasks: [], total_count: 51, active_count: 0, finished_count: 51 } },
+    { data: { ok: true, tasks: firstPage, next_cursor: 'retry-page-two', total_count: 51 } },
+    { ok: false, data: { ok: false, error: 'temporary page failure' } },
+    { data: { ok: true, tasks: [], total_count: 51, active_count: 0, finished_count: 51 } },
+    { data: { ok: true, tasks: firstPage, next_cursor: 'retry-page-two', total_count: 51 } },
+    {
+      data: {
+        ok: true,
+        tasks: [{ id: 'retry-retained-page-two', status: 'completed' }],
+        total_count: 51,
+      },
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      const response = responses.shift();
+      return {
+        ok: response.ok !== false,
+        json: async () => response.data,
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    ...firstPage,
+    { id: 'retry-deleted-page-two', status: 'completed' },
+    { id: 'retry-retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 52,
+    active_count: 0,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'retry-deleted-page-two'),
+    true,
+  );
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 6);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'retry-deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('authoritative reconciliation accumulates deletions while its retry is pending', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `pending-first-page-${index}`,
+    status: 'completed',
+  }));
+  const responses = [
+    { ok: true, data: { ok: true, tasks: [], total_count: 52, active_count: 0, finished_count: 52 } },
+    { ok: false, data: { ok: false, error: 'temporary first-page failure' } },
+    { ok: true, data: { ok: true, tasks: [], total_count: 51, active_count: 0, finished_count: 51 } },
+    {
+      ok: true,
+      data: { ok: true, tasks: firstPage, next_cursor: 'pending-page-two', total_count: 51 },
+    },
+    {
+      ok: true,
+      data: {
+        ok: true,
+        tasks: [{ id: 'pending-retained-page-two', status: 'completed' }],
+        total_count: 51,
+      },
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      const response = responses.shift();
+      return { ok: response.ok, json: async () => response.data };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'pending-deleted-active', status: 'running' },
+    ...firstPage,
+    { id: 'pending-deleted-page-two', status: 'completed' },
+    { id: 'pending-retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 53,
+    active_count: 1,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 5);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'pending-deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('authoritative reconciliation includes deletions during its first-page request', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `mid-request-first-page-${index}`,
+    status: 'completed',
+  }));
+  const responses = [
+    { tasks: [], total_count: 52, active_count: 0, finished_count: 52 },
+    { tasks: firstPage, next_cursor: 'mid-request-page-two', total_count: 51 },
+    {
+      tasks: [{ id: 'mid-request-retained-page-two', status: 'completed' }],
+      total_count: 51,
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return { ok: true, json: async () => ({ ok: true, ...responses.shift() }) };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'mid-request-deleted-active', status: 'running' },
+    ...firstPage,
+    { id: 'mid-request-deleted-page-two', status: 'completed' },
+    { id: 'mid-request-retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 53,
+    active_count: 1,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 3);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'mid-request-deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('authoritative reconciliation catches equal-count notification replacement', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `replacement-first-page-${index}`,
+    status: 'completed',
+  }));
+  const newActive = { id: 'replacement-new-active', status: 'running' };
+  const responses = [
+    { tasks: [newActive], total_count: 52, active_count: 1, finished_count: 51 },
+    {
+      tasks: [newActive, ...firstPage.slice(0, 49)],
+      next_cursor: 'replacement-page-two',
+      total_count: 52,
+    },
+    {
+      tasks: [firstPage[49], { id: 'replacement-retained-page-two', status: 'completed' }],
+      total_count: 52,
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return { ok: true, json: async () => ({ ok: true, ...responses.shift() }) };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    ...firstPage,
+    { id: 'replacement-deleted-page-two', status: 'completed' },
+    { id: 'replacement-retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 52,
+    active_count: 0,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 3);
+  assert.equal(context.state.coverLookup.tasks.length, 52);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'replacement-deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('membership revision reconciles an equal-count completed notification replacement', async () => {
+  const responses = [
+    {
+      tasks: [],
+      next_cursor: null,
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-completed', status: 'completed' },
+        { id: 'retained-completed', status: 'completed' },
+      ],
+      next_cursor: null,
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-completed', status: 'completed' },
+    { id: 'retained-completed', status: 'completed' },
+  ];
+  context.state.coverLookup.tasksMembershipRevision = 'membership-old';
+  context.state.coverLookup.notificationCounts = {
+    total_count: 2,
+    active_count: 0,
+    finished_count: 2,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=deleted-completed%2Cretained-completed',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['new-completed', 'retained-completed'],
+  );
+  assert.equal(context.state.coverLookup.tasksMembershipRevision, 'membership-new');
+});
+
+require('node:test')('count hydration preserves the membership baseline for a completed replacement', async () => {
+  const responses = [
+    {
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-old',
+    },
+    {
+      tasks: [],
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-completed', status: 'completed' },
+        { id: 'retained-completed', status: 'completed' },
+      ],
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-completed', status: 'completed' },
+    { id: 'retained-completed', status: 'completed' },
+  ];
+
+  await context.loadCoverLookupNotificationCounts({ toast: false });
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks/counts',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=deleted-completed%2Cretained-completed',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['new-completed', 'retained-completed'],
+  );
+});
+
+require('node:test')('positive-net notification additions cannot conceal a deletion', async () => {
+  const responses = [
+    {
+      total_count: 2,
+      active_count: 0,
+      finished_count: 2,
+      membership_revision: 'membership-old',
+    },
+    {
+      tasks: [{ id: 'new-active', status: 'running' }],
+      total_count: 3,
+      active_count: 1,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-active', status: 'running' },
+        { id: 'new-completed', status: 'completed' },
+        { id: 'retained-completed', status: 'completed' },
+      ],
+      total_count: 3,
+      active_count: 1,
+      finished_count: 2,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-completed', status: 'completed' },
+    { id: 'retained-completed', status: 'completed' },
+  ];
+
+  await context.loadCoverLookupNotificationCounts({ toast: false });
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks/counts',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=deleted-completed%2Cretained-completed',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['new-active', 'new-completed', 'retained-completed'],
+  );
+});
+
+require('node:test')('membership revision reconciles a completed replacement from a loaded later page', async () => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `terminal-first-page-${index}`,
+    status: 'completed',
+  }));
+  const responses = [
+    {
+      tasks: [],
+      next_cursor: null,
+      total_count: 52,
+      active_count: 0,
+      finished_count: 52,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-completed', status: 'completed' },
+        ...firstPage.slice(0, 49),
+      ],
+      next_cursor: 'terminal-page-two',
+      total_count: 52,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        firstPage[49],
+        { id: 'retained-page-two', status: 'completed' },
+      ],
+      next_cursor: null,
+      total_count: 52,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    ...firstPage,
+    { id: 'deleted-page-two', status: 'completed' },
+    { id: 'retained-page-two', status: 'completed' },
+  ];
+  context.state.coverLookup.tasksMembershipRevision = 'membership-old';
+  context.state.coverLookup.notificationCounts = {
+    total_count: 52,
+    active_count: 0,
+    finished_count: 52,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls.length, 3);
+  assert.match(requestedUrls[2], /cursor=terminal-page-two/);
+  assert.equal(context.state.coverLookup.tasks.length, 52);
+  assert.equal(
+    context.state.coverLookup.tasks.some((task) => task.id === 'deleted-page-two'),
+    false,
+  );
+});
+
+require('node:test')('later-page loading cannot hide an equal-count completed replacement', async () => {
+  const responses = [
+    {
+      tasks: [{ id: 'older-completed', status: 'completed' }],
+      next_cursor: null,
+      total_count: 3,
+      active_count: 0,
+      finished_count: 3,
+      membership_revision: 'membership-new',
+    },
+    {
+      tasks: [
+        { id: 'new-completed', status: 'completed' },
+        { id: 'retained-completed', status: 'completed' },
+        { id: 'older-completed', status: 'completed' },
+      ],
+      next_cursor: null,
+      total_count: 3,
+      active_count: 0,
+      finished_count: 3,
+      membership_revision: 'membership-new',
+    },
+  ];
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({ ok: true, ...responses.shift() }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-completed', status: 'completed' },
+    { id: 'retained-completed', status: 'completed' },
+  ];
+  context.state.coverLookup.tasksNextCursor = 'page-two';
+  context.state.coverLookup.tasksMembershipRevision = 'membership-old';
+  context.state.coverLookup.notificationCounts = {
+    total_count: 3,
+    active_count: 0,
+    finished_count: 3,
+  };
+
+  await context.loadCoverLookupTasks({ toast: false, append: true });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&cursor=page-two',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, (task) => task.id),
+    ['new-completed', 'retained-completed', 'older-completed'],
+  );
+});
+
+require('node:test')('count-only polling preserves loaded history after a known card was removed', async () => {
+  const history = Array.from({ length: 528 }, (_, index) => ({
+    id: `history-${String(index + 1).padStart(4, '0')}`,
+    status: 'completed',
+  }));
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      if (String(url).includes('active_only=true')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            tasks: [],
+            next_cursor: null,
+            total_count: 528,
+            active_count: 0,
+            finished_count: 528,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: history.slice(0, 50),
+          next_cursor: 'page-two',
+          total_count: 528,
+          active_count: 0,
+          finished_count: 528,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [...history];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 529,
+    active_count: 0,
+    finished_count: 528,
+  };
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    `/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=${encodeURIComponent(
+      history.slice(0, 60).map((task) => task.id).join(','),
+    )}`,
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.equal(context.state.coverLookup.tasks.length, 528);
+  assert.equal(context.state.coverLookup.tasks[259].id, 'history-0260');
+  assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
+});
+
+require('node:test')('active polling never removes a card before its terminal first-page refresh', async () => {
+  const history = Array.from({ length: 60 }, (_, index) => ({
+    id: `history-${String(index + 1).padStart(2, '0')}`,
+    status: 'completed',
+  }));
+  const transitioningTask = { id: 'transitioning-task', status: 'running' };
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      if (String(url).includes('active_only=true')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            tasks: [],
+            next_cursor: null,
+            total_count: 61,
+            active_count: 0,
+            finished_count: 61,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{ ...transitioningTask, status: 'completed' }, ...history.slice(0, 49)],
+          next_cursor: 'page-two',
+          total_count: 61,
+          active_count: 0,
+          finished_count: 61,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [...history, transitioningTask];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 61,
+    active_count: 1,
+    finished_count: 60,
+  };
+  const renderedTaskStates = [];
+  context.renderCoverLookupDrawer = () => {
+    renderedTaskStates.push(context.state.coverLookup.tasks.map((task) => ({
+      id: task.id,
+      status: task.status,
+    })));
+  };
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.ok(renderedTaskStates.length >= 1);
+  assert.equal(
+    renderedTaskStates.every((tasks) => tasks.some((task) => task.id === transitioningTask.id)),
+    true,
+    'a card must remain mounted while polling learns its terminal state',
+  );
+  assert.equal(
+    context.state.coverLookup.tasks.find((task) => task.id === transitioningTask.id)?.status,
+    'completed',
   );
 });
 
@@ -478,8 +2484,166 @@ require('node:test')('active-only polling refreshes the modal when partial candi
   assert.equal(galleryRefreshes, 1);
 });
 
+require('node:test')('active-only polling preserves full task fields omitted by compact summaries', async () => {
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        tasks: [{ id: 'active', status: 'running', progress: 62 }],
+        next_cursor: null,
+        total_count: 1,
+        active_count: 1,
+        finished_count: 0,
+      }),
+    }),
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'active',
+    status: 'running',
+    progress: 50,
+    manual_urls: ['https://covers.example/manual-front.jpg'],
+  }];
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.deepEqual(
+    context.state.coverLookup.tasks[0].manual_urls,
+    ['https://covers.example/manual-front.jpg'],
+  );
+  assert.equal(context.state.coverLookup.tasks[0].progress, 62);
+});
+
+require('node:test')('repeated explicit manual lookup reuses its terminal task without collapsing provider refresh generations', async () => {
+  class TestButton {
+    constructor() {
+      this.hidden = false;
+      this.disabled = false;
+    }
+  }
+  const album = {
+    album_artist: 'Synthetic Cover Artist',
+    name: 'Manual Lookup Album',
+    tracks: [{ path: 'C:/music/manual/01.flac' }],
+  };
+  const manualUrlInput = { value: 'https://covers.example/manual-front.jpg' };
+  const requestBodies = [];
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async (_url, options = {}) => {
+      requestBodies.push(JSON.parse(options.body));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          task: { id: requestBodies.at(-1).task_id || 'fresh-generation', status: 'pending' },
+        }),
+      };
+    },
+    document: {
+      body: { classList: { add: () => {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-save-remote-button': new TestButton(),
+        'cover-lookup-pasted-urls': manualUrlInput,
+      }[id] || null),
+    },
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'completed-manual-generation',
+    status: 'completed',
+    manual_urls: ['https://covers.example/manual-front.jpg'],
+  }];
+  context.state.coverLookup.modal.album = album;
+  context.state.coverLookup.modal.taskId = 'completed-manual-generation';
+  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  await context.startCoverLookupForAlbum(album);
+  manualUrlInput.value = '';
+  context.state.coverLookup.modal.manualUrlText = '';
+  context.state.coverLookup.modal.taskId = 'completed-manual-generation';
+  context.state.coverLookup.tasks = [{
+    id: 'completed-manual-generation',
+    status: 'completed',
+    manual_urls: ['https://covers.example/manual-front.jpg'],
+  }];
+  await context.startCoverLookupForAlbum(album);
+
+  assert.equal(requestBodies[0].task_id, 'completed-manual-generation');
+  assert.equal(requestBodies[1].task_id, '');
+});
+
+require('node:test')('repeated explicit manual lookup finds the matching terminal album task after another album opens', async () => {
+  class TestButton {
+    constructor() {
+      this.hidden = false;
+      this.disabled = false;
+    }
+  }
+  const album = {
+    album_artist: 'Synthetic Cover Artist',
+    name: 'Manual Lookup Album',
+    year: 2026,
+    tracks: [{ path: 'C:/music/manual/01.flac' }],
+  };
+  const manualUrls = ['https://covers.example/manual-front.jpg'];
+  let requestBody;
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async (_url, options = {}) => {
+      requestBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () => ({ ok: true, task: { id: requestBody.task_id, status: 'pending' } }),
+      };
+    },
+    document: {
+      body: { classList: { add: () => {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-save-remote-button': new TestButton(),
+        'cover-lookup-pasted-urls': { value: manualUrls[0] },
+      }[id] || null),
+    },
+  });
+  context.state.coverLookup.tasks = [
+    {
+      id: 'matching-terminal-generation',
+      status: 'completed',
+      manual_urls: manualUrls,
+      album_payload: album,
+    },
+    {
+      id: 'other-album-generation',
+      status: 'completed',
+      manual_urls: manualUrls,
+      album_payload: {
+        album_artist: 'Other Artist',
+        name: 'Other Album',
+        tracks: [{ path: 'C:/music/other/01.flac' }],
+      },
+    },
+  ];
+  context.state.coverLookup.modal.album = album;
+  context.state.coverLookup.modal.taskId = 'other-album-generation';
+  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  await context.startCoverLookupForAlbum(album);
+
+  assert.equal(requestBody.task_id, 'matching-terminal-generation');
+});
+
 require('node:test')('active-only polling refreshes the first page when a running task disappears', async () => {
   const requestedUrls = [];
+  let statusAtGalleryRefresh = '';
   const { context } = createDrawerHarness({
     fetch: async (url) => {
       requestedUrls.push(String(url));
@@ -500,7 +2664,11 @@ require('node:test')('active-only polling refreshes the first page when a runnin
         ok: true,
         json: async () => ({
           ok: true,
-          tasks: [{ id: 'finished', status: 'completed' }],
+          tasks: [{
+            id: 'finished',
+            status: 'completed',
+            possible_match_count: 4,
+          }],
           next_cursor: null,
           total_count: 1,
           active_count: 0,
@@ -510,18 +2678,200 @@ require('node:test')('active-only polling refreshes the first page when a runnin
     },
   });
   context.state.coverLookup.tasks = [
-    { id: 'finished', status: 'running' },
+    { id: 'finished', status: 'running', progress_label: 'Searching...' },
     { id: 'history', status: 'completed' },
   ];
+  context.state.coverLookup.modal.taskId = 'finished';
+  context.state.coverLookup.modal.statusText = 'Searching...';
+  context.refreshCoverLookupGallery = async () => {
+    statusAtGalleryRefresh = context.state.coverLookup.modal.statusText;
+  };
 
   await context.loadCoverLookupTasksForPolling({ toast: false });
 
   assert.deepEqual(requestedUrls, [
-    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=history',
     '/utilities/cover-lookup/tasks?limit=50',
   ]);
   assert.equal(context.state.coverLookup.tasks[0].status, 'completed');
   assert.deepEqual(Array.from(context.state.coverLookup.tasks, task => task.id), ['finished', 'history']);
+  assert.equal(
+    statusAtGalleryRefresh,
+    'Searching...',
+    'terminal summary must not publish completion before its counted candidates hydrate',
+  );
+});
+
+require('node:test')('authoritative refresh removes a deleted active task without dropping loaded history', async () => {
+  const requestedUrls = [];
+  const firstPageSurvivor = { id: 'first-page-survivor', status: 'completed' };
+  const loadedHistory = Array.from({ length: 527 }, (_, index) => ({
+    id: `loaded-history-${index}`,
+    status: 'completed',
+  }));
+  const { context, badgeElement } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      if (String(url).includes('active_only=true')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            tasks: [],
+            next_cursor: null,
+            total_count: 528,
+            active_count: 0,
+            finished_count: 528,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [firstPageSurvivor],
+          next_cursor: 'page-two',
+          total_count: 528,
+          active_count: 0,
+          finished_count: 528,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'deleted-active', status: 'running' },
+    firstPageSurvivor,
+    ...loadedHistory,
+  ];
+  context.state.coverLookup.notificationCounts = {
+    total_count: 529,
+    active_count: 1,
+    finished_count: 528,
+  };
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    `/utilities/cover-lookup/tasks?limit=50&active_only=true&task_ids=${encodeURIComponent([
+      firstPageSurvivor.id,
+      ...loadedHistory.slice(0, 58).map((task) => task.id),
+    ].join(','))}`,
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks.slice(0, 3), task => task.id),
+    ['first-page-survivor', 'loaded-history-0', 'loaded-history-1'],
+  );
+  assert.equal(context.state.coverLookup.tasks.length, 528);
+  assert.equal(context.state.coverLookup.tasks[1], loadedHistory[0]);
+  assert.equal(context.state.coverLookup.tasks.at(-1), loadedHistory.at(-1));
+  assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
+  assert.equal(badgeElement.textContent, '528');
+});
+
+require('node:test')('terminal gallery payload waits for its counted candidates before publishing completion', () => {
+  const context = loadHelper();
+  context.renderCoverLookupModal = () => {};
+  context.state.coverLookup.modal = {
+    album: { tracks: [{ path: 'C:/music/terminal/01.flac' }] },
+    taskId: 'terminal-generation',
+    statusText: 'Searching...',
+    statusTone: 'neutral',
+    possibleMatches: [],
+    selectedRemoteId: '',
+  };
+
+  context.applyCoverLookupGalleryPayload({
+    local_covers: [],
+    other_art: [],
+    task: {
+      id: 'terminal-generation',
+      status: 'completed',
+      progress_label: 'Completed',
+      possible_match_count: 2,
+      possible_matches: [],
+    },
+    candidate_snapshot: {
+      search_generation: 'terminal-generation',
+      status: 'completed',
+      candidates: [],
+    },
+  });
+
+  assert.equal(context.state.coverLookup.modal.statusText, 'Searching...');
+
+  context.applyCoverLookupGalleryPayload({
+    local_covers: [],
+    other_art: [],
+    task: {
+      id: 'terminal-generation',
+      status: 'completed',
+      progress_label: 'Completed',
+      possible_match_count: 2,
+      possible_matches: [
+        { id: 'accepted-a', art_kind: 'cover', url: 'https://images.example/a.jpg' },
+        { id: 'accepted-b', art_kind: 'cover', url: 'https://images.example/b.jpg' },
+      ],
+    },
+    candidate_snapshot: {
+      search_generation: 'terminal-generation',
+      status: 'completed',
+      candidates: [
+        { id: 'accepted-a', art_kind: 'cover', url: 'https://images.example/a.jpg' },
+        { id: 'accepted-b', art_kind: 'cover', url: 'https://images.example/b.jpg' },
+      ],
+    },
+  });
+
+  assert.equal(context.state.coverLookup.modal.statusText, 'Completed');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, ({ id }) => id),
+    ['accepted-a', 'accepted-b'],
+  );
+});
+
+require('node:test')('terminal gallery payload completes after its candidate revision hydrates even when filtering reduces the visible count', () => {
+  const context = loadHelper();
+  context.renderCoverLookupModal = () => {};
+  context.window.AlbumHavenCapabilities = {
+    allowsCoverCandidate: candidate => candidate.source !== 'blocked-provider',
+  };
+  context.state.coverLookup.modal = {
+    album: { tracks: [{ path: 'C:/music/terminal/01.flac' }] },
+    taskId: 'filtered-terminal-generation',
+    statusText: 'Searching...',
+    statusTone: 'neutral',
+    possibleMatches: [],
+    selectedRemoteId: '',
+  };
+
+  context.applyCoverLookupGalleryPayload({
+    local_covers: [],
+    other_art: [],
+    task: {
+      id: 'filtered-terminal-generation',
+      status: 'completed',
+      progress_label: 'Completed',
+      possible_match_count: 3,
+      possible_matches: [],
+    },
+    candidate_snapshot: {
+      search_generation: 'filtered-terminal-generation',
+      status: 'completed',
+      revision: 4,
+      candidates: [
+        { id: 'accepted', source: 'discogs', art_kind: 'cover', url: 'https://images.example/accepted.jpg' },
+        { id: 'duplicate', source: 'discogs', art_kind: 'cover', url: 'https://images.example/accepted.jpg' },
+        { id: 'blocked', source: 'blocked-provider', art_kind: 'cover', url: 'https://images.example/blocked.jpg' },
+      ],
+    },
+  });
+
+  assert.equal(context.state.coverLookup.modal.statusText, 'Completed');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, ({ id }) => id),
+    ['accepted'],
+  );
 });
 
 require('node:test')('notification history prefetches within two visible drawer heights', async () => {
@@ -563,6 +2913,35 @@ require('node:test')('notification history mounts no more than 60 cards with two
     assert.equal((bodyElement.innerHTML.match(/class="cover-lookup-task-card /g) || []).length, 60);
     assert.equal((bodyElement.innerHTML.match(/class="cover-lookup-task-spacer"/g) || []).length, 2);
   }
+});
+
+require('node:test')('notification virtualization keeps one fixed row geometry while swiping', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const drawerCss = fs.readFileSync(path.join(
+    __dirname,
+    '../../../music_app/static/css/runtime/cover-lookup-drawer-and-related.css',
+  ), 'utf8');
+  context.state.coverLookup.tasks = Array.from({ length: 120 }, (_, index) => ({
+    id: `task-${index}`,
+    status: 'completed',
+    artist: 'Artist',
+    album: `Album ${index}`,
+  }));
+  context.state.coverLookup.taskEstimatedHeight = 140;
+  bodyElement.innerHTML = '<div>previous cards</div>';
+  bodyElement.scrollTop = 4000;
+
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+
+  assert.match(bodyElement.innerHTML, /cover-lookup-task-spacer[^>]+height:2976px/);
+  const drawerBodyGaps = Array.from(
+    drawerCss.matchAll(/\.cover-lookup-drawer-body\s*\{([^}]*)\}/gs),
+    match => match[1].match(/gap:\s*([^;]+);/)?.[1]?.trim(),
+  ).filter(Boolean);
+  assert.equal(drawerBodyGaps.at(-1), '0', 'the final drawer-body rule must not add virtualized spacing');
+  assert.match(drawerCss, /\.cover-lookup-task-card\s*\{[^}]*margin-bottom:\s*10px;/s);
+  assert.match(drawerCss, /\.cover-lookup-task-card\s*\{[^}]*height:\s*86px;/s);
+  assert.equal(context.state.coverLookup.taskEstimatedHeight, 140);
 });
 
 require('node:test')('closing the notification drawer unmounts cards while retaining task summaries', () => {
@@ -650,15 +3029,18 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   class TestButton {}
   const overlay = { hidden: false };
   const modalBody = { innerHTML: '<img src="https://images.example/large-cover.jpg">' };
+  const drawerBody = { scrollTop: 0 };
   const saveButton = new TestButton();
   const context = loadHelper({
     HTMLButtonElement: TestButton,
+    window: { requestAnimationFrame: (callback) => callback() },
     document: {
       body: { classList: { remove() {} } },
       getElementById: (id) => ({
         'cover-lookup-modal': overlay,
         'cover-lookup-modal-body': modalBody,
         'cover-lookup-save-remote-button': saveButton,
+        'cover-lookup-drawer-body': drawerBody,
         'track-modal': { hidden: true },
         'utility-modal': { hidden: true },
       }[id] || null),
@@ -673,6 +3055,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     candidateSnapshot: { search_generation: 'completed-task', candidates: [{ id: 'remote-cover' }] },
   });
   context.state.coverLookup.tasks = [];
+  context.state.coverLookup.drawerOpen = true;
+  context.state.coverLookup.drawerScrollTop = 71;
 
   context.closeCoverLookupModal();
 
@@ -684,6 +3068,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   assert.equal(context.state.coverLookup.modal.otherArt.length, 0);
   assert.equal(context.state.coverLookup.modal.possibleMatches.length, 0);
   assert.equal(context.state.coverLookup.modal.candidateSnapshot, null);
+  assert.equal(drawerBody.scrollTop, 71);
 });
 
 (async () => {
@@ -695,6 +3080,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     });
     context.state.coverLookup.tasks = [{
       id: 'rollback-task', status: 'completed', artist: 'Artist', album: 'Restored Album',
+      notification_action_taken: true,
     }];
     context.renderCoverLookupDrawer();
     context.hasActiveCoverLookupDrawerAction = () => true;
@@ -702,7 +3088,10 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     const pending = clearAll
       ? context.clearCompletedCoverLookupTasks()
       : context.clearCoverLookupTaskNotification('rollback-task');
-    assert.match(bodyElement.innerHTML, /not looking for anything at the moment/i);
+    assert.match(
+      bodyElement.innerHTML,
+      clearAll ? /Restored Album/ : /not looking for anything at the moment/i,
+    );
     resolveFetch({ ok: false, json: async () => ({ ok: false, error: 'Delete failed' }) });
     await pending;
     assert.equal(context.state.coverLookup.tasks[0].id, 'rollback-task');
@@ -1030,6 +3419,349 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   assert.equal(context.hasPendingLocalCoverSelection(), true);
 }
 
+require('node:test')('remote optimistic selection reuses the selected preview until save completion', () => {
+  const album = {
+    key: 'artist::album::2001',
+    cover_path: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+  };
+  const selectedMatch = {
+    id: 'apple-candidate',
+    url: 'https://images.example/full.jpg',
+    thumbnail_url: 'https://images.example/preview.jpg',
+    source: 'apple',
+  };
+  const refreshedAlbums = [];
+  const context = loadHelper({
+    getAlbumPathSignature: (value) => (value?.tracks || [])
+      .map((track) => String(track?.path || ''))
+      .filter(Boolean)
+      .sort()
+      .join('|'),
+  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.tasks = [];
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
+    refreshedAlbums.push(...updatedAlbums);
+  };
+
+  const updatedAlbum = context.applyOptimisticRemoteCoverSelection(
+    album,
+    selectedMatch,
+    'C:/music/Remote/cover.jpg',
+  );
+
+  const expectedPreview = context.buildRemoteCoverLookupDisplayUrl(
+    selectedMatch,
+    selectedMatch.thumbnail_url,
+    selectedMatch.id,
+  );
+  assert.equal(updatedAlbum.cover_path, null);
+  assert.equal(updatedAlbum.remote_cover_url, selectedMatch.url);
+  assert.equal(refreshedAlbums[0].cover_path, null);
+  assert.equal(
+    context.state.coverLookup.optimisticAlbumCovers['C:/music/Remote/01.flac'].src,
+    expectedPreview,
+  );
+});
+
+require('node:test')('remote save publishes the selected preview before server acceptance', async () => {
+  const album = {
+    key: 'artist::album::2001',
+    tracks: [{ path: 'C:/music/Remote/01.flac' }],
+  };
+  let resolveResponse;
+  let optimisticCalls = 0;
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    showToast: () => {},
+  });
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-optimistic',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      thumbnail_url: 'https://images.example/remote-cover-preview.jpg',
+      display_only: false,
+    }],
+  };
+  context.applyOptimisticRemoteCoverSelection = () => {
+    optimisticCalls += 1;
+    return album;
+  };
+  context.closeCoverLookupModal = () => {};
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.fetch = () => new Promise((resolve) => { resolveResponse = resolve; });
+  context.loadCoverLookupTasks = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.renderCoverLookupDrawer = () => {};
+
+  const pending = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+
+  assert.equal(optimisticCalls, 1);
+
+  resolveResponse({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      queued: true,
+      task: { id: 'remote-save-optimistic' },
+    }),
+  });
+  await pending;
+});
+
+require('node:test')('rejected remote save restores the cover replaced before server acceptance', async () => {
+  const album = {
+    key: 'artist::album::2001',
+    tracks: [{ path: 'C:/music/Remote/01.flac' }],
+  };
+  const previousCover = { src: 'https://images.example/previous.jpg' };
+  let restoredAlbum = null;
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    showToast: () => {},
+  });
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-rejected',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      display_only: false,
+    }],
+  };
+  context.state.coverLookup.optimisticAlbumCovers = { album: previousCover };
+  context.applyOptimisticRemoteCoverSelection = () => {
+    context.state.coverLookup.optimisticAlbumCovers.album = {
+      src: 'https://images.example/remote-cover.jpg',
+    };
+    return album;
+  };
+  context.syncCoverLookupAlbumReferences = ([candidate]) => { restoredAlbum = candidate; };
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.fetch = async () => ({
+    ok: false,
+    json: async () => ({ ok: false, error: 'Save was rejected.' }),
+  });
+
+  await context.saveRemoteCoverFromLookup();
+
+  assert.strictEqual(context.state.coverLookup.optimisticAlbumCovers.album, previousCover);
+  assert.deepEqual(restoredAlbum, album);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+});
+
+require('node:test')('remote save closes only after the server accepts the queued mutation', async () => {
+  const album = {
+    key: 'artist::album::2001',
+    tracks: [{ path: 'C:/music/Remote/01.flac' }],
+  };
+  let resolveResponse;
+  let closeCount = 0;
+  let fetchCount = 0;
+  let refreshCount = 0;
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    showToast: () => {},
+  });
+  const advanceModalSession = context.closeCoverLookupModal;
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-acceptance',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      display_only: false,
+    }],
+  };
+  context.applyOptimisticRemoteCoverSelection = () => {};
+  context.closeCoverLookupModal = () => { closeCount += 1; };
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => { refreshCount += 1; };
+  context.fetch = () => {
+    fetchCount += 1;
+    return new Promise((resolve) => { resolveResponse = resolve; });
+  };
+  context.loadCoverLookupTasks = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.renderCoverLookupDrawer = () => {};
+
+  const pending = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+
+  assert.equal(closeCount, 0);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+  const duplicate = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+  assert.equal(fetchCount, 1);
+  await duplicate;
+
+  resolveResponse({
+    ok: false,
+    json: async () => ({ ok: false, error: 'Save was rejected.' }),
+  });
+  await pending;
+
+  assert.equal(closeCount, 0);
+  assert.equal(refreshCount, 0);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+
+  const accepted = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+  resolveResponse({
+    ok: true,
+    json: async () => ({ ok: true, queued: true, task: { id: 'remote-save-acceptance' } }),
+  });
+  await accepted;
+
+  assert.equal(closeCount, 1);
+
+  const replacementAlbum = {
+    key: 'replacement::album::2002',
+    tracks: [{ path: 'C:/music/Replacement/01.flac' }],
+  };
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-stale-modal',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      display_only: false,
+    }],
+    saving: false,
+  };
+  const staleModalSave = context.saveRemoteCoverFromLookup();
+  await Promise.resolve();
+  advanceModalSession();
+  context.state.coverLookup.modal = {
+    album: replacementAlbum,
+    selectedRemoteId: 'replacement-candidate',
+    saving: false,
+  };
+  resolveResponse({
+    ok: true,
+    json: async () => ({ ok: true, queued: true, task: { id: 'remote-save-stale-modal' } }),
+  });
+  await staleModalSave;
+
+  assert.strictEqual(context.state.coverLookup.modal.album, replacementAlbum);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'replacement-candidate');
+  assert.equal(closeCount, 1);
+});
+
+require('node:test')('failed or canceled accepted remote save restores owned artwork state', async () => {
+  const album = {
+    key: 'artist::album::2001',
+    cover_path: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+  };
+  const albumSignature = 'C:/music/Remote/01.flac';
+  const previousOptimisticCover = {
+    src: '/cover?path=original.jpg&size=480&revision=stable-prior-revision',
+  };
+  let terminalStatus = 'failed';
+  const toastCalls = [];
+  const restoredAlbums = [];
+  const context = loadHelper({
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    showToast: (...args) => toastCalls.push(args),
+  });
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'remote-save-failure',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/remote-cover.jpg',
+      display_only: false,
+    }],
+  };
+  context.state.coverLookup.tasks = [];
+  context.state.coverLookup.appliedTaskUpdateSignatures = {};
+  context.state.coverLookup.optimisticAlbumCovers = {
+    [albumSignature]: previousOptimisticCover,
+  };
+  context.applyOptimisticRemoteCoverSelection = (_selectedAlbum, selectedMatch) => {
+    context.state.coverLookup.optimisticAlbumCovers[albumSignature] = { src: selectedMatch.url };
+  };
+  context.closeCoverLookupModal = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = (_album, updatedAlbums) => {
+    restoredAlbums.push(updatedAlbums);
+  };
+  context.fetch = async (url) => {
+    if (url === '/utilities/cover-lookup/save-remote') {
+      return {
+        ok: true,
+        json: async () => ({ ok: true, queued: true, task: { id: 'remote-save-failure' } }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        tasks: [{
+          id: 'remote-save-failure',
+          status: terminalStatus,
+          progress: 100,
+          progress_label: terminalStatus === 'failed' ? 'Save failed' : 'Canceled',
+          message: terminalStatus === 'failed' ? 'Remote image could not be saved.' : 'Cover save canceled.',
+          notification_action_taken: false,
+          job_contract: { job_kind: 'save_remote_selection' },
+          album_payload: album,
+        }],
+      }),
+    };
+  };
+  context.mergeCoverLookupTasksWithNotifications = (tasks) => tasks;
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.stopCoverLookupPollingIfIdle = () => {};
+
+  await context.saveRemoteCoverFromLookup();
+  await context.loadCoverLookupTasks({ activeOnly: true, toast: false });
+
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
+  assert.equal(
+    context.state.coverLookup.optimisticAlbumCovers[albumSignature]?.src,
+    previousOptimisticCover.src,
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbums)), [[album]]);
+  assert.deepEqual(toastCalls, [['Remote image could not be saved.', 'error', 5000]]);
+
+  terminalStatus = 'canceled';
+  context.state.coverLookup.modal.selectedRemoteId = 'candidate-1';
+  context.state.coverLookup.modal.possibleMatches = [{
+    id: 'candidate-1',
+    url: 'https://images.example/remote-cover.jpg',
+    display_only: false,
+  }];
+  await context.saveRemoteCoverFromLookup();
+  await context.loadCoverLookupTasks({ activeOnly: true, toast: false });
+
+  assert.equal(restoredAlbums.length, 2);
+  assert.equal(
+    context.state.coverLookup.optimisticAlbumCovers[albumSignature]?.src,
+    previousOptimisticCover.src,
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(restoredAlbums.at(-1))), [album]);
+  assert.deepEqual(toastCalls, [['Remote image could not be saved.', 'error', 5000]]);
+});
+
 ;(async () => {
   class TestButton {
     constructor() {
@@ -1050,13 +3782,14 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   const overlay = { hidden: true };
   const saveButton = new TestButton();
   const fetchCalls = [];
+  const toastMessages = [];
   let taskReloads = 0;
   let galleryReloads = 0;
   let appliedGallery = null;
   const context = loadHelper({
     HTMLButtonElement: TestButton,
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
-    showToast: () => {},
+    showToast: (message) => toastMessages.push(message),
     fetch: async (url, options = {}) => {
       fetchCalls.push({ url, options });
       return {
@@ -1104,12 +3837,14 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   await context.startCoverLookupForAlbum(secondAlbum);
 
   assert.equal(fetchCalls.length, 1);
+  assert.deepEqual(toastMessages, ['Cover search started.']);
   assert.equal(taskReloads, 0, 'start response already contains the queued task');
   assert.equal(galleryReloads, 0, 'starting a lookup must retain the gallery already loaded by the open modal');
   assert.equal(appliedGallery, null);
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album: secondAlbum,
     manual_urls: [],
+    task_id: '',
   });
 })().catch((error) => {
   console.error(error);
@@ -1234,6 +3969,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   const lifecycleCalls = [];
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
     showToast: () => {},
   });
   context.state.coverLookup.modal = {
@@ -1246,29 +3982,66 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
       display_only: false,
     }],
   };
-  context.state.coverLookup.tasks = [];
-  context.applyOptimisticRemoteCoverSelection = () => {};
+  context.state.coverLookup.tasks = [
+    { id: 'newer-task', status: 'completed' },
+    {
+      id: 'remote-save-task',
+      status: 'completed',
+      result_kind: 'cover-updated',
+      selected_candidate_id: 'candidate-1',
+      save_generation: 'old-save',
+      notification_action_taken: false,
+    },
+    { id: 'older-task', status: 'completed' },
+  ];
+  context.state.coverLookup.optimisticAlbumCovers = { album: 'previous-cover' };
+  context.applyOptimisticRemoteCoverSelection = () => {
+    context.state.coverLookup.optimisticAlbumCovers.album = 'optimistic-cover';
+    return album;
+  };
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
   context.closeCoverLookupModal = () => {};
   context.fetch = async (url, options) => {
     fetchCalls.push({ url, options });
+    if (String(url).startsWith('/utilities/cover-lookup/tasks?')) {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{
+            id: 'remote-save-task',
+            status: 'completed',
+            result_kind: 'cover-updated',
+            selected_candidate_id: 'candidate-1',
+            save_generation: 'old-save',
+          }],
+          total_count: 1,
+          active_count: 0,
+          finished_count: 1,
+        }),
+      };
+    }
     return {
       ok: true,
-      json: async () => ({ ok: true, queued: true }),
+      json: async () => ({
+        ok: true,
+        queued: true,
+        task: {
+          id: 'remote-save-task',
+          status: 'running',
+          result_kind: '',
+          selected_candidate_id: 'candidate-1',
+          save_generation: 'new-save',
+          notification_action_taken: false,
+        },
+      }),
     };
-  };
-  context.loadCoverLookupTasks = async () => {
-    context.state.coverLookup.tasks = [{
-      id: 'remote-save-task',
-      status: 'failed',
-      progress_label: 'Save failed',
-      notification_action_taken: false,
-    }];
-    lifecycleCalls.push('reload');
   };
   context.markCoverLookupTaskActionTaken = (taskId) => {
     markCalls.push(taskId);
     const task = context.state.coverLookup.tasks.find((item) => item.id === taskId);
-    if (task) task.notification_action_taken = true;
+    if (task?.status === 'completed') task.notification_action_taken = true;
   };
   context.ensureCoverLookupPolling = () => lifecycleCalls.push('poll');
   context.renderCoverLookupDrawer = () => lifecycleCalls.push('render');
@@ -1282,10 +4055,30 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     task_id: 'remote-save-task',
     candidate_id: 'candidate-1',
   });
-  assert.deepEqual(markCalls, []);
-  assert.equal(context.state.coverLookup.tasks[0].status, 'failed');
-  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
-  assert.deepEqual(lifecycleCalls, ['reload', 'poll', 'render']);
+  assert.deepEqual(markCalls, ['remote-save-task']);
+  assert.deepEqual(context.state.coverLookup.tasks.map((task) => task.id), [
+    'newer-task',
+    'remote-save-task',
+    'older-task',
+  ]);
+  assert.equal(context.state.coverLookup.tasks[1].status, 'running');
+  assert.equal(context.state.coverLookup.tasks[1].result_kind, '');
+  assert.equal(context.state.coverLookup.tasks[1].save_generation, 'new-save');
+  assert.equal(context.state.coverLookup.tasks[1].notification_action_taken, false);
+  assert.deepEqual(lifecycleCalls, ['poll', 'render']);
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  assert.ok(fetchCalls.length >= 2);
+  assert.ok(fetchCalls.some((call) => /active_only=true/.test(call.url)));
+  assert.equal(context.state.coverLookup.tasks[1].status, 'running');
+  assert.equal(context.state.coverLookup.tasks[1].save_generation, 'new-save');
+  context.applyCoverLookupTaskUpdates({
+    id: 'remote-save-task',
+    status: 'failed',
+    save_generation: 'new-save',
+    message: 'save failed',
+  });
+  assert.equal(context.state.coverLookup.optimisticAlbumCovers.album, 'previous-cover');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -1313,6 +4106,11 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   const fetchCalls = [];
   const refreshedAlbums = [];
   const preloadedAlbums = [];
+  let signalPreloadStarted;
+  let finishPreload;
+  const preloadStarted = new Promise((resolve) => { signalPreloadStarted = resolve; });
+  const preloadFinished = new Promise((resolve) => { finishPreload = resolve; });
+  let closeCalls = 0;
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
     showToast: () => {},
@@ -1342,7 +4140,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     tasks: [],
     optimisticAlbumCovers: {},
   };
-  context.closeCoverLookupModal = () => {};
+  context.closeCoverLookupModal = () => { closeCalls += 1; };
   context.markAlbumCoverPathsFresh = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums, options = {}) => {
     refreshedAlbums.push({
@@ -1363,6 +4161,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
         context.state.coverLookup.optimisticAlbumCovers,
       )),
     });
+    signalPreloadStarted();
+    await preloadFinished;
     return true;
   };
   context.markCoverLookupTaskActionTaken = () => {};
@@ -1380,7 +4180,11 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     };
   };
 
-  await context.saveLocalCoverFromLookup(sourcePath);
+  const savePromise = context.saveLocalCoverFromLookup(sourcePath);
+  await preloadStarted;
+  assert.equal(closeCalls, 1, 'a saved local cover must close before preview preloading finishes');
+  finishPreload();
+  await savePromise;
 
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/local-select');
@@ -1465,21 +4269,21 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
     ['old-best'],
     'a new task without valid candidates must retain the prior persisted snapshot',
   );
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
     ['old-best'],
     'a zero-result failed task must keep the prior persisted snapshot visible',
   );
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
     ['new-best'],
     'the new generation replaces the prior snapshot after its first valid candidate',
   );
@@ -1667,9 +4471,9 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
-    ['snapshot-newer'],
-    'the durable snapshot wins when its publication timestamp is newer',
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['task-newer', 'snapshot-newer'],
+    'a newer durable snapshot appends without removing an already displayed task candidate',
   );
 })().catch((error) => {
   console.error(error);
@@ -1778,9 +4582,9 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
-    ['candidate-b', 'candidate-a'],
-    'progressive ranking may reorder cards but must retain their stable candidate IDs',
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['candidate-a', 'candidate-b'],
+    'progressive ranking must append without reordering an already displayed card',
   );
   assert.equal(
     context.state.coverLookup.modal.selectedRemoteId,
@@ -1799,8 +4603,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   await context.refreshCoverLookupGallery(false);
   assert.equal(
     context.state.coverLookup.modal.selectedRemoteId,
-    '',
-    'a disappeared explicit override must remain empty instead of selecting another same-generation candidate',
+    'persisted-candidate-a',
+    'an explicit selection must remain mounted when an intermediate snapshot omits its card',
   );
 
   await context.refreshCoverLookupGallery(false);
@@ -1813,8 +4617,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   await context.refreshCoverLookupGallery(false);
   assert.equal(
     context.state.coverLookup.modal.selectedRemoteId,
-    'candidate-d',
-    'a new generation resets the pending override and auto-selects its best candidate',
+    'candidate-a',
+    'a new generation preserves the explicit prior-generation choice instead of auto-selecting its best candidate',
   );
 })().catch((error) => {
   console.error(error);
@@ -2084,8 +4888,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.deepEqual(
-    context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.id),
-    ['candidate-a', 'candidate-d'],
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['candidate-a', 'candidate-b', 'candidate-d'],
   );
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-a');
   assert.deepEqual(renderCalls, ['modal', 'modal']);
@@ -2502,7 +5306,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   context.state.coverLookup.modal.statusTone = 'error';
   context.state.coverLookup.modal.statusText = 'Lookup unavailable';
   context.renderCoverLookupModal();
-  assert.match(statusElement.innerHTML, /data-on-page-alert="error"/);
+  assert.match(statusElement.innerHTML, /data-small-alert="error"/);
+  assert.doesNotMatch(statusElement.innerHTML, /data-on-page-alert/);
   assert.match(statusElement.innerHTML, /Lookup unavailable/);
   context.state.coverLookup.modal.statusTone = 'neutral';
   context.state.coverLookup.modal.statusText = 'Clipboard image added.';
@@ -2625,8 +5430,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   context.renderCoverLookupDrawer();
 
   assert.equal(clearElement.hidden, false);
-  assert.equal(clearElement.disabled, false);
-  assert.equal(clearElement.attributes['aria-disabled'], 'false');
+  assert.equal(clearElement.disabled, true);
+  assert.equal(clearElement.attributes['aria-disabled'], 'true');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2665,7 +5470,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   context.state.coverLookup.tasks = [{
     id: 'completed-task',
     status: 'completed',
-    notification_action_taken: false,
+    notification_action_taken: true,
   }];
 
   await context.clearCompletedCoverLookupTasks();
@@ -2698,10 +5503,12 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
       notification_action_taken: false,
     },
     {
-      id: 'failed-task',
-      status: 'failed',
-      artist: 'Failed Artist',
-      album: 'Failed Album',
+      id: 'selected-cover-task',
+      status: 'completed',
+      result_kind: 'cover-updated',
+      job_kind: 'save_remote_selection',
+      artist: 'Selected Artist',
+      album: 'Selected Album',
       notification_action_taken: true,
     },
     {
@@ -2732,15 +5539,22 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   const pending = context.clearCompletedCoverLookupTasks();
 
   assert.equal(fetchCalls.length, 1);
+  assert.equal(clearElement.disabled, true);
+  assert.equal(clearElement.attributes['aria-busy'], 'true');
+  assert.equal(bodyElement.attributes['aria-busy'], 'true');
+  assert.equal(bodyElement.classList.contains('is-clearing'), true);
+  assert.equal(bodyElement.inert, true);
+  await context.clearCompletedCoverLookupTasks();
+  assert.equal(fetchCalls.length, 1, 'a second clear tap must not start another request');
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/tasks/clear-completed');
-  assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
-    task_ids: ['completed-no-result-task', 'failed-task', 'canceled-task'],
-  });
+  assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {});
   assert.deepEqual(
     context.state.coverLookup.tasks.map((task) => task.id),
-    ['active-provider-task', 'pending-provider-task'],
+    ['completed-no-result-task', 'selected-cover-task', 'canceled-task', 'active-provider-task', 'pending-provider-task'],
   );
-  assert.doesNotMatch(bodyElement.innerHTML, /No Result Album|Failed Album|Canceled Album/);
+  assert.match(bodyElement.innerHTML, /Selected Album/);
+  assert.match(bodyElement.innerHTML, /No Result Album/);
+  assert.match(bodyElement.innerHTML, /Canceled Album/);
   assert.match(bodyElement.innerHTML, /Still Searching/);
   assert.match(bodyElement.innerHTML, /Waiting To Search/);
 
@@ -2748,11 +5562,20 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     ok: true,
     json: async () => ({
       ok: true,
-      removed_count: 3,
+      removed_count: 1,
       tasks: context.state.coverLookup.tasks,
     }),
   });
   await pending;
+  assert.deepEqual(
+    context.state.coverLookup.tasks.map((task) => task.id),
+    ['completed-no-result-task', 'canceled-task', 'active-provider-task', 'pending-provider-task'],
+  );
+  assert.doesNotMatch(bodyElement.innerHTML, /Selected Album/);
+  assert.equal(clearElement.attributes['aria-busy'], 'false');
+  assert.equal(bodyElement.attributes['aria-busy'], 'false');
+  assert.equal(bodyElement.classList.contains('is-clearing'), false);
+  assert.equal(bodyElement.inert, false);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2795,6 +5618,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
         lookup_group: 'services',
         art_kind: 'other',
         art_label: 'Booklet image 2',
+        display_only: true,
         url: 'https://images.example/discogs-booklet.jpg',
       },
       {
@@ -2827,15 +5651,22 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 
   const discogsHeading = bodyElement.innerHTML.indexOf('>Discogs<');
   const discogsFront = bodyElement.innerHTML.indexOf('data-select-remote-cover="discogs-front"');
-  const discogsBooklet = bodyElement.innerHTML.indexOf('data-cover-lookup-other-remote-art="1"', discogsFront);
+  const discogsBooklet = bodyElement.innerHTML.indexOf('data-select-remote-cover="discogs-booklet"');
   const caaHeading = bodyElement.innerHTML.indexOf('>Cover Art Archive<');
   const caaFront = bodyElement.innerHTML.indexOf('data-select-remote-cover="caa-front"');
-  const caaBookletUrl = bodyElement.innerHTML.indexOf('caa-booklet.jpg');
+  const caaBooklet = bodyElement.innerHTML.indexOf('data-select-remote-cover="caa-booklet"');
   assert.ok(discogsHeading >= 0, 'Discogs should have its own provider heading');
   assert.ok(discogsHeading < discogsFront && discogsFront < discogsBooklet && discogsBooklet < caaHeading);
-  assert.ok(caaHeading < caaFront && caaFront < caaBookletUrl);
+  assert.ok(caaHeading < caaFront && caaFront < caaBooklet);
   assert.match(bodyElement.innerHTML, /data-cover-lookup-provider-group="discogs"/);
   assert.match(bodyElement.innerHTML, /data-cover-lookup-provider-group="cover_art_archive"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /is-preview-only[^>]*data-select-remote-cover="discogs-booklet"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /is-preview-only[^>]*data-select-remote-cover="caa-booklet"/);
+  assert.equal(
+    (bodyElement.innerHTML.match(/data-cover-lookup-other-remote-art="1"/g) || []).length,
+    2,
+    'selectable secondary art should retain its semantic artwork marker',
+  );
   assert.equal(
     (bodyElement.innerHTML.match(/class="cover-lookup-art-preview-image"[^>]*loading="lazy"/g) || []).length,
     4,
@@ -3056,9 +5887,9 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   let publicationError = null;
   try {
     assert.deepEqual(
-      context.state.coverLookup.modal.possibleMatches.map((candidate) => candidate.source),
-      ['discogs', 'cover_art_archive', 'direct_url'],
-      'a completed task must publish its final provider candidates before the gallery response arrives',
+      Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.source),
+      ['direct_url', 'discogs', 'cover_art_archive'],
+      'a completed task must append its final provider candidates without moving the existing card',
     );
     assert.equal(
       context.state.coverLookup.modal.selectedRemoteId,
@@ -3129,7 +5960,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 
   assert.deepEqual(
     context.state.coverLookup.tasks.map((task) => task.id),
-    ['active-provider-task', 'pending-provider-task'],
+    originalTasks.map((task) => task.id),
   );
 
   resolveFetch({
@@ -3198,7 +6029,12 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 
     context.renderCoverLookupDrawer();
 
-    assert.match(bodyElement.innerHTML, /cover-lookup-task-status-label[^>]*>Canceled<\/span>/);
+    assert.match(
+      bodyElement.innerHTML,
+      notificationActionTaken
+        ? /cover-lookup-task-status-label[^>]*>Art chosen<\/span>/
+        : /cover-lookup-task-status-label[^>]*>Canceled<\/span>/,
+    );
     assert.match(bodyElement.innerHTML, /data-clear-cover-lookup-task="canceled-task"/);
     assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/);
     assert.match(bodyElement.innerHTML, /aria-label="Open Cover Look Up: Canceled Album — Canceled Artist"/);
@@ -3500,6 +6336,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   });
   context.state.coverLookup.drawerOpen = true;
   context.state.coverLookup.modal = { taskId: 'completed-task' };
+  context.state.coverLookup.tasksHydrated = true;
   context.state.coverLookup.tasks = [
     {
       id: 'completed-task',
@@ -3526,6 +6363,193 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
+});
+
+require('node:test')('successfully clearing one notification is silent', async () => {
+  const toastCalls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => ({
+      ok: true,
+      json: async () => String(url).endsWith('/counts')
+        ? { ok: true, total_count: 0, active_count: 0, finished_count: 0 }
+        : { ok: true, tasks: [] },
+    }),
+    showToast: (...args) => toastCalls.push(args),
+  });
+  context.state.coverLookup.tasks = [{ id: 'cleared-task', status: 'completed' }];
+
+  await context.clearCoverLookupTaskNotification('cleared-task');
+
+  assert.deepEqual(toastCalls, []);
+});
+
+require('node:test')('failed single notification clear performs a full rollback render', async () => {
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: false,
+      json: async () => ({ ok: false, error: 'Delete failed' }),
+    }),
+    console: { error: () => {} },
+    showToast: () => {},
+  });
+  context.state.coverLookup.tasks = [{ id: 'rollback-task', status: 'completed' }];
+  const originalRender = context.renderCoverLookupDrawer;
+  const renderCalls = [];
+  context.renderCoverLookupDrawer = (options) => {
+    renderCalls.push(options || {});
+    return originalRender(options);
+  };
+
+  await context.clearCoverLookupTaskNotification('rollback-task');
+
+  assert.equal(context.state.coverLookup.tasks[0].id, 'rollback-task');
+  assert.deepEqual(Array.from(renderCalls.at(-1).taskIds || []), []);
+});
+
+require('node:test')('initial cover gallery load finishes before task polling starts', async () => {
+  class TestButton {}
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const saveButton = new TestButton();
+  const order = [];
+  let finishGallery;
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': saveButton,
+      }[id] || null),
+    },
+    showToast: () => {},
+  });
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = () => new Promise((resolve) => {
+    order.push('gallery');
+    finishGallery = resolve;
+  });
+  context.ensureCoverLookupPolling = () => order.push('poll');
+
+  const opening = context.openCoverLookupModal({ tracks: [{ path: 'C:/music/01.flac' }] });
+  await Promise.resolve();
+  assert.deepEqual(order, ['gallery']);
+  finishGallery();
+  await opening;
+  assert.deepEqual(order, ['gallery', 'poll']);
+
+  order.length = 0;
+  const closedBeforeReady = context.openCoverLookupModal({ tracks: [{ path: 'C:/music/02.flac' }] });
+  await Promise.resolve();
+  overlay.hidden = true;
+  finishGallery();
+  await closedBeforeReady;
+  assert.deepEqual(order, ['gallery']);
+});
+
+require('node:test')('reopening Cover Lookup renders its cached gallery before refreshing', async () => {
+  class TestButton {}
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const saveButton = new TestButton();
+  const album = { tracks: [{ path: 'N:/Music/Dissection/01.flac' }] };
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': saveButton,
+      }[id] || null),
+    },
+    showToast: () => {},
+  });
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true,
+    local_covers: [{ path: 'N:/Music/Dissection/cover.jpg' }, { path: 'N:/Music/Dissection/cover-existing-1.jpg' }],
+    other_art: [],
+  });
+  context.renderCoverLookupModal = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.refreshCoverLookupGallery = async (showLoading) => {
+    assert.equal(showLoading, false);
+    assert.equal(context.state.coverLookup.modal.loading, false);
+    assert.equal(context.state.coverLookup.modal.localCovers.length, 2);
+  };
+
+  await context.openCoverLookupModal(album);
+});
+
+require('node:test')('reopening Cover Lookup from a compact notification reuses the cached gallery', async () => {
+  class TestButton {}
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const fullAlbum = {
+    key: 'mastodon::crack the skye',
+    tracks: [{ path: 'N:/Music/Mastodon/Crack the Skye/01.flac' }],
+  };
+  const compactAlbum = { key: fullAlbum.key };
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    getAlbumRequestKey: (album) => String(album?.album_ref || album?.key || ''),
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': new TestButton(),
+      }[id] || null),
+    },
+    showToast: () => {},
+  });
+  context.cacheCoverLookupGalleryPayload(fullAlbum, {
+    ok: true,
+    local_covers: [{ path: 'N:/Music/Mastodon/Crack the Skye/cover.jpg' }],
+    other_art: [],
+  });
+  context.renderCoverLookupModal = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.refreshCoverLookupGallery = async (showLoading) => {
+    assert.equal(showLoading, false);
+    assert.equal(context.state.coverLookup.modal.loading, false);
+    assert.equal(context.state.coverLookup.modal.localCovers.length, 1);
+  };
+
+  await context.openCoverLookupModal(compactAlbum);
+});
+
+require('node:test')('actioned terminal notifications render source-neutral Art chosen status', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  context.state.coverLookup.tasks = [
+    {
+      id: 'pasted-zero', status: 'completed', result_kind: 'no-results',
+      notification_action_taken: true, artist: 'Artist', album: 'Pasted cover',
+    },
+    {
+      id: 'local-after-failure', status: 'failed',
+      notification_action_taken: true, artist: 'Artist', album: 'Local after failure',
+    },
+    {
+      id: 'local-after-cancel', status: 'canceled',
+      notification_action_taken: true, artist: 'Artist', album: 'Local after cancel',
+    },
+    {
+      id: 'unresolved-zero', status: 'completed', result_kind: 'no-results',
+      notification_action_taken: false, artist: 'Artist', album: 'Unresolved',
+    },
+    {
+      id: 'early-provider-choice', status: 'completed', result_kind: 'cover-updated',
+      notification_action_taken: false, artist: 'Artist', album: 'Early choice',
+    },
+    {
+      id: 'early-provider-save', status: 'running', job_kind: 'save_remote_selection',
+      notification_action_taken: false, artist: 'Artist', album: 'Early save',
+    },
+  ];
+
+  context.renderCoverLookupDrawer();
+
+  assert.equal((bodyElement.innerHTML.match(/Art chosen/g) || []).length, 3);
+  assert.equal((bodyElement.innerHTML.match(/No covers found/g) || []).length, 1);
+  assert.match(bodyElement.innerHTML, /Early choice/);
+  assert.match(bodyElement.innerHTML, /Saving art…/);
+  assert.doesNotMatch(bodyElement.innerHTML, /Lookup failed|Canceled/);
 });
 
 
@@ -3674,6 +6698,307 @@ require('node:test')('visible service cover previews receive eager browser prior
   assert.doesNotMatch(deferredImage, /\ssrc=/);
 });
 
+require('node:test')('mobile Cover Lookup initially centers the selected cover without fighting later scrolling', () => {
+  const selectedCard = { offsetTop: 820, offsetHeight: 180 };
+  const bodyElement = {
+    innerHTML: '',
+    scrollTop: 0,
+    clientHeight: 500,
+    querySelector: (selector) => selector === '.cover-lookup-art-card.is-active' ? selectedCard : null,
+  };
+  const context = loadHelper({
+    escapeHtml: (value) => String(value || ''),
+    usesMobilePageLayout: () => true,
+    document: {
+      activeElement: null,
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-modal-body': bodyElement,
+        'cover-lookup-modal-subtitle': { innerHTML: '' },
+        'cover-lookup-modal-status': { textContent: '', classList: { toggle() {} } },
+      }[id] || null),
+    },
+  });
+  context.captureCoverLookupModalScrollAnchor = () => null;
+  context.restoreCoverLookupModalScrollAnchor = () => {};
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Selected Album' },
+    loading: false,
+    initialScrollPending: true,
+    selectedRemoteId: 'selected-cover',
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: [{
+      id: 'selected-cover',
+      source: 'discogs',
+      source_label: 'Discogs',
+      lookup_group: 'services',
+      art_kind: 'cover',
+      url: 'https://images.example/selected.jpg',
+    }],
+  };
+
+  context.renderCoverLookupModal();
+
+  assert.equal(bodyElement.scrollTop, 660);
+  assert.equal(context.state.coverLookup.modal.initialScrollPending, false);
+  bodyElement.scrollTop = 120;
+  context.renderCoverLookupModal();
+  assert.equal(bodyElement.scrollTop, 120, 'later renders preserve the user position');
+});
+
+require('node:test')('staged extracted images retain decoded resolution on their cover card', async () => {
+  let bitmapClosed = false;
+  class TestBlob {
+    constructor() {
+      this.name = 'front.jpg';
+      this.type = 'image/jpeg';
+      this.size = 1234;
+    }
+  }
+  class TestFileReader {
+    readAsDataURL() {
+      this.result = 'data:image/jpeg;base64,AAAA';
+      this.onload();
+    }
+  }
+  const context = loadHelper({
+    Blob: TestBlob,
+    escapeHtml: (value) => String(value || ''),
+    FileReader: TestFileReader,
+    createImageBitmap: async () => ({
+      width: 1200,
+      height: 800,
+      close() { bitmapClosed = true; },
+    }),
+    URL: {
+      createObjectURL: () => 'blob:staged-cover',
+      revokeObjectURL() {},
+    },
+  });
+  context.renderCoverLookupModal = () => {};
+  context.state.coverLookup.modal.pastedImages = [];
+  context.state.coverLookup.modal.manualImageAttachments = [];
+
+  await context.addPastedImageToCoverLookup(new TestBlob());
+
+  const [image] = context.state.coverLookup.modal.manualImageAttachments;
+  assert.equal(image.width, 1200);
+  assert.equal(image.height, 800);
+  assert.equal(bitmapClosed, true);
+  assert.match(context.buildCoverLookupCard(image, 'pasted'), /1200x800/);
+});
+
+require('node:test')('adding files renders a pending image card before file decoding finishes', async () => {
+  let pendingReader = null;
+  class TestBlob {
+    constructor() {
+      this.name = 'slow-front.jpg';
+      this.type = 'image/jpeg';
+      this.size = 1234;
+    }
+  }
+  class TestFileReader {
+    constructor() {
+      pendingReader = this;
+    }
+
+    readAsDataURL() {}
+  }
+  const renderStates = [];
+  const context = loadHelper({
+    Blob: TestBlob,
+    FileReader: TestFileReader,
+    createImageBitmap: async () => ({ width: 1200, height: 800, close() {} }),
+    URL: { createObjectURL: () => 'blob:slow-cover', revokeObjectURL() {} },
+  });
+  context.renderCoverLookupModal = () => {
+    renderStates.push(context.state.coverLookup.modal.manualPendingCount || 0);
+  };
+  context.state.coverLookup.modal.pastedImages = [];
+  context.state.coverLookup.modal.manualImageAttachments = [];
+
+  const addPromise = context.addCoverLookupFiles([new TestBlob()]);
+  await Promise.resolve();
+
+  assert.equal(renderStates[0], 1);
+  assert.equal(context.state.coverLookup.modal.manualImageAttachments.length, 0);
+
+  pendingReader.result = 'data:image/jpeg;base64,AAAA';
+  pendingReader.onload();
+  await addPromise;
+
+  assert.equal(renderStates.at(-1), 0);
+  assert.equal(context.state.coverLookup.modal.manualImageAttachments.length, 1);
+});
+
+require('node:test')('extracting a staged image marks only a finished lookup as art chosen', () => {
+  const album = {
+    album_artist: 'Extractor Artist',
+    name: 'Extractor Album',
+    tracks: [{ path: 'C:/Music/Extractor/01.flac' }],
+  };
+  for (const [status, expectedCalls] of [['completed', 1], ['running', 0]]) {
+    const calls = [];
+    const context = loadHelper();
+    context.state.coverLookup.tasks = [{
+      id: `extractor-${status}`,
+      status,
+      notification_action_taken: false,
+      album_payload: album,
+    }];
+    context.state.coverLookup.modal = {
+      album,
+      taskId: `extractor-${status}`,
+      pastedImages: [],
+      manualImageAttachments: [{
+        id: `staged-${status}`,
+        data_url: 'data:image/jpeg;base64,AAAA',
+      }],
+    };
+    context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum) => {
+      calls.push({ taskId, selectedAlbum });
+    };
+    context.renderCoverLookupDrawer = () => {};
+
+    assert.equal(context.extractCoverLookupPendingAttachments(), 1);
+    assert.equal(calls.length, expectedCalls);
+    if (expectedCalls) {
+      assert.equal(calls[0].taskId, `extractor-${status}`);
+      assert.strictEqual(calls[0].selectedAlbum, album);
+    }
+  }
+});
+
+require('node:test')('a new running lookup keeps cached candidates until replacement results settle', () => {
+  const { context } = createDrawerHarness();
+  Object.assign(context.state.coverLookup.modal, {
+    candidateGeneration: 'previous-lookup',
+    possibleMatches: [{
+      id: 'cached-discogs',
+      url: 'https://images.example/cached-discogs.jpg',
+      source: 'discogs',
+      art_kind: 'cover',
+    }],
+    selectedRemoteId: '',
+    remoteSelectionOverrideGeneration: '',
+    remoteSelectionOverrideCandidateId: '',
+    remoteSelectionOverrideUrl: '',
+  });
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'replacement-lookup',
+    status: 'running',
+    revision: 1,
+    bestCandidateId: '',
+    candidates: [],
+  });
+
+  assert.equal(context.state.coverLookup.modal.possibleMatches.length, 1);
+  assert.equal(context.state.coverLookup.modal.possibleMatches[0].id, 'cached-discogs');
+  assert.equal(
+    context.state.coverLookup.modal.selectedRemoteId,
+    '',
+    'a retained card must not become the new lookup generation selection without a click',
+  );
+});
+
+require('node:test')('progressive candidates only append within the same search generation', () => {
+  const { context } = createDrawerHarness();
+  Object.assign(context.state.coverLookup.modal, {
+    candidateGeneration: 'progressive-lookup',
+    candidateRevision: 2,
+    possibleMatches: [
+      { id: 'discogs-first', url: 'https://images.example/discogs-first.jpg' },
+      { id: 'apple-second', url: 'https://images.example/apple-second.jpg' },
+    ],
+    selectedRemoteId: '',
+    remoteSelectionOverrideGeneration: '',
+    remoteSelectionOverrideCandidateId: '',
+    remoteSelectionOverrideUrl: '',
+  });
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-lookup',
+    status: 'running',
+    revision: 3,
+    bestCandidateId: '',
+    candidates: [
+      { id: 'discogs-first', url: 'https://images.example/discogs-first.jpg' },
+      { id: 'caa-third', url: 'https://images.example/caa-third.jpg' },
+    ],
+  });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['discogs-first', 'apple-second', 'caa-third'],
+    'an intermediate provider publication must not remove or reorder visible cards',
+  );
+  assert.equal(context.state.coverLookup.modal.candidateRevision, 3);
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-lookup',
+    status: 'running',
+    revision: 0,
+    bestCandidateId: '',
+    candidates: [{ id: 'spotify-fourth', url: 'https://images.example/spotify-fourth.jpg' }],
+  });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['discogs-first', 'apple-second', 'caa-third', 'spotify-fourth'],
+    'a revisionless live task publication is not proof that its new candidate is stale',
+  );
+  assert.equal(context.state.coverLookup.modal.candidateRevision, 3);
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-lookup',
+    status: 'running',
+    revision: 2,
+    bestCandidateId: '',
+    candidates: [{ id: 'discogs-first', url: 'https://images.example/discogs-first.jpg' }],
+  });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.possibleMatches, (candidate) => candidate.id),
+    ['discogs-first', 'apple-second', 'caa-third', 'spotify-fourth'],
+    'a stale poll response must not collapse a progressively populated section',
+  );
+  assert.equal(context.state.coverLookup.modal.candidateRevision, 3);
+});
+
+require('node:test')('progressive modal rendering retains existing cover card nodes', () => {
+  const retainedCard = {
+    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img src="loaded.jpg" style="display:block"><span>Initial provider details</span></div>',
+    getAttribute: (name) => (name === 'data-cover-lookup-item-key' ? 'remote:stable' : ''),
+  };
+  const replacementCard = {
+    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img data-cover-lookup-deferred-src="loaded.jpg"><span>Enriched provider details</span></div>',
+    getAttribute: retainedCard.getAttribute,
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  let rendered = false;
+  const body = {
+    querySelectorAll() {
+      return rendered ? [replacementCard] : [retainedCard];
+    },
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get() { return ''; },
+    set() { rendered = true; },
+  });
+  const context = loadHelper();
+
+  context.replaceCoverLookupModalMarkup(body, '<div>stable plus new card</div>');
+
+  assert.strictEqual(
+    replacementCard.replacedWith,
+    retainedCard,
+    'a same-identity card must stay mounted while provider details change and later results append',
+  );
+});
+
 require('node:test')('UUID generation formatting retains a progressive remote override', () => {
   const context = loadHelper();
   const generation = '699803380ccd46e0b1fe89fc61de666a';
@@ -3795,4 +7120,308 @@ require('node:test')('only the first service cover preview receives eager browse
 
   assert.equal((bodyElement.innerHTML.match(/loading="eager" fetchpriority="high"/g) || []).length, 1);
   assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
+});
+
+require('node:test')('progressive provider rendering appends without moving existing cards', () => {
+  const bodyElement = { innerHTML: '', scrollTop: 0 };
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  context.getCoverLookupModalElements = () => ({
+    overlay: {},
+    body: bodyElement,
+    subtitle: { textContent: '' },
+    status: null,
+    saveRemote: null,
+  });
+  context.captureCoverLookupModalScrollAnchor = () => null;
+  context.restoreCoverLookupModalScrollAnchor = () => {};
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Album' },
+    loading: false,
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: [],
+    selectedRemoteId: '',
+    remoteSelectionOverrideGeneration: '',
+    remoteSelectionOverrideCandidateId: '',
+    remoteSelectionOverrideUrl: '',
+  };
+  const initialCandidates = [
+    {
+      id: 'apple-first',
+      source: 'apple',
+      art_kind: 'cover',
+      url: 'https://images.example/apple.jpg',
+    },
+    {
+      id: 'manual-front-second',
+      source: 'direct_url',
+      lookup_group: 'manual_links',
+      art_kind: 'cover',
+      url: 'https://images.example/manual-front.jpg',
+    },
+    {
+      id: 'manual-other-third',
+      source: 'direct_url',
+      lookup_group: 'manual_links',
+      art_kind: 'other',
+      url: 'https://images.example/manual-other.jpg',
+    },
+  ];
+
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-render-order',
+    status: 'running',
+    revision: 1,
+    candidates: initialCandidates,
+  });
+  context.renderCoverLookupModal();
+  const initialOrder = Array.from(
+    bodyElement.innerHTML.matchAll(/data-cover-lookup-item-key="remote:([^"]+)"/g),
+    match => match[1],
+  );
+  assert.deepEqual(initialOrder, initialCandidates.map(candidate => candidate.id));
+
+  const laterCandidates = [
+    ...initialCandidates,
+    {
+      id: 'discogs-front-fourth',
+      source: 'discogs',
+      art_kind: 'cover',
+      url: 'https://images.example/discogs-front.jpg',
+    },
+    {
+      id: 'discogs-other-fifth',
+      source: 'discogs',
+      art_kind: 'other',
+      url: 'https://images.example/discogs-other.jpg',
+    },
+    {
+      id: 'caa-front-sixth',
+      source: 'cover_art_archive',
+      lookup_group: 'cover_art_archive',
+      art_kind: 'cover',
+      url: 'https://images.example/caa-front.jpg',
+    },
+  ];
+  context.applyCoverLookupCandidateSource({
+    generation: 'progressive-render-order',
+    status: 'running',
+    revision: 2,
+    candidates: laterCandidates,
+  });
+  context.renderCoverLookupModal();
+  const progressiveOrder = Array.from(
+    bodyElement.innerHTML.matchAll(/data-cover-lookup-item-key="remote:([^"]+)"/g),
+    match => match[1],
+  );
+
+  assert.deepEqual(
+    progressiveOrder,
+    laterCandidates.map(candidate => candidate.id),
+    'new provider cards append after every card already visible in the modal',
+  );
+});
+
+require('node:test')('loading Cover Lookup renders only known gallery card placeholders', () => {
+  const bodyElement = { innerHTML: '', scrollTop: 0 };
+  const context = loadHelper({ escapeHtml: (value) => String(value ?? '') });
+  context.getCoverLookupModalElements = () => ({
+    overlay: {},
+    body: bodyElement,
+    subtitle: { textContent: '' },
+    status: null,
+    saveRemote: null,
+  });
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Album' },
+    loading: true,
+    expectedRemoteCount: 4,
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: [],
+  };
+
+  context.renderCoverLookupModal();
+
+  assert.match(bodyElement.innerHTML, /cover-lookup-gallery-loading/);
+  assert.match(bodyElement.innerHTML, /cover-lookup-task-loading-line/);
+  assert.doesNotMatch(bodyElement.innerHTML, />LOCAL</);
+  assert.doesNotMatch(bodyElement.innerHTML, />OTHER ART</);
+  assert.match(bodyElement.innerHTML, />REMOTE · 4 images</);
+  assert.match(bodyElement.innerHTML, />MANUAL SEARCH</);
+  assert.equal(
+    (bodyElement.innerHTML.match(/data-cover-lookup-loading-section="remote"/g) || []).length,
+    4,
+  );
+  assert.doesNotMatch(bodyElement.innerHTML, /No images in album folder/);
+});
+
+require('node:test')('notification polling rerenders when the selected user cover preview changes', async () => {
+  let previewUrl = '/cover?album=temple&v=before';
+  const renderOptions = [];
+  const context = loadHelper({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        tasks: [{
+          id: 'temple-task',
+          status: 'completed',
+          artist: 'Тампль',
+          album: 'Премьера на Зиланте 2000',
+          notification_action_taken: true,
+          current_user_cover_preview_url: previewUrl,
+        }],
+      }),
+    }),
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    updateCoverLookupNotificationCounts: () => {},
+    applyCoverLookupTaskUpdates: () => {},
+    stopCoverLookupPollingIfIdle: () => {},
+  });
+  context.state.coverLookup.tasks = [];
+  context.state.coverLookup.modal = { taskId: '' };
+  context.renderCoverLookupDrawer = (options) => { renderOptions.push(options || {}); };
+
+  await context.loadCoverLookupTasks({ toast: false });
+  const initialRenderCount = renderOptions.length;
+  assert.ok(initialRenderCount > 0);
+
+  previewUrl = '/cover?album=temple&v=selected';
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(context.state.coverLookup.tasks[0].current_user_cover_preview_url, previewUrl);
+  assert.equal(renderOptions.length, initialRenderCount + 1);
+  assert.deepEqual(Array.from(renderOptions.at(-1).taskIds), ['temple-task']);
+});
+
+require('node:test')('poll acknowledgement does not rerender an already-updated notification list', async () => {
+  const task = {
+    id: 'saved-task',
+    status: 'completed',
+    notification_action_taken: true,
+    current_user_cover_preview_url: '/cover?saved=1',
+  };
+  const context = loadHelper({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, tasks: [{ ...task }] }),
+    }),
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    updateCoverLookupNotificationCounts: () => {},
+    applyCoverLookupTaskUpdates: () => {},
+    stopCoverLookupPollingIfIdle: () => {},
+  });
+  context.state.coverLookup.tasks = [{ ...task }];
+  context.state.coverLookup.tasksHydrated = true;
+  context.state.coverLookup.tasksSnapshot = 'stale-before-optimistic-update';
+  let renderCount = 0;
+  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(renderCount, 0);
+});
+
+require('node:test')('changed notification card keeps its keyed outer node mounted', () => {
+  const attributes = new Map([
+    ['data-open-cover-lookup-task', 'stable-task'],
+    ['class', 'cover-lookup-task-card is-failed'],
+  ]);
+  const retained = {
+    outerHTML: '<article data-open-cover-lookup-task="stable-task" class="cover-lookup-task-card is-failed">Failed</article>',
+    innerHTML: 'Failed',
+    getAttribute: (name) => attributes.get(name) || '',
+    getAttributeNames: () => Array.from(attributes.keys()),
+    hasAttribute: (name) => attributes.has(name),
+    removeAttribute: (name) => attributes.delete(name),
+    setAttribute: (name, value) => attributes.set(name, value),
+    querySelector: () => null,
+  };
+  const replacementAttributes = new Map([
+    ['data-open-cover-lookup-task', 'stable-task'],
+    ['class', 'cover-lookup-task-card is-completed'],
+  ]);
+  const replacement = {
+    outerHTML: '<article data-open-cover-lookup-task="stable-task" class="cover-lookup-task-card is-completed">Art chosen</article>',
+    innerHTML: 'Art chosen',
+    getAttribute: (name) => replacementAttributes.get(name) || '',
+    getAttributeNames: () => Array.from(replacementAttributes.keys()),
+    hasAttribute: (name) => replacementAttributes.has(name),
+    querySelector: () => null,
+    replaceWith(value) { this.replacedWith = value; },
+  };
+  let rendered = false;
+  const body = {
+    querySelectorAll: () => [rendered ? replacement : retained],
+  };
+  Object.defineProperty(body, 'innerHTML', {
+    get: () => '',
+    set: () => { rendered = true; },
+  });
+  const { context } = createDrawerHarness();
+
+  context.replaceCoverLookupDrawerMarkup(body, replacement.outerHTML);
+
+  assert.strictEqual(replacement.replacedWith, retained);
+  assert.equal(retained.innerHTML, 'Art chosen');
+  assert.equal(attributes.get('class'), 'cover-lookup-task-card is-completed');
+});
+
+require('node:test')('retry immediately resets the existing card label tone and progress', async () => {
+  const album = { album_artist: 'Eden', name: 'Eden', year: 2020 };
+  let resolveFetch;
+  const context = loadHelper({
+    fetch: () => new Promise((resolve) => { resolveFetch = resolve; }),
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'eden-task',
+    status: 'failed',
+    progress: 100,
+    progress_label: 'Lookup failed',
+    message: 'Lookup failed',
+    album_payload: album,
+  }];
+  const renderOptions = [];
+  context.renderCoverLookupDrawer = (options) => renderOptions.push(options);
+  context.loadCoverLookupTasks = async () => {};
+
+  const retryRequest = context.startCoverLookupForAlbum(album, {
+    backgroundOnly: true,
+    taskId: 'eden-task',
+  });
+  await Promise.resolve();
+
+  assert.equal(context.state.coverLookup.tasks.length, 1);
+  assert.equal(context.state.coverLookup.tasks[0].status, 'pending');
+  assert.equal(context.state.coverLookup.tasks[0].progress, 0);
+  assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Queued');
+  assert.equal(context.state.coverLookup.tasks[0].message, '');
+  assert.equal(renderOptions[0]?.preserveInteraction, false);
+  const { context: drawerContext, bodyElement } = createDrawerHarness();
+  drawerContext.state.coverLookup.tasks = [
+    JSON.parse(JSON.stringify(context.state.coverLookup.tasks[0])),
+  ];
+  drawerContext.renderCoverLookupDrawer({ preserveInteraction: false });
+  assert.match(bodyElement.innerHTML, /is-running[^>]*>Queued</);
+  assert.match(bodyElement.innerHTML, /width:\s*0%/);
+  assert.doesNotMatch(bodyElement.innerHTML, /is-failed/);
+  resolveFetch({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      task: {
+        id: 'eden-task',
+        status: 'pending',
+        progress: 0,
+        progress_label: 'Queued',
+        message: '',
+      },
+    }),
+  });
+  await retryRequest;
 });

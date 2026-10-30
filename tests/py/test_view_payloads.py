@@ -1360,7 +1360,10 @@ def test_build_view_payload_merges_case_only_variants_for_shared_artist_groups(a
         "Exit in Darkness",
         "Live Session",
     ]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Mono / A.A. Williams"]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == [
+        "A.A. Williams",
+        "Mono",
+    ]
 
 
 def test_build_view_payload_merges_case_only_solo_artist_variants_even_when_relation_views_are_stale(app):

@@ -11,8 +11,314 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "startup-progress-player-colors",
-      "startup-progress-content-release"
+      "startup-progress-content-release",
+      "appearance-independent-startup-background"
     ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumTagRename.spec.js",
+    "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "album-identity-lineage",
+    "appProcessScope": "isolated",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "album-identity:split-selector-and-merge-follow"
+    ],
+    "filesystemScenarios": [
+      "media-copy:album-identity-lineage"
+    ],
+    "expectedContracts": [
+      "stale-split-reference-requires-current-release",
+      "stale-merge-reference-follows-current-release"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:album-identity-lineage",
+      "filesystemCopy": "media/cases/album-identity-lineage"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-punctuation-band"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-punctuation-identity"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "punctuation-only-band-identity",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-punctuation-band",
+      "filesystemCopy": "media/cases/watcher-punctuation-identity"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-possessive-project"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-possessive-identity"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "possessive-project-identity-separation",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-possessive-project",
+      "filesystemCopy": "media/cases/watcher-possessive-identity"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-featured-ownership"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-featured-ownership"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "track-artist-featured-not-owned",
+      "album-owner-credit-preserved",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-featured-ownership",
+      "filesystemCopy": "media/cases/watcher-featured-ownership"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing display names",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-artist-collation"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-artist-collation"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "leading-punctuation-collation",
+      "display-name-preservation",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-artist-collation",
+      "filesystemCopy": "media/cases/watcher-artist-collation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both constituent artists",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-joint-credit-projection"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-joint-credit"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "joint-display-credit",
+      "constituent-artist-membership",
+      "no-synthetic-composite-artist",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-joint-credit",
+      "filesystemCopy": "media/cases/watcher-joint-credit"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-ALBUM-TRACK-CREDITS-003 groups repeated featured artists under one marker",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-track-credit-projection"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-grouped-feature-credit"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "single-feature-marker",
+      "deduplicated-featured-artists"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-grouped-feature-credit",
+      "filesystemCopy": "media/cases/watcher-grouped-feature-credit"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-034 keeps empty artist-scoped Non-album tracks disabled after hydration",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-without-non-album-tracks"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-empty-non-album"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "artist-scoped-non-album-hydration",
+      "native-disabled-semantics",
+      "visibly-disabled-control",
+      "restart-idempotent-non-album-state"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-empty-non-album",
+      "filesystemCopy": "media/cases/watcher-empty-non-album"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-COVERS-033 watcher indexes a new album and applies one automatic cover without Full Scan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-automatic-cover"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-reconciliation"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "automatic-cover-selection",
+      "restart-idempotent-projection-and-cover"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-automatic-cover",
+      "filesystemCopy": "media/cases/watcher-reconciliation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-COVERS-034 watcher prefers front-named local art over a larger booklet image",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-with-local-art"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-local-cover-ranking"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "local-cover-filename-ranking",
+      "no-unnecessary-remote-cover-search"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-local-cover-ranking",
+      "filesystemCopy": "media/cases/watcher-local-cover-ranking"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
+    "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "watcher:track-subtitle-edition-reconciliation"
+    ],
+    "filesystemScenarios": [
+      "media-copy:track-subtitle-edition-boundary"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "track-subtitles-remain-track-metadata",
+      "single-release-gallery-and-album-details"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-track-subtitle-edition-reconciliation",
+      "filesystemCopy": "media/cases/watcher-track-subtitle-edition-boundary"
+    },
     "ownerApproval": "approved"
   },
   {
@@ -71,7 +377,8 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "startup-progress-player-colors",
-      "startup-progress-content-release"
+      "startup-progress-content-release",
+      "appearance-independent-startup-background"
     ],
     "ownerApproval": "approved"
   },
@@ -163,6 +470,26 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+    "case": "FTC-TAGS-027 loads every disc when expanding an indexed album folder",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "family:ordinary-shared-release"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "tag-editor-folder-expansion-uses-authoritative-album-root",
+      "tag-editor-folder-expansion-includes-every-disc"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
     "case": "FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 preserve featured credits and exclude guest and Interview albums from family galleries",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -233,6 +560,94 @@
     "mutationOwnership": {
       "databaseIdentity": "case:album-identity-logical-release",
       "filesystemCopy": "media/cases/album-identity-logical-release"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
+    "case": "FTC-ALBUM-DETAILS-026 rebuild drops track subtitle and part frames from album editions",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "track-subtitle-projection",
+    "databaseScenarios": [
+      "album-identity:track-subtitle-edition-boundary"
+    ],
+    "filesystemScenarios": [
+      "media-copy:track-subtitle-edition-boundary"
+    ],
+    "expectedContracts": [
+      "track-subtitle-frames-do-not-create-album-editions",
+      "collapsed-release-persists-after-reload"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:track-subtitle-edition-boundary",
+      "filesystemCopy": "media/cases/track-subtitle-edition-boundary"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/numericDiscFolderProjection.spec.js",
+    "case": "FTC-ALBUM-DETAILS-027 numeric disc folders remain one release without duplicate versions",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "numeric-disc-folder-projection",
+    "databaseScenarios": [
+      "album-identity:numeric-disc-folder-projection"
+    ],
+    "filesystemScenarios": [
+      "media-copy:numeric-disc-folder-projection"
+    ],
+    "expectedContracts": [
+      "numeric-disc-folders-form-one-release",
+      "numeric-disc-folders-do-not-create-duplicate-sources",
+      "numeric-disc-folder-release-persists-after-restart"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:numeric-disc-folder-projection",
+      "filesystemCopy": "media/cases/numeric-disc-folder-projection"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/yearDistinctReleaseProjection.spec.js",
+    "case": "FTC-ALBUM-DETAILS-028 year-distinct folders remain separate releases",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "year-distinct-release-projection",
+    "databaseScenarios": [
+      "album-identity:year-distinct-release-projection"
+    ],
+    "filesystemScenarios": [
+      "media-copy:year-distinct-release-projection"
+    ],
+    "expectedContracts": [
+      "watcher-adds-second-year-without-full-rescan",
+      "legacy-base-album-row-adopts-to-first-year-identity",
+      "year-distinct-folders-form-separate-releases",
+      "year-distinct-releases-do-not-create-duplicate-sources",
+      "year-distinct-release-identities-persist-after-restart"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:year-distinct-release-projection",
+      "filesystemCopy": "media/cases/year-distinct-release-projection"
     },
     "ownerApproval": "approved"
   },
@@ -334,6 +749,32 @@
     "mutationOwnership": {
       "databaseIdentity": "case:album-rename-task",
       "filesystemCopy": "media/cases/album-rename-task"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumTagRename.spec.js",
+    "case": "FTC-COVERS-038 persisted lookup survives an album identity rename and app restart",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "rename-completion",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:persisted-notification-album-rename"
+    ],
+    "filesystemScenarios": [
+      "media-copy:persisted-notification-album-rename"
+    ],
+    "expectedContracts": [
+      "persisted-notification-current-album-resolution",
+      "persisted-candidate-preservation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:persisted-notification-album-rename",
+      "filesystemCopy": "media/cases/persisted-notification-album-rename"
     },
     "ownerApproval": "approved"
   },
@@ -457,7 +898,9 @@
     ],
     "expectedContracts": [
       "clean-track-titles",
-      "per-track-credits"
+      "per-track-credits",
+      "single-featured-prefix",
+      "deduplicated-featured-artists"
     ],
     "ownerApproval": "approved"
   },
@@ -575,7 +1018,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumTrackCredits.spec.js",
-    "case": "FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words",
+    "case": "FTC-ALBUM-DETAILS-005 ignores a sole bonus-labeled group",
     "profile": "functional-core",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -742,6 +1185,26 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-032 current 1200px cover clears stale poor-quality alert",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-quality:stale-dimensions"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool"
+    ],
+    "expectedContracts": [
+      "current-cover-dimensions"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-022 cover gallery loading starts before the task list responds",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -818,7 +1281,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
-    "case": "FTC-COVERS-007 notification states and bulk clear preserve active work",
+    "case": "FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -831,11 +1294,81 @@
       "media-copy:notification-bulk-clear"
     ],
     "expectedContracts": [
+      "chosen-cover-notifications-cleared",
       "active-work-preserved-on-clear"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:notification-bulk-clear",
       "filesystemCopy": "media/cases/notification-bulk-clear"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-036 notification cards keep independent album identity after cover save",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:notification-identity-isolation"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:notification-identity-isolation"
+    ],
+    "expectedContracts": [
+      "notification-card-identity-isolation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:notification-identity-isolation",
+      "filesystemCopy": "media/cases/notification-identity-isolation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-039 stale split identity stays open and chooses an exact current release",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "stale-split-selector-remains-in-cover-lookup",
+      "exact-current-release-rebind"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:local-cover-deletion"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:local-cover-deletion"
+    ],
+    "expectedContracts": [
+      "foreground-local-cover-deletion",
+      "confirmation-stacks-above-cover-lookup",
+      "deleted-cover-remains-absent-after-reload"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:local-cover-deletion",
+      "filesystemCopy": "media/cases/local-cover-deletion"
     },
     "ownerApproval": "approved"
   },
@@ -862,6 +1395,32 @@
     "mutationOwnership": {
       "databaseIdentity": "case:partial-cover-results",
       "filesystemCopy": "media/cases/partial-cover-results"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-040 failed accepted save restores prior art and keeps its notification",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:failed-save-reconciliation"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:failed-cover-save"
+    ],
+    "expectedContracts": [
+      "failed-save-restores-prior-art",
+      "failed-save-notification-retained"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:failed-cover-save",
+      "filesystemCopy": "media/cases/failed-cover-save"
     },
     "ownerApproval": "approved"
   },
@@ -916,6 +1475,59 @@
     "mutationOwnership": {
       "databaseIdentity": "case:manual-composer",
       "filesystemCopy": "media/cases/manual-composer"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-028 pasted cover revision reconciles album details, gallery, and mobile caches",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:manual-composer"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:pasted-cover-revision"
+    ],
+    "expectedContracts": [
+      "pasted-cover-revision-persistence",
+      "desktop-mobile-cover-cache-reconciliation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:pasted-cover-revision",
+      "filesystemCopy": "media/cases/pasted-cover-revision"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-031 a prior-generation choice survives a newer active lookup and saves unchanged",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:selection-concurrency"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:selection-concurrency"
+    ],
+    "expectedContracts": [
+      "save-prior-generation-selection-while-newer-task-running",
+      "newer-terminal-publication-cannot-replace-explicit-selection",
+      "selected-cover-bytes-and-user-origin-persist"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:selection-concurrency",
+      "filesystemCopy": "media/cases/selection-concurrency"
     },
     "ownerApproval": "approved"
   },
@@ -1234,6 +1846,28 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/galleryCoverStability.spec.js",
+    "case": "FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-size art is unavailable",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "setupGroup": "joseph-cover-detail",
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "album:joseph-2023"
+    ],
+    "filesystemScenarios": [
+      "covers:joseph-2023-approved-copy"
+    ],
+    "expectedContracts": [
+      "bounded-full-cover-retry-preview-and-retry-control"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/galleryCoverStability.spec.js",
     "case": "FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -1248,7 +1882,9 @@
     ],
     "expectedContracts": [
       "decoded-player-artwork",
-      "active-album-full-art-scope"
+      "active-album-full-art-scope",
+      "resting-outline-suppression",
+      "keyboard-visible-lightbox-controls"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:active-album-artwork",
@@ -2419,7 +3055,7 @@
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
-    "executionWave": 1,
+    "executionWave": 2,
     "databaseScenarios": [
       "cover-lookup:selected-local-art-rescan"
     ],
@@ -2428,9 +3064,34 @@
       "media-copy:selected-local-art-rescan"
     ],
     "expectedContracts": [
-      "selected-local-art-authority-after-rescan-restart"
+      "selected-local-art-authority-after-rescan-restart",
+      "durable-local-save-clears-saving-and-closes-modal"
     ],
     "globalMutationReason": "Requires a dedicated full-library rescan and managed application restart.",
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.cover-rescan.config.js",
+    "project": "cover-rescan",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-035 persisted notification candidates remain visible and save after app restart",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "cover-lookup:persisted-candidates-restart"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:persisted-candidates-restart"
+    ],
+    "expectedContracts": [
+      "persisted-candidates-visible-after-restart",
+      "persisted-candidate-saves-through-production-route",
+      "notification-drawer-remains-open-behind-cover-lookup"
+    ],
+    "globalMutationReason": "Requires a managed application restart after persisting provider candidates.",
     "ownerApproval": "approved"
   },
   {
@@ -3237,6 +3898,36 @@
     "mutationOwnership": {
       "databaseIdentity": "case:watcher-reconciliation",
       "filesystemCopy": "media/cases/watcher-reconciliation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/offlineDeletionReconciliation.spec.js",
+    "case": "FTC-LIBROOTS-019 reconciles offline legacy deletions without stale active tracks",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "offline-deletion-reconciliation",
+    "databaseScenarios": [
+      "album-identity:legacy-source-less-track-file"
+    ],
+    "filesystemScenarios": [
+      "media-copy:offline-deletion-reconciliation"
+    ],
+    "expectedContracts": [
+      "offline-deleted-files-become-stale-after-full-scan",
+      "surviving-files-remain-the-only-active-track-projection",
+      "fully-removed-album-remains-an-explicit-missing-card",
+      "offline-deletion-reconciliation-survives-restart"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:offline-deletion-reconciliation",
+      "filesystemCopy": "media/cases/offline-deletion-reconciliation"
     },
     "ownerApproval": "approved"
   },
@@ -5463,6 +6154,21 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/galleryBarAlignment.spec.js",
+    "case": "desktop page GalleryBar aligns its back control with the title row",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "desktop page GalleryBar aligns its back control with the title row"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryBarAlignment.spec.js",
     "case": "light Gallery-bar hover uses its approved surface",
     "profile": null,
     "setupScope": "suite",
@@ -7168,6 +7874,26 @@
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
     "test": "tests/e2e/mobile-feedback/mobilePolish.spec.js",
+    "case": "Gallery and Admin keep the same desktop shell and page-header geometry",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Gallery and Admin keep the same desktop shell and page-header geometry"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobilePolish.spec.js",
     "case": "Follow mode locks every phone editor and Rules uses the page-bar navigation dropdown",
     "profile": null,
     "setupScope": "isolated",
@@ -8410,7 +9136,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
-    "case": "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+      "case": "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -8431,6 +9157,62 @@
     "mutationOwnership": {
       "databaseIdentity": "case:ftc-covers-027",
       "filesystemCopy": "media/cases/ftc-covers-027"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "release-scoped-cover-ownership"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-029",
+      "filesystemCopy": "media/cases/ftc-covers-029"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "release-scoped-cover-ownership"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-043",
+      "filesystemCopy": "media/cases/ftc-covers-043"
     },
     "ownerApproval": "approved"
   },
@@ -8538,6 +9320,22 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "Album Details keeps the Gallery header offset and tightens its identity lines",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared-mobile-header-geometry",
+      "compact-album-identity-spacing"
     ],
     "ownerApproval": "approved"
   },

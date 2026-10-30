@@ -240,7 +240,7 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
       let progressVisible = false;
       let rectangle = { x: 100, y: 50, width: 800, height: 700 };
       const toast = {
-        querySelector: () => ({ textContent: 'Cover art lookup started.' }),
+        querySelector: () => ({ textContent: 'Cover search started.' }),
         classList: { contains: () => settled },
         getAnimations: () => settled ? [] : [{ playState: 'running' }],
       };
@@ -248,8 +248,20 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         querySelector: () => ({ getBoundingClientRect: () => ({ height: progressVisible ? 80 : 0 }) }),
         getBoundingClientRect: () => ({ ...rectangle }),
       };
+      const HTMLButtonElement = class {};
+      const findBetterButton = new HTMLButtonElement();
+      findBetterButton.disabled = true;
+      const modalStatus = { textContent: 'Cover search started.' };
       const context = {
-        document: { querySelector: () => modal, querySelectorAll: () => [toast] },
+        HTMLButtonElement,
+        document: {
+          querySelector: (selector) => {
+            if (selector === '.find-better') return findBetterButton;
+            if (selector === '.modal-status') return modalStatus;
+            return modal;
+          },
+          querySelectorAll: () => [toast],
+        },
         getComputedStyle: () => ({ opacity: settled ? '1' : '0.5' }),
         requestAnimationFrame: (callback) => { frames.set(++nextId, callback); return nextId; },
         cancelAnimationFrame: (id) => frames.delete(id),
@@ -257,7 +269,9 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         clearTimeout: (id) => timers.delete(id),
       };
       const measurement = await CoverLookup.prototype.observeStartedToastEntrance.call({
+        findBetterButtonSelector: '.find-better',
         modalDialogSelector: '.dialog',
+        modalStatusSelector: '.modal-status',
         toastSelector: '.toast',
         page: { evaluateHandle: (callback, args) => vm.runInNewContext(`(${callback})`, context)(args) },
       }, { timeout: 100 });
@@ -1227,6 +1241,20 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.keyboard|\.press\(['"]Space['"]\)/);
 });
 
+test('full-size artwork E2E owns resting and keyboard-focus presentation checks', () => {
+  const spec = read('tests/e2e/specs/galleryCoverStability.spec.js');
+  const trackModalActions = read('tests/e2e/actions/trackModalActions.js');
+
+  assert.match(
+    trackModalActions,
+    /expectCoverLightboxKeyboardFocusPresentation\([\s\S]*outline-style[\s\S]*lightboxCloseButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxPreviousButton\)[\s\S]*lightboxPreviousButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxNextButton\)[\s\S]*lightboxNextButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxCloseButton\)/,
+  );
+  assert.match(
+    spec,
+    /expectCoverLightboxNavigationAvailable\(\)[\s\S]*expectCoverLightboxKeyboardFocusPresentation\(\)/,
+  );
+});
+
 test('player artwork search-context E2E restores playback through an action-owned reload', () => {
   const spec = read('tests/e2e/specs/playerArtworkSearchContext.spec.js');
   const globalPlayerActions = read('tests/e2e/actions/globalPlayerActions.js');
@@ -1267,7 +1295,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   assert.match(coverLookupFixtureData, /notificationActioned[\s\S]*notificationFailed[\s\S]*cancelClear[\s\S]*notificationActive/);
   assert.match(
     coverLookup,
-    /waitForTaskStatus\(actionedTaskTitle, \/\^\(\?:\\d\+ \)\?covers found\$\/u\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearFinishedTasksAndPreserveActive\([\s\S]*\[actionedTaskTitle, noResultTaskTitle, failedTaskTitle\],[\s\S]*activeTaskTitle[\s\S]*reloadAndOpenDrawer\(\)[\s\S]*waitForTaskActive\(activeTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(actionedTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(noResultTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(failedTaskTitle\)/,
+    /waitForTaskStatus\(actionedTaskTitle, \/\^\(\?:\\d\+ \)\?covers found\$\/u\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearFinishedTasksAndPreserveActive\([\s\S]*\[actionedTaskTitle\],[\s\S]*activeTaskTitle[\s\S]*reloadAndOpenDrawer\(\)[\s\S]*waitForTaskActive\(activeTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(actionedTaskTitle\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearTaskAndExpectImmediateRemoval\(noResultTaskTitle\)[\s\S]*clearTaskAndExpectImmediateRemoval\(failedTaskTitle\)/,
   );
   assert.match(
     coverLookupActions,
@@ -1275,7 +1303,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   );
   assert.match(
     coverLookup,
-    /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, 'Art chosen'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
+    /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, '1 covers found'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
   );
   assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = String\(selection\.payload\?\.optimistic_cover_path[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
   assert.match(
@@ -1319,7 +1347,7 @@ test('FTC-COVERS-007 alert-placement scenario cleans its completed lookup state'
   const spec = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarioTitle = 'FTC-COVERS-007 lookup-start alert does not reposition the cover modal';
   const scenarioMarker = `test('${scenarioTitle}',`;
-  const nextScenarioMarker = "test('FTC-COVERS-007 notification states and bulk clear preserve active work',";
+  const nextScenarioMarker = "test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work',";
   const scenarioStart = spec.indexOf(scenarioMarker);
   assert.ok(scenarioStart >= 0, `Expected exact scenario title: ${scenarioTitle}`);
   assert.equal(
@@ -1592,8 +1620,12 @@ test('manual all-provider scenarios explicitly opt into normal provider results'
   const spec = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarios = [
     {
-      title: 'FTC-COVERS-007 notification states and bulk clear preserve active work',
+      title: 'FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work',
       searchMarker: 'startSearchAndReadToastPlacement()',
+    },
+    {
+      title: 'FTC-COVERS-036 notification cards keep independent album identity after cover save',
+      searchMarker: 'enterManualUrls(',
     },
     {
       title: 'FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload',
@@ -5071,7 +5103,7 @@ test('search readiness waits for the committed URL query and completed view requ
 test('the long cover notification lifecycle owns enough CI budget to reach cancellation', () => {
   const coverLookup = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarioStart = coverLookup.indexOf(
-    "test('FTC-COVERS-007 notification states and bulk clear preserve active work'",
+    "test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work'",
   );
   const nextScenario = coverLookup.indexOf('\ntest(', scenarioStart + 1);
   const scenario = coverLookup.slice(scenarioStart, nextScenario);
@@ -5363,6 +5395,86 @@ test('cover lookup drawer actions use product state and the explicit close contr
   const pom = read('tests/e2e/poms/coverLookup.js');
   assert.match(pom, /drawer\.hidden/);
   assert.match(pom, /classList\.contains\('is-open'\)/);
+});
+
+test('cover lookup results readiness waits for initial gallery placeholders but not pasted-image work', async () => {
+  const moduleUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js'),
+  ).href;
+  const { CoverLookupActions } = await import(moduleUrl);
+  const { CoverLookup } = await import(pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/poms/coverLookup.js'),
+  ).href);
+  const initialGalleryLoadingSelector = Object.getOwnPropertyDescriptor(
+    CoverLookup.prototype,
+    'initialGalleryLoadingSelector',
+  ).get.call({});
+  assert.equal(
+    initialGalleryLoadingSelector,
+    '#cover-lookup-modal-body .cover-lookup-gallery-resolving, #cover-lookup-modal-body [data-cover-lookup-loading-section]:not([data-cover-lookup-loading-section="pasted"])',
+  );
+  const page = new EventEmitter();
+  page.url = () => 'http://127.0.0.1:4173/';
+
+  const originalDocument = globalThis.document;
+  const originalHTMLElement = globalThis.HTMLElement;
+  const originalHTMLTextAreaElement = globalThis.HTMLTextAreaElement;
+  const originalHTMLButtonElement = globalThis.HTMLButtonElement;
+  class TestElement {}
+  class TestTextAreaElement extends TestElement {}
+  class TestButtonElement extends TestElement {}
+  const modal = Object.assign(new TestElement(), { hidden: false });
+  const subtitle = Object.assign(new TestElement(), { textContent: 'Album' });
+  const manualInput = new TestTextAreaElement();
+  const manualExtractButton = new TestButtonElement();
+  let loadingSection = 'remote';
+  const observed = [];
+
+  globalThis.HTMLElement = TestElement;
+  globalThis.HTMLTextAreaElement = TestTextAreaElement;
+  globalThis.HTMLButtonElement = TestButtonElement;
+  globalThis.document = {
+    querySelector(selector) {
+      if (selector === '#cover-lookup-modal') return modal;
+      if (selector === '#cover-lookup-modal-subtitle') return subtitle;
+      if (selector === '#cover-lookup-pasted-urls') return manualInput;
+      if (selector === '[data-add-cover-lookup-remote="1"]') return manualExtractButton;
+      if (selector === initialGalleryLoadingSelector) {
+        return loadingSection === 'pasted' || loadingSection === '' ? null : new TestElement();
+      }
+      return null;
+    },
+  };
+
+  try {
+    const actions = new CoverLookupActions({
+      page,
+      modalSelector: '#cover-lookup-modal',
+      modalSubtitleSelector: '#cover-lookup-modal-subtitle',
+      manualUrlInputSelector: '#cover-lookup-pasted-urls',
+      manualExtractButtonSelector: '[data-add-cover-lookup-remote="1"]',
+      initialGalleryLoadingSelector,
+      async waitForPageCondition(predicate, options, selectors) {
+        assert.equal(options.timeout, 30000);
+        observed.push(predicate(selectors));
+        loadingSection = 'resolving';
+        observed.push(predicate(selectors));
+        loadingSection = '';
+        observed.push(predicate(selectors));
+        loadingSection = 'pasted';
+        observed.push(predicate(selectors));
+      },
+    });
+
+    await actions.waitForModalResultsReady();
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.HTMLElement = originalHTMLElement;
+    globalThis.HTMLTextAreaElement = originalHTMLTextAreaElement;
+    globalThis.HTMLButtonElement = originalHTMLButtonElement;
+  }
+
+  assert.deepEqual(observed, [false, false, true, true]);
 });
 
 test('utility loop summaries read the group header instead of a saved-loop title', () => {

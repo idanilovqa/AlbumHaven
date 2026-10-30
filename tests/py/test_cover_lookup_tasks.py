@@ -96,7 +96,10 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
         "notification_action_taken": False,
         "notification_completed_at": "2026-10-17T18:00:00+00:00",
         "track_paths": ["C:/Music/Artist/Album/01.flac"],
-        "job_contract": {"provider_state": "q" * 200_000},
+        "job_contract": {
+            "job_kind": "save_remote_selection",
+            "provider_state": "q" * 200_000,
+        },
         "phase_timings_ms": {"lookup": 123},
         "possible_matches": [
             {"id": "front", "art_kind": "cover", "debug": "x" * 200_000},
@@ -124,10 +127,11 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
 
     assert summary["id"] == "completed-task"
     assert summary["status"] == "completed"
-    assert summary["possible_match_count"] == 1
+    assert summary["possible_match_count"] == 2
     assert "possible_matches" not in summary
     assert "track_paths" not in summary
     assert "job_contract" not in summary
+    assert summary["job_kind"] == "save_remote_selection"
     assert "phase_timings_ms" not in summary
     assert summary["album_payload"] == {
         "album_id": 41,
@@ -140,6 +144,53 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
     assert "tracks" not in summary["album_payload"]
     assert "01.flac" not in json.dumps(summary)
     assert len(json.dumps(summary).encode("utf-8")) < 4_096
+
+
+def test_terminal_task_list_summaries_keep_album_identity_and_artwork_isolated():
+    from music_app.services import cover_lookup_tasks as task_service
+
+    tasks = [
+        {
+            "id": "angels-task",
+            "status": "completed",
+            "album_payload": {
+                "album_id": 41,
+                "key": "black-obelisk::angels::2005",
+                "name": "Ангелы",
+                "album_artist": "Чёрный Обелиск",
+                "cover_path": "C:/Music/Black Obelisk/Angels/cover.jpg",
+                "tracks": [{"path": "C:/Music/Black Obelisk/Angels/01.flac"}],
+            },
+        },
+        {
+            "id": "garip-task",
+            "status": "completed",
+            "album_payload": {
+                "album_id": 84,
+                "key": "altin-gun::garip::2026",
+                "name": "Garip",
+                "album_artist": "Altın Gün",
+                "cover_path": "C:/Music/Altin Gun/Garip/cover.jpg",
+                "tracks": [{"path": "C:/Music/Altin Gun/Garip/01.flac"}],
+            },
+        },
+    ]
+
+    summaries = [
+        task_service.summarize_cover_lookup_task_for_list(task) for task in tasks
+    ]
+
+    assert [summary["id"] for summary in summaries] == ["angels-task", "garip-task"]
+    assert [summary["album_payload"]["album_id"] for summary in summaries] == [41, 84]
+    assert [summary["album_payload"]["key"] for summary in summaries] == [
+        "black-obelisk::angels::2005",
+        "altin-gun::garip::2026",
+    ]
+    assert [summary["album_payload"]["cover_path"] for summary in summaries] == [
+        "C:/Music/Black Obelisk/Angels/cover.jpg",
+        "C:/Music/Altin Gun/Garip/cover.jpg",
+    ]
+    assert all("tracks" not in summary["album_payload"] for summary in summaries)
 
 
 def test_task_list_uses_compact_persisted_summaries(monkeypatch):
@@ -345,6 +396,60 @@ def test_failed_worker_future_terminalizes_live_task(monkeypatch, config):
     assert task["progress_label"] == "Interrupted"
 
 
+def test_superseded_candidate_future_cannot_fail_active_cover_save(monkeypatch, config):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, cancel_event = create_cover_lookup_task(
+        {"album_artist": "Rush", "name": "A Farewell to Kings"}, set()
+    )
+    candidate_future = Future()
+    task_service.register_cover_lookup_future(task_id, candidate_future, config=config)
+    update_cover_lookup_task(
+        task_id,
+        status="running",
+        progress_label="Saving art",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    candidate_future.set_exception(RuntimeError("superseded lookup worker stopped"))
+
+    task = cover_lookup_result(task_id)
+    assert not cancel_event.is_set()
+    assert task["status"] == "running"
+    assert task["progress_label"] == "Saving art"
+    assert task["job_contract"]["job_kind"] == "save_remote_selection"
+
+
+def test_failed_cover_save_future_reports_a_save_failure(monkeypatch, config):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, _cancel_event = create_cover_lookup_task(
+        {"album_artist": "Rush", "name": "A Farewell to Kings"}, set()
+    )
+    update_cover_lookup_task(
+        task_id,
+        status="running",
+        progress_label="Saving art",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+    save_future = Future()
+    task_service.register_cover_lookup_future(task_id, save_future, config=config)
+
+    save_future.set_exception(RuntimeError("save worker stopped"))
+
+    task = cover_lookup_result(task_id)
+    assert task["status"] == "failed"
+    assert task["result_kind"] == "save-failed"
+    assert task["progress_label"] == "Save failed"
+    assert "save worker stopped" in task["message"].casefold()
+
+
 def test_failed_future_does_not_resurrect_cleared_terminal_task(monkeypatch):
     monkeypatch.setattr(
         task_service,
@@ -461,6 +566,37 @@ def test_running_transition_records_fresh_activity_timestamp(monkeypatch):
     assert task["updated_at"]
 
 
+def test_failed_lookup_can_transition_to_remote_cover_save(monkeypatch):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, _cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    update_cover_lookup_task(
+        task_id,
+        status="failed",
+        result_kind="interrupted",
+        message="Cover art lookup stopped before it could finish.",
+        possible_matches=[],
+    )
+
+    update_cover_lookup_task(
+        task_id,
+        status="running",
+        progress=100,
+        progress_label="Saving art",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    task = cover_lookup_result(task_id)
+    assert task["status"] == "running"
+    assert task["job_contract"]["job_kind"] == "save_remote_selection"
+    assert task["progress_label"] == "Saving art"
+
+
 def test_timeout_failure_cannot_be_reversed_by_late_worker_completion(monkeypatch):
     monkeypatch.setattr(
         task_service,
@@ -482,12 +618,18 @@ def test_timeout_failure_cannot_be_reversed_by_late_worker_completion(monkeypatc
         status="completed",
         result_kind="possible-matches",
         message="Late worker completion.",
+        possible_matches=[{"id": "late-provider-result"}],
+    )
+    update_cover_lookup_task(
+        task_id,
+        possible_matches=[{"id": "late-progressive-provider-result"}],
     )
 
     task = cover_lookup_result(task_id)
     assert task["status"] == "failed"
     assert task["result_kind"] == "interrupted"
     assert task["message"] == "Cover art lookup stopped before it could finish."
+    assert task["possible_matches"] == []
 
 
 def test_live_terminal_completion_beats_stale_persisted_running_timestamp():
@@ -550,6 +692,156 @@ def _install_fake_notification_adapter(monkeypatch, config, initial_tasks=None):
     )
     config["PERSISTENCE_BACKENDS"] = {"cover_lookup_tasks": "postgres"}
     return persisted_tasks
+
+
+@pytest.mark.parametrize("preferred_task_id", ["", "  "])
+def test_fresh_lookup_allocates_new_task_for_same_files_without_manual_urls(
+    config,
+    monkeypatch,
+    preferred_task_id,
+):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    other_track_path = track_path.with_name("different.mp3")
+    completed_id = "completed-same-album"
+    _install_fake_notification_adapter(monkeypatch, config, [
+        {
+            "id": completed_id,
+            "status": "completed",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "track_paths": [str(track_path).swapcase()],
+            "created_at": "2026-05-17T00:00:00+00:00",
+            "finished_at": "2026-05-17T00:01:00+00:00",
+        },
+        {
+            "id": "different-files-same-labels",
+            "status": "completed",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "track_paths": [str(other_track_path)],
+            "created_at": "2026-05-18T00:00:00+00:00",
+            "finished_at": "2026-05-18T00:01:00+00:00",
+        },
+    ])
+
+    task_id, _cancel_event = create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+        config=config,
+        preferred_task_id=preferred_task_id,
+    )
+
+    assert task_id != completed_id
+    assert cover_lookup_result(task_id)["status"] == "pending"
+    assert {task["id"] for task in list_cover_lookup_tasks(config=config)} == {
+        task_id,
+        completed_id,
+        "different-files-same-labels",
+    }
+
+
+def test_manual_lookup_reuses_terminal_task_for_same_files_and_urls_without_preferred_id(
+    config,
+    monkeypatch,
+):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    completed_id = "completed-manual-lookup"
+    manual_urls = [
+        "https://covers.example/front.jpg",
+        "https://covers.example/back.jpg",
+    ]
+    _install_fake_notification_adapter(monkeypatch, config, [
+        {
+            "id": completed_id,
+            "status": "completed",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "track_paths": [str(track_path).swapcase()],
+            "manual_urls": list(manual_urls),
+            "created_at": "2026-05-17T00:00:00+00:00",
+            "finished_at": "2026-05-17T00:01:00+00:00",
+        },
+        {
+            "id": "different-manual-lookup",
+            "status": "completed",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "track_paths": [str(track_path)],
+            "manual_urls": ["https://covers.example/different.jpg"],
+            "created_at": "2026-05-18T00:00:00+00:00",
+            "finished_at": "2026-05-18T00:01:00+00:00",
+        },
+    ])
+
+    task_id, _cancel_event = create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+        list(reversed(manual_urls)),
+        config=config,
+    )
+
+    assert task_id == completed_id
+    assert cover_lookup_result(task_id)["status"] == "pending"
+    assert {task["id"] for task in list_cover_lookup_tasks(config=config)} == {
+        completed_id,
+        "different-manual-lookup",
+    }
+
+
+def test_retry_reuses_preferred_terminal_notification_after_album_paths_change(config, monkeypatch):
+    old_path = (config["MUSIC_DIR"] / "Eden" / "Perelandra Disc 1" / "01.mp3").resolve()
+    current_path = (config["MUSIC_DIR"] / "Eden" / "Perelandra" / "01.mp3").resolve()
+    task_id = "eden-interrupted-task"
+    _install_fake_notification_adapter(
+        monkeypatch,
+        config,
+        [{
+            "id": task_id,
+            "status": "failed",
+            "result_kind": "interrupted",
+            "track_paths": [str(old_path)],
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "finished_at": "2026-10-20T01:58:00+00:00",
+        }],
+    )
+
+    retried_id, _cancel_event = create_cover_lookup_task(
+        _album_payload(current_path),
+        {str(current_path)},
+        config=config,
+        preferred_task_id=task_id,
+        allow_preferred_path_rebind=True,
+    )
+
+    assert retried_id == task_id
+    assert cover_lookup_result(task_id)["status"] == "pending"
+    assert cover_lookup_result(task_id)["track_paths"] == [str(current_path)]
+
+
+def test_preferred_task_id_does_not_bypass_path_match_without_validated_rebind(config, monkeypatch):
+    old_path = (config["MUSIC_DIR"] / "Artist A" / "Album A" / "01.mp3").resolve()
+    unrelated_path = (config["MUSIC_DIR"] / "Artist B" / "Album B" / "01.mp3").resolve()
+    preferred_id = "unrelated-terminal-task"
+    _install_fake_notification_adapter(
+        monkeypatch,
+        config,
+        [{
+            "id": preferred_id,
+            "status": "failed",
+            "track_paths": [str(old_path)],
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "finished_at": "2026-10-20T00:01:00+00:00",
+        }],
+    )
+
+    task_id, _cancel_event = create_cover_lookup_task(
+        _album_payload(unrelated_path),
+        {str(unrelated_path)},
+        config=config,
+        preferred_task_id=preferred_id,
+    )
+
+    assert task_id != preferred_id
 
 
 def test_cover_lookup_tasks_list_serializes_without_raw_bytes(config, monkeypatch):
@@ -1295,6 +1587,73 @@ def test_cover_lookup_tasks_mark_action_taken_uses_postgres_selection_without_to
     }
 
 
+def test_mark_action_taken_for_track_paths_waits_for_matching_active_task(monkeypatch, tmp_path):
+    matching_path = tmp_path / "Artist" / "Album" / "song.mp3"
+    other_path = tmp_path / "Other" / "Album" / "song.mp3"
+    tasks = [
+        {
+            "id": "completed-match",
+            "status": "completed",
+            "album_payload": {"tracks": [{"path": str(matching_path)}]},
+        },
+        {
+            "id": "running-match",
+            "status": "running",
+            "track_paths": [str(matching_path)],
+        },
+        {
+            "id": "completed-other",
+            "status": "completed",
+            "track_paths": [str(other_path)],
+        },
+    ]
+    marked_ids = []
+    monkeypatch.setattr(task_service, "load_cover_lookup_notifications", lambda _config: tasks)
+    monkeypatch.setattr(
+        task_service,
+        "mark_cover_lookup_task_notification_action_taken",
+        lambda task_id, *, config: marked_ids.append(task_id) or {"id": task_id},
+    )
+    reset_cover_lookup_runtime_state()
+
+    marked = task_service.mark_cover_lookup_notifications_action_taken_for_track_paths(
+        {str(matching_path)},
+        config={"PERSISTENCE_BACKENDS": {"cover_lookup_tasks": "postgres"}},
+    )
+
+    assert marked_ids == []
+    assert marked == []
+
+    tasks[:] = [task for task in tasks if task["id"] != "running-match"]
+    marked = task_service.mark_cover_lookup_notifications_action_taken_for_track_paths(
+        {str(matching_path)},
+        config={"PERSISTENCE_BACKENDS": {"cover_lookup_tasks": "postgres"}},
+    )
+
+    assert marked_ids == ["completed-match"]
+    assert marked == [{"id": "completed-match"}]
+
+
+def test_cover_lookup_tasks_clear_completed_keeps_early_provider_choice():
+    task_id, _ = create_cover_lookup_task(
+        {"album_artist": "Artist", "name": "Album"},
+        set(),
+    )
+    update_cover_lookup_task(
+        task_id,
+        status="completed",
+        result_kind="cover-updated",
+        notification_action_taken=False,
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    assert clear_completed_cover_lookup_tasks(
+        [task_id],
+        actioned_only=True,
+    ) == 0
+    assert cover_lookup_result(task_id)["notification_action_taken"] is False
+
+
 def test_cover_lookup_tasks_clear_completed_uses_postgres_selection_without_touching_file(
     config,
     monkeypatch,
@@ -1459,8 +1818,9 @@ def test_task_level_bounded_notification_reads_preserve_contract(monkeypatch):
     monkeypatch.setattr(
         task_service,
         "load_cover_lookup_notification_summary_page",
-        lambda config, *, limit, cursor, active_only: page
-        if (config, limit, cursor, active_only) == ({"key": "value"}, 50, None, False)
+        lambda config, *, limit, cursor, active_only, task_ids: page
+        if (config, limit, cursor, active_only, task_ids)
+        == ({"key": "value"}, 50, None, False, ())
         else None,
         raising=False,
     )

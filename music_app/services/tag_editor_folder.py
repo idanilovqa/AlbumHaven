@@ -4,6 +4,7 @@ import re
 from collections.abc import Collection, Mapping
 from pathlib import Path
 
+from music_app.services.cover_workflow import resolve_album_root_from_track_paths
 from music_app.services.library_roots import configured_library_root_paths_snapshot
 from music_app.services.metadata import read_editable_tag_values
 
@@ -17,6 +18,8 @@ _EDITABLE_PHYSICAL_FIELDS = {
     "year",
     "track_number",
     "disc_number",
+    "total_discs",
+    "disc_subtitle",
     "edition",
     "album_rating",
 }
@@ -24,10 +27,11 @@ _MAX_FOLDER_FILES = 500
 _NATURAL_PART = re.compile(r"(\d+)")
 
 
-def _natural_name_key(path: Path) -> tuple[object, ...]:
+def _natural_path_key(path: Path, root: Path) -> tuple[tuple[int, object], ...]:
     return tuple(
-        int(part) if part.isdigit() else part.casefold()
-        for part in _NATURAL_PART.split(path.name)
+        (0, int(part)) if part.isdigit() else (1, part.casefold())
+        for component in path.relative_to(root).parts
+        for part in _NATURAL_PART.split(component)
     )
 
 
@@ -56,17 +60,27 @@ def load_tag_editor_folder_files(
         for extension in config.get("SUPPORTED_EXTENSIONS", ())
         if str(extension).strip()
     }
+    resolved_album_root = (
+        resolve_album_root_from_track_paths(
+            dict(config),
+            {str(path) for path in indexed_paths},
+        )
+        if len(indexed_keys) > 1
+        else None
+    )
+    folder = resolved_album_root or source.parent
+    entries = folder.rglob("*") if resolved_album_root is not None else folder.iterdir()
     candidates = sorted(
         (
             candidate
             for candidate in (
                 entry.resolve(strict=True)
-                for entry in source.parent.iterdir()
+                for entry in entries
                 if entry.is_file() and entry.suffix.casefold() in supported
             )
-            if candidate.parent == source.parent and _is_within_any_root(candidate, roots)
+            if candidate.is_relative_to(folder) and _is_within_any_root(candidate, roots)
         ),
-        key=_natural_name_key,
+        key=lambda path: _natural_path_key(path, folder),
     )
     if len(candidates) > _MAX_FOLDER_FILES:
         raise ValueError("The selected folder contains too many audio files.")
@@ -79,4 +93,4 @@ def load_tag_editor_folder_files(
             continue
         tracks.append({"path": str(candidate), **values})
 
-    return {"folder_path": str(source.parent), "tracks": tracks}
+    return {"folder_path": str(folder), "tracks": tracks}

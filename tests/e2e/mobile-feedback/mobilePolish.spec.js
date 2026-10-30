@@ -90,6 +90,15 @@ test('Admin is a readable phone table and header Back exits the hierarchy after 
   }
 });
 
+test('Gallery and Admin keep the same desktop shell and page-header geometry', async ({ page, app }) => {
+  const desktop = new MobilePolishPage(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const galleryHeader = await desktop.readGalleryHeaderGeometry(null);
+  await app.openSettings();
+  await desktop.openUsers();
+  await desktop.expectAdminHeaderMatches(galleryHeader, null);
+});
+
 test('Follow mode locks every phone editor and Rules uses the page-bar navigation dropdown', async ({ page, app, snapshot }) => {
   await app.openSettings();
   for (const section of ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page']) {

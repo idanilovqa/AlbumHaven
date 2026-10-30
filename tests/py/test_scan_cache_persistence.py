@@ -185,16 +185,39 @@ def test_full_scan_stale_sql_preserves_nested_scan_cache_file_entry():
     assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
 
 
-def test_targeted_featured_artist_sync_is_scoped_to_affected_scan_owned_albums():
+def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
     from music_app.services import scan_cache_persistence
 
-    normalized_sql = _normalized_sql(
+    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+
+    assert (
+        "coalesce( nullif(btrim(library.local_track_files.metadata #>> "
+        "'{scan_cache,source}'), ''), %(source)s ) = %(source)s"
+    ) in normalized_sql
+
+
+def test_featured_artist_sync_reconciles_only_current_and_legacy_generated_rows():
+    from music_app.services import scan_cache_persistence
+
+    for sql in (
+        scan_cache_persistence._synchronize_local_album_featured_artists_sql(),
+        scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql(),
+    ):
+        normalized_sql = _normalized_sql(sql)
+        assert "metadata ->> 'source' = any(%(synchronized_sources)s::text[])" in normalized_sql
+        assert "metadata ->> 'source' = %(source)s" not in normalized_sql
+        assert "not exists" in normalized_sql
+
+    targeted_sql = _normalized_sql(
         scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql()
     )
-    assert "unnest(%(affected_album_keys)s::text[])" in normalized_sql
-    assert "album_id = affected_albums.album_id" in normalized_sql
-    assert "metadata ->> 'source' = %(source)s" in normalized_sql
-    assert "not exists" in normalized_sql
+    assert "unnest(%(affected_album_keys)s::text[])" in targeted_sql
+    assert "album_id = affected_albums.album_id" in targeted_sql
+
+    assert scan_cache_persistence._SYNCHRONIZED_FEATURED_ARTIST_SOURCES == [
+        "runtime_scan_cache",
+        "repair_featured_artist_backfill",
+    ]
 
 
 def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(monkeypatch):
@@ -202,11 +225,17 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
     class TargetedConnection(FakeConnection):
+        def __init__(self, *, existing_memberships=None):
+            super().__init__()
+            self.existing_memberships = existing_memberships
+
         def execute(self, sql, params=None):
             cursor = super().execute(sql, params)
             normalized = _normalized_sql(sql)
             if "from library.separate_releases" in normalized:
                 return FakeCursor([{"release_key": "artist::new album"}])
+            if "as album_owner_key" in normalized and self.existing_memberships is not None:
+                return FakeCursor(self.existing_memberships)
             if "as album_owner_key" in normalized:
                 return FakeCursor([{
                     "private_path": active_path, "album_key": "artist::new album",
@@ -222,6 +251,14 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
             return cursor
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    semantic_adoption_calls = []
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "_execute_semantic_local_album_key_adoptions",
+        lambda active_connection, album_rows: semantic_adoption_calls.append(
+            (active_connection, album_rows)
+        ),
+    )
     connection = TargetedConnection()
     observed_separate_release_keys = []
 
@@ -272,6 +309,7 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     assert result == {
         "inventory_mutation_revision": 7,
         "affected_album_keys": ["artist::new album", "artist::old album"],
+        "new_track_paths": [],
     }
     assert observed_separate_release_keys == [{"artist::new album"}, {"artist::new album"}]
     normalized_calls = [_normalized_sql(sql) for sql, _ in connection.executed]
@@ -285,6 +323,7 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     )
     assert lock_index < upsert_index < stale_index < revision_index
     assert connection.commit_calls == 1
+    assert semantic_adoption_calls == [(connection, semantic_adoption_calls[0][1])]
     stale_params = next(
         params
         for sql, params in connection.executed
@@ -297,7 +336,68 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
         if "delete from library.local_album_featured_artists" in _normalized_sql(sql)
     )
     assert featured_sync_params["affected_album_keys"] == ["artist::new album"]
+    assert featured_sync_params["synchronized_sources"] == [
+        "runtime_scan_cache",
+        "repair_featured_artist_backfill",
+    ]
     assert connection.exit_exc_type is None
+
+    unseen_connection = TargetedConnection(existing_memberships=[])
+    unseen_adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: unseen_connection,
+        build_albums=build_albums,
+    )
+    unseen_result = unseen_adapter.persist_targeted_inventory_mutation(
+        root_id="main",
+        active_file_entries={
+            active_path: {
+                "path": active_path,
+                "album": "New Album",
+                "album_artist": "Artist",
+                "artist": "Artist",
+                "title": "Track",
+                "track_number": 1,
+                "disc_number": 1,
+                "duration_seconds": 120,
+                "mtime": 1.0,
+                "size": 123,
+                "library_root_id": "main",
+                "library_root_category": "main-library",
+            }
+        },
+    )
+    assert unseen_result["new_track_paths"] == [active_path]
+
+    moved_directory_result = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: TargetedConnection(existing_memberships=[]),
+        build_albums=build_albums,
+    ).persist_targeted_inventory_mutation(
+        root_id="main",
+        active_file_entries={active_path: {
+            "path": active_path,
+            "album": "New Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "Track",
+            "track_number": 1,
+            "disc_number": 1,
+            "duration_seconds": 120,
+            "mtime": 1.0,
+            "size": 123,
+            "library_root_id": "main",
+            "library_root_category": "main-library",
+        }},
+        moves=({
+            "source_path": "C:/Music/Artist/Old Album",
+            "destination_path": "C:/Music/Artist/New Album",
+            "source_root_id": "main",
+            "destination_root_id": "main",
+            "is_directory": True,
+        },),
+    )
+    assert moved_directory_result["new_track_paths"] == []
 
 
 def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artists(
@@ -332,6 +432,7 @@ def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artis
     assert result == {
         "inventory_mutation_revision": 8,
         "affected_album_keys": ["artist::surviving album"],
+        "new_track_paths": [],
     }
     featured_sync_params = next(
         params
@@ -363,6 +464,7 @@ def test_noop_targeted_subtree_deletion_does_not_advance_inventory_revision(
     assert result == {
         "inventory_mutation_revision": 0,
         "affected_album_keys": [],
+        "new_track_paths": [],
     }
     assert not any(
         "update library.libraries" in _normalized_sql(sql)
@@ -393,6 +495,91 @@ def test_targeted_album_upsert_preserves_existing_user_cover_authority():
     assert "cover_selection_origin" in sql
     assert "then library.local_albums.cover_path" in sql
     assert "cover_revision" in sql
+
+
+def test_targeted_surviving_entry_keeps_owned_folder_cover(tmp_path):
+    from music_app.services import scan_cache_persistence
+
+    track_path = tmp_path / "Artist" / "Album" / "01.flac"
+    cover_path = track_path.parent / "cover.jpg"
+    row = {
+        "private_path": str(track_path),
+        "file_entry": {"path": str(track_path), "cover_path": None},
+        "cover_path": str(cover_path),
+        "album_metadata": {
+            "cover_revision": "folder-cover-revision",
+            "cover_selection_origin": "automatic",
+        },
+    }
+
+    entry = scan_cache_persistence._targeted_surviving_file_entry(row)
+
+    assert entry["cover_path"] == str(cover_path)
+    assert entry["cover_revision"] == "folder-cover-revision"
+    assert entry["cover_selection_origin"] == "automatic"
+
+
+def test_targeted_reconciliation_restores_structurally_inherited_cover(tmp_path):
+    from music_app.services import scan_cache_persistence
+
+    track_path = tmp_path / "Artist" / "Shared Folder" / "01.flac"
+    cover_path = track_path.parent / "cover.jpg"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"audio")
+    cover_path.write_bytes(b"image")
+    incoming = {
+        str(track_path): {
+            "path": str(track_path),
+            "album": "Destination Album",
+            "cover_path": None,
+        }
+    }
+    persisted = {
+        str(track_path): {
+            "path": str(track_path),
+            "album": "Source Album",
+            "cover_path": str(cover_path),
+            "cover_inherited_from_structural_edit": True,
+        }
+    }
+
+    restored = scan_cache_persistence._restore_structurally_inherited_covers(
+        incoming,
+        persisted,
+    )
+
+    assert restored[str(track_path)]["album"] == "Destination Album"
+    assert restored[str(track_path)]["cover_path"] == str(cover_path)
+    assert (
+        restored[str(track_path)]["cover_inherited_from_structural_edit"] is True
+    )
+
+
+def test_targeted_surviving_entry_drops_removed_container_cover(tmp_path):
+    from music_app.services import scan_cache_persistence
+
+    track_path = tmp_path / "Artist" / "Retained Container" / "02.flac"
+    removed_cover = tmp_path / "Artist" / "Removed Container" / "cover.jpg"
+    row = {
+        "private_path": str(track_path),
+        "file_entry": {
+            "path": str(track_path),
+            "cover_path": str(removed_cover),
+            "cover_revision": "persisted-removed-cover-revision",
+        },
+        "cover_path": str(removed_cover),
+        "cover_selection_origin": "automatic",
+        "album_metadata": {
+            "cover_revision": "removed-cover-revision",
+            "cover_selection_origin": "automatic",
+        },
+    }
+
+    entry = scan_cache_persistence._targeted_surviving_file_entry(row)
+
+    assert entry["cover_path"] is None
+    assert entry["cover_revision"] is None
+    assert entry["cover_selection_origin"] is None
 
 
 def test_incremental_album_aggregate_keeps_the_guarded_inherited_cover_repair(monkeypatch):
@@ -472,6 +659,7 @@ def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
             "album_title": "Studio Records",
             "artist_key": "yuri shevchuk / ddt",
         }],
+        separate_release_keys=set(),
     )
 
     assert album_rows[0] == {
@@ -483,6 +671,468 @@ def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
     assert featured_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
     assert featured_rows[0]["artist_key"] == "yuri shevchuk / ddt"
     assert track_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
+
+
+@pytest.mark.parametrize(
+    ("separate_release_keys", "expected_key"),
+    [
+        (set(), "owner::album"),
+        ({"owner::album"}, "owner::album::year::2001"),
+    ],
+)
+def test_targeted_album_rows_remap_automatic_year_identity_only_when_not_explicit(
+    separate_release_keys,
+    expected_key,
+):
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/Owner/Album/01.flac"
+    year_key = "owner::album::year::2001"
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": year_key,
+            "title": "Album",
+            "release_year": 2001,
+        }
+    ]
+    featured_rows = [
+        {"album_key": year_key, "artist_key": "owner", "featured_kind": "owner"}
+    ]
+    track_rows = [{"album_key": year_key, "track_key": path}]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": path,
+                "album_key": "owner::album",
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2001,
+            }
+        ],
+        separate_release_keys=separate_release_keys,
+    )
+
+    assert album_rows[0]["album_key"] == expected_key
+    assert featured_rows[0]["album_key"] == expected_key
+    assert track_rows[0]["album_key"] == expected_key
+
+
+def test_targeted_album_rows_do_not_remap_a_changed_release_year_to_the_old_identity():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/Owner/Album/01.flac"
+    generated_key = "owner::album::year::2001"
+    album_rows = [{
+        "artist_key": "owner",
+        "album_key": generated_key,
+        "title": "Album",
+        "release_year": 2001,
+    }]
+    featured_rows = [{
+        "album_key": generated_key,
+        "artist_key": "owner",
+        "featured_kind": "owner",
+    }]
+    track_rows = [{"album_key": generated_key, "track_key": path}]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[{
+            "private_path": path,
+            "album_key": "owner::album",
+            "album_title": "Album",
+            "artist_key": "owner",
+            "release_year": 2000,
+        }],
+        separate_release_keys=set(),
+    )
+
+    assert album_rows[0]["album_key"] == generated_key
+    assert featured_rows[0]["album_key"] == generated_key
+    assert track_rows[0]["album_key"] == generated_key
+
+
+def test_targeted_album_rows_collapse_unseparated_automatic_year_members_to_complete_release():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": path,
+                "album_key": key,
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": year,
+            }
+            for path, key, year in zip(
+                paths, keys, (2000, 2003), strict=True
+            )
+        ],
+        separate_release_keys=set(),
+    )
+
+    assert {row["album_key"] for row in album_rows} == {keys[0]}
+    assert {row["release_year"] for row in album_rows} == {2000}
+    assert {row["album_key"] for row in featured_rows} == {keys[0]}
+    assert {row["album_key"] for row in track_rows} == {keys[0]}
+
+
+def test_targeted_album_rows_keep_intentional_year_retag_as_a_split():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": paths[0],
+                "album_key": keys[0],
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2000,
+            },
+            {
+                "private_path": paths[1],
+                "album_key": keys[0],
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2000,
+            },
+        ],
+        separate_release_keys=set(),
+        preferred_paths={paths[1]},
+    )
+
+    assert [row["album_key"] for row in album_rows] == keys
+    assert [row["album_key"] for row in featured_rows] == keys
+    assert [row["album_key"] for row in track_rows] == keys
+
+
+def test_targeted_album_rows_prefer_one_full_date_for_automatic_year_group():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+            "metadata": {},
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": paths[0],
+                "album_key": keys[0],
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2000,
+            },
+            {
+                "private_path": paths[1],
+                "album_key": keys[1],
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": 2004,
+                "release_date": "2004-07-16",
+            },
+        ],
+        separate_release_keys=set(),
+    )
+
+    assert {row["album_key"] for row in album_rows} == {keys[1]}
+    assert {row["release_year"] for row in album_rows} == {2004}
+    assert {
+        row["metadata"]["release_date"] for row in album_rows
+    } == {"2004-07-16"}
+    assert {row["album_key"] for row in featured_rows} == {keys[1]}
+    assert {row["album_key"] for row in track_rows} == {keys[1]}
+
+
+def test_targeted_album_rows_ignore_full_date_outside_rebuilt_group():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+            "metadata": {},
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+    existing_memberships = [
+        {
+            "private_path": path,
+            "album_key": key,
+            "album_title": "Album",
+            "artist_key": "owner",
+            "release_year": year,
+        }
+        for path, key, year in zip(paths, keys, (2000, 2003), strict=True)
+    ]
+    existing_memberships.append(
+        {
+            "private_path": "C:/Music/Owner/Archive/01.flac",
+            "album_key": "owner::album::year::1990",
+            "album_title": "Album",
+            "artist_key": "owner",
+            "release_year": 1990,
+            "release_date": "1990-01-01",
+        }
+    )
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=existing_memberships,
+        separate_release_keys=set(),
+    )
+
+    assert {row["album_key"] for row in album_rows} == {keys[0]}
+    assert {row["release_year"] for row in album_rows} == {2000}
+    assert {row["album_key"] for row in featured_rows} == {keys[0]}
+    assert {row["album_key"] for row in track_rows} == {keys[0]}
+
+
+def test_targeted_album_rows_fail_closed_for_conflicting_full_dates():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["owner::album::year::2000", "owner::album::year::2003"]
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    album_rows = [
+        {
+            "artist_key": "owner",
+            "album_key": key,
+            "title": "Album",
+            "release_year": year,
+            "metadata": {},
+        }
+        for key, year in zip(keys, (2000, 2003), strict=True)
+    ]
+    featured_rows = [
+        {"album_key": key, "artist_key": "owner", "featured_kind": "owner"}
+        for key in keys
+    ]
+    track_rows = [
+        {"album_key": key, "track_key": path}
+        for key, path in zip(keys, paths, strict=True)
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": path,
+                "album_key": key,
+                "album_title": "Album",
+                "artist_key": "owner",
+                "release_year": year,
+                "release_date": release_date,
+            }
+            for path, key, year, release_date in zip(
+                paths,
+                keys,
+                (2000, 2003),
+                ("2000-01-01", "2003-01-01"),
+                strict=True,
+            )
+        ],
+        separate_release_keys=set(),
+    )
+
+    assert [row["album_key"] for row in album_rows] == keys
+    assert [row["album_key"] for row in featured_rows] == keys
+    assert [row["album_key"] for row in track_rows] == keys
+
+
+def test_targeted_album_rows_preserve_existing_full_release_date_authority():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/Owner/Album/01.flac"
+    generated_key = "owner::album::year::2003"
+    existing_key = "owner::album::year::2001"
+    album_rows = [{
+        "artist_key": "owner",
+        "album_key": generated_key,
+        "title": "Album",
+        "release_year": 2003,
+        "metadata": {},
+    }]
+    featured_rows = [{
+        "album_key": generated_key,
+        "artist_key": "owner",
+        "featured_kind": "owner",
+    }]
+    track_rows = [{"album_key": generated_key, "track_key": path}]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[{
+            "private_path": path,
+            "album_key": existing_key,
+            "album_title": "Album",
+            "artist_key": "owner",
+            "release_year": 2004,
+            "release_date": "2004-07-16",
+        }],
+        separate_release_keys=set(),
+    )
+
+    assert album_rows[0]["album_key"] == existing_key
+    assert album_rows[0]["release_year"] == 2004
+    assert album_rows[0]["metadata"]["release_date"] == "2004-07-16"
+    assert featured_rows[0]["album_key"] == existing_key
+    assert track_rows[0]["album_key"] == existing_key
+
+
+def test_targeted_album_rows_keep_existing_identity_for_unresolved_track_years():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    paths = [
+        "C:/Music/DDT/Studio Records/02.flac",
+        "C:/Music/DDT/Studio Records/03.flac",
+    ]
+    generated_key = "yuri shevchuk / ddt::studio records::year::unresolved"
+    existing_key = "yuri shevchuk / ddt::studio records::canonical"
+    album_rows = [{
+        "artist_key": "yuri shevchuk / ddt",
+        "album_key": generated_key,
+        "title": "Studio Records",
+        "release_year": None,
+    }]
+    featured_rows = [{
+        "album_key": generated_key,
+        "artist_key": "yuri shevchuk / ddt",
+        "featured_kind": "owner",
+    }]
+    track_rows = [
+        {"album_key": generated_key, "track_key": path}
+        for path in paths
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[
+            {
+                "private_path": path,
+                "album_key": existing_key,
+                "album_title": "Studio Records",
+                "artist_key": "yuri shevchuk / ddt",
+                "release_year": 1999,
+            }
+            for path in paths
+        ],
+        separate_release_keys=set(),
+    )
+
+    assert album_rows[0]["album_key"] == existing_key
+    assert album_rows[0]["release_year"] == 1999
+    assert featured_rows[0]["album_key"] == existing_key
+    assert {row["album_key"] for row in track_rows} == {existing_key}
 
 
 def test_targeted_album_rows_accept_an_external_album_artist_correction():
@@ -516,6 +1166,7 @@ def test_targeted_album_rows_accept_an_external_album_artist_correction():
             "album_title": "Studio Records",
             "artist_key": "old artist",
         }],
+        separate_release_keys=set(),
     )
 
     assert album_rows[0]["artist_key"] == "new artist"
@@ -963,12 +1614,118 @@ def test_cache_wrapper_forwards_explicit_expected_cover_state(monkeypatch, expec
     assert "expected_cover_revision" not in calls[0]
 
 
+@pytest.mark.parametrize("revision", [0, 12])
+def test_cache_wrapper_forwards_expected_inventory_revision(monkeypatch, revision):
+    from music_app.services import cache
+
+    calls = []
+    adapter = SimpleNamespace(
+        persist_cover_selection=lambda **kwargs: calls.append(kwargs)
+        or {"album_rows_updated": 1}
+    )
+    monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+
+    result = cache.persist_cover_selection_for_tracks_for_config(
+        {},
+        {"generated-track"},
+        Path("generated-cover"),
+        expected_inventory_mutation_revision=revision,
+    )
+
+    assert result == {"album_rows_updated": 1}
+    assert calls[0]["expected_inventory_mutation_revision"] == revision
+
+
 @pytest.mark.parametrize("legacy", [{"expected_cover_selection_origin": "automatic"}, {"expected_cover_revision": "old"}, {"expected_cover_selection_origin": "invalid", "expected_cover_revision": "old"}])
 def test_legacy_expected_cover_state_still_rejects_partial_or_invalid_values(legacy):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     adapter = PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated-test"}, connect=lambda _url: pytest.fail("Invalid legacy guard must not connect"))
     with pytest.raises(ValueError):
         adapter.persist_cover_selection(track_paths={"C:/Generated/song.mp3"}, selected_cover_path=Path("C:/Generated/cover.jpg"), cover_revision="new", **legacy)
+
+
+def test_postgres_cover_selection_rejects_stale_inventory_revision_after_lock_before_mutation(
+    monkeypatch,
+):
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import (
+        PostgresScanCacheAdapter,
+        ScanCachePublicationSuperseded,
+    )
+
+    events: list[str] = []
+    publication_lock_sql = _normalized_sql(
+        scan_cache_persistence._inventory_publication_advisory_lock_sql()
+    )
+    inventory_revision_sql = _normalized_sql(
+        scan_cache_persistence._load_inventory_mutation_revision_sql()
+    )
+
+    class StaleInventoryConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            normalized_sql = _normalized_sql(sql)
+            cursor = super().execute(sql, params)
+            if normalized_sql == publication_lock_sql:
+                events.append("publication-lock")
+            elif "bootstrap_context_ready" in normalized_sql:
+                events.append("bootstrap-context")
+            elif normalized_sql == inventory_revision_sql:
+                events.append("inventory-revision-read")
+                return FakeCursor([{"inventory_mutation_revision": 12}])
+            elif (
+                "cover_mutation_revision" in normalized_sql
+                and "update library.libraries" in normalized_sql
+            ):
+                events.append("cover-revision-increment")
+            elif "updated_albums" in normalized_sql:
+                events.append("cover-mutation")
+                return FakeCursor([{
+                    "input_path_count": 1,
+                    "resolved_path_count": 1,
+                    "selected_album_count": 1,
+                    "album_track_file_count": 1,
+                    "album_rows_updated": 1,
+                    "track_file_rows_updated": 1,
+                }])
+            return cursor
+
+        def commit(self):
+            events.append("database-commit")
+            super().commit()
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append("transaction-exit")
+            return super().__exit__(exc_type, exc, traceback)
+
+    connection = StaleInventoryConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://stale-cover-inventory"},
+        connect=lambda _url: connection,
+    )
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+
+    commit_guard_calls = []
+    with pytest.raises(
+        ScanCachePublicationSuperseded,
+        match="Inventory changed while cover selection was prepared",
+    ):
+        adapter.persist_cover_selection(
+            track_paths={"C:/Generated/Artist/Album/song.mp3"},
+            selected_cover_path=Path("C:/Generated/Artist/Album/cover.jpg"),
+            cover_revision="prepared-cover-revision",
+            expected_inventory_mutation_revision=11,
+            commit_guard=lambda commit: commit_guard_calls.append(commit),
+        )
+
+    assert events == [
+        "publication-lock",
+        "bootstrap-context",
+        "inventory-revision-read",
+        "transaction-exit",
+    ]
+    assert commit_guard_calls == []
+    assert connection.commit_calls == 0
+    assert connection.exit_exc_type is ScanCachePublicationSuperseded
 
 
 def test_postgres_cover_selection_invokes_commit_guard_after_mutation_before_exit(monkeypatch):
@@ -2023,19 +2780,46 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
         for sql, params in connection.executed
         if "delete from library.local_album_featured_artists" in sql
     )
-    assert synchronize_params["source"] == "runtime_scan_cache"
+    assert synchronize_params["synchronized_sources"] == [
+        "runtime_scan_cache",
+        "repair_featured_artist_backfill",
+    ]
     assert synchronize_params["current_featured_rows"] == [
         {
             "album_key": "broadcast::tender buttons",
             "artist_key": "broadcast",
             "featured_kind": "owner",
         },
-        {
-            "album_key": "broadcast::tender buttons",
-            "artist_key": "broadcast",
-            "featured_kind": "featured_track_artist",
-        },
     ]
+
+
+def test_exception_file_with_album_tags_stays_detached_from_album_inventory(monkeypatch):
+    from music_app.services import scan_cache_persistence
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    path = "C:/Music/Incoming/problem-file.mp3"
+    file_cache = {
+        path: {
+            "path": path,
+            "mtime": 1.0,
+            "size": 123,
+            "album": "Loose Tracks",
+            "album_artist": "Unknown Artist",
+            "artist": "Unknown Artist",
+            "title": "Problem File",
+            "track_number": None,
+            "disc_number": None,
+            "duration_seconds": None,
+            "exception_type": "missing_tags",
+        }
+    }
+
+    _artists, album_rows, _featured, track_rows, _track_files = (
+        scan_cache_persistence._inventory_rows_from_albums(file_cache, [])
+    )
+
+    assert album_rows == []
+    assert track_rows[0]["album_key"] is None
 
 
 def test_explicit_scan_publishes_family_links_before_compilation_aware_ready_metadata_on_same_transaction(monkeypatch):
@@ -2948,7 +3732,6 @@ def test_postgres_scan_cache_adapter_splits_featured_track_artists_into_featured
         for row in featured_rows
     } == {
         ("artist one", "owner"),
-        ("artist one", "featured_track_artist"),
         ("guest one", "featured_track_artist"),
     }
 
@@ -3487,6 +4270,112 @@ def test_local_album_inventory_does_not_publish_null_cover_authority(monkeypatch
     assert "remote_cover_url" not in metadata
 
 
+def test_scan_projection_keeps_unrelated_release_identity_from_rejected_mixed_folder(
+    monkeypatch,
+):
+    from music_app.services import scan_cache_persistence
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    artist = "Fixture Artist"
+    real_paths = [
+        "C:/Music/Fixture Artist/Real Album/01.mp3",
+        "C:/Music/Fixture Artist/Real Album/02.mp3",
+    ]
+    copied_path = "C:/Music/Fixture Artist/Random songs/copied-song.mp3"
+    unrelated_path = "C:/Music/Fixture Artist/Random songs/unrelated.mp3"
+
+    def entry(path, album, title, track_number):
+        return {
+            "path": path,
+            "album": album,
+            "album_artist": artist,
+            "artist": artist,
+            "title": title,
+            "year": 2026,
+            "track_number": track_number,
+            "disc_number": 1,
+            "duration_seconds": 180,
+            "mtime": 1.0,
+            "size": 123,
+            "library_root_id": "main",
+            "cover_path": "C:/Music/Fixture Artist/Random songs/cover.png",
+            "cover_selection_origin": "user",
+        }
+
+    file_cache = {
+        real_paths[0]: entry(real_paths[0], "Real Album", "Song One", 1),
+        real_paths[1]: entry(real_paths[1], "Real Album", "Song Two", 2),
+        copied_path: entry(copied_path, "Real Album", "Song One", 1),
+        unrelated_path: entry(
+            unrelated_path,
+            "Unrelated Album",
+            "Unrelated song",
+            8,
+        ),
+    }
+    album = SimpleNamespace(
+        key="fixture artist::real album",
+        name="Real Album",
+        album_artist=artist,
+        artists=[artist],
+        year=2026,
+        cover_path="C:/Music/Fixture Artist/Real Album/cover.png",
+        cover_revision="repaired",
+        cover_selection_origin="automatic",
+        cover_selection_provenance=None,
+        cover_selection_repair_previous={
+            "cover_path": "C:/Music/Fixture Artist/Random songs/cover.png",
+            "cover_selection_origin": "user",
+            "cover_revision": "inherited",
+        },
+        edition=None,
+        root_provenance={"root_id": "main"},
+        album_rating=None,
+        tracks=[
+            SimpleNamespace(
+                path=path,
+                title=title,
+                artist=artist,
+                album="Real Album",
+                album_artist=artist,
+                year=2026,
+                disc_number=1,
+                track_number=index,
+                duration_seconds=180,
+                edition=None,
+                root_provenance={"root_id": "main"},
+            )
+            for index, (path, title) in enumerate(
+                zip(real_paths, ("Song One", "Song Two")),
+                start=1,
+            )
+        ],
+    )
+
+    _artists, album_rows, _featured, track_rows, _files = (
+        scan_cache_persistence._inventory_rows_from_albums(file_cache, [album])
+    )
+
+    unrelated = next(
+        row for row in album_rows
+        if row["album_key"] == "fixture artist::unrelated album"
+    )
+    assert unrelated["title"] == "Unrelated Album"
+    assert unrelated["cover_path"] is None
+    assert "cover_path" not in unrelated["metadata"]
+    assert "cover_selection_origin" not in unrelated["metadata"]
+    assert "Random songs" not in repr(unrelated)
+    assert [row["album_key"] for row in album_rows].count(
+        "fixture artist::real album"
+    ) == 1
+    assert next(row for row in track_rows if row["track_key"] == copied_path)[
+        "album_key"
+    ] == "fixture artist::real album"
+    assert next(row for row in track_rows if row["track_key"] == unrelated_path)[
+        "album_key"
+    ] == unrelated["album_key"]
+
+
 @pytest.mark.parametrize(
     ("raw_rating", "expected_candidates"),
     [
@@ -3561,19 +4450,6 @@ def test_postgres_scan_publication_persists_album_compilation_state(monkeypatch)
     assert persisted_album_metadata["Ordinary Contract"]["is_compilation"] is False
 
 
-def test_attached_track_artist_names_keeps_numeric_slash_artist_intact():
-    from music_app.services import scan_cache_persistence
-
-    assert scan_cache_persistence._attached_track_artist_names(
-        "Ногу Свело! feat 25 / 17",
-        "Ногу Свело!",
-    ) == ["Ногу Свело!", "25/17"]
-    assert scan_cache_persistence._attached_track_artist_names(
-        "Owner feat Guest / Partner",
-        "Owner",
-    ) == ["Owner", "Guest", "Partner"]
-
-
 def test_local_album_inventory_retains_cover_revision_after_track_metadata_rewrite(
     monkeypatch,
 ):
@@ -3627,6 +4503,44 @@ def test_local_album_inventory_retains_cover_revision_after_track_metadata_rewri
 
     assert album_rows[0]["metadata"]["featured_artists"] == ["Guest Artist"]
     assert album_rows[0]["metadata"]["cover_revision"] == "exact-cover-sha256"
+
+
+def test_local_album_inventory_publishes_proven_shared_members_instead_of_various_artists():
+    from music_app.services import scan_cache_persistence
+    from music_app.services.library import build_albums_from_file_cache
+
+    album_name = "Watcher Joint Credit Release"
+    members = ("Jordsjø", "Breidablik")
+    file_cache = {
+        f"C:/Music/Shared/{album_name}/{track_number:02}.mp3": {
+            "path": f"C:/Music/Shared/{album_name}/{track_number:02}.mp3",
+            "title": f"Track {track_number}",
+            "artist": member,
+            "album_artist": "Various Artists",
+            "album": album_name,
+            "year": 2013,
+            "track_number": track_number,
+            "disc_number": 1,
+            "disc_number_raw": "1",
+            "duration_seconds": 180,
+            "mtime": 1.0,
+            "size": 123,
+        }
+        for track_number, member in enumerate(members, start=1)
+    }
+
+    albums = build_albums_from_file_cache(file_cache)
+    artist_rows, album_rows, featured_rows, *_ = (
+        scan_cache_persistence._inventory_rows_from_albums(file_cache, albums)
+    )
+
+    assert album_rows[0]["artist_key"] is None
+    assert {row["name"] for row in artist_rows} == set(members)
+    assert {
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+        if row["featured_kind"] == "featured_member"
+    } == {(member.casefold(), "featured_member") for member in members}
 
 
 def test_postgres_scan_cache_snapshot_does_not_seed_ratings_by_default(monkeypatch):
@@ -3853,6 +4767,69 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(
             'relation_projection': {**snapshot['relation_projection'], 'status': 'ready'},
         }
         assert snapshot['relation_projection']['status'] == 'stale'
+
+
+def test_targeted_preferred_paths_detects_external_retag_from_uniform_album():
+    from music_app.services.scan_cache_persistence import _targeted_preferred_paths
+
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    context = {
+        path: {"path": path, "album_artist": "Owner", "album": "Album", "year": 2000}
+        for path in paths
+    }
+    incoming = {paths[1]: {**context[paths[1]], "year": 2001}}
+    memberships = [
+        {"private_path": path, "album_key": "owner::album"}
+        for path in paths
+    ]
+
+    assert _targeted_preferred_paths(
+        incoming_entries=incoming,
+        context_entries=context,
+        existing_memberships=memberships,
+    ) == {paths[1]}
+
+
+def test_targeted_preferred_paths_ignores_refresh_of_heterogeneous_year_group():
+    from music_app.services.scan_cache_persistence import _targeted_preferred_paths
+
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    context = {
+        paths[0]: {"path": paths[0], "album_artist": "Owner", "album": "Album", "year": 2000},
+        paths[1]: {"path": paths[1], "album_artist": "Owner", "album": "Album", "year": 2001},
+    }
+    incoming = {paths[1]: {**context[paths[1]], "year": 2003}}
+    memberships = [
+        {"private_path": path, "album_key": "owner::album"}
+        for path in paths
+    ]
+
+    assert _targeted_preferred_paths(
+        incoming_entries=incoming,
+        context_entries=context,
+        existing_memberships=memberships,
+    ) == set()
+
+
+def test_targeted_preferred_paths_ignores_refresh_of_year_split_release_group():
+    from music_app.services.scan_cache_persistence import _targeted_preferred_paths
+
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    context = {
+        paths[0]: {"path": paths[0], "album_artist": "Owner", "album": "Album", "year": 2000},
+        paths[1]: {"path": paths[1], "album_artist": "Owner", "album": "Album", "year": 2001},
+    }
+    incoming = {paths[1]: {**context[paths[1]], "year": 2003}}
+    memberships = [
+        {"private_path": paths[0], "album_key": "owner::album::year::2000"},
+        {"private_path": paths[1], "album_key": "owner::album::year::2001"},
+    ]
+
+    assert _targeted_preferred_paths(
+        incoming_entries=incoming,
+        context_entries=context,
+        existing_memberships=memberships,
+    ) == set()
 
 
 @pytest.mark.parametrize('invalidity', ['changed_source', 'stale_mismatch', 'unknown_status', 'old_builder', 'incomplete'])

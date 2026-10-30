@@ -47,7 +47,7 @@
           <h3 class="tag-editor-title" id="tag-editor-title">Edit tags</h3>
           <div class="tag-editor-subtitle" id="tag-editor-subtitle">Select a track and edit tag values.</div>
         </div>
-        <button class="icon-button tag-editor-close" type="button" data-close-tag-editor="1" aria-label="Close tag editor">x</button>
+        {% call action_button('Close tag editor', class_name='tag-editor-close', attributes={'data-close-tag-editor': '1'}) %}<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>{% endcall %}
       </div>
       <div class="tag-editor-body">
         <aside class="tag-editor-track-pane">
@@ -68,7 +68,10 @@
           <label>Year<input type="text" data-tag-field="year"></label>
           <label>Track Number<input type="text" data-tag-field="track_number"></label>
           <label>Disc Number<input type="text" data-tag-field="disc_number"></label>
+          <label>Total Discs<input type="text" data-tag-field="total_discs"></label>
+          <label>Disc Title<input type="text" data-tag-field="disc_subtitle"></label>
           <label>Edition<input type="text" data-tag-field="edition"></label>
+          <label>Album Type<input type="text" data-tag-field="album_type"></label>
           <label>Album Rating<input type="text" data-tag-field="album_rating"></label>
           <div class="tag-editor-exception-field" data-tag-editor-exception-anchor><label for="tag-editor-exception-input">Exception</label><input id="tag-editor-exception-input" type="text" data-tag-field="exception_type" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="tag-editor-exception-menu" aria-expanded="false" autocomplete="off" placeholder="None"><div class="tag-editor-exception-menu" id="tag-editor-exception-menu" role="listbox" aria-label="Exception types" hidden></div></div>
           <label data-custom-collection-name-field hidden>Custom Collection name<input type="text" data-tag-field="custom_collection_name" autocomplete="off" placeholder="e.g. Road trip"></label>
@@ -126,13 +129,12 @@
           <h3 class="cover-lookup-modal-title" id="cover-lookup-modal-title">Cover Art Look Up Gallery</h3>
           <div class="cover-lookup-modal-subtitle" id="cover-lookup-modal-subtitle"></div>
         </div>
-        <button class="icon-button" type="button" data-close-cover-lookup-modal="1" aria-label="Close cover art look up gallery">✕</button>
+        {% call action_button('Close cover art look up gallery', class_name='cover-lookup-modal-close', attributes={'data-close-cover-lookup-modal': '1'}) %}<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>{% endcall %}
       </div>
       <div class="cover-lookup-modal-body" id="cover-lookup-modal-body"></div>
       <div class="cover-lookup-modal-actions">
         <div class="cover-lookup-search-action">
-          <button class="button ui-button ui-button--primary ui-button--medium" type="button" id="cover-lookup-find-better-button" data-start-cover-lookup="1" aria-describedby="cover-lookup-search-hint">Find Better Art</button>
-          <span id="cover-lookup-search-hint">Runs a full cover art search</span>
+          <button class="button ui-button ui-button--primary ui-button--medium" type="button" id="cover-lookup-find-better-button" data-start-cover-lookup="1">Find Better Art</button>
         </div>
         <div class="cover-lookup-modal-status" id="cover-lookup-modal-status"></div>
         <div class="cover-lookup-modal-actions-right">

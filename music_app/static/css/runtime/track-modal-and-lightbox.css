@@ -266,7 +266,6 @@
 .track-modal-cover img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   display: block;
 }
 .track-modal-cover-tool {
@@ -473,7 +472,6 @@
 .track-modal-cover-button img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   display: block;
 }
 .image-lightbox {
@@ -499,7 +497,27 @@
   place-items: center;
   pointer-events: none;
 }
+.image-lightbox-error {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  color: #f8fafc;
+  text-align: center;
+}
+.image-lightbox-retry {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 3;
+  width: max-content;
+  max-width: calc(100vw - 40px);
+  white-space: normal;
+  text-align: center;
+}
 .image-lightbox-loading[hidden],
+.image-lightbox-error[hidden],
+.image-lightbox-retry[hidden],
 .image-lightbox-image[hidden] {
   display: none;
 }
@@ -536,9 +554,11 @@
   will-change: transform;
   cursor: zoom-in;
   user-select: none;
+  touch-action: manipulation;
 }
 .image-lightbox-image.is-zoomed {
   cursor: grab;
+  touch-action: none;
 }
 .image-lightbox-image.is-dragging {
   cursor: grabbing;
@@ -549,6 +569,7 @@
   display: grid; place-items: center; width: 44px; height: 44px;
   border: 0; border-radius: 6px; background: transparent;
   color: var(--lightbox-control-ink); cursor: pointer;
+  outline: none !important;
 }
 .image-lightbox-close svg { width: 26px; height: 26px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; }
 .image-lightbox-close:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--lightbox-control-ink) 10%, transparent); }
@@ -569,6 +590,12 @@
   font-size: 2rem;
   line-height: 1;
   z-index: 2;
+  outline: none !important;
+}
+.image-lightbox-close:focus-visible,
+.image-lightbox-nav:focus-visible {
+  outline: 2px solid var(--lightbox-control-accent) !important;
+  outline-offset: 2px !important;
 }
 .image-lightbox-nav:hover {
   border-color: var(--lightbox-control-accent);

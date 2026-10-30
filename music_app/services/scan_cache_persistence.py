@@ -2884,28 +2884,31 @@ def _targeted_preferred_paths(
             safe_int(entry.get("year")),
         )
 
-    album_key_by_path = {
-        str(row.get("private_path") or ""): str(row.get("album_key") or "")
+    existing_paths = {
+        str(row.get("private_path") or "")
         for row in existing_memberships
-        if row.get("private_path") and row.get("album_key")
+        if row.get("private_path")
     }
-    identities_by_album: dict[str, set[tuple[str, int | None]]] = {}
-    for path, album_key in album_key_by_path.items():
+    identities_by_release: dict[str, set[tuple[str, int | None]]] = {}
+    for path in existing_paths:
         context_entry = context_entries.get(path)
         if context_entry is not None:
-            identities_by_album.setdefault(album_key, set()).add(
-                structural_identity(context_entry)
-            )
+            identity = structural_identity(context_entry)
+            identities_by_release.setdefault(identity[0], set()).add(identity)
 
     preferred_paths: set[str] = set()
     for path, incoming_entry in incoming_entries.items():
         context_entry = context_entries.get(path)
-        album_key = album_key_by_path.get(path)
+        context_identity = (
+            structural_identity(context_entry)
+            if context_entry is not None
+            else None
+        )
         if (
-            context_entry is not None
-            and album_key
-            and len(identities_by_album.get(album_key, set())) == 1
-            and structural_identity(incoming_entry) != structural_identity(context_entry)
+            path in existing_paths
+            and context_identity is not None
+            and len(identities_by_release.get(context_identity[0], set())) == 1
+            and structural_identity(incoming_entry) != context_identity
         ):
             preferred_paths.add(path)
     return preferred_paths

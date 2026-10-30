@@ -4811,6 +4811,27 @@ def test_targeted_preferred_paths_ignores_refresh_of_heterogeneous_year_group():
     ) == set()
 
 
+def test_targeted_preferred_paths_ignores_refresh_of_year_split_release_group():
+    from music_app.services.scan_cache_persistence import _targeted_preferred_paths
+
+    paths = ["C:/Music/Owner/Album/01.flac", "C:/Music/Owner/Album/02.flac"]
+    context = {
+        paths[0]: {"path": paths[0], "album_artist": "Owner", "album": "Album", "year": 2000},
+        paths[1]: {"path": paths[1], "album_artist": "Owner", "album": "Album", "year": 2001},
+    }
+    incoming = {paths[1]: {**context[paths[1]], "year": 2003}}
+    memberships = [
+        {"private_path": paths[0], "album_key": "owner::album::year::2000"},
+        {"private_path": paths[1], "album_key": "owner::album::year::2001"},
+    ]
+
+    assert _targeted_preferred_paths(
+        incoming_entries=incoming,
+        context_entries=context,
+        existing_memberships=memberships,
+    ) == set()
+
+
 @pytest.mark.parametrize('invalidity', ['changed_source', 'stale_mismatch', 'unknown_status', 'old_builder', 'incomplete'])
 def test_targeted_reconciliation_does_not_reuse_invalid_relation_projection(monkeypatch, invalidity):
     from copy import deepcopy

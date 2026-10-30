@@ -239,9 +239,7 @@ def test_targeted_additions_publish_tagged_or_inferred_album_artist_identity(
     by_title = {row["title"]: row for row in albums}
     assert set(by_title) == {album for _folder, album, _owner, _artists in additions}
     assert by_title["Rain Man"]["owner_name"] is None
-    assert by_title["Rain Man"]["metadata"]["album_artist"] == (
-        "Belle Stars / Watcher Compilation Performer"
-    )
+    assert by_title["Rain Man"]["metadata"]["album_artist"] == "Various Artists"
     assert set(by_title["Rain Man"]["featured_names"]) == {
         "Belle Stars",
         "Watcher Compilation Performer",

@@ -330,7 +330,7 @@ function openCoverLookupAlbumDetails() {
     );
     state.coverLookup.returnToDrawerAfterAlbumDetails = true;
     state.coverLookup.drawerOpen = false;
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ preserveClosedScroll: true });
   }
   closeCoverLookupModal();
   openTrackModal(
@@ -1786,7 +1786,11 @@ function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
   });
 }
 
-function renderCoverLookupDrawer({ preserveInteraction = true, taskIds = [] } = {}) {
+function renderCoverLookupDrawer({
+  preserveInteraction = true,
+  taskIds = [],
+  preserveClosedScroll = false,
+} = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
   const badge = document.getElementById('cover-lookup-drawer-badge');
@@ -1805,7 +1809,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true, taskIds = [] } = 
     clearTriggerAnchor(drawer);
   }
   if (!state.coverLookup.drawerOpen && body.innerHTML) {
-    state.coverLookup.drawerScrollTop = Math.max(0, Number(body.scrollTop || 0));
+    state.coverLookup.drawerScrollTop = preserveClosedScroll
+      ? Math.max(0, Number(body.scrollTop || 0))
+      : 0;
   }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
@@ -1900,7 +1906,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true, taskIds = [] } = 
     const foundCount = Number.isFinite(Number(task?.possible_match_count))
       ? Math.max(0, Number(task.possible_match_count))
       : Array.isArray(task?.possible_matches)
-        ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+        ? task.possible_matches.filter(isSelectableRemoteCoverCandidate).length
         : 0;
     const statusLabel = savePending
       ? 'Saving art…'
@@ -2715,7 +2721,10 @@ function mergeCoverLookupTaskSummaries(
     const incomingById = new Map(incoming.map((task) => [String(task?.id || ''), task]));
     const newTasks = incoming.filter((task) => !currentIds.has(String(task?.id || '')));
     return [
-      ...current.map((task) => incomingById.get(String(task?.id || '')) || task),
+      ...current.map((task) => {
+        const update = incomingById.get(String(task?.id || ''));
+        return update ? { ...task, ...update } : task;
+      }),
       ...newTasks,
     ];
   }

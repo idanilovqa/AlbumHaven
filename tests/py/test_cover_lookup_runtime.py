@@ -4090,3 +4090,117 @@ def test_progressive_candidate_publication_never_regresses_to_an_older_provider_
         if set(ids) == {service_candidate["id"], discogs_candidate["id"]}
     )
     assert (service_candidate["id"],) not in published_ids[combined_index + 1 :]
+
+
+@pytest.mark.parametrize("terminal_mode", ["failure", "cancellation"])
+def test_progressive_provider_cannot_publish_after_terminal_task(
+    config,
+    logger,
+    monkeypatch,
+    tmp_path: Path,
+    terminal_mode,
+):
+    track_path = tmp_path / "song.mp3"
+    album = {**_album_payload(track_path), "id": 41}
+    release_late_candidate = Event()
+    late_candidate_done = Event()
+    cancel_event = Event()
+    publisher_events: list[str] = []
+    task_updates: list[dict[str, object]] = []
+
+    initial_candidate = {
+        "id": "initial-candidate",
+        "url": "https://images.example/initial.jpg",
+        "source": "apple",
+    }
+    late_candidate = {
+        "id": "late-candidate",
+        "url": "https://images.example/late.jpg",
+        "source": "deezer",
+    }
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+    class FakePublisher:
+        def __init__(self, _repository, **_kwargs):
+            pass
+
+        def publish_candidates(self, candidates):
+            publisher_events.append(
+                "publish:" + ",".join(str(candidate["id"]) for candidate in candidates)
+            )
+            return True
+
+        def complete(self):
+            publisher_events.append("complete")
+
+        def fail(self):
+            publisher_events.append("fail")
+
+    class LateProviderRegistry:
+        def search_music_service_matches(self, _query, *, on_candidates=None, **_kwargs):
+            assert callable(on_candidates)
+            on_candidates([initial_candidate])
+
+            def publish_late_candidate():
+                assert release_late_candidate.wait(timeout=1)
+                on_candidates([late_candidate])
+                late_candidate_done.set()
+
+            Thread(target=publish_late_candidate, daemon=True).start()
+            if terminal_mode == "cancellation":
+                cancel_event.set()
+            return [initial_candidate], []
+
+        def search_bandcamp_matches(self, _query, **_kwargs):
+            return []
+
+        def search_discogs_and_cover_art_archive_matches(self, _query, **_kwargs):
+            raise ValueError("invalid-width")
+
+        def search_artist_website_matches(self, _query, **_kwargs):
+            return []
+
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "AlbumCoverCandidateSnapshotRepository",
+        FakeRepository,
+    )
+    monkeypatch.setattr(cover_lookup_runtime, "AlbumCoverCandidatePublisher", FakePublisher)
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "COVER_LOOKUP_PROVIDER_REGISTRY",
+        LateProviderRegistry(),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "update_cover_lookup_task",
+        lambda _task_id, **changes: task_updates.append(changes),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "finalize_cover_lookup_task_canceled",
+        lambda _task_id, **_kwargs: task_updates.append({"status": "canceled"}),
+    )
+    monkeypatch.setattr(cover_lookup_runtime, "discard_cover_lookup_future", lambda _task_id: None)
+    monkeypatch.setattr(cover_lookup_runtime, "log_app_event", lambda *_args, **_kwargs: None)
+
+    cover_lookup_runtime._run_cover_lookup_task(
+        f"terminal-{terminal_mode}-generation",
+        config,
+        logger,
+        str(config["MUSICBRAINZ_USER_AGENT"]),
+        album,
+        {str(track_path)},
+        cancel_event,
+    )
+    expected_status = "canceled" if terminal_mode == "cancellation" else "failed"
+    assert task_updates[-1]["status"] == expected_status
+    assert publisher_events[-1] == "fail"
+
+    release_late_candidate.set()
+    assert late_candidate_done.wait(timeout=1)
+
+    assert publisher_events[-1] == "fail"

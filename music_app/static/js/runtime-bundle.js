@@ -11411,13 +11411,23 @@ function getNonAlbumMenuLabel() {
 
 let deferredNonAlbumHydrationRequest = null;
 
+function getDeferredNonAlbumScopeKey(url) {
+  const entries = Array.from(url.searchParams.entries()).sort(([leftKey, leftValue], [rightKey, rightValue]) => (
+    leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue)
+  ));
+  const query = entries
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  return `${url.pathname}${query ? `?${query}` : ''}`;
+}
+
 async function hydrateDeferredNonAlbumTracks(options = {}) {
   const view = state.view || {};
   const libraryWide = options.libraryWide === true;
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
   requestUrl.searchParams.set('include_non_album', '1');
-  const requestScopeKey = `${requestUrl.pathname}${requestUrl.search}`;
+  const requestScopeKey = getDeferredNonAlbumScopeKey(requestUrl);
   if (!view.non_album_tracks_deferred
       && (!libraryWide || view.library_non_album_tracks_hydrated_scope === requestScopeKey)) {
     return view.non_album_tracks || [];
@@ -11426,10 +11436,11 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
     requestUrl.searchParams.set('include_library_wide_non_album', '1');
   }
   const requestKey = `${requestUrl.pathname}${requestUrl.search}`;
-  if (deferredNonAlbumHydrationRequest?.key === requestKey) {
+  const requestIdentity = getDeferredNonAlbumScopeKey(requestUrl);
+  if (deferredNonAlbumHydrationRequest?.key === requestIdentity) {
     return deferredNonAlbumHydrationRequest.promise;
   }
-  const request = { key: requestKey, promise: null };
+  const request = { key: requestIdentity, promise: null };
   request.promise = (async () => {
     const response = await fetch(requestKey, {
       headers: { Accept: 'application/json' },
@@ -11444,7 +11455,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
       'http://localhost',
     );
     currentScopeUrl.searchParams.set('include_non_album', '1');
-    const currentScopeKey = `${currentScopeUrl.pathname}${currentScopeUrl.search}`;
+    const currentScopeKey = getDeferredNonAlbumScopeKey(currentScopeUrl);
     if (String(currentView.selected_artist || '') !== requestedArtist
         || currentScopeKey !== requestScopeKey) {
       return state.view?.non_album_tracks || [];
@@ -29191,7 +29202,7 @@ function openCoverLookupAlbumDetails() {
     );
     state.coverLookup.returnToDrawerAfterAlbumDetails = true;
     state.coverLookup.drawerOpen = false;
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ preserveClosedScroll: true });
   }
   closeCoverLookupModal();
   openTrackModal(
@@ -30647,7 +30658,11 @@ function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
   });
 }
 
-function renderCoverLookupDrawer({ preserveInteraction = true, taskIds = [] } = {}) {
+function renderCoverLookupDrawer({
+  preserveInteraction = true,
+  taskIds = [],
+  preserveClosedScroll = false,
+} = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
   const badge = document.getElementById('cover-lookup-drawer-badge');
@@ -30666,7 +30681,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true, taskIds = [] } = 
     clearTriggerAnchor(drawer);
   }
   if (!state.coverLookup.drawerOpen && body.innerHTML) {
-    state.coverLookup.drawerScrollTop = Math.max(0, Number(body.scrollTop || 0));
+    state.coverLookup.drawerScrollTop = preserveClosedScroll
+      ? Math.max(0, Number(body.scrollTop || 0))
+      : 0;
   }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
@@ -30761,7 +30778,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true, taskIds = [] } = 
     const foundCount = Number.isFinite(Number(task?.possible_match_count))
       ? Math.max(0, Number(task.possible_match_count))
       : Array.isArray(task?.possible_matches)
-        ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+        ? task.possible_matches.filter(isSelectableRemoteCoverCandidate).length
         : 0;
     const statusLabel = savePending
       ? 'Saving art…'
@@ -31576,7 +31593,10 @@ function mergeCoverLookupTaskSummaries(
     const incomingById = new Map(incoming.map((task) => [String(task?.id || ''), task]));
     const newTasks = incoming.filter((task) => !currentIds.has(String(task?.id || '')));
     return [
-      ...current.map((task) => incomingById.get(String(task?.id || '')) || task),
+      ...current.map((task) => {
+        const update = incomingById.get(String(task?.id || ''));
+        return update ? { ...task, ...update } : task;
+      }),
       ...newTasks,
     ];
   }

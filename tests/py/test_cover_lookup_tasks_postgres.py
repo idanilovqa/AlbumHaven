@@ -414,6 +414,9 @@ def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_can
     assert "album_payload' ->> 'key'" in page_sql
     assert "from library.local_albums as album" not in page_sql
     assert "with ordinality as candidates(candidate, ordinal)" in page_sql
+    assert page_sql.count(
+        "coalesce(candidate ->> 'art_kind', 'cover') = 'cover'"
+    ) == 1
 
 
 def test_notification_summary_page_keeps_current_album_cover_as_last_preview_fallback():

@@ -425,16 +425,24 @@ export class TrackModalActions {
     const expectedTrackTitles = Array.isArray(expected.trackTitles)
       ? expected.trackTitles.map((title) => String(title || '').trim())
       : [];
-    await this.waitForTitle(expectedTitle, options);
-    await expect(this.trackModal.trackRows).toHaveCount(expectedTrackTitles.length, {
+    const expectedSnapshot = {
+      title: expectedTitle,
+      trackRowCount: expectedTrackTitles.length,
+      trackTitles: expectedTrackTitles,
+      ...(Array.isArray(expected.displayedTrackNumbers)
+        ? { displayedTrackNumbers: expected.displayedTrackNumbers }
+        : {}),
+    };
+    await expect.poll(async () => {
+      const snapshot = await this.trackModal.readExactAlbumDetailsSnapshot();
+      if (!Array.isArray(expected.displayedTrackNumbers)) {
+        delete snapshot.displayedTrackNumbers;
+      }
+      return snapshot;
+    }, {
       timeout: options.timeout || 30000,
-    });
-    expect(await this.readTrackTitles()).toEqual(expectedTrackTitles);
-    if (Array.isArray(expected.displayedTrackNumbers)) {
-      expect(await this.trackModal.readDisplayedTrackNumbers()).toEqual(
-        expected.displayedTrackNumbers,
-      );
-    }
+      intervals: [100, 250, 500],
+    }).toEqual(expectedSnapshot);
     return this.readSummary();
   }
 

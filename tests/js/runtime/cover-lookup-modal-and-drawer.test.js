@@ -194,18 +194,17 @@ require('node:test')('only the active automatic suggestion receives suggested st
   assert.doesNotMatch(manuallySelected, /is-suggested/);
 });
 
-require('node:test')('completed lookup counts covers while retaining every other artwork alternative', () => {
+require('node:test')('completed lookup counts every selectable artwork candidate', () => {
   const { context, bodyElement } = createDrawerHarness();
   const covers = [{ id: 'cover-default' }, ...['one', 'two', 'three'].map(id => ({ id, art_kind: 'cover' }))];
-  const alternatives = ['booklet', 'back', 'disc'].map(art_kind => ({ id: art_kind, art_kind }));
+  const alternatives = ['booklet', 'back', 'disc'].map(id => ({ id, art_kind: 'other' }));
   const matches = [...covers, ...alternatives];
   const before = JSON.stringify(matches);
   context.state.coverLookup.tasks = [{
     id: 'mixed-artwork', status: 'completed', artist: 'Artist', album: 'Album', possible_matches: matches,
   }];
   context.renderCoverLookupDrawer();
-  assert.match(bodyElement.innerHTML, />4 covers found</);
-  assert.doesNotMatch(bodyElement.innerHTML, />7 covers found</);
+  assert.match(bodyElement.innerHTML, />7 covers found</);
   assert.equal(JSON.stringify(matches), before);
   assert.strictEqual(context.state.coverLookup.tasks[0].possible_matches, matches);
   for (const alternative of alternatives) {
@@ -937,7 +936,7 @@ require('node:test')('polling preserves a pressed task before selection exists a
     'Explicit user removal must not be blocked by interaction preservation');
 });
 
-require('node:test')('closed drawer releases cards and renders terminal task state when reopened', () => {
+require('node:test')('ordinary drawer close resets virtualization to the newest card', () => {
   const { context, bodyElement } = createDrawerHarness();
   const drawerElement = context.document.getElementById('cover-lookup-drawer');
   let drawerHidden = false;
@@ -963,10 +962,10 @@ require('node:test')('closed drawer releases cards and renders terminal task sta
   context.renderCoverLookupDrawer();
 
   assert.equal(bodyElement.innerHTML, '');
-  assert.equal(context.state.coverLookup.drawerScrollTop, 222);
+  assert.equal(context.state.coverLookup.drawerScrollTop, 0);
   context.state.coverLookup.drawerOpen = true;
   context.renderCoverLookupDrawer();
-  assert.equal(bodyElement.scrollTop, 222);
+  assert.equal(bodyElement.scrollTop, 0);
   assert.match(bodyElement.innerHTML, />Art chosen</);
 });
 
@@ -2483,6 +2482,36 @@ require('node:test')('active-only polling refreshes the modal when partial candi
   await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
 
   assert.equal(galleryRefreshes, 1);
+});
+
+require('node:test')('active-only polling preserves full task fields omitted by compact summaries', async () => {
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        tasks: [{ id: 'active', status: 'running', progress: 62 }],
+        next_cursor: null,
+        total_count: 1,
+        active_count: 1,
+        finished_count: 0,
+      }),
+    }),
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'active',
+    status: 'running',
+    progress: 50,
+    manual_urls: ['https://covers.example/manual-front.jpg'],
+  }];
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.deepEqual(
+    context.state.coverLookup.tasks[0].manual_urls,
+    ['https://covers.example/manual-front.jpg'],
+  );
+  assert.equal(context.state.coverLookup.tasks[0].progress, 62);
 });
 
 require('node:test')('repeated explicit manual lookup reuses its terminal task without collapsing provider refresh generations', async () => {

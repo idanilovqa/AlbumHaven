@@ -127,7 +127,7 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
 
     assert summary["id"] == "completed-task"
     assert summary["status"] == "completed"
-    assert summary["possible_match_count"] == 1
+    assert summary["possible_match_count"] == 2
     assert "possible_matches" not in summary
     assert "track_paths" not in summary
     assert "job_contract" not in summary
@@ -580,6 +580,7 @@ def test_failed_lookup_can_transition_to_remote_cover_save(monkeypatch):
         status="failed",
         result_kind="interrupted",
         message="Cover art lookup stopped before it could finish.",
+        possible_matches=[],
     )
 
     update_cover_lookup_task(
@@ -617,12 +618,18 @@ def test_timeout_failure_cannot_be_reversed_by_late_worker_completion(monkeypatc
         status="completed",
         result_kind="possible-matches",
         message="Late worker completion.",
+        possible_matches=[{"id": "late-provider-result"}],
+    )
+    update_cover_lookup_task(
+        task_id,
+        possible_matches=[{"id": "late-progressive-provider-result"}],
     )
 
     task = cover_lookup_result(task_id)
     assert task["status"] == "failed"
     assert task["result_kind"] == "interrupted"
     assert task["message"] == "Cover art lookup stopped before it could finish."
+    assert task["possible_matches"] == []
 
 
 def test_live_terminal_completion_beats_stale_persisted_running_timestamp():

@@ -249,7 +249,7 @@ def summarize_cover_lookup_task_for_list(
                 1
                 for match in (matches or [])
                 if isinstance(match, Mapping)
-                and str(match.get("art_kind") or "cover") == "cover"
+                and str(match.get("art_kind") or "cover") in {"cover", "other"}
             )
     elif isinstance(matches, list):
         summary["possible_matches"] = matches
@@ -621,6 +621,12 @@ def update_cover_lookup_task(
         current_status = str(task.get("status") or "").strip().casefold()
         requested_status = str(changes.get("status") or "").strip().casefold()
         if current_job_kind == "save_remote_selection" and requested_job_kind == "candidate_lookup":
+            return
+        if (
+            current_status in {"completed", "failed", "canceled"}
+            and not requested_status
+            and "possible_matches" in changes
+        ):
             return
         if current_status == "canceled":
             if requested_status != "canceled":

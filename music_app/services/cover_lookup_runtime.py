@@ -439,7 +439,10 @@ def _terminalize_canceled_cover_lookup_task(
     config: Mapping[str, object],
     candidate_publisher: object | None,
     candidate_snapshot_published: bool,
+    close_candidate_publication: Callable[[], None] | None = None,
 ) -> None:
+    if close_candidate_publication is not None:
+        close_candidate_publication()
     if candidate_publisher is not None and candidate_snapshot_published:
         try:
             candidate_publisher.fail()
@@ -571,6 +574,13 @@ def _run_cover_lookup_task(
         else build_cover_lookup_provider_deadline_at(config)
     )
     provider_deadline_exhausted = False
+    progressive_candidates_lock = Lock()
+    candidate_publication_closed = Event()
+
+    def close_candidate_publication() -> None:
+        with progressive_candidates_lock:
+            candidate_publication_closed.set()
+
     try:
         if cancel_event.is_set():
             _terminalize_canceled_cover_lookup_task(
@@ -578,6 +588,7 @@ def _run_cover_lookup_task(
                 config=config,
                 candidate_publisher=candidate_publisher,
                 candidate_snapshot_published=candidate_snapshot_published,
+                close_candidate_publication=close_candidate_publication,
             )
             return
         log_app_event(
@@ -605,6 +616,7 @@ def _run_cover_lookup_task(
                 config=config,
                 candidate_publisher=candidate_publisher,
                 candidate_snapshot_published=candidate_snapshot_published,
+                close_candidate_publication=close_candidate_publication,
             )
             return
         _update_candidate_lookup_task(
@@ -643,7 +655,6 @@ def _run_cover_lookup_task(
         )
         progressive_service_candidates: list[dict[str, object]] = []
         progressive_later_candidates: list[dict[str, object]] = []
-        progressive_candidates_lock = Lock()
         progressive_candidate_signature: tuple[str, ...] = ()
 
         def publish_progressive_candidates() -> None:
@@ -660,7 +671,7 @@ def _run_cover_lookup_task(
                 if not candidates or signature == progressive_candidate_signature:
                     return
                 progressive_candidate_signature = signature
-                if cancel_event.is_set():
+                if cancel_event.is_set() or candidate_publication_closed.is_set():
                     return
                 publish_candidate_snapshot(candidates)
                 _update_candidate_lookup_task(
@@ -746,6 +757,7 @@ def _run_cover_lookup_task(
                 config=config,
                 candidate_publisher=candidate_publisher,
                 candidate_snapshot_published=candidate_snapshot_published,
+                close_candidate_publication=close_candidate_publication,
             )
             return
         phase_started = time.perf_counter()
@@ -827,6 +839,7 @@ def _run_cover_lookup_task(
                 config=config,
                 candidate_publisher=candidate_publisher,
                 candidate_snapshot_published=candidate_snapshot_published,
+                close_candidate_publication=close_candidate_publication,
             )
             return
         phase_started = time.perf_counter()
@@ -865,6 +878,7 @@ def _run_cover_lookup_task(
                 config=config,
                 candidate_publisher=candidate_publisher,
                 candidate_snapshot_published=candidate_snapshot_published,
+                close_candidate_publication=close_candidate_publication,
             )
             return
         _update_candidate_lookup_task(
@@ -921,6 +935,7 @@ def _run_cover_lookup_task(
                 config=config,
                 candidate_publisher=candidate_publisher,
                 candidate_snapshot_published=candidate_snapshot_published,
+                close_candidate_publication=close_candidate_publication,
             )
             return
         phase_started = time.perf_counter()
@@ -981,6 +996,7 @@ def _run_cover_lookup_task(
                     config=config,
                     candidate_publisher=candidate_publisher,
                     candidate_snapshot_published=candidate_snapshot_published,
+                    close_candidate_publication=close_candidate_publication,
                 )
                 return
             log_app_event(
@@ -1015,6 +1031,7 @@ def _run_cover_lookup_task(
                 config=config,
                 candidate_publisher=candidate_publisher,
                 candidate_snapshot_published=candidate_snapshot_published,
+                close_candidate_publication=close_candidate_publication,
             )
             return
         if provider_deadline_exhausted:
@@ -1029,6 +1046,7 @@ def _run_cover_lookup_task(
                 candidate_count=len(combined_candidates),
             )
         caa_empty_notice = not archive_candidates
+        close_candidate_publication()
         if candidate_publisher is not None and candidate_snapshot_published:
             try:
                 candidate_publisher.complete()
@@ -1062,6 +1080,7 @@ def _run_cover_lookup_task(
             counts=phase_counts,
         )
     except Exception as exc:
+        close_candidate_publication()
         if candidate_publisher is not None and candidate_snapshot_published:
             try:
                 candidate_publisher.fail()

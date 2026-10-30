@@ -410,6 +410,18 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
         + b'"'
         in body
     )
+    assert (
+        b'<link rel="preload" href="/static/app.js?v='
+        + encoded_runtime_asset_version
+        + b'" as="script" fetchpriority="high">'
+        in body
+    )
+    assert (
+        b'<link rel="preload" href="/static/js/runtime-bundle.js?v='
+        + encoded_runtime_asset_version
+        + b'" as="script" fetchpriority="high">'
+        in body
+    )
     assert b'<script src="/static/app.js?v=' + encoded_runtime_asset_version + b'"' in body
     assert (
         b'<script src="/static/js/runtime-bundle.js?v='

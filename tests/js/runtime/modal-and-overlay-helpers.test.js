@@ -318,6 +318,52 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   assert.equal(controlSyncs, 1);
 });
 
+test('deferred non-album hydration accepts an equivalent reordered category scope', async () => {
+  const { context } = loadHelper();
+  let resolveRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => {
+    const params = new URLSearchParams({
+      surface: 'albums',
+      artist: view.selected_artist || '',
+    });
+    for (const category of view.visible_library_categories || []) {
+      params.append('category', category);
+    }
+    return `/view-data?${params}`;
+  };
+  context.fetch = async () => new Promise((resolve) => {
+    resolveRequest = () => resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Neal Morse',
+        non_album_tracks: [{ path: '/music/neal-morse/loose.flac', title: 'Loose' }],
+        non_album_tracks_deferred: false,
+      }),
+    });
+  });
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+
+  const hydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+  context.state.view.visible_library_categories = ['hoard', 'main_library', 'new_arrivals'];
+  resolveRequest();
+  await hydration;
+
+  assert.deepEqual(
+    Array.from(context.state.view.non_album_tracks, (track) => track.title),
+    ['Loose'],
+  );
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
+});
+
 test('library-wide non-album tracks hydrate after artist hydration completes', async () => {
   const { context } = loadHelper();
   const requested = [];

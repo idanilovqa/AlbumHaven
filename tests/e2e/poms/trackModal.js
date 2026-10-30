@@ -101,6 +101,38 @@ export class TrackModal extends BasePage {
     });
   }
 
+  async readExactAlbumDetailsSnapshot() {
+    // parity-check: allow-read-only-measurement-evaluate -- one atomic rendered album-details observation
+    return this.dialog.evaluate((dialog) => {
+      const header = dialog.querySelector('.album-details-header');
+      const primary = header?.querySelector('.album-details-header__primary')?.textContent.trim() || '';
+      const values = Array.from(
+        header?.querySelectorAll('.album-details-header__secondary > span:not([aria-hidden]):not([class])') || [],
+        (node) => node.textContent.trim(),
+      );
+      const layout = header?.getAttribute('data-album-details-layout');
+      const title = layout === 'editorial_canvas'
+        ? [values[0], primary, values[1]].filter(Boolean).join(' • ')
+        : (layout === 'stacked_bar'
+          ? [primary, values[0]].filter(Boolean).join(' • ')
+          : primary);
+      const rows = Array.from(dialog.querySelectorAll('[data-track-row-path]'));
+      return {
+        title,
+        trackRowCount: rows.length,
+        trackTitles: rows.map((row) => String(
+          row.querySelector('[data-track-title]')?.getAttribute('data-track-title') || '',
+        ).trim()),
+        displayedTrackNumbers: rows.map((row) => {
+          const text = String(
+            row.querySelector('[data-cdt-column="number"]')?.textContent || '',
+          ).trim();
+          return Number.parseInt(text.replace(/\.$/u, ''), 10);
+        }),
+      };
+    });
+  }
+
   async startVisibleContentObservation() {
     const observation = await this.dialog.evaluateHandle((dialog) => {
       const samples = [];

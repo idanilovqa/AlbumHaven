@@ -247,13 +247,23 @@ function getNonAlbumMenuLabel() {
 
 let deferredNonAlbumHydrationRequest = null;
 
+function getDeferredNonAlbumScopeKey(url) {
+  const entries = Array.from(url.searchParams.entries()).sort(([leftKey, leftValue], [rightKey, rightValue]) => (
+    leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue)
+  ));
+  const query = entries
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  return `${url.pathname}${query ? `?${query}` : ''}`;
+}
+
 async function hydrateDeferredNonAlbumTracks(options = {}) {
   const view = state.view || {};
   const libraryWide = options.libraryWide === true;
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
   requestUrl.searchParams.set('include_non_album', '1');
-  const requestScopeKey = `${requestUrl.pathname}${requestUrl.search}`;
+  const requestScopeKey = getDeferredNonAlbumScopeKey(requestUrl);
   if (!view.non_album_tracks_deferred
       && (!libraryWide || view.library_non_album_tracks_hydrated_scope === requestScopeKey)) {
     return view.non_album_tracks || [];
@@ -262,10 +272,11 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
     requestUrl.searchParams.set('include_library_wide_non_album', '1');
   }
   const requestKey = `${requestUrl.pathname}${requestUrl.search}`;
-  if (deferredNonAlbumHydrationRequest?.key === requestKey) {
+  const requestIdentity = getDeferredNonAlbumScopeKey(requestUrl);
+  if (deferredNonAlbumHydrationRequest?.key === requestIdentity) {
     return deferredNonAlbumHydrationRequest.promise;
   }
-  const request = { key: requestKey, promise: null };
+  const request = { key: requestIdentity, promise: null };
   request.promise = (async () => {
     const response = await fetch(requestKey, {
       headers: { Accept: 'application/json' },
@@ -280,7 +291,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
       'http://localhost',
     );
     currentScopeUrl.searchParams.set('include_non_album', '1');
-    const currentScopeKey = `${currentScopeUrl.pathname}${currentScopeUrl.search}`;
+    const currentScopeKey = getDeferredNonAlbumScopeKey(currentScopeUrl);
     if (String(currentView.selected_artist || '') !== requestedArtist
         || currentScopeKey !== requestScopeKey) {
       return state.view?.non_album_tracks || [];

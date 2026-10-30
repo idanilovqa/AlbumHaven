@@ -954,7 +954,7 @@ def _load_notification_summary_page_sql(
                     '[]'::jsonb
                   )
                 ) as candidate
-                where coalesce(candidate ->> 'art_kind', 'cover') = 'cover'
+                where coalesce(candidate ->> 'art_kind', 'cover') in ('cover', 'other')
               ),
               'current_user_cover_path', case
                 when current_album.metadata ->> 'cover_selection_origin' = 'user'

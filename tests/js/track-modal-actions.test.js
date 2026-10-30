@@ -9,6 +9,40 @@ test('TrackModalActions exposes the current-release split choice journey', async
   assert.equal(typeof TrackModalActions.prototype.chooseCurrentRelease, 'function');
 });
 
+test('TrackModalActions waits for one atomic exact album-details render', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+  let snapshotReads = 0;
+  const actions = new TrackModalActions({
+    async readExactAlbumDetailsSnapshot() {
+      snapshotReads += 1;
+      if (snapshotReads === 1) {
+        return {
+          title: 'Artist • Destination • 2026',
+          trackRowCount: 0,
+          trackTitles: [],
+          displayedTrackNumbers: [],
+        };
+      }
+      return {
+        title: 'Artist • Destination • 2026',
+        trackRowCount: 2,
+        trackTitles: ['First', 'Second'],
+        displayedTrackNumbers: [1, 2],
+      };
+    },
+  });
+  actions.readSummary = async () => ({ trackRows: 2 });
+
+  const summary = await actions.waitForExactAlbumDetails({
+    title: 'Artist • Destination • 2026',
+    trackTitles: ['First', 'Second'],
+    displayedTrackNumbers: [1, 2],
+  }, { timeout: 2000 });
+
+  assert.deepEqual(summary, { trackRows: 2 });
+  assert.equal(snapshotReads, 2);
+});
+
 function createLocator({ text = '', visible = true, count = 0, evaluateAll = null, attributes = {} } = {}) {
   return {
     async textContent() {

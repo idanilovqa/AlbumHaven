@@ -103,7 +103,7 @@ def test_same_volume_move_is_atomic_and_checkpointed(tmp_path):
     assert repository.completed[0]["status"] == "completed"
 
 
-def test_same_volume_move_removes_byte_identical_source_recreated_after_checkpoint(tmp_path):
+def test_same_volume_move_preserves_source_recreated_after_terminal_checkpoint(tmp_path):
     content = b"preview-recreated-during-relocation"
     source = tmp_path / "source.webp"
     target = tmp_path / "managed/v1/cover_variants/ab/abcdef.webp"
@@ -120,12 +120,12 @@ def test_same_volume_move_removes_byte_identical_source_recreated_after_checkpoi
     run_worker(repository)
 
     assert target.read_bytes() == content
-    assert not source.exists()
+    assert source.read_bytes() == content
     assert repository.completed[0]["status"] == "completed"
     assert repository.cleanup_failures == []
 
 
-def test_cross_volume_copy_checkpoints_before_source_deletion(tmp_path, monkeypatch):
+def test_cross_volume_copy_deletes_source_before_terminal_checkpoint(tmp_path, monkeypatch):
     content = b"cross-volume-preview"
     source = tmp_path / "source.webp"
     target = tmp_path / "managed/v1/cover_variants/ab/abcdef.webp"
@@ -135,7 +135,7 @@ def test_cross_volume_copy_checkpoints_before_source_deletion(tmp_path, monkeypa
 
     def complete_item(**result):
         assert target.read_bytes() == content
-        assert source.read_bytes() == content
+        assert not source.exists()
         original_complete(**result)
 
     repository.complete_item = complete_item
@@ -217,13 +217,9 @@ def test_source_cleanup_failure_is_durable_and_retryable(tmp_path, monkeypatch):
 
     assert source.exists()
     assert target.read_bytes() == content
-    assert repository.cleanup_failures == [
-        {
-            "operation_id": repository.operation_id,
-            "item_id": 1,
-            "error": "source is locked",
-        }
-    ]
+    assert repository.completed[0]["status"] == "failed"
+    assert repository.completed[0]["error"] == "source is locked"
+    assert repository.cleanup_failures == []
 
 
 def test_cancellation_stops_at_file_boundary_without_claiming(tmp_path):

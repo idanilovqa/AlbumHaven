@@ -23,6 +23,129 @@ def test_cover_jobs_skip_adequate_selected_remote_artwork(tmp_path, monkeypatch,
     assert jobs == []
 
 
+def test_album_selection_dominates_stale_missing_cover_on_sibling_track(tmp_path, monkeypatch):
+    monkeypatch.setattr(cover_refresh_policy, "AUTOMATIC_COVER_REPAIR_MIN_EDGE", 2000)
+    album_folder = tmp_path / "Album"
+    selected = {
+        "album_artist": "Artist",
+        "album": "Album",
+        "album_id": 12,
+        "selected_cover_origin": "user",
+        "selected_cover_provenance": "explicit",
+        "selected_remote_cover_url": "https://images.example/adequate.png",
+        "selected_remote_cover_width": 1200,
+        "selected_remote_cover_height": 1200,
+    }
+    stale = {"album_artist": "Artist", "album": "Album", "album_id": 12}
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(
+        {
+            str(album_folder / "01.mp3"): stale,
+            str(album_folder / "02.mp3"): selected,
+        },
+        require_missing_cover=True,
+    )
+
+    assert jobs == []
+
+
+@pytest.mark.parametrize("selected_first", [True, False])
+def test_conflicting_album_ids_do_not_share_selected_remote_artwork(
+    tmp_path,
+    selected_first,
+):
+    album_folder = tmp_path / "Album"
+    selected = {
+        "album_artist": "Artist",
+        "album": "Album",
+        "album_id": 12,
+        "selected_cover_origin": "user",
+        "selected_cover_provenance": "explicit",
+        "selected_remote_cover_url": "https://images.example/adequate.png",
+        "selected_remote_cover_width": 1200,
+        "selected_remote_cover_height": 1200,
+    }
+    conflicting = {
+        "album_artist": "Artist",
+        "album": "Album",
+        "album_id": 13,
+    }
+    ordered = [selected, conflicting] if selected_first else [conflicting, selected]
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(
+        {
+            str(album_folder / f"0{index}.mp3"): entry
+            for index, entry in enumerate(ordered, start=1)
+        },
+        require_missing_cover=True,
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0]["needs_cover_fetch"] is True
+
+
+@pytest.mark.parametrize("selected_first", [True, False])
+def test_missing_album_id_does_not_conflict_with_identified_sibling_selection(
+    tmp_path,
+    selected_first,
+):
+    album_folder = tmp_path / "Album"
+    selected = {
+        "album_artist": "Artist",
+        "album": "Album",
+        "album_id": 12,
+        "selected_cover_origin": "user",
+        "selected_cover_provenance": "explicit",
+        "selected_remote_cover_url": "https://images.example/adequate.png",
+        "selected_remote_cover_width": 1200,
+        "selected_remote_cover_height": 1200,
+    }
+    unidentified = {"album_artist": "Artist", "album": "Album", "album_id": None}
+    ordered = [selected, unidentified] if selected_first else [unidentified, selected]
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(
+        {
+            str(album_folder / f"0{index}.mp3"): entry
+            for index, entry in enumerate(ordered, start=1)
+        },
+        require_missing_cover=True,
+    )
+
+    assert jobs == []
+
+
+@pytest.mark.parametrize("unidentified_first", [True, False])
+def test_unidentified_sibling_cannot_donate_selected_remote_artwork(
+    tmp_path,
+    unidentified_first,
+):
+    album_folder = tmp_path / "Album"
+    identified = {"album_artist": "Artist", "album": "Album", "album_id": 12}
+    unidentified = {
+        "album_artist": "Artist",
+        "album": "Album",
+        "album_id": None,
+        "selected_cover_origin": "user",
+        "selected_cover_provenance": "explicit",
+        "selected_remote_cover_url": "https://images.example/unowned.png",
+        "selected_remote_cover_width": 1200,
+        "selected_remote_cover_height": 1200,
+    }
+    ordered = [unidentified, identified] if unidentified_first else [identified, unidentified]
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(
+        {
+            str(album_folder / f"0{index}.mp3"): entry
+            for index, entry in enumerate(ordered, start=1)
+        },
+        require_missing_cover=True,
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0]["needs_cover_fetch"] is True
+    assert not jobs[0].get("selected_remote_cover_url")
+
+
 @pytest.mark.parametrize("require_missing_cover", [False, True])
 @pytest.mark.parametrize("persisted_markers", [False, True])
 def test_cover_jobs_exclude_mixed_and_orphan_sources_but_keep_disc_siblings(

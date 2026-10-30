@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from music_app.services.jobs import authorization as job_authorization
 from music_app.services.current_actor import (
     ActorState,
     CapabilityGrant,
@@ -178,6 +179,9 @@ def _service(repository: _ContextRepository | None = None, *, validators=None):
         "full_scan": _resource_scope_validator,
         "targeted_reconciliation": _server_scope_validator,
         "post_scan_cover_refresh": _server_scope_validator,
+        "problematic_files_projection": (
+            job_authorization.build_problematic_files_projection_resource_validator()
+        ),
         "cover_lookup": _resource_scope_validator,
         "cover_remote_save": _resource_scope_validator,
         "lastfm_scrobble_retry": _lastfm_validator,
@@ -776,6 +780,150 @@ def test_server_owned_work_without_inherited_library_scope_fails_before_loading(
         False, "authorization_input_invalid"
     )
     assert repository.loads == []
+
+
+def _problematic_projection_claim(**overrides):
+    values = {
+        "kind": "problematic_files_projection",
+        "subject_kind": "problematic_files_projection",
+        "subject_ref": "library:9",
+        "parameters": {
+            "projection_kind": "problematic_files",
+            "source_generation": 18,
+            "rebuild_epoch": 2,
+        },
+        "account_id": None,
+        "library_id": 9,
+        "capability_key": None,
+        "request_origin_id": None,
+        "idempotency_key": "problematic-files-projection:9:18:2",
+        "max_attempts": 3,
+    }
+    values.update(overrides)
+    return _claim(**values)
+
+
+def test_problematic_projection_uses_only_its_exact_server_owned_scope():
+    service, repository = _service()
+    repository.actor = None
+
+    assert service.authorize(
+        _problematic_projection_claim(), NOW
+    ) == AuthorizationDecision(True, "problematic_projection_scope_current")
+
+
+def test_terminal_projection_replacement_uses_an_authorized_server_surface():
+    import re
+    from pathlib import Path
+
+    sql = Path(
+        "migrations/postgres/0128_create_problematic_files_projection.sql"
+    ).read_text(encoding="utf-8")
+    failure_sql = sql.split(
+        "create or replace function ops.fail_claimed_problematic_projection",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    inserted_scope = re.search(
+        r"\),\s*p_library_id,\s*'([^']+)',\s*'([^']+)'",
+        failure_sql,
+    )
+    assert inserted_scope is not None
+    deployment_mode, client_surface = inserted_scope.groups()
+
+    claim = _problematic_projection_claim(
+        deployment_mode=deployment_mode,
+        client_surface=client_surface,
+    )
+    context = job_authorization._authorization_context_from_row(
+        {
+            "account_id": None,
+            "library_exists": True,
+            "membership_current": False,
+            "is_bootstrap_owner": False,
+            "account_is_active": None,
+            "library_relationships": [],
+            "capability_grants": [],
+            "request_origin_id": None,
+            "request_origin_account_id": None,
+            "request_origin_type": None,
+            "request_origin_surface": None,
+            "integration_session_ref": None,
+        },
+        claim,
+    )
+
+    assert context.deployment_allowed is True
+    assert context.client_surface_allowed is True
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"subject_kind": "library"},
+        {"subject_ref": "library:10"},
+        {"parameters": []},
+        {"parameters": {}},
+        {
+            "parameters": {
+                "projection_kind": "problematic_files",
+                "source_generation": 18,
+                "rebuild_epoch": 2,
+                "untrusted": True,
+            }
+        },
+        {
+            "parameters": {
+                "projection_kind": "album_gallery",
+                "source_generation": 18,
+                "rebuild_epoch": 2,
+            }
+        },
+        {
+            "parameters": {
+                "projection_kind": "problematic_files",
+                "source_generation": 0,
+                "rebuild_epoch": 2,
+            }
+        },
+        {"idempotency_key": "problematic-files-projection:9:18:3"},
+    ],
+)
+def test_problematic_projection_rejects_malformed_or_foreign_resources(overrides):
+    validator = job_authorization.build_problematic_files_projection_resource_validator()
+    context = _ContextRepository().load_authorization_context(
+        _problematic_projection_claim(), NOW
+    )
+
+    assert validator(
+        _problematic_projection_claim(**overrides), context, NOW
+    ) == AuthorizationDecision(False, "problematic_projection_scope_invalid")
+
+
+def test_problematic_projection_rejects_synthesized_actor_capability_before_loading():
+    service, repository = _service()
+    claim = _problematic_projection_claim(capability_key="library.refresh")
+
+    assert service.authorize(claim, NOW) == AuthorizationDecision(
+        False, "authorization_input_invalid"
+    )
+    assert repository.loads == []
+
+
+def test_problematic_projection_requires_current_library_not_future_repository_state():
+    validator = job_authorization.build_problematic_files_projection_resource_validator()
+    context = _ContextRepository().load_authorization_context(
+        _problematic_projection_claim(), NOW
+    )
+    context.server_scope_current = False
+
+    assert validator(
+        _problematic_projection_claim(), context, NOW
+    ) == AuthorizationDecision(True, "problematic_projection_scope_current")
+
+    context.library_current = False
+    assert validator(
+        _problematic_projection_claim(), context, NOW
+    ) == AuthorizationDecision(False, "problematic_projection_scope_revoked")
 
 
 def test_library_watcher_targeted_work_uses_claim_scoped_validator_without_account_snapshot():

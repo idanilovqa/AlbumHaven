@@ -83,6 +83,8 @@ def main(
 
 def _shutdown_signals() -> tuple[int, ...]:
     candidates = [signal.SIGINT]
+    if hasattr(signal, "SIGBREAK"):
+        candidates.append(signal.SIGBREAK)
     if hasattr(signal, "SIGTERM"):
         candidates.append(signal.SIGTERM)
     return tuple(dict.fromkeys(candidates))
@@ -129,6 +131,7 @@ def _build_worker(
     from music_app.services.jobs.authorization import (
         build_auth_mail_resource_validator,
         build_lastfm_retry_resource_validator,
+        build_problematic_files_projection_resource_validator,
         JobAuthorizationService,
         PostgresJobAuthorizationContextRepository,
     )
@@ -159,6 +162,16 @@ def _build_worker(
     )
     from music_app.services.jobs.models import JobKind
     from music_app.jobs.full_scan_executor import DurableFullScanExecutor
+    from music_app.jobs.problematic_projection_handlers import (
+        build_problematic_projection_handler,
+    )
+    from music_app.services.problematic_files_projection import project_problematic_files
+    from music_app.services.problematic_projection_integrity import (
+        ProblematicProjectionIntegrityReconciler,
+    )
+    from music_app.services.problematic_projection_postgres import (
+        PostgresProblematicProjectionRepository,
+    )
 
     pool = create_worker_pool(config)
 
@@ -192,6 +205,13 @@ def _build_worker(
     watcher_recovery = PostgresWatcherRecoveryRepository(
         database_url=config.database_url,
         connect_to_database=connect_to_database,
+    )
+    problematic_projection_repository = PostgresProblematicProjectionRepository(
+        database_url=config.database_url,
+        connect_to_database=connect_to_database,
+    )
+    problematic_projection_integrity = ProblematicProjectionIntegrityReconciler(
+        repository=problematic_projection_repository,
     )
     if not callable(scan_repository.load_claimed_targeted_reconciliation_scope):
         raise RuntimeError("targeted reconciliation scope loader is unavailable")
@@ -251,6 +271,9 @@ def _build_worker(
             JobKind.POST_SCAN_COVER_REFRESH.value: post_scan_cover_validator,
             JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
             JobKind.LASTFM_SCROBBLE_RETRY.value: lastfm_retry_validator,
+            JobKind.PROBLEMATIC_FILES_PROJECTION.value: (
+                build_problematic_files_projection_resource_validator()
+            ),
             **auth_mail_validators,
         },
     )
@@ -259,6 +282,13 @@ def _build_worker(
         connect_to_database=connect_to_database,
     )
     handlers = JobHandlerRegistry()
+    handlers.register(
+        JobKind.PROBLEMATIC_FILES_PROJECTION,
+        build_problematic_projection_handler(
+            repository=problematic_projection_repository,
+            project_group=project_problematic_files,
+        ),
+    )
     handlers.register(
         JobKind.COVER_LOOKUP,
         build_cover_lookup_handler(
@@ -358,6 +388,7 @@ def _build_worker(
             watcher_recovery.reconcile_due,
             lastfm_retry_repository.reconcile_due_pending,
             auth_mail_repository.reconcile_due_pending,
+            problematic_projection_integrity.reconcile_due,
         ),
     )
 

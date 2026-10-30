@@ -11589,16 +11589,178 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
         "active_problem_rows as materialized (",
         1,
     )[1].split("active_album_rollup as (", 1)[0]
-    assert "library.local_tracks.track_number > 0" in order_rows_sql
+    raw_scan_trim_sql = "btrim(library.local_track_files.scan_file_track_number)"
+    negative_scan_guard_sql = "scan_track_raw.raw_value ~ '^-[0-9]+$'"
+    positive_scan_guard_sql = "scan_track_raw.raw_value ~ '^\\+?[0-9]+$'"
+    negative_magnitude_sql = (
+        "regexp_replace( substring(scan_track_raw.raw_value from 2), "
+        "'^0+', '' )"
+    )
+    positive_magnitude_sql = (
+        "regexp_replace( ltrim(scan_track_raw.raw_value, '+'), '^0+', '' )"
+    )
+    bounded_magnitude_sql = (
+        "scan_track_normalized.normalized_value ~ '^[0-9]{1,2}$'"
+    )
+    nonzero_magnitude_sql = "scan_track_normalized.normalized_value <> '0'"
+    bounded_integer_sql = "scan_track_normalized.normalized_value::integer"
+    canonical_precedence_sql = (
+        "when library.local_tracks.track_number between 1 and 99 "
+        "then library.local_tracks.track_number"
+    )
+    effective_track_number_sql = order_rows_sql.split("as disc_number,", 1)[1].split(
+        "as effective_track_number",
+        1,
+    )[0]
+    canonical_precedence = effective_track_number_sql.index(
+        canonical_precedence_sql
+    )
+    effective_scan_branch = effective_track_number_sql.index(
+        "when library.local_tracks.track_number is null "
+        "and scan_track_number.raw_value is not null then"
+    )
+    effective_scan_output = effective_track_number_sql.index(
+        "scan_track_number.valid_value",
+        effective_scan_branch,
+    )
+    assert (
+        canonical_precedence
+        < effective_scan_branch
+        < effective_scan_output
+    )
     assert "as effective_track_number" in order_rows_sql
     assert "from library.local_track_files" in order_rows_sql
     assert "library.local_track_files.metadata" not in order_rows_sql
     # Physical-container identity needs the directory, not path-derived track numbers.
     assert "as source_directory" in order_rows_sql
-    assert "library.local_track_files.scan_file_track_number" not in order_rows_sql
     assert "regexp_match(" not in order_rows_sql
-    assert "library.local_tracks.track_number is null" in order_rows_sql
-    assert "library.local_tracks.track_number <= 0" in order_rows_sql
+    track_problem_sql = order_rows_sql.split("as effective_track_number,", 1)[1].split(
+        "as track_problem",
+        1,
+    )[0]
+    scan_number_projection_start = order_rows_sql.index(
+        "select scan_track_raw.raw_value,"
+    )
+    raw_scan_source_start = order_rows_sql.index(
+        "from ( select nullif(",
+        scan_number_projection_start,
+    )
+    raw_scan_source_end = order_rows_sql.index(
+        ") scan_track_raw",
+        raw_scan_source_start,
+    )
+    raw_scan_source_sql = order_rows_sql[
+        raw_scan_source_start:raw_scan_source_end
+    ]
+    raw_null_normalization = raw_scan_source_sql.index("nullif(")
+    raw_trim = raw_scan_source_sql.index(
+        raw_scan_trim_sql,
+        raw_null_normalization,
+    )
+    raw_value_output = raw_scan_source_sql.index("as raw_value", raw_trim)
+    assert raw_null_normalization < raw_trim < raw_value_output
+
+    valid_projection_sql = order_rows_sql[
+        scan_number_projection_start:raw_scan_source_start
+    ]
+    bounded_magnitude = valid_projection_sql.index(bounded_magnitude_sql)
+    nonzero_magnitude = valid_projection_sql.index(
+        nonzero_magnitude_sql,
+        bounded_magnitude,
+    )
+    bounded_integer = valid_projection_sql.index(
+        bounded_integer_sql,
+        nonzero_magnitude,
+    )
+    valid_value_output = valid_projection_sql.index(
+        "as valid_value",
+        bounded_integer,
+    )
+    assert (
+        bounded_magnitude
+        < nonzero_magnitude
+        < bounded_integer
+        < valid_value_output
+    )
+
+    normalized_scan_source_start = order_rows_sql.index(
+        "cross join lateral",
+        raw_scan_source_end,
+    )
+    normalized_scan_source_end = order_rows_sql.index(
+        ") scan_track_normalized",
+        normalized_scan_source_start,
+    )
+    normalized_scan_source_sql = order_rows_sql[
+        normalized_scan_source_start:normalized_scan_source_end
+    ]
+    negative_scan_guard = normalized_scan_source_sql.index(negative_scan_guard_sql)
+    negative_magnitude = normalized_scan_source_sql.index(
+        negative_magnitude_sql,
+        negative_scan_guard,
+    )
+    positive_scan_guard = normalized_scan_source_sql.index(
+        positive_scan_guard_sql,
+        negative_magnitude,
+    )
+    positive_magnitude = normalized_scan_source_sql.index(
+        positive_magnitude_sql,
+        positive_scan_guard,
+    )
+    normalized_value_output = normalized_scan_source_sql.index(
+        "as normalized_value",
+        positive_magnitude,
+    )
+    assert (
+        negative_scan_guard
+        < negative_magnitude
+        < positive_scan_guard
+        < positive_magnitude
+        < normalized_value_output
+    )
+    assert order_rows_sql.count(negative_magnitude_sql) == 1
+    assert order_rows_sql.count(positive_magnitude_sql) == 1
+
+    scan_entry_problem_branch_sql = (
+        "when library.local_track_files.scan_file_entry_is_object is true then case"
+    )
+    scan_entry_problem_branch = track_problem_sql.index(
+        scan_entry_problem_branch_sql
+    )
+    missing_scan_branch_sql = "when scan_track_number.raw_value is null then true"
+    missing_scan_branch = track_problem_sql.index(
+        missing_scan_branch_sql,
+        scan_entry_problem_branch,
+    )
+    valid_scan_branch = track_problem_sql.index(
+        "when scan_track_number.valid_value is not null then false",
+        missing_scan_branch,
+    )
+    nonnumeric_scan_result = track_problem_sql.index(
+        "else true end",
+        valid_scan_branch,
+    )
+    canonical_problem_fallback_sql = (
+        "else (library.local_tracks.track_number is null or "
+        "library.local_tracks.track_number <= 0 or "
+        "library.local_tracks.track_number >= 100) end"
+    )
+    canonical_problem_fallback = track_problem_sql.index(
+        canonical_problem_fallback_sql,
+        nonnumeric_scan_result,
+    )
+    assert (
+        scan_entry_problem_branch
+        < missing_scan_branch
+        < valid_scan_branch
+        < nonnumeric_scan_result
+        < canonical_problem_fallback
+    )
+    assert order_rows_sql.count(bounded_magnitude_sql) == 1
+    assert order_rows_sql.count(bounded_integer_sql) == 1
+    assert "::numeric" not in order_rows_sql
+    assert "scan_track_raw.raw_value::integer" not in order_rows_sql
+    assert "scan_file_track_number::integer" not in order_rows_sql
 
     order_rollup_sql = candidate_sql.split(
         "active_track_order_rollup as (",
@@ -11612,6 +11774,246 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
     assert "count(distinct active_problem_rows.effective_track_number)" in order_rollup_sql
     assert "incomplete_track_order" in order_rollup_sql
     assert "active_track_order_rollup.incomplete_track_order is true" in candidate_sql
+
+
+def _seed_watcher_repair_inventory_as_setup(fixture, *entries):
+    from music_app.services.library_browse_postgres import (
+        invalidate_postgres_utility_projection_cache,
+    )
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    from tests.e2e.support import isolatedPostgres
+
+    setup_config = {
+        **fixture.config,
+        "ALBUM_HAVEN_APP_DATABASE_URL": fixture.setup_url,
+    }
+    adapter = PostgresScanCacheAdapter(
+        setup_config,
+        connect=isolatedPostgres._connect,
+    )
+    adapter.save_snapshot(
+        Path("unused-watcher-repair-setup.json"),
+        {item["path"]: item for item in entries},
+        "watcher-repair-setup",
+        1.0,
+        observed_library_root_ids={root["id"] for root in fixture.roots},
+    )
+    invalidate_postgres_utility_projection_cache(database_url=fixture.runtime_url)
+
+
+def test_live_problematic_candidates_prefer_valid_canonical_track_number(
+    watcher_repair_inventory,
+):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+    )
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    album_name = "Scan Track Authority"
+    first = fixture.entry(
+        "Owner/Scan Track Authority/01.flac",
+        album=album_name,
+    )
+    second = fixture.entry(
+        "Owner/Scan Track Authority/02.flac",
+        album=album_name,
+    )
+    first["track_number"] = 1
+    second["track_number"] = 3
+    cover = Path(first["path"]).with_name("cover.jpg")
+    cover.write_bytes(b"existing-test-cover")
+    for entry in (first, second):
+        entry.update(
+            cover_path=str(cover),
+            local_cover_width=1200,
+            local_cover_height=1200,
+        )
+    _seed_watcher_repair_inventory_as_setup(fixture, first, second)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        updated = connection.execute(
+            """
+            update library.local_tracks as track
+               set track_number = 2
+              from library.local_track_files as track_file
+             where track_file.track_id = track.id
+               and track_file.private_path = %s
+            returning track.album_id
+            """,
+            (second["path"],),
+        ).fetchone()
+        generated_numbers = connection.execute(
+            """
+            select track.track_number as canonical_track_number,
+                   track_file.scan_file_track_number
+              from library.local_track_files as track_file
+              join library.local_tracks as track on track.id = track_file.track_id
+             where track.album_id = %s
+             order by track_file.private_path
+            """,
+            (updated["album_id"],),
+        ).fetchall()
+
+    assert generated_numbers == [
+        {"canonical_track_number": 1, "scan_file_track_number": "1"},
+        {"canonical_track_number": 2, "scan_file_track_number": "3"},
+    ]
+
+    repository = PostgresLibraryBrowseRepository(
+        fixture.config,
+        connect=isolatedPostgres._connect,
+    )
+    payload = repository.build_problematic_files_payload()
+    assert all(item["name"] != album_name for item in payload["items"])
+
+
+def test_live_problematic_candidates_report_blank_scan_without_incomplete_order(
+    watcher_repair_inventory,
+):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+    )
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    album_name = "Blank Scan Track Fallback"
+    first = fixture.entry(
+        "Owner/Blank Scan Track Fallback/01.flac",
+        album=album_name,
+    )
+    second = fixture.entry(
+        "Owner/Blank Scan Track Fallback/02.flac",
+        album=album_name,
+    )
+    first["track_number"] = ""
+    second["track_number"] = "   "
+    cover = Path(first["path"]).with_name("cover.jpg")
+    cover.write_bytes(b"existing-test-cover")
+    for entry in (first, second):
+        entry.update(
+            cover_path=str(cover),
+            local_cover_width=1200,
+            local_cover_height=1200,
+        )
+    _seed_watcher_repair_inventory_as_setup(fixture, first, second)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """
+            update library.local_tracks as track
+               set track_number = case track_file.private_path
+                   when %s then 1
+                   when %s then 2
+               end
+              from library.local_track_files as track_file
+             where track_file.track_id = track.id
+               and track_file.private_path = any(%s)
+            """,
+            (first["path"], second["path"], [first["path"], second["path"]]),
+        )
+        generated_numbers = connection.execute(
+            """
+            select track.track_number as canonical_track_number,
+                   track_file.scan_file_track_number
+              from library.local_track_files as track_file
+              join library.local_tracks as track on track.id = track_file.track_id
+             where track_file.private_path = any(%s)
+             order by track_file.private_path
+            """,
+            ([first["path"], second["path"]],),
+        ).fetchall()
+
+    assert generated_numbers == [
+        {"canonical_track_number": 1, "scan_file_track_number": ""},
+        {"canonical_track_number": 2, "scan_file_track_number": "   "},
+    ]
+
+    repository = PostgresLibraryBrowseRepository(
+        fixture.config,
+        connect=isolatedPostgres._connect,
+    )
+    payload = repository.build_problematic_files_payload()
+    item = next(
+        (item for item in payload["items"] if item["name"] == album_name),
+        None,
+    )
+
+    assert item is not None, payload["items"]
+    assert item["problem_reasons"] == ["Missing track number"]
+    assert not any(
+        reason.startswith("Incomplete track order:")
+        for reason in item["problem_reasons"]
+    )
+
+
+def test_live_problematic_candidates_reject_oversized_numeric_scan_without_expansion(
+    watcher_repair_inventory,
+):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+    )
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    invalid_album_name = "Oversized Scan Track Number"
+    control_album_name = "Signed Leading Zero Track Number"
+    invalid = fixture.entry(
+        "Owner/Oversized Scan Track Number/01.flac",
+        album=invalid_album_name,
+    )
+    control = fixture.entry(
+        "Owner/Signed Leading Zero Track Number/01.flac",
+        album=control_album_name,
+    )
+    oversized_track_number = "9" * 150_000
+    padded_positive_one = "+" + ("0" * 4_096) + "1"
+    invalid["track_number"] = oversized_track_number
+    control["track_number"] = padded_positive_one
+    for entry in (invalid, control):
+        cover = Path(entry["path"]).with_name("cover.jpg")
+        cover.write_bytes(b"existing-test-cover")
+        entry.update(
+            cover_path=str(cover),
+            local_cover_width=1200,
+            local_cover_height=1200,
+        )
+    _seed_watcher_repair_inventory_as_setup(fixture, invalid, control)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        persisted_scan_numbers = connection.execute(
+            """
+            select private_path, scan_file_track_number
+              from library.local_track_files
+             where private_path = any(%s)
+             order by private_path
+            """,
+            ([invalid["path"], control["path"]],),
+        ).fetchall()
+
+    assert {
+        row["private_path"]: row["scan_file_track_number"]
+        for row in persisted_scan_numbers
+    } == {
+        invalid["path"]: oversized_track_number,
+        control["path"]: padded_positive_one,
+    }
+
+    repository = PostgresLibraryBrowseRepository(
+        fixture.config,
+        connect=isolatedPostgres._connect,
+    )
+    payload = repository.build_problematic_files_payload()
+    invalid_item = next(
+        item for item in payload["items"] if item["name"] == invalid_album_name
+    )
+
+    assert invalid_item["problem_reasons"] == ["Invalid track number"]
+    assert not any(
+        reason.startswith("Incomplete track order:")
+        for reason in invalid_item["problem_reasons"]
+    )
+    assert all(item["name"] != control_album_name for item in payload["items"])
 
 
 def test_duplicate_candidates_select_exact_ids_before_loading_complete_containers():
@@ -13644,6 +14046,21 @@ def test_problematic_album_reports_incomplete_canonical_track_order(
     assert _problematic_album_reasons(album) == expected_reasons
 
 
+def test_problematic_album_prefers_file_track_number_for_incomplete_order():
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_projection_payloads,
+        _problematic_album_reasons,
+    )
+
+    album = _problematic_album_projection_payloads(
+        _healthy_problematic_order_rows([1, 2], file_track_numbers=[1, 3])
+    )[0]
+
+    assert _problematic_album_reasons(album) == [
+        "Incomplete track order: Disc 1 missing 2"
+    ]
+
+
 def _semantic_problematic_release_rows(
     track_numbers,
     *,
@@ -14280,6 +14697,7 @@ def test_problematic_summary_skips_repairs_for_rows_rejected_by_persisted_mojiba
 
 def test_problematic_projection_reuses_text_classification_only_within_one_call(monkeypatch):
     from music_app.services import library_browse_postgres as module
+    from music_app.services import problematic_files_projection as projection_module
 
     rows = []
     for album_id, album_key, album_title in (
@@ -14305,7 +14723,11 @@ def test_problematic_projection_reuses_text_classification_only_within_one_call(
         calls.append((label, value, detect_encoding))
         return None
 
-    monkeypatch.setattr(module, "_text_problem_reason_fast", observed_reason)
+    monkeypatch.setattr(
+        projection_module,
+        "_text_problem_reason_fast",
+        observed_reason,
+    )
 
     def classify_projection():
         albums = module._problematic_album_projection_payloads(rows)
@@ -14752,6 +15174,39 @@ def test_problematic_files_page_reuses_complete_projection_cache_before_querying
     assert payload["initial_detail"]["key"] == "album-1"
 
 
+def test_problematic_projection_invalid_cursor_never_enqueues_rebuild(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    enqueued = []
+
+    class FakeProjectionRepository:
+        def __init__(self, **_kwargs):
+            pass
+
+        def resolve_bootstrap_library_id(self):
+            return 17
+
+        def read_page(self, **_kwargs):
+            raise browse.ProblematicProjectionCursorError("invalid cursor")
+
+        def enqueue_rebuild(self, **kwargs):
+            enqueued.append(kwargs)
+
+    monkeypatch.setattr(
+        browse,
+        "PostgresProblematicProjectionRepository",
+        FakeProjectionRepository,
+    )
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/app"}
+    )
+
+    with pytest.raises(browse.ProblematicProjectionCursorError):
+        repository.build_problematic_files_page(limit=1, cursor="forged")
+
+    assert enqueued == []
+
+
 def test_problematic_files_summary_and_initial_detail_share_one_repeatable_read_snapshot():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -15151,21 +15606,21 @@ def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
 
 
 def test_known_problem_reason_identity_does_not_encode_unused_fallback(monkeypatch):
-    from music_app.services import library_browse_postgres as module
+    from music_app.services import problematic_files_projection as projection
 
     def reject_encoding(_reason):
         raise AssertionError("Known reason identities must not encode an unused fallback.")
 
-    monkeypatch.setattr(module, "_encoded_problem_reason_identity", reject_encoding)
-    for reason, code in module._PROBLEM_REASON_IDENTITY_CODES.items():
-        assert module._problem_reason_identity_code(f"  {reason}  ") == code
+    monkeypatch.setattr(projection, "_encoded_problem_reason_identity", reject_encoding)
+    for reason, code in projection._PROBLEM_REASON_IDENTITY_CODES.items():
+        assert projection._problem_reason_identity_code(f"  {reason}  ") == code
 
 
 def test_unknown_problem_reason_identity_encodes_normalized_reason_once(monkeypatch):
-    from music_app.services import library_browse_postgres as module
+    from music_app.services import problematic_files_projection as projection
 
     reason = "Unexpected embedded cuesheet marker"
-    original = module._encoded_problem_reason_identity
+    original = projection._encoded_problem_reason_identity
     expected = original(reason)
     calls = []
 
@@ -15173,9 +15628,9 @@ def test_unknown_problem_reason_identity_encodes_normalized_reason_once(monkeypa
         calls.append(value)
         return original(value)
 
-    monkeypatch.setattr(module, "_encoded_problem_reason_identity", record_encoding)
-    assert module._problem_reason_identity_code(f"  {reason}  ") == expected
-    assert module._decoded_problem_reason_identity(expected) == reason
+    monkeypatch.setattr(projection, "_encoded_problem_reason_identity", record_encoding)
+    assert projection._problem_reason_identity_code(f"  {reason}  ") == expected
+    assert projection._decoded_problem_reason_identity(expected) == reason
     assert calls == [reason]
 
 

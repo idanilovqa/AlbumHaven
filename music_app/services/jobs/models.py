@@ -12,6 +12,7 @@ class JobKind(str, Enum):
     FULL_SCAN = "full_scan"
     TARGETED_RECONCILIATION = "targeted_reconciliation"
     POST_SCAN_COVER_REFRESH = "post_scan_cover_refresh"
+    PROBLEMATIC_FILES_PROJECTION = "problematic_files_projection"
     COVER_LOOKUP = "cover_lookup"
     COVER_BULK_REFRESH = "cover_bulk_refresh"
     COVER_REMOTE_SAVE = "cover_remote_save"

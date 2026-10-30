@@ -540,6 +540,11 @@ begin
     where namespace.nspname not like 'pg\_%' escape '\'
       and namespace.nspname <> 'information_schema'
       and has_function_privilege('album_haven_app', routine.oid, allowed.privilege_type)
+      and has_function_privilege(
+        current_user,
+        routine.oid,
+        allowed.privilege_type || ' WITH GRANT OPTION'
+      )
   loop
     execute format('grant %s on function %s to %I', privilege.privilege_type, privilege.object_name, '$($names.Roles.app)');
   end loop;

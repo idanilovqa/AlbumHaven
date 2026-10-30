@@ -907,6 +907,11 @@ def grant_runtime_role_privileges(
               and has_function_privilege(
                 'album_haven_app', routine.oid, allowed.privilege_type
               )
+          and has_function_privilege(
+            current_user,
+            routine.oid,
+            allowed.privilege_type || ' WITH GRANT OPTION'
+          )
           loop
             execute format(
               'grant %s on function %s to %I',

@@ -117,6 +117,58 @@ ResourceValidator = Callable[
 ]
 
 
+def build_problematic_files_projection_resource_validator() -> ResourceValidator:
+    """Validate the closed server-owned Problematic Files projection scope."""
+
+    def validate(
+        claim: ClaimedJob, context: Any, _now: datetime
+    ) -> AuthorizationDecision:
+        parameters = claim.parameters
+        if not isinstance(parameters, Mapping):
+            return AuthorizationDecision(
+                False, "problematic_projection_scope_invalid"
+            )
+        source_generation = parameters.get("source_generation")
+        rebuild_epoch = parameters.get("rebuild_epoch")
+        valid = (
+            claim.kind
+            in {
+                JobKind.PROBLEMATIC_FILES_PROJECTION,
+                JobKind.PROBLEMATIC_FILES_PROJECTION.value,
+            }
+            and claim.subject_kind == "problematic_files_projection"
+            and _positive_bigint(claim.library_id)
+            and claim.subject_ref == f"library:{claim.library_id}"
+            and claim.account_id is None
+            and claim.capability_key is None
+            and claim.request_origin_id is None
+            and claim.max_attempts == 3
+            and set(parameters)
+            == {"projection_kind", "source_generation", "rebuild_epoch"}
+            and parameters.get("projection_kind") == "problematic_files"
+            and _positive_bigint(source_generation)
+            and _positive_bigint(rebuild_epoch)
+            and claim.idempotency_key
+            == (
+                "problematic-files-projection:"
+                f"{claim.library_id}:{source_generation}:{rebuild_epoch}"
+            )
+        )
+        if not valid:
+            return AuthorizationDecision(
+                False, "problematic_projection_scope_invalid"
+            )
+        if not getattr(context, "library_current", False):
+            return AuthorizationDecision(
+                False, "problematic_projection_scope_revoked"
+            )
+        return AuthorizationDecision(
+            True, "problematic_projection_scope_current"
+        )
+
+    return validate
+
+
 def build_lastfm_retry_resource_validator(
     *, retry_repository: Any
 ) -> ResourceValidator:

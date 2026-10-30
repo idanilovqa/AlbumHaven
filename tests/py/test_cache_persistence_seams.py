@@ -1339,3 +1339,54 @@ def test_structural_tag_persistence_invalidates_utility_projections(monkeypatch)
     assert invalidations == [
         {"database_url": "postgresql://runtime/library"}
     ]
+
+
+@pytest.mark.parametrize("structural_fields", [set(), {"album"}])
+def test_recovered_tag_edit_uses_one_adapter_call_and_narrow_post_commit_effects(
+    monkeypatch,
+    structural_fields,
+):
+    from music_app.services import cache as cache_module
+    from music_app.services import gallery_projection_postgres as gallery_module
+    from music_app.services import library_browse_postgres as browse_module
+
+    calls = []
+
+    class Adapter:
+        def persist_recovered_tag_edit(self, **options):
+            calls.append(options)
+            return {"inventory_mutation_revision": 3}
+
+    invalidations = []
+    gallery_refreshes = []
+    monkeypatch.setattr(
+        cache_module,
+        "_select_runtime_scan_cache_adapter",
+        lambda _config: Adapter(),
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "invalidate_postgres_utility_projection_cache",
+        lambda **options: invalidations.append(options),
+    )
+    monkeypatch.setattr(
+        gallery_module,
+        "schedule_gallery_projection_refresh",
+        lambda config: gallery_refreshes.append(config),
+    )
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://runtime/library"}
+    result = cache_module.persist_recovered_tag_edit_for_config(
+        config,
+        changed_paths={"track.flac"},
+        previous_file_entries={"track.flac": {"album": "Before"}},
+        resolved_file_entries={"track.flac": {"album": "After"}},
+        structural_field_names=structural_fields,
+        inventory_field_names={"title"},
+        before_commit=lambda _connection: None,
+    )
+
+    assert result == {"inventory_mutation_revision": 3}
+    assert calls[0]["structural_field_names"] == structural_fields
+    assert invalidations == [{"database_url": config["ALBUM_HAVEN_APP_DATABASE_URL"]}]
+    assert gallery_refreshes == ([config] if structural_fields else [])

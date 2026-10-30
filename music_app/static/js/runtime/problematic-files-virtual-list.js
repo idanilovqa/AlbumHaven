@@ -21,6 +21,7 @@
   function create({
     list,
     renderRow,
+    onNearEnd,
     rowStride = DEFAULT_ROW_STRIDE,
     overscan = DEFAULT_OVERSCAN,
   }) {
@@ -109,6 +110,9 @@
       };
       for (const [key, value] of Object.entries(metadata)) {
         if (list.dataset[key] !== value) list.dataset[key] = value;
+      }
+      if (typeof onNearEnd === 'function' && items.length && range.end >= items.length - overscan) {
+        onNearEnd();
       }
     };
 

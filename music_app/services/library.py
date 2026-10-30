@@ -45,7 +45,7 @@ from music_app.services.utils import safe_int, format_duration, repair_display_t
 from music_app.services.metadata import normalize_exception_value
 
 _NON_ALBUM_ALBUM_VALUE_RE = re.compile(r"^[!\-\s\[\(]*non[\s\-_]*album(?:\b.*)?$", re.IGNORECASE)
-_DISC_FOLDER_RE = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?![A-Za-z0-9])", re.IGNORECASE)
+_DISC_FOLDER_RE = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*([0-9]{1,2})(?![A-Za-z0-9])", re.IGNORECASE)
 _VARIOUS_ARTIST_KEYS = {"va", "v.a.", "various artists", "various artist", "various"}
 _FEATURE_ARTIST_SPLIT_RE = re.compile(r"\s+(?:feat\.?|featuring|with|vs|x)\s+", re.IGNORECASE)
 _SPLIT_ARTIST_SPLIT_RE = re.compile(

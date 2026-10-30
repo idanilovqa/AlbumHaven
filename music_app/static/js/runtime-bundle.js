@@ -5259,6 +5259,11 @@ const state = {
     loadPromise: null,
     completeLoadPromise: null,
     problematicFilesComplete: false,
+    problematicFilesNextCursor: null,
+    problematicFilesPageSignature: '',
+    problematicFilesTotal: 0,
+    problematicReasonFacets: [],
+    selectedProblematicDetail: null,
     detailLoadPromises: {},
     problematicDiagnostics: {
       summaryLoad: null,
@@ -19106,7 +19111,9 @@ function buildProblematicAlbumDetail(album) {
 }
 
 function getSelectedProblematicAlbum() {
-  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey)
+    || (state.utility.selectedProblematicDetail?.key === state.utility.selectedProblematicKey
+      ? state.utility.selectedProblematicDetail : null);
 }
 
 function getAlbumTrackPaths(album) {
@@ -21564,12 +21571,10 @@ function getAlbumProblemFilterReasons(album) {
 }
 
 function getProblemReasonTypes() {
-  const reasons = new Set();
-  (state.utility.problematicFiles || []).forEach((album) => {
-    getAlbumProblemFilterReasons(album).forEach((reason) => {
-      if (reason) reasons.add(reason);
-    });
-  });
+  const reasons = new Set([
+    ...(state.utility.problematicReasonFacets || []),
+    ...(state.utility.selectedProblemFilters || []),
+  ].map(normalizeProblemFilterReason).filter(Boolean));
   return Array.from(reasons).sort((a, b) => a.localeCompare(b));
 }
 
@@ -21578,14 +21583,6 @@ function albumMatchesProblemFilters(album, selectedFilters = state.utility.selec
   if (!selected.length) return true;
   const reasons = new Set(getAlbumProblemFilterReasons(album));
   return selected.some((reason) => reasons.has(normalizeProblemFilterReason(reason)));
-}
-
-function getAlbumProblemFilterSortIndex(album) {
-  const selected = state.utility.selectedProblemFilters || [];
-  if (!selected.length) return Number.MAX_SAFE_INTEGER;
-  const reasons = new Set(getAlbumProblemFilterReasons(album));
-  const index = selected.findIndex((reason) => reasons.has(reason));
-  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
 function renderProblemFilterControls(els) {
@@ -21636,39 +21633,7 @@ function renderProblemFilterControls(els) {
 }
 
 function getFilteredProblematicAlbums() {
-  const items = state.utility.problematicFiles || [];
-  const query = (state.utility.searchQuery || '').trim().toLowerCase();
-
-  const filtered = items.filter((album) => {
-    if (!albumMatchesProblemFilters(album)) return false;
-    if (!query) return true;
-    const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
-    const trackTitles = Array.isArray(album.tracks) ? album.tracks.map((track) => String(track.title || '')) : [];
-    const haystack = [
-      String(album.name || ''),
-      String(album.raw_name || ''),
-      String(album.album_artist || ''),
-      String(album.raw_album_artist || ''),
-      String(album.year || ''),
-      ...(Array.isArray(album.problem_reasons) ? album.problem_reasons.map((reason) => String(reason || '')) : []),
-      String(album.search_text || ''),
-      ...trackTitles,
-      ...repairRows.flatMap((row) => [
-        String(row.track_title || ''),
-        String(row.original || ''),
-        String(row.repaired || ''),
-      ]),
-    ].join('\n').toLowerCase();
-    return haystack.includes(query);
-  });
-
-  if (!(state.utility.selectedProblemFilters || []).length) return filtered;
-  return filtered.slice().sort((a, b) => (
-    getAlbumProblemFilterSortIndex(a) - getAlbumProblemFilterSortIndex(b)
-    || String(a.name || '').localeCompare(String(b.name || ''))
-    || String(a.album_artist || '').localeCompare(String(b.album_artist || ''))
-    || String(a.year || '').localeCompare(String(b.year || ''))
-  ));
+  return state.utility.problematicFiles || [];
 }
 
 function getProblematicAlbumIssueLabel(album) {
@@ -21772,25 +21737,38 @@ async function openUtilityModalForTrack(trackPath) {
       && Number(state.utility.problematicSummaryRequestToken || 0)
         > summaryRequestTokenBeforePendingTasks
     );
+    state.utility.searchQuery = '';
+    state.utility.selectedProblemFilters = [];
     const loadTrackSummary = async () => {
-      const complete = loadProblematicFiles(true, { render: false });
-      const initial = state.utility.initialLoadPromise || complete;
-      if (initial !== complete) {
-        complete.then((result) => {
-          if (result !== null && openedCanonicalTarget && ownsNavigation()
-              && state.utility.activeTab === 'problematic-files'
-              && state.utility.focusedTrackPath === String(trackPath || '')) {
-            renderUtilityModalContent();
-          }
-        });
-      }
-      const result = await initial;
+      const request = loadProblematicFiles(true, { render: false });
+      const result = await request;
       if (result === null || !ownsNavigation()
-          || (initial.problematicSummaryRequestToken !== undefined
-            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
-      if (getProblematicAlbumForTrackPath(trackPath)) return result;
-      // Only returned canonical track membership may identify the target.
-      return complete;
+          || (request.problematicSummaryRequestToken !== undefined
+            && request.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      return result;
+    };
+    const loadTargetedAlbum = async () => {
+      let detail;
+      try {
+        detail = await loadProblematicAlbumDetailForTrack(trackPath);
+      } catch (error) {
+        if (ownsNavigation()) {
+          console.error('[AlbumHaven][Utilities] Failed to locate a problematic track.', error);
+          showToast('Unable to load problematic album detail.', 'error', 3200);
+        }
+        return null;
+      }
+      if (!detail || !ownsNavigation()) return null;
+      const targetPaths = new Set([String(trackPath || '')].filter(Boolean));
+      const pageItems = (state.utility.problematicFiles || []).filter((item) => (
+        String(item?.key || '') === String(detail.key || '')
+        || !albumsShareTrackPath(item, targetPaths)
+      ));
+      const pageIndex = pageItems.findIndex((item) => String(item?.key || '') === String(detail.key || ''));
+      if (pageIndex >= 0) pageItems[pageIndex] = detail;
+      state.utility.problematicFiles = pageItems;
+      state.utility.selectedProblematicDetail = pageIndex >= 0 ? null : detail;
+      return detail;
     };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
       const loadResult = await loadTrackSummary();
@@ -21802,6 +21780,7 @@ async function openUtilityModalForTrack(trackPath) {
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
+    if (!album) album = await loadTargetedAlbum();
     if (!ownsNavigation()) return;
     if (!album) {
       showToast('This track is not currently listed in Problematic Files.', 'error', 3200);
@@ -21814,59 +21793,30 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
-    let refreshedStaleDetailTarget = false;
     if (!album.detail_loaded) {
-      while (album && !album.detail_loaded) {
-        const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
-        state.utility.selectedProblematicKey = album.key || '';
-        const detailRequest = loadProblematicAlbumDetail(
-          album.key || '',
-          undefined,
-          { render: false, allowMissing: true },
-        );
-        const detailOwner = Number(state.utility.problematicDetailRequestToken || 0);
-        const refreshedDetail = await detailRequest;
-        if (!ownsNavigation()) return;
-        const detailMissing = !refreshedDetail
-          && Number(state.utility.problematicDetailRequestToken || 0) === detailOwner;
-        const currentSummary = state.utility.completeLoadPromise
-          || state.utility.initialLoadPromise;
-        if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
-          const current = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
-          if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
-            await state.utility.detailLoadPromises[current.key];
-            if (!ownsNavigation()) return;
-          }
-          if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
-            album = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
-            if (!album && !refreshedStaleDetailTarget) {
-              if (currentSummary && typeof currentSummary.then === 'function') {
-                await currentSummary;
-                if (!ownsNavigation()) return;
-                album = getProblematicAlbumForTrackPath(trackPath);
-                if (album) continue;
-              }
-              refreshedStaleDetailTarget = true;
-              const refreshResult = await loadTrackSummary();
-              if (refreshResult === null || !ownsNavigation()) return;
-              album = getProblematicAlbumForTrackPath(trackPath);
-              if (album) continue;
-            }
-            if (album?.detail_loaded
-                || !currentSummary
-                || typeof currentSummary.then !== 'function') break;
-          }
-        }
-        if (!currentSummary || typeof currentSummary.then !== 'function') {
-          if (!state.utility.loaded) return;
-          album = getProblematicAlbumForTrackPath(trackPath);
-          if (!album) return;
-          continue;
-        }
-        await currentSummary;
-        if (!ownsNavigation()) return;
-        album = getProblematicAlbumForTrackPath(trackPath);
+      const detailSummaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+      state.utility.selectedProblematicKey = album.key || '';
+      album = await loadProblematicAlbumDetail(
+        album.key || '',
+        undefined,
+        { render: false, allowMissing: true },
+      );
+      if (!ownsNavigation()) return;
+      const hydratedProblematicPaths = [
+        ...(Array.isArray(album?.problematic_track_paths) ? album.problematic_track_paths : []),
+        ...(Array.isArray(album?.track_paths) ? album.track_paths : []),
+      ].map((path) => String(path || ''));
+      if (album && !hydratedProblematicPaths.includes(String(trackPath || ''))) {
+        album = await loadTargetedAlbum();
       }
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== detailSummaryOwner) {
+        const currentSummary = state.utility.loadPromise;
+        if (currentSummary) await currentSummary;
+        if (!ownsNavigation() || !state.utility.loaded) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
+        if (!album?.detail_loaded) album = await loadTargetedAlbum();
+      }
+      if (!album) album = await loadTargetedAlbum();
     }
     if (!album) return;
     state.utility.selectedProblematicKey = album.key || '';
@@ -23596,6 +23546,7 @@ function mountAlertsAppearanceEditor(detail) {
   function create({
     list,
     renderRow,
+    onNearEnd,
     rowStride = DEFAULT_ROW_STRIDE,
     overscan = DEFAULT_OVERSCAN,
   }) {
@@ -23684,6 +23635,9 @@ function mountAlertsAppearanceEditor(detail) {
       };
       for (const [key, value] of Object.entries(metadata)) {
         if (list.dataset[key] !== value) list.dataset[key] = value;
+      }
+      if (typeof onNearEnd === 'function' && items.length && range.end >= items.length - overscan) {
+        onNearEnd();
       }
     };
 
@@ -23804,8 +23758,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   };
 
   const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  if (mobileIndex) disposeProblematicFilesVirtualList();
-  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
+  const virtualListApi = typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
@@ -23819,6 +23772,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       problematicFilesVirtualList = virtualListApi.create({
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+        onNearEnd: () => {
+          if (state.utility.problematicFilesNextCursor) void loadNextProblematicFilesPage();
+        },
       });
     }
     if (problematicFilesVirtualList) {
@@ -23843,7 +23799,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     });
   };
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
-  els.count.textContent = String(items.length);
+  const total = Number(state.utility.problematicFilesTotal);
+  els.count.textContent = String(Number.isSafeInteger(total) && total >= items.length
+    ? total : items.length);
   if (els.search) {
     els.search.disabled = false;
     els.search.placeholder = 'Filter artist, album, or track';
@@ -23890,7 +23848,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
 
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
-    || !items.some((item) => item.key === state.utility.selectedProblematicKey);
+    || (!items.some((item) => item.key === state.utility.selectedProblematicKey)
+      && state.utility.selectedProblematicDetail?.key !== state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
@@ -23928,7 +23887,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     state.utility.showRepairedDisplay = true;
   }
 
-  const selectedAlbum = getSelectedProblematicAlbumFrom(items);
+  const selectedAlbum = getSelectedProblematicAlbumFrom(items)
+    || (state.utility.selectedProblematicDetail?.key === state.utility.selectedProblematicKey
+      ? state.utility.selectedProblematicDetail : null);
   renderTree(state.utility.selectedProblematicKey);
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
@@ -25908,43 +25869,114 @@ function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
 
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
+function getProblematicFilesPageFilter() {
+  const query = String(state.utility.searchQuery || '').trim();
+  const reasons = Array.from(new Set(
+    (state.utility.selectedProblemFilters || [])
+      .map((reason) => String(reason || '').trim())
+      .filter(Boolean),
+  )).sort((a, b) => a.localeCompare(b));
+  return query || reasons.length ? JSON.stringify({ query, reasons }) : '';
+}
+
+function buildProblematicFilesPageUrl(cursor = '', filter = getProblematicFilesPageFilter()) {
+  const params = ['limit=50'];
+  if (filter) params.push(`filter=${encodeURIComponent(filter)}`);
+  if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`);
+  return `/utilities/problematic-files?${params.join('&')}`;
+}
+
+async function fetchProblematicFilesPage(url) {
+  const requestStartedAt = getProblematicUtilityNow();
+  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const requestMs = roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
+  const parseStartedAt = getProblematicUtilityNow();
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    error.problematicResponseStatus = Number(response.status || 0);
+    error.problematicRequestMs = requestMs;
+    error.problematicParseMs = roundProblematicUtilityMs(getProblematicUtilityNow() - parseStartedAt);
+    throw error;
+  }
+  const parseMs = roundProblematicUtilityMs(getProblematicUtilityNow() - parseStartedAt);
+  if (!response.ok) {
+    const error = new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
+    error.problematicResponseStatus = Number(response.status || 0);
+    error.problematicErrorCode = String(data?.error_code || '');
+    const retryAfterValue = String(response.headers?.get?.('Retry-After') || '').trim();
+    const retryAfter = Number(retryAfterValue);
+    error.problematicRetryAfterMs = retryAfterValue && Number.isFinite(retryAfter) && retryAfter >= 0
+      ? Math.min(retryAfter * 1000, 30_000) : 1000;
+    error.problematicRequestMs = requestMs;
+    error.problematicParseMs = parseMs;
+    throw error;
+  }
+  return { data, status: Number(response.status || 0), requestMs, parseMs };
+}
+
+function readProblematicFilesPageState(data, summaryItems) {
+  const nextCursor = data.next_cursor == null ? '' : String(data.next_cursor);
+  const parsedTotal = Number(data.total);
+  const total = Number.isSafeInteger(parsedTotal) && parsedTotal >= summaryItems.length
+    ? parsedTotal
+    : summaryItems.length;
+  return { nextCursor, total };
+}
+
+function normalizeProblematicReasonFacets(facets) {
+  return facets
+    .map((facet) => String(typeof facet === 'string' ? facet : facet?.reason || '').trim())
+    .filter(Boolean);
+}
+
+function invalidateProblematicFilesPaging() {
+  state.utility.problematicSummaryRequestToken = Number(
+    state.utility.problematicSummaryRequestToken || 0,
+  ) + 1;
+  state.utility.problematicFilesNextCursor = null;
+  state.utility.problematicFilesPageSignature = '';
+  state.utility.problematicFilesComplete = false;
+  state.utility.completeLoadPromise = null;
+}
+
 async function loadProblematicFiles(force = false, options = {}) {
   const shouldRender = () => options.render !== false && state.utility.activeTab === 'problematic-files';
   const shouldRenderInitialPage = () => (
-    options.renderInitialPage === true
-    && state.utility.activeTab === 'problematic-files'
-    && !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
-  );
-  const canRenderBoundedPage = () => (
-    !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
+    options.renderInitialPage === true && state.utility.activeTab === 'problematic-files'
   );
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
+  const requestSignature = getProblematicFilesPageFilter();
   if (state.utility.loading) {
     const pendingLoad = state.utility.loadPromise;
-    const result = await pendingLoad;
-    if (pendingLoad && !state.utility.loaded
-      && pendingLoad.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0)) {
-      return loadProblematicFiles(force, options);
+    const pendingOwnsCurrentRequest = pendingLoad?.problematicSummaryRequestToken
+      === Number(state.utility.problematicSummaryRequestToken || 0);
+    if (pendingOwnsCurrentRequest
+        && (!force || pendingLoad?.problematicPageSignature === requestSignature)) {
+      return pendingLoad;
     }
-    return result;
-  }
-  const pendingCompleteLoad = state.utility.completeLoadPromise;
-  if (
-    state.utility.problematicFilesComplete === false
-    && pendingCompleteLoad
-    && pendingCompleteLoad.problematicSummaryRequestToken
-      === Number(state.utility.problematicSummaryRequestToken || 0)
-  ) {
-    return pendingCompleteLoad;
   }
   if (state.utility.loaded && !force) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
-    return;
+    return state.utility.problematicFiles;
   }
+  const retainedState = {
+    complete: state.utility.problematicFilesComplete,
+    detailLoadPromises: state.utility.detailLoadPromises,
+    healthProblems: state.utility.libraryWatchHealthProblems,
+    loaded: state.utility.loaded,
+    nextCursor: state.utility.problematicFilesNextCursor,
+    pageSignature: state.utility.problematicFilesPageSignature,
+    reasonFacets: state.utility.problematicReasonFacets,
+    selectedDetail: state.utility.selectedProblematicDetail,
+    total: state.utility.problematicFilesTotal,
+  };
+  state.utility.problematicFilesNextCursor = null;
+  state.utility.problematicFilesPageSignature = '';
+  state.utility.completeLoadPromise = null;
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
@@ -25965,33 +25997,20 @@ async function loadProblematicFiles(force = false, options = {}) {
     let responseStatus = 0;
     let loadSucceeded = false;
     let loadError = '';
-    let boundedPayloadCommitted = false;
-    let previousSummaryItems = [];
+    let previousSummaryItems = Array.isArray(state.utility.problematicFiles)
+      ? state.utility.problematicFiles.slice()
+      : [];
     try {
-      const fetchSummary = async (url) => {
-        const requestStartedAt = getProblematicUtilityNow();
-        const response = await fetch(url, { headers: { Accept: 'application/json' } });
-        requestMs += roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
-        responseStatus = Number(response.status || 0);
-        const parseStartedAt = getProblematicUtilityNow();
-        let data;
-        try {
-          data = await response.json();
-        } finally {
-          parseMs += roundProblematicUtilityMs(getProblematicUtilityNow() - parseStartedAt);
-        }
-        if (!response.ok) {
-          throw new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
-        }
-        return data;
-      };
       const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
         const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
         const stateCommitStartedAt = getProblematicUtilityNow();
         initialDetailKey = String(initialDetail?.key || '').trim();
         const selectedKey = String(state.utility.selectedProblematicKey || '');
         const selectedDetail = preserveSelectedDetail
-          ? state.utility.problematicFiles.find(item => item.key === selectedKey && item.detail_loaded === true)
+          ? (state.utility.problematicFiles.find(item => item.key === selectedKey && item.detail_loaded === true)
+            || (state.utility.selectedProblematicDetail?.key === selectedKey
+              && state.utility.selectedProblematicDetail?.detail_loaded === true
+              ? state.utility.selectedProblematicDetail : null))
           : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;
@@ -26010,41 +26029,45 @@ async function loadProblematicFiles(force = false, options = {}) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
+          return item === selectedSummary ? selectedDetail : item;
         });
+        state.utility.selectedProblematicDetail = selectedDetail && !selectedSummary
+          ? selectedDetail : null;
         state.utility.libraryWatchHealthProblems = operationalItems;
+        if (Array.isArray(data.reason_facets)) {
+          state.utility.problematicReasonFacets = normalizeProblematicReasonFacets(data.reason_facets);
+        }
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
         previousSummaryItems = summaryItems;
         state.utility.loaded = true;
         stateCommitMs += roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
+        const { nextCursor, total } = readProblematicFilesPageState(data, summaryItems);
+        state.utility.problematicFilesNextCursor = nextCursor || null;
+        state.utility.problematicFilesPageSignature = requestSignature;
+        state.utility.problematicFilesTotal = total;
+        state.utility.problematicFilesComplete = !nextCursor;
         return { selectedKey, selectedDetail,
           selectedSummary: (continuation && unchangedSelection) ? null : selectedSummary,
           refreshChangedSelection };
       };
 
-      let data = await fetchSummary('/utilities/problematic-files?limit=50');
+      const pageResult = await fetchProblematicFilesPage(buildProblematicFilesPageUrl());
+      responseStatus = pageResult.status;
+      requestMs = pageResult.requestMs;
+      parseMs = pageResult.parseMs;
+      const data = pageResult.data;
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      let committedSelection = commitSummary(data, options.preserveSelectedDetail === true);
-      boundedPayloadCommitted = data.complete === false;
+      const committedSelection = commitSummary(
+        data,
+        options.preserveSelectedDetail === true,
+        options.preserveSelectedDetail === true,
+      );
       settleInitialSummary(state.utility.problematicFiles);
-      if (boundedPayloadCommitted) {
-        state.utility.problematicFilesComplete = false;
-        const completePayloadPromise = fetchSummary('/utilities/problematic-files');
-        if (state.utility.loadPromise === requestPromise) {
-          state.utility.loading = false;
-          state.utility.loadPromise = null;
-        }
-        if (canRenderBoundedPage()
-            && ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage())) {
-          renderUtilityModalContent();
-          await waitForProblematicUtilityRenderFrame();
-        }
-        data = await completePayloadPromise;
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitSummary(data, true, true);
+      if (shouldRenderInitialPage()) {
+        renderUtilityModalContent();
+        await waitForProblematicUtilityRenderFrame();
       }
-      state.utility.problematicFilesComplete = true;
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
@@ -26065,13 +26088,44 @@ async function loadProblematicFiles(force = false, options = {}) {
       return state.utility.problematicFiles;
     } catch (error) {
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      responseStatus = Number(error?.problematicResponseStatus || responseStatus || 0);
+      requestMs = Number(error?.problematicRequestMs || requestMs || 0);
+      parseMs = Number(error?.problematicParseMs || parseMs || 0);
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
-      if (!boundedPayloadCommitted) {
-        state.utility.problematicFiles = [];
-        state.utility.libraryWatchHealthProblems = [];
-        state.utility.detailLoadPromises = {};
+      if (error?.problematicErrorCode === 'problematic_projection_pending') {
+        state.utility.detailLoadPromises = retainedState.detailLoadPromises;
+        state.utility.libraryWatchHealthProblems = retainedState.healthProblems;
+        state.utility.loaded = retainedState.loaded;
+        state.utility.problematicFilesComplete = retainedState.complete;
+        state.utility.problematicFilesNextCursor = retainedState.nextCursor;
+        state.utility.problematicFilesPageSignature = retainedState.pageSignature;
+        state.utility.problematicFilesTotal = retainedState.total;
+        state.utility.problematicReasonFacets = retainedState.reasonFacets;
+        state.utility.selectedProblematicDetail = retainedState.selectedDetail;
+        if (Number(options.problematicProjectionRetryCount || 0) < 1) {
+          const retryDelayMs = Number(error.problematicRetryAfterMs ?? 1000);
+          scheduleBrowserTimeout(() => {
+            if (
+              Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken
+              || getProblematicFilesPageFilter() !== requestSignature
+            ) return;
+            void loadProblematicFiles(true, {
+              ...options,
+              problematicProjectionRetryCount: 1,
+            });
+          }, retryDelayMs);
+        }
+        return null;
       }
+      state.utility.problematicFiles = [];
+      state.utility.libraryWatchHealthProblems = [];
+      state.utility.detailLoadPromises = {};
+      state.utility.problematicFilesNextCursor = null;
+      state.utility.problematicFilesPageSignature = '';
+      state.utility.problematicFilesTotal = 0;
+      state.utility.problematicReasonFacets = [];
+      state.utility.selectedProblematicDetail = null;
       state.utility.loaded = false;
       state.utility.problematicFilesComplete = false;
       showToast('Unable to load problematic files.', 'error', 3200);
@@ -26114,23 +26168,132 @@ async function loadProblematicFiles(force = false, options = {}) {
     }
   })();
   requestPromise.problematicSummaryRequestToken = requestToken;
+  requestPromise.problematicPageSignature = requestSignature;
   state.utility.loadPromise = requestPromise;
-  state.utility.completeLoadPromise = requestPromise;
+  state.utility.completeLoadPromise = null;
   return requestPromise;
 }
 
-async function waitForProblematicFilesComplete() {
-  if (state.utility.problematicFilesComplete !== false) return true;
-  const pending = state.utility.completeLoadPromise || state.utility.loadPromise;
-  if (!pending) return false;
-  await pending;
-  return state.utility.problematicFilesComplete === true;
+async function loadNextProblematicFilesPage() {
+  const cursor = String(state.utility.problematicFilesNextCursor || '');
+  if (!cursor) {
+    state.utility.problematicFilesComplete = true;
+    return state.utility.problematicFiles || [];
+  }
+  const owner = Number(state.utility.problematicSummaryRequestToken || 0);
+  const pageSignature = String(state.utility.problematicFilesPageSignature || '');
+  if (getProblematicFilesPageFilter() !== pageSignature) return state.utility.problematicFiles || [];
+  const existing = state.utility.completeLoadPromise;
+  if (
+    existing
+    && existing.problematicSummaryRequestToken === owner
+    && existing.problematicPageCursor === cursor
+    && existing.problematicPageSignature === pageSignature
+  ) return existing;
+
+  let pagePromise;
+  pagePromise = (async () => {
+    try {
+      const { data } = await fetchProblematicFilesPage(
+        buildProblematicFilesPageUrl(cursor, pageSignature),
+      );
+      if (
+        Number(state.utility.problematicSummaryRequestToken || 0) !== owner
+        || String(state.utility.problematicFilesNextCursor || '') !== cursor
+        || String(state.utility.problematicFilesPageSignature || '') !== pageSignature
+        || getProblematicFilesPageFilter() !== pageSignature
+      ) return null;
+      const { summaryItems, operationalItems } = validateProblematicSummaryPayload(data);
+      const existingItems = Array.isArray(state.utility.problematicFiles)
+        ? state.utility.problematicFiles
+        : [];
+      const itemsByKey = new Map(existingItems.map((item) => [String(item?.key || ''), item]));
+      for (const item of summaryItems) {
+        const key = String(item?.key || '');
+        const current = itemsByKey.get(key);
+        const selectedDetail = state.utility.selectedProblematicDetail?.key === key
+          ? state.utility.selectedProblematicDetail : null;
+        itemsByKey.set(key, current?.detail_loaded === true
+          ? current : selectedDetail?.detail_loaded === true ? selectedDetail : item);
+      }
+      state.utility.problematicFiles = Array.from(itemsByKey.values());
+      if (itemsByKey.has(String(state.utility.selectedProblematicDetail?.key || ''))) {
+        state.utility.selectedProblematicDetail = null;
+      }
+      state.utility.libraryWatchHealthProblems = operationalItems;
+      if (Array.isArray(data.reason_facets)) {
+        state.utility.problematicReasonFacets = normalizeProblematicReasonFacets(data.reason_facets);
+      }
+      const { nextCursor, total } = readProblematicFilesPageState(data, state.utility.problematicFiles);
+      state.utility.problematicFilesNextCursor = nextCursor || null;
+      state.utility.problematicFilesTotal = total;
+      state.utility.problematicFilesComplete = !nextCursor;
+      if (state.utility.activeTab === 'problematic-files') {
+        renderUtilityModalContent({ preserveProblematicTree: true });
+      }
+      return state.utility.problematicFiles;
+    } catch (error) {
+      const stillOwner = (
+        Number(state.utility.problematicSummaryRequestToken || 0) === owner
+        && String(state.utility.problematicFilesNextCursor || '') === cursor
+        && String(state.utility.problematicFilesPageSignature || '') === pageSignature
+        && getProblematicFilesPageFilter() === pageSignature
+      );
+      if (stillOwner && error?.problematicErrorCode === 'problematic_projection_cursor_expired') {
+        state.utility.problematicFilesNextCursor = null;
+        return loadProblematicFiles(true, {
+          preserveSelectedDetail: true,
+        });
+      }
+      if (stillOwner) {
+        console.error('[AlbumHaven][Utilities] Failed to load the next problematic-files page.', error);
+        showToast('Unable to load more problematic files.', 'error', 3200);
+      }
+      return null;
+    } finally {
+      if (state.utility.completeLoadPromise === pagePromise) {
+        state.utility.completeLoadPromise = null;
+      }
+    }
+  })();
+  pagePromise.problematicSummaryRequestToken = owner;
+  pagePromise.problematicPageCursor = cursor;
+  pagePromise.problematicPageSignature = pageSignature;
+  state.utility.completeLoadPromise = pagePromise;
+  return pagePromise;
+}
+
+async function loadProblematicAlbumDetailForTrack(trackPath) {
+  const normalizedPath = String(trackPath || '').trim();
+  if (!normalizedPath) return null;
+  const response = await fetch(
+    `/utilities/problematic-files/detail?track_path=${encodeURIComponent(normalizedPath)}`,
+    { headers: { Accept: 'application/json' } },
+  );
+  const data = await response.json();
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(readProblematicPayloadError(data, 'Unable to load problematic album detail.'));
+  }
+  const key = String(data?.key || '').trim();
+  if (!key) throw new Error('Problematic album detail is missing its key.');
+  const detail = validateProblematicDetailPayload(data, key);
+  const returnedPaths = [
+    ...(Array.isArray(detail.problematic_track_paths) ? detail.problematic_track_paths : []),
+    ...(Array.isArray(detail.track_paths) ? detail.track_paths : []),
+  ].map((path) => String(path || ''));
+  if (!returnedPaths.includes(normalizedPath)) {
+    throw new Error('Problematic album detail does not contain the requested track.');
+  }
+  return detail;
 }
 
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {
   const normalizedKey = String(albumKey || '').trim();
   if (!normalizedKey) return null;
-  const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
+  const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey)
+    || (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey
+      ? state.utility.selectedProblematicDetail : null);
   if (currentAlbum?.detail_loaded === true && !force) {
     return currentAlbum;
   }
@@ -26192,9 +26355,19 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
           }
           : item
       ));
+      if (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey) {
+        state.utility.selectedProblematicDetail = {
+          ...state.utility.selectedProblematicDetail,
+          ...detail,
+          detail_loaded: true,
+          detail_load_failed: false,
+        };
+      }
       loadSucceeded = true;
       stateCommitMs = roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
-      return (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
+      return (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey)
+        || (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey
+          ? state.utility.selectedProblematicDetail : null);
     } catch (error) {
       if (Number(state.utility.problematicDetailRequestToken || 0) !== requestToken) return null;
       loadError = String(error?.message || error || 'Unable to load problematic album detail.');
@@ -26205,6 +26378,12 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
             ? { ...item, detail_load_failed: true }
             : item
         ));
+        if (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey) {
+          state.utility.selectedProblematicDetail = {
+            ...state.utility.selectedProblematicDetail,
+            detail_load_failed: true,
+          };
+        }
         showToast('Unable to load the selected problematic album.', 'error', 3200);
       }
       return null;
@@ -26236,7 +26415,11 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         stateCommitMs,
         renderMs,
         totalMs: roundProblematicUtilityMs(getProblematicUtilityNow() - startedAt),
-        detailLoaded: Boolean((state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey)?.detail_loaded),
+        detailLoaded: Boolean(
+          (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey)?.detail_loaded
+          || (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey
+            && state.utility.selectedProblematicDetail?.detail_loaded),
+        ),
       });
     }
   });
@@ -40748,8 +40931,8 @@ function attachUtilityModalEvents() {
     const tab = owner.activeTab;
     searchRenderTimer = setTimeout(async () => {
       searchRenderTimer = null;
-      if (tab === 'problematic-files' && owner.problematicFilesComplete === false
-          && !(await waitForProblematicFilesComplete())) return;
+      if (tab === 'problematic-files'
+          && !(await loadProblematicFiles(true, { preserveSelectedDetail: true }))) return;
       if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) renderUtilityModalContent();
     }, 80);
   };
@@ -40770,7 +40953,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      invalidateProblematicFilesPaging();
+    }
     else return;
     scheduleSearchRender();
   });
@@ -40791,7 +40977,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      invalidateProblematicFilesPaging();
+    }
     else return;
     scheduleSearchRender();
   });
@@ -40958,9 +41147,7 @@ async function handleUtilityBootstrapClick(event) {
   const reconcileProblematicSelectionForFilters = (nextSelectedFilters) => {
     const selectedKey = String(state.utility.selectedProblematicKey || '');
     if (!selectedKey) return;
-    const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-      String(album?.key || '') === selectedKey
-    )) || null;
+    const selectedAlbum = getSelectedProblematicAlbum();
     if (selectedAlbum && albumMatchesProblemFilters(selectedAlbum, nextSelectedFilters)) {
       return;
     }
@@ -40979,8 +41166,6 @@ async function handleUtilityBootstrapClick(event) {
   const problemFilterOption = event.target.closest('[data-problem-filter-value]');
   if (problemFilterOption) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = problemFilterOption.getAttribute('data-problem-filter-value') || '';
     if (value) {
       const selected = state.utility.selectedProblemFilters || [];
@@ -40992,6 +41177,7 @@ async function handleUtilityBootstrapClick(event) {
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
       state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
+      await loadProblematicFiles(true, { preserveSelectedDetail: true });
       renderUtilityModalContent();
       if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
@@ -41001,8 +41187,6 @@ async function handleUtilityBootstrapClick(event) {
   const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
   if (removeProblemFilter) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
     const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
     state.utility.selectedProblemFilters = nextSelectedFilters;
@@ -41010,6 +41194,7 @@ async function handleUtilityBootstrapClick(event) {
     reconcileProblematicSelectionForFilters(nextSelectedFilters);
     state.utility.problemDropdownOpen = false;
     state.utility.showRepairedDisplay = true;
+    await loadProblematicFiles(true, { preserveSelectedDetail: true });
     renderUtilityModalContent();
     return;
   }

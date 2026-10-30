@@ -19,6 +19,11 @@ class Worker:
             raise self.error
 
 
+def test_windows_worker_registers_break_signal_for_process_group_shutdown():
+    if hasattr(run_jobs_worker.signal, "SIGBREAK"):
+        assert run_jobs_worker.signal.SIGBREAK in run_jobs_worker._shutdown_signals()
+
+
 def test_command_returns_two_for_invalid_configuration_without_echoing_value():
     stderr = io.StringIO()
 
@@ -188,6 +193,21 @@ def test_worker_bootstrap_composes_durable_watcher_due_reconciliation():
     assert "PostgresWatcherRecoveryRepository" in source
     assert "watcher_recovery.reconcile_due" in source
     assert "combine_due_reconcilers" in source
+
+
+def test_worker_bootstrap_wires_problematic_projection_handler_and_reconciler():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "PostgresProblematicProjectionRepository" in source
+    assert "build_problematic_files_projection_resource_validator" in source
+    assert "build_problematic_projection_handler" in source
+    assert "JobKind.PROBLEMATIC_FILES_PROJECTION" in source
+    assert "ProblematicProjectionIntegrityReconciler" in source
+    assert "problematic_projection_integrity.reconcile_due" in source
+    assert source.count("problematic_projection_integrity.reconcile_due") == 1
+    assert "closeables=(pool,)" in source
 
 
 def test_worker_bootstrap_forwards_optional_worker_id_to_worker():

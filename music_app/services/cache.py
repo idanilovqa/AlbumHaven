@@ -1,5 +1,5 @@
 from __future__ import annotations
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from datetime import datetime, timezone
 import logging
@@ -774,6 +774,64 @@ def persist_structural_tag_edit_for_config(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
     )
     return result
+
+
+def persist_recovered_tag_edit_for_config(
+    config: dict[str, object],
+    *,
+    changed_paths: set[str],
+    previous_file_entries: Mapping[str, dict[str, object]],
+    resolved_file_entries: Mapping[str, dict[str, object]],
+    structural_field_names: set[str],
+    inventory_field_names: set[str],
+    before_commit: Callable[[object], object],
+    commit_guard: Callable[[Callable[[], object]], object] | None = None,
+) -> dict[str, object]:
+    adapter = _select_runtime_scan_cache_adapter(config)
+    result = adapter.persist_recovered_tag_edit(
+        changed_paths=set(changed_paths),
+        previous_file_entries=previous_file_entries,
+        resolved_file_entries=resolved_file_entries,
+        structural_field_names=set(structural_field_names),
+        inventory_field_names=set(inventory_field_names),
+        before_commit=before_commit,
+        commit_guard=commit_guard,
+    )
+    finalize_recovered_tag_edit_for_config(
+        config,
+        structural_partition_ran=bool(structural_field_names),
+    )
+    return result
+
+
+def finalize_recovered_tag_edit_for_config(
+    config: dict[str, object],
+    *,
+    structural_partition_ran: bool,
+) -> None:
+    try:
+        from music_app.services.library_browse_postgres import (
+            invalidate_postgres_utility_projection_cache,
+        )
+
+        invalidate_postgres_utility_projection_cache(
+            database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+        )
+    except Exception:
+        _LOGGER.exception(
+            "Committed recovered tag edit could not invalidate utility projections."
+        )
+    if structural_partition_ran:
+        try:
+            from music_app.services.gallery_projection_postgres import (
+                schedule_gallery_projection_refresh,
+            )
+
+            schedule_gallery_projection_refresh(config)
+        except Exception:
+            _LOGGER.exception(
+                "Committed recovered tag edit could not schedule gallery refresh."
+            )
 
 
 def validate_structural_tag_edit_for_config(

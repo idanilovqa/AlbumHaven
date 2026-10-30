@@ -3,7 +3,13 @@ from datetime import datetime, timezone
 import pytest
 
 from music_app.services.jobs.models import EnqueueJob, JobKind, JobState, RecoveryPolicy
-from music_app.services.jobs.registry import JOB_POLICIES, policy_for, validate_enqueue
+from music_app.jobs.dispatch import JobHandlerRegistry
+from music_app.services.jobs import registry as job_registry
+from music_app.services.jobs.registry import (
+    JOB_POLICIES,
+    policy_for,
+    validate_enqueue,
+)
 
 
 NOW = datetime(2026, 9, 5, tzinfo=timezone.utc)
@@ -12,6 +18,13 @@ EXPECTED_POLICIES = {
     "full_scan": ({"library.refresh"}, 2, RecoveryPolicy.RETRY_SAFE, False, False),
     "targeted_reconciliation": (set(), 3, RecoveryPolicy.RETRY_SAFE, True, False),
     "post_scan_cover_refresh": (set(), 2, RecoveryPolicy.RETRY_SAFE, True, False),
+    "problematic_files_projection": (
+        set(),
+        3,
+        RecoveryPolicy.RETRY_SAFE,
+        True,
+        False,
+    ),
     "cover_lookup": ({"library.covers.lookup"}, 2, RecoveryPolicy.RETRY_SAFE, False, False),
     "cover_bulk_refresh": (
         {"library.covers.fetch"},
@@ -223,6 +236,52 @@ def test_server_owned_work_rejects_a_synthesized_actor_capability():
 
     with pytest.raises(ValueError, match="server-owned|capability"):
         validate_enqueue(command)
+
+
+def test_problematic_files_projection_is_server_owned_and_library_scoped():
+    command = _command(
+        kind=JobKind.PROBLEMATIC_FILES_PROJECTION,
+        subject_kind="problematic_files_projection",
+        subject_ref="library:9",
+        parameters={
+            "projection_kind": "problematic_files",
+            "source_generation": 18,
+            "rebuild_epoch": 2,
+        },
+        account_id=None,
+        capability_key=None,
+        request_origin_ref=None,
+        idempotency_key="problematic-files-projection:9:18:2",
+        max_attempts=3,
+    )
+
+    assert validate_enqueue(command) is command
+
+
+def test_registered_handler_fingerprint_is_registry_owned_and_order_independent():
+    first = job_registry.registered_handler_fingerprint(
+        [JobKind.FULL_SCAN, JobKind.PROBLEMATIC_FILES_PROJECTION]
+    )
+    second = job_registry.registered_handler_fingerprint(
+        ["problematic_files_projection", "full_scan"]
+    )
+    handlers = JobHandlerRegistry()
+    handlers.register(JobKind.PROBLEMATIC_FILES_PROJECTION, lambda *_: None)
+    handlers.register(JobKind.FULL_SCAN, lambda *_: None)
+
+    assert first == second == handlers.fingerprint
+    assert len(first) == 64
+
+
+def test_registered_handler_fingerprint_rejects_unregistered_kinds():
+    with pytest.raises(ValueError, match="job kind"):
+        job_registry.registered_handler_fingerprint(["arbitrary_code"])
+
+
+def test_expected_registered_handler_fingerprint_covers_the_closed_kind_set():
+    assert job_registry.expected_registered_handler_fingerprint() == (
+        job_registry.registered_handler_fingerprint(JobKind)
+    )
 
 
 def test_public_password_reset_uses_lifecycle_context_without_an_actor_capability():

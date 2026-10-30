@@ -253,7 +253,12 @@ def safe_int(value) -> int | None:
     if value is None:
         return None
     text = str(value).split("/")[0].strip()
-    return int(text) if text.lstrip("-").isdigit() else None
+    if not text.lstrip("-").isdigit():
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 def clamp_rating_10(value: int | None) -> int | None:
     if value is None:

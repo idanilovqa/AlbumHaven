@@ -833,6 +833,7 @@ def test_live_durable_worker_startup_preflight_accepts_worker_and_rejects_missin
         "full_scan",
         "lastfm_scrobble_retry",
         "post_scan_cover_refresh",
+        "problematic_files_projection",
         "targeted_reconciliation",
     ]
     cleanup_complete = False
@@ -7716,6 +7717,184 @@ def test_watcher_recovery_viewer_is_normal_single_library_member_without_repair_
         capability_keys = set(viewer["capability_keys"])
         assert capability_keys == {"capability.view", "library.refresh.read"}
         assert "library.refresh" not in capability_keys
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_app_role_persists_composite_recovered_tag_edit_atomically(
+    monkeypatch,
+    tmp_path,
+):
+    from music_app.services.library_roots_postgres import (
+        PostgresLibraryRootSettingsStore,
+    )
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    from music_app.services.tag_edit_intents_postgres import (
+        PostgresTagEditIntentRepository,
+    )
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    track_path = str((tmp_path / "Artist" / "Old Album" / "01.flac").resolve())
+    previous_entry = {
+        "path": track_path,
+        "mtime": 1.0,
+        "size": 100,
+        "album": "Old Album",
+        "album_artist": "Artist",
+        "artist": "Artist",
+        "title": "Old Title",
+        "track_number": 1,
+        "disc_number": 1,
+        "duration_seconds": 60,
+        "year": 2026,
+        "edition": "",
+        "album_rating": 0,
+        "library_root_id": "composite-root",
+        "library_root_category": "main_library",
+        "exception_type": None,
+    }
+    resolved_entry = {
+        **previous_entry,
+        "album": "New Album",
+        "title": "New Title",
+    }
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+        "MUSIC_DIR": str(tmp_path),
+        "APP_NAME": "Album Haven",
+    }
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        setup_config = {**config, "ALBUM_HAVEN_APP_DATABASE_URL": setup_url}
+        PostgresLibraryRootSettingsStore(setup_config).save_settings(
+            {
+                "main_library_roots": [
+                    {
+                        "id": "composite-root",
+                        "path": str(tmp_path.resolve()),
+                        "layout_mode": "artist",
+                    }
+                ],
+                "hoarding_library_roots": [],
+                "new_arrivals_roots": [],
+            }
+        )
+        setup_adapter = PostgresScanCacheAdapter(
+            setup_config,
+            connect=isolatedPostgres._connect,
+        )
+        setup_adapter.save_snapshot(
+            Path("unused-composite-recovery.json"),
+            {track_path: previous_entry},
+            "composite-recovery-root",
+            1.0,
+        )
+        adapter = PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect)
+        repository = PostgresTagEditIntentRepository(
+            config,
+            connect=isolatedPostgres._connect,
+        )
+        intent_id = repository.prepare_intent(
+            library_root_identity="composite-recovery-root",
+            changes=[
+                {
+                    "path": track_path,
+                    "old_values": {"album": "Old Album", "title": "Old Title"},
+                    "requested_values": {
+                        "album": "New Album",
+                        "title": "New Title",
+                    },
+                }
+            ],
+        )
+
+        def fail_after_journal_update(connection):
+            repository.complete_in_transaction(connection, intent_id)
+            raise RuntimeError("forced finalizer rollback")
+
+        with pytest.raises(RuntimeError, match="forced finalizer rollback"):
+            adapter.persist_recovered_tag_edit(
+                changed_paths={track_path},
+                previous_file_entries={track_path: previous_entry},
+                resolved_file_entries={track_path: resolved_entry},
+                structural_field_names={"album"},
+                inventory_field_names={"title"},
+                before_commit=fail_after_journal_update,
+            )
+
+        rolled_back_journal = repository.load_intent_for_recovery(
+            intent_id,
+            library_root_identity="composite-recovery-root",
+        )
+        assert rolled_back_journal is not None
+        assert rolled_back_journal["status"] == "prepared"
+        with isolatedPostgres._connect(setup_url) as connection:
+            rolled_back_inventory = connection.execute(
+                """
+                select library.local_albums.title as album_title,
+                       library.local_tracks.title as track_title
+                  from library.local_track_files
+                  join library.local_tracks
+                    on library.local_tracks.id = library.local_track_files.track_id
+                  join library.local_albums
+                    on library.local_albums.id = library.local_tracks.album_id
+                 where library.local_track_files.private_path = %s
+                """,
+                (track_path,),
+            ).fetchone()
+        assert rolled_back_inventory == {
+            "album_title": "Old Album",
+            "track_title": "Old Title",
+        }
+
+        result = adapter.persist_recovered_tag_edit(
+            changed_paths={track_path},
+            previous_file_entries={track_path: previous_entry},
+            resolved_file_entries={track_path: resolved_entry},
+            structural_field_names={"album"},
+            inventory_field_names={"title"},
+            before_commit=lambda connection: repository.complete_in_transaction(
+                connection,
+                intent_id,
+            ),
+        )
+
+        assert result["structural_partition_ran"] is True
+        assert int(result["inventory_mutation_revision"]) > 0
+        authority = adapter.load_recovered_tag_edit_state({track_path})
+        assert authority["file_entries"][track_path]["album"] == "New Album"
+        assert authority["file_entries"][track_path]["title"] == "New Title"
+        journal = repository.load_intent_for_recovery(
+            intent_id,
+            library_root_identity="composite-recovery-root",
+        )
+        assert journal is not None
+        assert journal["status"] == "completed"
+        with isolatedPostgres._connect(setup_url) as connection:
+            committed = connection.execute(
+                """
+                select library.local_albums.title as album_title,
+                       library.local_tracks.title as track_title
+                  from library.local_track_files
+                  join library.local_tracks
+                    on library.local_tracks.id = library.local_track_files.track_id
+                  join library.local_albums
+                    on library.local_albums.id = library.local_tracks.album_id
+                 where library.local_track_files.private_path = %s
+                """,
+                (track_path,),
+            ).fetchone()
+        assert committed == {
+            "album_title": "New Album",
+            "track_title": "New Title",
+        }
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True

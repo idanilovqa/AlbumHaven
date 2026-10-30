@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections import ChainMap
 from collections.abc import Callable, Mapping
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -111,6 +112,14 @@ class StructuralTagEditDestinationConflict(RuntimeError):
     """Raised when a structural tag edit would collide with another album."""
 
 
+class RecoveredTagEditCommitUnknown(RuntimeError):
+    """Raised when recovery commit may have landed but acknowledgement was lost."""
+
+    def __init__(self, persistence_result: dict[str, object]) -> None:
+        self.persistence_result = dict(persistence_result)
+        super().__init__("Recovered tag edit commit acknowledgement is unknown.")
+
+
 class ScanCacheAdapter(Protocol):
     def refresh_relation_projection(
         self,
@@ -202,12 +211,31 @@ class ScanCacheAdapter(Protocol):
         self,
         *,
         changed_paths: set[str],
-        previous_file_entries: dict[str, dict[str, object]],
-        updated_file_entries: dict[str, dict[str, object]],
+        previous_file_entries: Mapping[str, dict[str, object]],
+        updated_file_entries: Mapping[str, dict[str, object]],
         changed_field_names: set[str],
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         rebuild_relation_projection: bool = False,
+    ) -> dict[str, object]:
+        ...
+
+    def persist_recovered_tag_edit(
+        self,
+        *,
+        changed_paths: set[str],
+        previous_file_entries: Mapping[str, dict[str, object]],
+        resolved_file_entries: Mapping[str, dict[str, object]],
+        structural_field_names: set[str],
+        inventory_field_names: set[str],
+        before_commit: Callable[[Any], object],
+        commit_guard: Callable[[Callable[[], object]], object] | None = None,
+    ) -> dict[str, object]:
+        ...
+
+    def load_recovered_tag_edit_state(
+        self,
+        changed_paths: set[str],
     ) -> dict[str, object]:
         ...
 
@@ -895,38 +923,10 @@ class PostgresScanCacheAdapter:
         file_cache: dict[str, dict[str, object]] = {}
         for row in file_rows:
             row_payload = _row_mapping(row)
-            file_entry = row_payload.get("file_entry")
-            if not isinstance(file_entry, dict):
-                file_entry = _fallback_file_entry(row_payload)
-            if not isinstance(file_entry, dict):
-                continue
-            path = str(row_payload.get("private_path") or file_entry.get("path") or "").strip()
-            if not path:
-                continue
-            try:
-                hydrated_entry = deserialize_file_entry(file_entry)
-            except Exception:
-                hydrated_entry = dict(file_entry)
-            if "file_size_bytes" in row_payload:
-                hydrated_entry["size"] = safe_int(row_payload["file_size_bytes"])
-            hydrated_entry["path"] = path
-            if type(row_payload.get("album_is_compilation")) is bool:
-                hydrated_entry["is_compilation"] = row_payload[
-                    "album_is_compilation"
-                ]
-            cover_selection_origin = str(
-                row_payload.get("cover_selection_origin") or ""
-            ).strip().casefold()
-            hydrated_entry["cover_selection_origin"] = (
-                cover_selection_origin
-                if cover_selection_origin in {"user", "automatic"}
-                else None
-            )
-            hydrated_entry["cover_selection_provenance"] = (
-                "explicit" if row_payload.get("cover_selection_provenance") == "explicit" else None
-            )
-            hydrated_entry["album_id"] = row_payload.get("album_id")
-            file_cache[path] = hydrated_entry
+            hydrated = _hydrate_file_entry_row(row_payload)
+            if hydrated is not None:
+                path, hydrated_entry = hydrated
+                file_cache[path] = hydrated_entry
 
         relation_views = deserialize_relation_views(snapshot_payload.get("relation_views"))
         return (
@@ -936,6 +936,69 @@ class PostgresScanCacheAdapter:
             _float_or_zero(snapshot_payload.get("relations_last_built")),
             None,
         )
+
+    def load_recovered_tag_edit_state(
+        self,
+        changed_paths: set[str],
+    ) -> dict[str, object]:
+        normalized_paths = sorted(
+            {str(path or "").strip() for path in changed_paths if str(path or "").strip()}
+        )
+        if not normalized_paths:
+            raise ValueError("Recovered tag edit state requires at least one changed path.")
+        with self._connect_to_database() as connection:
+            _ensure_bootstrap_context(connection)
+            connection.execute(_inventory_publication_advisory_lock_sql())
+            revisions = _row_mapping(
+                _first_row(connection.execute(_load_library_revisions_sql()))
+            )
+            rows = connection.execute(
+                _load_file_entries_sql(targeted_paths=True),
+                {"source": _SOURCE, "changed_paths": normalized_paths},
+            ).fetchall()
+            override_rows = connection.execute(
+                _load_recovered_exception_overrides_sql(),
+                {"changed_paths": normalized_paths},
+            ).fetchall()
+        file_entries: dict[str, dict[str, object]] = {}
+        for row in rows:
+            hydrated = _hydrate_file_entry_row(_row_mapping(row))
+            if hydrated is not None:
+                path, entry = hydrated
+                file_entries[path] = entry
+        if set(file_entries) != set(normalized_paths):
+            raise RuntimeError(
+                "Recovered tag edit state could not resolve every changed path."
+            )
+        exception_overrides = {
+            path: {"exception_type": "", "custom_collection_name": ""}
+            for path in normalized_paths
+        }
+        for row in override_rows:
+            row_payload = _row_mapping(row)
+            path = str(row_payload.get("track_key") or "").strip()
+            if path not in exception_overrides:
+                continue
+            payload = row_payload.get("override_payload")
+            payload = payload if isinstance(payload, Mapping) else {}
+            exception_type = normalize_exception_value(
+                payload.get("exception_type")
+            )
+            exception_overrides[path] = {
+                "exception_type": exception_type,
+                "custom_collection_name": (
+                    str(payload.get("custom_collection_name") or "").strip()
+                    if exception_type == "Custom Collection"
+                    else ""
+                ),
+            }
+        return {
+            "inventory_mutation_revision": int(
+                revisions.get("inventory_mutation_revision") or 0
+            ),
+            "file_entries": file_entries,
+            "exception_overrides": exception_overrides,
+        }
 
     def persist_cover_selection(
         self,
@@ -1230,10 +1293,11 @@ class PostgresScanCacheAdapter:
         *,
         normalized_paths: list[str],
         previous_entries: dict[str, dict[str, object]],
-        updated_file_entries: dict[str, dict[str, object]],
+        updated_file_entries: Mapping[str, dict[str, object]],
         commit_guard: Callable[[Callable[[], object]], object] | None,
         before_commit: Callable[[Any], object] | None,
         rebuild_relation_projection: bool,
+        _connection: Any | None = None,
     ) -> dict[str, object]:
         source_album_name = str(next(iter(previous_entries.values())).get("album") or "").strip()
         retained_memberships = {
@@ -1266,9 +1330,14 @@ class PostgresScanCacheAdapter:
             }
             for path in normalized_paths
         ]
-        with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql())
-            connection.execute(relation_projection_advisory_lock_sql())
+        with (
+            nullcontext(_connection)
+            if _connection is not None
+            else self._connect_to_database()
+        ) as connection:
+            if _connection is None:
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             result = _row_mapping(_first_row(connection.execute(
                 _persist_blank_album_tag_edit_sql(),
@@ -1331,6 +1400,11 @@ class PostgresScanCacheAdapter:
         }
         if committed_relation_state is not None:
             persistence_result.update(committed_relation_state)
+        if _connection is not None:
+            persistence_result["_source_album_vacated"] = (
+                source_album_count == 1
+                and source_album_track_file_count == input_path_count
+            )
         return persistence_result
 
     def _persist_detached_album_restore(
@@ -1342,6 +1416,7 @@ class PostgresScanCacheAdapter:
         commit_guard: Callable[[Callable[[], object]], object] | None,
         before_commit: Callable[[Any], object] | None,
         rebuild_relation_projection: bool,
+        _connection: Any | None = None,
     ) -> dict[str, object]:
         destination_album = _structural_destination_album_projection(
             self._build_albums,
@@ -1406,9 +1481,14 @@ class PostgresScanCacheAdapter:
             ],
         }
         committed_relation_state: dict[str, object] | None = None
-        with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql())
-            connection.execute(relation_projection_advisory_lock_sql())
+        with (
+            nullcontext(_connection)
+            if _connection is not None
+            else self._connect_to_database()
+        ) as connection:
+            if _connection is None:
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             revisions = _row_mapping(
                 _first_row(connection.execute(_load_library_revisions_sql()))
@@ -1483,18 +1563,24 @@ class PostgresScanCacheAdapter:
         }
         if committed_relation_state is not None:
             persistence_result.update(committed_relation_state)
+        if _connection is not None:
+            persistence_result["_source_album_vacated"] = (
+                source_album_count == 1
+                and source_album_track_file_count == input_path_count
+            )
         return persistence_result
 
     def persist_structural_tag_edit(
         self,
         *,
         changed_paths: set[str],
-        previous_file_entries: dict[str, dict[str, object]],
-        updated_file_entries: dict[str, dict[str, object]],
+        previous_file_entries: Mapping[str, dict[str, object]],
+        updated_file_entries: Mapping[str, dict[str, object]],
         changed_field_names: set[str],
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         rebuild_relation_projection: bool = False,
+        _connection: Any | None = None,
     ) -> dict[str, object]:
         normalized_paths = sorted(
             {str(path or "").strip() for path in changed_paths if str(path or "").strip()}
@@ -1538,8 +1624,13 @@ class PostgresScanCacheAdapter:
                 }
                 for path in normalized_paths
             ]
-            with self._connect_to_database() as connection:
-                connection.execute(_inventory_publication_advisory_lock_sql())
+            with (
+                nullcontext(_connection)
+                if _connection is not None
+                else self._connect_to_database()
+            ) as connection:
+                if _connection is None:
+                    connection.execute(_inventory_publication_advisory_lock_sql())
                 _ensure_bootstrap_context(connection)
                 result = _row_mapping(
                     _first_row(
@@ -1632,6 +1723,7 @@ class PostgresScanCacheAdapter:
                 commit_guard=commit_guard,
                 before_commit=before_commit,
                 rebuild_relation_projection=rebuild_relation_projection,
+                _connection=_connection,
             )
         if (
             (
@@ -1649,6 +1741,7 @@ class PostgresScanCacheAdapter:
                 commit_guard=commit_guard,
                 before_commit=before_commit,
                 rebuild_relation_projection=rebuild_relation_projection,
+                _connection=_connection,
             )
         if len(destination_album_names) != 1 or not next(iter(destination_album_names), ""):
             raise RuntimeError("Structural tag persistence requires one destination album.")
@@ -1674,9 +1767,14 @@ class PostgresScanCacheAdapter:
             }
             for path in normalized_paths
         ]
-        with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql())
-            connection.execute(relation_projection_advisory_lock_sql())
+        with (
+            nullcontext(_connection)
+            if _connection is not None
+            else self._connect_to_database()
+        ) as connection:
+            if _connection is None:
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             active_separate_release_keys = _load_separate_release_keys(connection)
             destination_album = _structural_destination_album_projection(
@@ -1890,13 +1988,17 @@ class PostgresScanCacheAdapter:
         }
         if committed_relation_state is not None:
             persistence_result.update(committed_relation_state)
+        if _connection is not None:
+            persistence_result["_source_album_vacated"] = (
+                source_album_track_file_count == input_path_count
+            )
         if source_album_id:
             persistence_result["source_album_id"] = source_album_id
         if persisted_separate_release_key:
             persistence_result["separate_release_key"] = (
                 persisted_separate_release_key
             )
-        if source_album_id and destination_album_id:
+        if _connection is None and source_album_id and destination_album_id:
             from music_app.services import gallery_projection_postgres as gallery
 
             try:
@@ -1908,6 +2010,112 @@ class PostgresScanCacheAdapter:
                 _LOGGER.exception(
                     "Committed structural tag edit could not schedule gallery refresh."
                 )
+        return persistence_result
+
+    def persist_recovered_tag_edit(
+        self,
+        *,
+        changed_paths: set[str],
+        previous_file_entries: Mapping[str, dict[str, object]],
+        resolved_file_entries: Mapping[str, dict[str, object]],
+        structural_field_names: set[str],
+        inventory_field_names: set[str],
+        before_commit: Callable[[Any], object],
+        commit_guard: Callable[[Callable[[], object]], object] | None = None,
+    ) -> dict[str, object]:
+        normalized_paths = sorted(
+            {str(path or "").strip() for path in changed_paths if str(path or "").strip()}
+        )
+        structural_fields = frozenset(structural_field_names)
+        inventory_fields = frozenset(inventory_field_names)
+        if not normalized_paths:
+            raise ValueError("Recovered tag persistence requires at least one changed path.")
+        if structural_fields and structural_fields not in _TARGETED_STRUCTURAL_EDIT_FIELD_SETS:
+            raise ValueError("Recovered tag persistence has unsupported structural fields.")
+        if not inventory_fields <= _TARGETED_INVENTORY_EDIT_FIELDS:
+            raise ValueError("Recovered tag persistence has unsupported inventory fields.")
+        if not callable(before_commit):
+            raise ValueError("Recovered tag persistence requires a finalizer callback.")
+        if any(
+            not isinstance(previous_file_entries.get(path), dict)
+            or not isinstance(resolved_file_entries.get(path), dict)
+            for path in normalized_paths
+        ):
+            raise RuntimeError("Recovered tag persistence must resolve every changed path.")
+
+        with self._connect_to_database() as connection:
+            connection.execute(_inventory_publication_advisory_lock_sql())
+            if structural_fields:
+                connection.execute(relation_projection_advisory_lock_sql())
+            _ensure_bootstrap_context(connection)
+            revision_row = _row_mapping(
+                _first_row(connection.execute(_load_library_revisions_sql()))
+            )
+            inventory_revision = int(
+                revision_row.get("inventory_mutation_revision") or 0
+            )
+            source_album_vacated = False
+            if structural_fields:
+                structural_result = self.persist_structural_tag_edit(
+                    changed_paths=set(normalized_paths),
+                    previous_file_entries=previous_file_entries,
+                    updated_file_entries=_recovered_partition_entries(
+                        previous_file_entries,
+                        resolved_file_entries,
+                        normalized_paths,
+                        structural_fields,
+                    ),
+                    changed_field_names=set(structural_fields),
+                    rebuild_relation_projection=False,
+                    _connection=connection,
+                )
+                inventory_revision = int(
+                    structural_result.get("inventory_mutation_revision")
+                    or inventory_revision
+                )
+                source_album_vacated = bool(
+                    structural_result.pop("_source_album_vacated", False)
+                )
+            if inventory_fields:
+                inventory_result = self.persist_structural_tag_edit(
+                    changed_paths=set(normalized_paths),
+                    previous_file_entries=previous_file_entries,
+                    updated_file_entries=_recovered_partition_entries(
+                        previous_file_entries,
+                        resolved_file_entries,
+                        normalized_paths,
+                        inventory_fields,
+                    ),
+                    changed_field_names=set(inventory_fields),
+                    rebuild_relation_projection=False,
+                    _connection=connection,
+                )
+                inventory_revision = int(
+                    inventory_result.get("inventory_mutation_revision")
+                    or inventory_revision
+                )
+            if structural_fields:
+                _patch_structural_relation_projection(
+                    connection,
+                    previous_entries={
+                        path: dict(previous_file_entries[path])
+                        for path in normalized_paths
+                    },
+                    updated_entries={
+                        path: dict(resolved_file_entries[path])
+                        for path in normalized_paths
+                    },
+                    source_album_vacated=source_album_vacated,
+                )
+            persistence_result = {
+                "inventory_mutation_revision": inventory_revision,
+                "structural_partition_ran": bool(structural_fields),
+            }
+            before_commit(connection)
+            try:
+                (commit_guard or (lambda commit: commit()))(connection.commit)
+            except Exception as error:
+                raise RecoveredTagEditCommitUnknown(persistence_result) from error
         return persistence_result
 
     def validate_structural_tag_edit(
@@ -2760,6 +2968,26 @@ def _structural_file_entry_delta(
     return delta
 
 
+def _recovered_partition_entries(
+    previous_file_entries: Mapping[str, dict[str, object]],
+    resolved_file_entries: Mapping[str, dict[str, object]],
+    changed_paths: list[str],
+    owned_fields: frozenset[str],
+) -> ChainMap[str, dict[str, object]]:
+    changed_entries: dict[str, dict[str, object]] = {}
+    ancillary_fields = {"mtime", "size"}
+    if "year" in owned_fields:
+        ancillary_fields.add("release_date")
+    for path in changed_paths:
+        baseline = dict(previous_file_entries[path])
+        changed_entries[path] = baseline
+        resolved = resolved_file_entries[path]
+        for field in owned_fields.union(ancillary_fields):
+            if field in resolved:
+                baseline[field] = resolved[field]
+    return ChainMap(changed_entries, previous_file_entries)
+
+
 def _file_cache_with_inferred_blank_album_memberships(
     file_cache: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
@@ -2922,6 +3150,8 @@ def _patch_structural_relation_projection(
         not isinstance(relation_views_payload, dict)
         or not isinstance(projection_metadata, dict)
         or not isinstance(relations_last_built, (int, float))
+        or not str(projection_metadata.get("builder_version") or "").strip()
+        or not str(projection_metadata.get("source_fingerprint") or "").strip()
     ):
         return {
             "projection_mode": "stale",
@@ -3660,6 +3890,43 @@ def _fallback_file_entry(row: dict[str, object]) -> dict[str, object] | None:
         "library_root_category": row.get("library_root_category"),
         "exception_type": None,
     }
+
+
+def _hydrate_file_entry_row(
+    row_payload: dict[str, object],
+) -> tuple[str, dict[str, object]] | None:
+    file_entry = row_payload.get("file_entry")
+    if not isinstance(file_entry, dict):
+        file_entry = _fallback_file_entry(row_payload)
+    if not isinstance(file_entry, dict):
+        return None
+    path = str(row_payload.get("private_path") or file_entry.get("path") or "").strip()
+    if not path:
+        return None
+    try:
+        hydrated_entry = deserialize_file_entry(file_entry)
+    except Exception:
+        hydrated_entry = dict(file_entry)
+    if "file_size_bytes" in row_payload:
+        hydrated_entry["size"] = safe_int(row_payload["file_size_bytes"])
+    hydrated_entry["path"] = path
+    if type(row_payload.get("album_is_compilation")) is bool:
+        hydrated_entry["is_compilation"] = row_payload["album_is_compilation"]
+    cover_selection_origin = str(
+        row_payload.get("cover_selection_origin") or ""
+    ).strip().casefold()
+    hydrated_entry["cover_selection_origin"] = (
+        cover_selection_origin
+        if cover_selection_origin in {"user", "automatic"}
+        else None
+    )
+    hydrated_entry["cover_selection_provenance"] = (
+        "explicit"
+        if row_payload.get("cover_selection_provenance") == "explicit"
+        else None
+    )
+    hydrated_entry["album_id"] = row_payload.get("album_id")
+    return path, hydrated_entry
 
 
 def _load_cover_mutation_revision_sql() -> str:
@@ -5330,8 +5597,40 @@ def _load_cover_selections_sql() -> str:
     """
 
 
-def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
+def _load_recovered_exception_overrides_sql() -> str:
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )
+        select
+          library.exception_overrides.track_key,
+          library.exception_overrides.override_payload
+        from library.exception_overrides
+        join bootstrap_context
+          on bootstrap_context.library_id = library.exception_overrides.library_id
+        where library.exception_overrides.track_key = any(%(changed_paths)s::text[])
+        order by library.exception_overrides.track_key;
+    """
+
+
+def _load_file_entries_sql(
+    *,
+    targeted_albums: bool = False,
+    targeted_paths: bool = False,
+) -> str:
     album_filter = "and library.local_albums.album_key = any(%(album_keys)s::text[])" if targeted_albums else ""
+    path_filter = (
+        "and library.local_track_files.private_path = any(%(changed_paths)s::text[])"
+        if targeted_paths
+        else ""
+    )
     return """
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -5391,9 +5690,12 @@ def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
         left join library.local_artists track_artists on track_artists.id = library.local_tracks.artist_id
         where library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
           and coalesce((library.local_track_files.metadata #>> '{scan_cache,stale}')::boolean, false) is false
-          __TARGETED_ALBUM_FILTER__
+          __TARGETED_FILE_FILTERS__
         order by library.local_track_files.private_path;
-    """.replace("__TARGETED_ALBUM_FILTER__", album_filter)
+    """.replace(
+        "__TARGETED_FILE_FILTERS__",
+        "\n          ".join(filter(None, (album_filter, path_filter))),
+    )
 
 
 def _save_scan_snapshot_sql() -> str:

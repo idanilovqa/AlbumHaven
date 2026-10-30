@@ -141,6 +141,9 @@ LIBRARY_WARNING_ACKNOWLEDGEMENT_MIGRATION = (
 AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION = (
     MIGRATIONS_DIR / "0127_restore_authoritative_exception_clear.sql"
 )
+PROBLEMATIC_PROJECTION_MIGRATION = (
+    MIGRATIONS_DIR / "0128_create_problematic_files_projection.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -155,6 +158,18 @@ def _watcher_function_sql(name: str) -> str:
     sql = _watcher_recovery_sql()
     marker = f"create or replace function {name}("
     assert marker in sql, f"missing watcher function {name}"
+    return sql.split(marker, 1)[1].split(" $$;", 1)[0]
+
+
+def _problematic_projection_function_sql(name: str) -> str:
+    assert PROBLEMATIC_PROJECTION_MIGRATION.is_file(), (
+        "missing additive problematic projection migration 0128"
+    )
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    marker = f"create or replace function {name}("
+    assert marker in sql, f"missing problematic projection function {name}"
     return sql.split(marker, 1)[1].split(" $$;", 1)[0]
 
 
@@ -510,14 +525,14 @@ def test_cover_consistency_worker_startup_requires_finalization_functions_and_gr
     assert f"grant execute on function {signature} to album_haven_worker" in sql
 
 
-def test_0127_is_the_exact_ordered_successor_to_0126():
+def test_0128_is_the_exact_ordered_successor_to_0127():
     migration_names = sorted(
         path.name
         for path in MIGRATIONS_DIR.iterdir()
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
 
-    assert migration_names[-7:] == [
+    assert migration_names[-8:] == [
         "0121_preserve_full_scan_progress_on_restart.sql",
         "0122_close_cover_consistency.sql",
         "0123_preserve_newer_watcher_incident_presentation.sql",
@@ -525,7 +540,1160 @@ def test_0127_is_the_exact_ordered_successor_to_0126():
         "0125_preserve_cover_selection_metadata.sql",
         "0126_acknowledge_mixed_version_library_warnings.sql",
         "0127_restore_authoritative_exception_clear.sql",
+        "0128_create_problematic_files_projection.sql",
     ]
+
+
+def test_0128_declares_bounded_problematic_projection_storage_and_indexes():
+    assert PROBLEMATIC_PROJECTION_MIGRATION.is_file()
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    for table in (
+        "ops.problematic_projection_state",
+        "ops.problematic_projection_headers",
+        "ops.problematic_projection_items",
+        "ops.problematic_projection_source_staging",
+        "ops.problematic_projection_item_staging",
+    ):
+        assert f"create table if not exists {table}" in sql
+        for role in ("public", "album_haven_app", "album_haven_worker", "album_haven_readonly"):
+            assert f"revoke all on table {table} from {role}" in sql
+    for table in (
+        "ops.problematic_projection_state",
+        "ops.problematic_projection_headers",
+        "ops.problematic_projection_items",
+    ):
+        assert f"grant select on table {table} to album_haven_app" in sql
+        assert f"grant select on table {table} to album_haven_readonly" in sql
+    assert (
+        "grant select on table ops.problematic_projection_source_staging "
+        "to album_haven_app"
+    ) not in sql
+    assert (
+        "grant select on table ops.problematic_projection_item_staging "
+        "to album_haven_app"
+    ) not in sql
+    assert "using gin (reasons)" in sql
+    assert "using gin (search_text library.gin_trgm_ops)" in sql
+    assert "(library_id, revision, sort_title, sort_artist, sort_year, sort_album_key, item_key)" in sql
+    assert "jsonb_typeof(summary) = 'object'" in sql
+    assert "octet_length(summary::text) <= 65536" in sql
+    assert "requested_attempt integer" in sql
+    assert "source_xid_fence xid8" in sql
+    assert "audit_claim_token uuid" in sql
+
+
+def test_0128_declares_claim_owned_reason_fact_staging():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    marker = (
+        "create table if not exists "
+        "ops.problematic_projection_reason_fact_staging"
+    )
+    assert marker in sql
+    table_sql = sql.split(marker, 1)[1].split("create table if not exists", 1)[0]
+
+    assert (
+        "primary key ( job_id, attempt, revision, item_key, normalized_reason, "
+        "display_reason, category_reason )"
+    ) in table_sql
+    assert (
+        "foreign key (job_id, attempt, revision, item_key) references "
+        "ops.problematic_projection_item_staging( job_id, attempt, revision, "
+        "item_key ) on update cascade on delete cascade"
+    ) in table_sql
+    for field_name in ("normalized_reason", "display_reason"):
+        assert f"{field_name} <> ''" in table_sql
+        assert f"octet_length({field_name}) <= 4096" in table_sql
+    for role in (
+        "public",
+        "album_haven_app",
+        "album_haven_worker",
+        "album_haven_readonly",
+    ):
+        assert (
+            "revoke all on table ops.problematic_projection_reason_fact_staging "
+            f"from {role}"
+        ) in sql
+    assert (
+        "grant select on table ops.problematic_projection_reason_fact_staging"
+        not in sql
+    )
+    signature = (
+        "ops.stage_claimed_problematic_projection_reason_facts("
+        "bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,jsonb,"
+        "timestamptz)"
+    )
+    for role in ("public", "album_haven_app", "album_haven_readonly"):
+        assert f"revoke all on function {signature} from {role}" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" in sql
+    assert f"grant execute on function {signature} to album_haven_app" not in sql
+    startup = _problematic_projection_function_sql(
+        "ops.validate_durable_worker_startup"
+    )
+    assert "'ops.stage_claimed_problematic_projection_reason_facts(" in startup
+
+
+def test_0128_reason_fact_staging_is_claim_fenced_group_scoped_and_idempotent():
+    function_sql = _problematic_projection_function_sql(
+        "ops.stage_claimed_problematic_projection_reason_facts"
+    )
+
+    assert "p_facts is null" in function_sql
+    assert "jsonb_typeof(p_facts) <> 'array'" in function_sql
+    assert "jsonb_array_length(p_facts) not between 1 and 100" in function_sql
+    assert "ops.validate_claimed_problematic_projection" in function_sql
+    assert "ops.problematic_projection_item_staging" in function_sql
+    for scope_column in (
+        "job_id",
+        "attempt",
+        "revision",
+        "group_kind",
+        "group_identity",
+        "item_key",
+    ):
+        assert scope_column in function_sql
+    for field_name in ("item_key", "normalized_reason", "display_reason"):
+        assert f"jsonb_typeof(fact -> '{field_name}') <> 'string'" in function_sql
+        assert f"fact ->> '{field_name}'" in function_sql
+        assert f"nullif(fact ->> '{field_name}', '') is null" in function_sql
+        assert f"octet_length(fact ->> '{field_name}') > 4096" in function_sql
+    assert "on conflict do nothing" in function_sql
+
+
+def test_0128_projection_staging_has_no_set_wide_ordinal_or_window_pass():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "row_number(" not in sql
+    assert "count(*) over" not in sql
+    assert "with ordinality" not in sql
+    assert not re.search(r"\bordinal\b", sql)
+
+    assert (
+        "from ops.problematic_projection_item_staging as item_staging "
+        "where item_staging.job_id = p_job_id"
+    ) in sql
+
+
+def test_0128_repairs_unbounded_scan_tag_numeric_casts_without_changing_index_contract():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    repair_sql = sql.split(
+        "create or replace function library.problematic_release_identity", 1
+    )[0]
+    assert "drop column if exists scan_file_metadata_problem_candidate" in repair_sql
+    assert "add column scan_file_metadata_problem_candidate boolean generated always as" in repair_sql
+    assert "::numeric" not in repair_sql
+    assert "regexp_replace(" in repair_sql
+    assert "!~ '^[1-9][0-9]?$'" in repair_sql
+    assert "create index local_track_files_active_track_id_idx" in repair_sql
+    assert "create index local_track_files_problem_candidate_v5_idx" in repair_sql
+
+
+def test_0128_coalesces_projection_invalidation_and_fences_publication():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "source_xid_fence xid8" in sql
+    assert "pg_catalog.pg_current_xact_id()" in sql
+    assert (
+        "problematic_projection_state.source_xid_fence is distinct from "
+        "current_fence"
+    ) in sql
+    assert "for update;" in sql
+    assert "requested_job_id = p_job_id" in sql
+    assert "requested_attempt = p_attempt" in sql
+    assert "requested_revision = p_revision" in sql
+
+
+def test_0128_claim_cleanup_retention_and_integrity_audit_are_bounded():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "for update skip locked" in sql
+    assert "audit_claim_token = p_audit_claim_token" in sql
+    assert "audit_after_item_key is not distinct from p_expected_after_item_key" in sql
+    assert "limit least(greatest(p_limit, 1), 100)" in sql
+    assert "delete from ops.problematic_projection_source_staging" in sql
+    assert "delete from ops.problematic_projection_item_staging" in sql
+
+
+    assert (
+        "order by predecessor.source_generation desc, "
+        "predecessor.rebuild_epoch desc, predecessor.revision desc"
+    ) in sql
+    assert "limit 2" in sql
+    assert "ops.reclaim_one_abandoned_problematic_projection" in sql
+    assert "job.state in ('succeeded', 'failed', 'canceled', 'ambiguous')" in sql
+    assert "database_now timestamptz := pg_catalog.clock_timestamp()" in sql
+    assert "job.state = 'running' and job.lease_expires_at < database_now" in sql
+    assert "state.live_job_id = job.id" in sql
+    assert "state.requested_attempt = job.attempt_count" in sql
+
+
+def test_problematic_projection_accumulator_is_scalar_and_persisted():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    table = sql.split(
+        "create table if not exists ops.problematic_projection_group_accumulators",
+        1,
+    )[1].split(");", 1)[0]
+
+    for column in (
+        "after_stage_id bigint not null",
+        "next_batch_index integer not null",
+        "row_count bigint not null",
+    ):
+        assert column in table
+    assert "json" not in table
+    assert "[]" not in table
+    assert "create table if not exists ops.problematic_projection_group_facts" in sql
+
+
+def test_0128_reason_identity_and_audit_leases_use_exact_database_owned_state():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection(", 1
+    )[1].split("create or replace function", 1)[0]
+    load = sql.split(
+        "create or replace function ops.load_due_problematic_projection_integrity_audit(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    advance = sql.split(
+        "create or replace function ops.advance_problematic_projection_integrity_audit(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    page = sql.split(
+        "create or replace function ops.load_problematic_projection_integrity_page(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    complete = sql.split(
+        "create or replace function ops.complete_problematic_projection_integrity_audit(",
+        1,
+    )[1].split("revoke all on table", 1)[0]
+
+    assert "display_reason, category_reason" in sql
+    assert "category_reason as identity_three" in page
+    assert "fact.identity_three" in page
+    assert page.count('collate "c"') == 15
+    assert "category_reason" in publish.split(
+        "into projected_reason_fact_count", 1
+    )[0]
+    assert "audit_after_identity_three" in load
+    assert "audit_after_identity_three" in advance
+    assert "p_observed_at" not in load
+    assert "p_observed_at" not in advance
+    assert "p_observed_at" not in complete
+    assert "pg_catalog.clock_timestamp()" in load
+    assert "interval '5 minutes'" in load
+    assert "interval '5 minutes'" in advance
+    assert "interval '5 minutes'" in complete
+    assert "next_integrity_audit_at = pg_catalog.clock_timestamp()" in advance
+    assert "next_integrity_audit_at = database_now" in complete
+
+
+def test_problematic_projection_invalidation_is_column_and_predicate_specific():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "after update of requested_at, completed_at" not in sql
+    assert "after update of updated_at" not in sql
+    expected_columns = {
+        "library.library_roots": {"root_kind", "is_active"},
+        "library.local_albums": {
+            "artist_id",
+            "album_key",
+            "title",
+            "release_year",
+            "cover_path",
+        },
+        "library.local_artists": {"name"},
+        "library.local_tracks": {
+            "album_id",
+            "track_key",
+            "title",
+            "disc_number",
+            "track_number",
+            "duration_seconds",
+        },
+        "library.local_track_files": {
+            "track_id",
+            "private_path",
+            "file_size_bytes",
+            "library_root_id",
+        },
+        "library.separate_releases": {"release_key"},
+        "library.exception_overrides": {"track_id", "track_key"},
+        "library.ignored_repairs": {"repair_key"},
+    }
+    for table, expected in expected_columns.items():
+        trigger = re.search(
+            r"create trigger invalidate_problematic_projection_update "
+            rf"after update of (?P<columns>[a-z_, ]+) on {re.escape(table)} "
+            r"for each statement",
+            sql,
+        )
+        assert trigger is not None, f"missing scoped invalidation trigger for {table}"
+        assert {
+            column.strip() for column in trigger.group("columns").split(",")
+        } == expected
+
+    ownership_tables = {
+        "library.library_roots",
+        "library.local_albums",
+        "library.local_artists",
+        "library.local_tracks",
+        "library.separate_releases",
+        "library.exception_overrides",
+        "library.ignored_repairs",
+    }
+    assert sql.count(
+        "create trigger invalidate_problematic_projection_ownership_update"
+    ) == len(ownership_tables)
+    for table in ownership_tables:
+        assert re.search(
+            r"create trigger invalidate_problematic_projection_ownership_update "
+            rf"after update on {re.escape(table)} "
+            r"referencing old table as old_rows new table as new_rows "
+            r"for each statement execute function "
+            r"ops\.invalidate_problematic_projection_ownership_move\(\);",
+            sql,
+        ), f"missing statement-scoped ownership invalidation for {table}"
+
+    ownership_function = _problematic_projection_function_sql(
+        "ops.invalidate_problematic_projection_ownership_move"
+    )
+    assert ownership_function.count(
+        "from ops.resolve_problematic_projection_library() resolved"
+    ) == 1
+    assert "from old_rows as old_row" in ownership_function
+    assert "join new_rows as new_row using (id)" in ownership_function
+    assert "old_row.library_id is distinct from new_row.library_id" in ownership_function
+    assert ownership_function.count(
+        "perform ops.invalidate_problematic_projection_library(canonical_library_id)"
+    ) == 1
+
+
+def test_problematic_projection_cover_quota_transition_invalidates_once():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "on ops.cover_lookup_tasks" in sql
+    for predicate in (
+        "automatic_cover_provider_outcomes_v1",
+        "search_spotify",
+        "rate_limit_quota",
+        "status = 'failed'",
+        "source_xid_fence is distinct from current_fence",
+    ):
+        assert predicate in sql
+    assert "cover_lookup_tasks_problematic_quota_idx" in sql
+
+
+def test_0128_variable_driven_writes_qualify_target_columns():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    statements = re.findall(
+        r"(?:update|delete from) ops\.[a-z_]+.*?;",
+        sql,
+        flags=re.DOTALL,
+    )
+    target_columns = (
+        "library_id",
+        "job_id",
+        "attempt",
+        "revision",
+        "live_job_id",
+        "source_generation",
+        "rebuild_epoch",
+        "requested_job_id",
+        "requested_attempt",
+        "requested_revision",
+        "committed_revision",
+        "audit_revision",
+        "audit_claim_token",
+        "audit_after_item_key",
+    )
+
+    for statement in statements:
+        if not re.search(r"\b(?:p_[a-z_]+|selected_[a-z_]+|state_row)\b", statement):
+            continue
+        target = re.match(
+            r"(?:update|delete from) ops\.[a-z_]+ as ([a-z_]+)",
+            statement,
+        )
+        assert target is not None, statement
+        where_clause = statement.split(" where ", 1)[1]
+        for column in target_columns:
+            assert not re.search(
+                rf"(?<![.\w]){column}\b\s*(?:=|<>|is\b)",
+                where_clause,
+            ), statement
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "ops.stage_claimed_problematic_projection_source",
+        "ops.complete_claimed_problematic_projection_group",
+    ),
+)
+def test_0128_projection_state_mutations_are_atomically_claim_fenced(
+    function_name,
+):
+    function_sql = _problematic_projection_function_sql(function_name)
+    state_update = function_sql.split(
+        "update ops.problematic_projection_state", 1
+    )[1].split(";", 1)[0]
+    exact_fence = all(
+        predicate in state_update
+        for predicate in (
+            "projection_state.live_job_id = p_job_id",
+            "projection_state.source_generation = p_source_generation",
+            "projection_state.rebuild_epoch = p_rebuild_epoch",
+            "projection_state.build_revision = p_revision",
+            "projection_state.requested_job_id = p_job_id",
+            "projection_state.requested_attempt = p_attempt",
+            "projection_state.requested_revision = p_revision",
+        )
+    )
+    locked_recheck = (
+        "for update" in function_sql
+        and function_sql.count("ops.validate_claimed_problematic_projection") >= 2
+    )
+
+    assert exact_fence or locked_recheck
+
+
+def test_0128_source_selection_bounds_keys_before_library_diagnostics():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    first_bounded_keyset = function_sql.index(" limit ")
+
+    assert first_bounded_keyset < function_sql.index(
+        "selected_album_state as materialized"
+    )
+    assert first_bounded_keyset < function_sql.index(
+        "join library.local_track_files candidate_file"
+    )
+
+
+def test_0128_source_selection_persists_a_bounded_raw_album_scan_cursor():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    state_sql = sql.split(
+        "create table if not exists ops.problematic_projection_state", 1
+    )[1].split(");", 1)[0]
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    first_album_scan = function_sql.index("from library.local_albums album")
+    first_file_classification = function_sql.index(
+        "join library.local_track_files", first_album_scan
+    )
+    first_album_limit = function_sql.index(" limit ", first_album_scan)
+
+    assert first_album_limit < first_file_classification
+    scan_kind = re.search(r"\b((?:scan|skip)[a-z_]*kind)\s+text\b", state_sql)
+    scan_identity = re.search(
+        r"\b((?:scan|skip)[a-z_]*identity)\s+text\b", state_sql
+    )
+    assert scan_kind is not None
+    assert scan_identity is not None
+    assert f"state.{scan_kind.group(1)}" in function_sql
+    assert f"state.{scan_identity.group(1)}" in function_sql
+
+
+def test_0128_source_selection_bounds_children_before_duplicate_expansion():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+
+    child_page_limit = function_sql.index(
+        "limit least(p_limit, p_child_limit, 100)"
+    )
+    duplicate_expansion = function_sql.index(
+        "join library.local_track_files candidate_file"
+    )
+
+    assert child_page_limit < duplicate_expansion
+
+
+def test_0128_source_phases_probe_more_work_without_materializing_cap_plus_one():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    capped_phase_limits = re.findall(
+        r"limit least\(p_limit, p_child_limit, 100\)\s*\+\s*1",
+        function_sql,
+    )
+    completion_sql = function_sql.split("select source.group_kind", 1)[1]
+
+    assert not capped_phase_limits
+    assert completion_sql.count("exists (") >= 3
+    assert "from ops.problematic_projection_group_facts" in completion_sql
+    assert "from library.local_track_files" in completion_sql
+    assert "join library.local_tracks" in completion_sql
+
+
+def test_0128_source_rows_page_featured_artists_and_ignored_repairs_as_facts():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    source_rows_sql = function_sql.split("source_rows as materialized", 1)[1]
+
+    assert "array_agg(" not in source_rows_sql
+    assert "'featured_artist'" in function_sql
+    assert "'ignored_repair'" in function_sql
+
+
+def test_0128_companion_completion_checks_unconsumed_lookup_facts():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    completion_sql = function_sql.rsplit(
+        "union all select active.group_kind",
+        1,
+    )[1]
+
+    assert completion_sql.count(
+        "from ops.problematic_projection_group_facts"
+    ) >= 2
+    assert completion_sql.count("fact_kind = 'duplicate_lookup'") >= 2
+
+
+def test_0128_companion_discovery_crosses_roots_and_validates_container():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    companion_sql = function_sql.split(
+        "companion_candidates as materialized",
+        1,
+    )[1].split("source_keys as materialized", 1)[0]
+
+    assert "candidate_root.library_id = p_library_id" in companion_sql
+    assert (
+        "candidate_root.id = (lookup.fact_value ->> 'library_root_id')::bigint"
+        not in companion_sql
+    )
+    assert "problematic_physical_album_container" in companion_sql
+    assert "not exists" in companion_sql
+
+
+def test_0128_source_group_and_child_selection_are_bounded_before_aggregation():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    bounded_group_sql = function_sql.split(
+        "bounded_groups as materialized",
+        1,
+    )[1].split("active_group as materialized", 1)[0]
+
+    assert "exists (" not in bounded_group_sql
+    assert "join library.local_track_files" not in bounded_group_sql
+    assert "album_status as materialized" not in function_sql
+
+
+def test_0128_physical_container_uses_the_python_ascii_disc_boundary():
+    from music_app.services import library
+
+    function_sql = _problematic_projection_function_sql(
+        "library.problematic_physical_album_container"
+    )
+
+    assert "[a-za-z0-9]" in library._DISC_FOLDER_RE.pattern.casefold()
+    assert "[a-za-z0-9]" in function_sql
+    assert "[:alnum:]" not in function_sql
+
+
+def test_0128_disc_folder_digits_are_ascii_in_python_and_sql():
+    from music_app.services import library
+
+    function_sql = _problematic_projection_function_sql(
+        "library.problematic_physical_album_container"
+    )
+    unicode_disc_path = r"C:\Music\Album\Disc ١\song.flac"
+
+    assert library._DISC_FOLDER_RE.search("Disc 1") is not None
+    assert library._DISC_FOLDER_RE.search("Disc ١") is None
+    assert library._entry_album_container({"path": unicode_disc_path}).endswith(
+        "disc ١"
+    )
+    assert "[0-9]{1,2}" in function_sql
+    assert "\\d" not in function_sql
+    assert "[:digit:]" not in function_sql
+
+
+def test_0128_cover_quota_update_requires_a_projection_relevant_change():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    trigger_sql = sql.split(
+        "create trigger invalidate_problematic_projection_quota_update", 1
+    )[1].split("execute function ops.invalidate_problematic_projection()", 1)[0]
+    qualifier_end = trigger_sql.index(
+        "and new.metadata ->> 'category' = 'rate_limit_quota'"
+    ) + len("and new.metadata ->> 'category' = 'rate_limit_quota'")
+
+    assert trigger_sql[qualifier_end:].lstrip().startswith(") ) and row(")
+
+
+def test_0128_fact_checkpoint_returns_the_persisted_source_completion_state():
+    function_sql = _problematic_projection_function_sql(
+        "ops.checkpoint_claimed_problematic_projection_group_facts"
+    )
+
+    assert "source_complete boolean" in function_sql.split("language plpgsql", 1)[0]
+    assert "accumulator.source_complete" in function_sql
+
+
+def test_0128_terminal_failure_atomically_queues_one_replacement_epoch():
+    function_sql = _problematic_projection_function_sql(
+        "ops.fail_claimed_problematic_projection"
+    )
+
+    assert function_sql.count("p_reason_code") >= 2
+    assert "insert into ops.jobs" in function_sql
+    assert "rebuild_epoch = projection_state.rebuild_epoch + 1" in function_sql
+
+
+def test_0128_abandoned_reclaim_uses_database_clock_for_lease_expiry():
+    function_sql = _problematic_projection_function_sql(
+        "ops.reclaim_one_abandoned_problematic_projection"
+    )
+
+    assert "database_now timestamptz := pg_catalog.clock_timestamp()" in function_sql
+    assert function_sql.count("lease_expires_at < database_now") == 2
+    assert "lease_expires_at < p_observed_at" not in function_sql
+
+
+def test_0128_terminal_replacement_keeps_the_closed_authorization_parameters():
+    function_sql = _problematic_projection_function_sql(
+        "ops.fail_claimed_problematic_projection"
+    )
+    job_parameters = function_sql.split(
+        "pg_catalog.jsonb_build_object(", 1
+    )[1].split("), p_library_id", 1)[0]
+
+    assert "'projection_kind'" in job_parameters
+    assert "'source_generation'" in job_parameters
+    assert "'rebuild_epoch'" in job_parameters
+    assert "'recovery_reason'" not in job_parameters
+
+
+def test_0128_new_retry_attempt_rebinds_resumable_staging_to_the_new_attempt():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    prepare_start = sql.index(
+        "create or replace function ops.prepare_claimed_problematic_projection"
+    )
+    prepare_end = sql.index(
+        "create or replace function ops.validate_claimed_problematic_projection",
+        prepare_start,
+    )
+    prepare_sql = sql[prepare_start:prepare_end]
+
+    assert "selected_state.requested_attempt is distinct from p_attempt" in prepare_sql
+    assert "update ops.problematic_projection_source_staging as source_staging" in prepare_sql
+    assert "update ops.problematic_projection_item_staging as item_staging" in prepare_sql
+    assert (
+        "update ops.problematic_projection_group_accumulators as accumulator"
+        in prepare_sql
+    )
+    assert "set attempt = p_attempt" in prepare_sql
+    assert "attempt = selected_state.requested_attempt" in prepare_sql
+    assert "revision = selected_state.build_revision" in prepare_sql
+    assert "build_revision = pg_catalog.gen_random_uuid()" in prepare_sql
+    assert "group_kind = null" in prepare_sql
+    assert "group_identity = null" in prepare_sql
+    assert "source_kind = null" in prepare_sql
+    assert "source_identity = null" in prepare_sql
+    assert "child_kind = null" in prepare_sql
+    assert "child_identity = null" in prepare_sql
+
+
+def test_0128_scopes_rule_arrays_to_each_source_album_and_file():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    source_start = sql.index(
+        "create or replace function ops.load_claimed_problematic_projection_source"
+    )
+    source_end = sql.index(
+        "create or replace function ops.stage_claimed_problematic_projection_source",
+        source_start,
+    )
+    source_sql = sql[source_start:source_end]
+
+    assert "global_inputs as" not in source_sql
+    assert "cross join global_inputs" not in source_sql
+    assert "separate_release.library_id = album.library_id" in source_sql
+    assert "separate_release.release_key = album.album_key" in source_sql
+    assert "ignored_repair.library_id = p_library_id" in source_sql
+    assert (
+        "split_part(ignored_repair.repair_key, '::', 1) = "
+        "row_projection.fact_value ->> 'file_private_path'"
+    ) in source_sql
+    assert (
+        "ignored_repair.metadata ->> 'album_key' = "
+        "row_projection.fact_value ->> 'album_key'"
+    ) in source_sql
+
+
+def test_0128_source_rows_project_compact_metadata_and_page_ignores_as_facts():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    source_start = sql.index(
+        "create or replace function ops.load_claimed_problematic_projection_source"
+    )
+    source_end = sql.index(
+        "create or replace function ops.stage_claimed_problematic_projection_source",
+        source_start,
+    )
+    source_sql = sql[source_start:source_end]
+    hydrated_rows = source_sql.split("source_rows as materialized (", 1)[1]
+    album_rows = hydrated_rows.split("union all select source_keys.group_kind", 1)[0]
+
+    assert "select album.*" not in source_sql
+    assert "select album.id, album.library_id" in source_sql
+    assert "'album_metadata', album.metadata" not in album_rows
+    assert "'file_entry', file.metadata #> '{scan_cache,file_entry}'" not in album_rows
+    for field in (
+        "'album_artist'",
+        "'album_edition'",
+        "'album_rating'",
+        "'file_entry_is_object'",
+        "'file_track_number'",
+        "'file_year'",
+        "'file_genre'",
+        "'file_disc_number'",
+    ):
+        assert field in album_rows
+    assert "'ignored_repair_keys'" not in hydrated_rows
+    assert "jsonb_agg(ignored_repair.repair_key" not in hydrated_rows
+    assert "ignored_repair_candidates as materialized" in source_sql
+    assert "from ignored_repair_candidates ignored" in source_sql
+    ignored_candidates = source_sql.split(
+        "ignored_repair_candidates as materialized (", 1
+    )[1].split("), duplicate_lookups as materialized", 1)[0]
+    ignored_rows = source_sql.split(
+        "from ignored_repair_candidates ignored", 1
+    )[0].rsplit("select ignored.group_kind", 1)[1]
+    assert "ignored_repair.repair_key as child_identity" not in ignored_candidates
+    assert "ignored_repair.repair_key as fact_value" not in ignored_candidates
+    assert "lpad(ignored_repair.id::text, 20, '0')" in ignored_candidates
+    assert "ignored_repair_hash" in ignored_candidates
+    assert "'ignored_repair_hash', ignored.fact_value" in ignored_rows
+
+
+def test_0128_persisted_sort_and_item_key_bounds_match_staging_validation():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    for contract in (
+        "octet_length(item_key) <= 256",
+        "octet_length(sort_title) <= 512",
+        "octet_length(sort_artist) <= 512",
+        "octet_length(sort_year) <= 64",
+        "octet_length(sort_album_key) <= 512",
+    ):
+        assert sql.count(contract) >= 2
+    stage_function = _problematic_projection_function_sql(
+        "ops.stage_claimed_problematic_projection_items"
+    )
+    assert "octet_length(item ->> 'item_key') > 256" in stage_function
+    assert "octet_length(coalesce(item ->> 'sort_title', '')) > 512" in stage_function
+    assert "invalid projection item sort contract" in stage_function
+
+
+def test_0128_stages_only_bounded_normalized_search_chunk_facts():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    function_sql = sql.split(
+        "create or replace function ops.stage_claimed_problematic_projection_items",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    assert "octet_length(normalized_text) <= 32768" in sql
+    assert "problematic_projection_search_facts using gin" in sql
+    assert "(normalized_text library.gin_trgm_ops)" in sql
+
+    assert "problematic_projection_search_fact_staging" not in function_sql
+    search_stage = sql.split(
+        "create or replace function "
+        "ops.stage_claimed_problematic_projection_search_facts(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "security definer" in search_stage
+    assert "set search_path = pg_catalog" in search_stage
+    assert "ops.validate_claimed_problematic_projection(" in search_stage
+    for search_fact_kind in (
+        "track_title_search",
+        "private_path_search",
+        "album_title_search",
+        "album_artist_search",
+        "album_key_search",
+    ):
+        assert f"'{search_fact_kind}'" in search_stage
+    assert "fact.fact_kind in ('track_title', 'private_path')" not in search_stage
+    assert "fact.fact_value ->> 'normalized_text'" in search_stage
+    assert "least(greatest(p_limit, 1), 100)" in search_stage
+    assert "order by fact.projection_id, fact.fact_kind, " in search_stage
+    assert "fact.semantic_child_identity" in search_stage
+    assert "problematic_projection_item_staging" in search_stage
+    assert "problematic_projection_search_fact_staging" in search_stage
+    assert "on conflict" in search_stage
+    assert "return query select" in search_stage
+    assert "complete" in search_stage
+
+    complete_group = sql.split(
+        "create or replace function "
+        "ops.complete_claimed_problematic_projection_group(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "track_title_search" in complete_group
+    assert "private_path_search" in complete_group
+    assert "album_title_search" in complete_group
+    assert "album_artist_search" in complete_group
+    assert "album_key_search" in complete_group
+    assert "projection search facts are not fully staged" in complete_group
+
+    headers = sql.split(
+        "create table if not exists ops.problematic_projection_headers (", 1
+    )[1].split(");", 1)[0]
+    assert "search_fact_count bigint not null" in headers
+    assert "search_fingerprint bit(256) not null" in headers
+
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection(", 1
+    )[1].split("create or replace function", 1)[0]
+    assert "projected_search_fact_count" in publish
+    assert "projected_search_fingerprint" in publish
+    for value in (
+        "item_key",
+        "fact_kind",
+        "semantic_child_identity",
+        "normalized_text",
+    ):
+        assert f"convert_to({value}, 'utf8')" in publish
+    assert "search_fact_count, search_fingerprint" in publish
+
+    integrity_page = sql.split(
+        "create or replace function ops.load_problematic_projection_integrity_page(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "'reason'::text as fact_type" in integrity_page
+    assert "'search'::text as fact_type" in integrity_page
+    assert "union all" in integrity_page
+    assert "problematic_projection_search_facts" in integrity_page
+    assert "limit least(greatest(p_limit, 1), 100)" in integrity_page
+
+    complete_audit = sql.split(
+        "create or replace function "
+        "ops.complete_problematic_projection_integrity_audit(",
+        1,
+    )[1].split("revoke all on table", 1)[0]
+    assert "expected_search_fact_count" in complete_audit
+    assert "expected_search_fingerprint" in complete_audit
+    assert "p_search_fact_count" in complete_audit
+    assert "p_search_fingerprint" in complete_audit
+
+    signature = (
+        "ops.stage_claimed_problematic_projection_search_facts("
+        "bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,"
+        "text,text,text,integer,timestamptz)"
+    )
+    assert f"revoke all on function {signature} from public" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" in sql
+
+
+def test_0128_ownership_moves_invalidate_only_the_resolved_canonical_library():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    function_start = sql.index(
+        "create or replace function ops.invalidate_problematic_projection_ownership_move"
+    )
+    function_end = sql.index("drop trigger", function_start)
+    function_sql = sql[function_start:function_end]
+
+    assert "ops.resolve_problematic_projection_library()" in function_sql
+    assert "canonical_library_id" in function_sql
+    assert function_sql.count(
+        "perform ops.invalidate_problematic_projection_library(canonical_library_id)"
+    ) == 1
+    assert "old_row.library_id is not distinct from canonical_library_id" in function_sql
+    assert "new_row.library_id is not distinct from canonical_library_id" in function_sql
+    assert "invalidate_problematic_projection_library(old.library_id)" not in function_sql
+    assert "invalidate_problematic_projection_library(new.library_id)" not in function_sql
+
+
+def test_0128_ownership_moves_are_deduplicated_per_update_statement():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    function_start = sql.index(
+        "create or replace function ops.invalidate_problematic_projection_ownership_move"
+    )
+    function_end = sql.index("drop trigger", function_start)
+    function_sql = sql[function_start:function_end]
+
+    assert "from old_rows as old_row" in function_sql
+    assert "join new_rows as new_row using (id)" in function_sql
+    assert function_sql.count(
+        "perform ops.invalidate_problematic_projection_library(canonical_library_id)"
+    ) == 1
+    for table in (
+        "library.library_roots",
+        "library.local_albums",
+        "library.local_artists",
+        "library.local_tracks",
+        "library.separate_releases",
+        "library.exception_overrides",
+        "library.ignored_repairs",
+    ):
+        trigger = re.search(
+            rf"create trigger invalidate_problematic_projection_ownership_update "
+            rf"after update on {re.escape(table)} "
+            rf"referencing old table as old_rows new table as new_rows "
+            rf"for each statement execute function "
+            rf"ops\.invalidate_problematic_projection_ownership_move\(\);",
+            sql,
+        )
+        assert trigger is not None
+
+
+def test_0128_compact_metadata_invalidation_compares_only_projector_fields():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    invalidation = _problematic_projection_function_sql(
+        "ops.invalidate_problematic_projection_metadata_update"
+    )
+
+    assert "from old_rows as old_row" in invalidation
+    assert "join new_rows as new_row using (id)" in invalidation
+    assert "old_row.library_id is not distinct from $1" in invalidation
+    assert "old_row.metadata is distinct from new_row.metadata" not in invalidation
+    assert "old_row.scan_cache_stale" in invalidation
+    for unrelated_key in ("comment", "lyrics", "custom_tag"):
+        assert unrelated_key not in invalidation
+    for consumed_path in (
+        "album_artist",
+        "edition",
+        "album_rating",
+        "{scan_cache,file_entry,title}",
+        "{scan_cache,file_entry,track_number}",
+        "{scan_cache,file_entry,exception_type}",
+        "{scan_cache,stale_marked_at}",
+    ):
+        assert consumed_path in invalidation
+    assert invalidation.count(
+        "perform ops.invalidate_problematic_projection_library(canonical_library_id)"
+    ) == 1
+    assert "old_row.override_payload ->> 'exception_type'" in invalidation
+    assert sql.count("ops.invalidate_problematic_projection_metadata_update('") == 3
+    assert "after update of artist_id, album_key, title, release_year, cover_path " in sql
+    assert "after update of track_id, private_path, file_size_bytes, library_root_id " in sql
+    assert "after update of track_id, track_key on library.exception_overrides" in sql
+    assert "after update of repair_key on library.ignored_repairs" in sql
+
+
+def test_0128_invalidation_ignores_only_missing_canonical_bootstrap_state():
+    generic = _problematic_projection_function_sql(
+        "ops.invalidate_problematic_projection"
+    )
+    assert "when sqlstate '55000'" in generic
+    assert "tg_op = 'insert'" in generic
+    assert "('app', 'bootstrap_owners')" in generic
+    assert "('library', 'libraries')" in generic
+    assert "and not exists (" in generic
+    assert "owner.owner_key = 'local-bootstrap-owner'" in generic
+    assert "local_library.library_kind = 'local'" in generic
+    assert "raise;" in generic
+    for function_name in (
+        "ops.invalidate_problematic_projection_metadata_update",
+        "ops.invalidate_problematic_projection_ownership_move",
+    ):
+        body = _problematic_projection_function_sql(function_name)
+        assert "when sqlstate '55000'" not in body
+
+
+def test_0128_integrity_keyset_has_matching_c_collated_composite_indexes():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    assert (
+        'create index if not exists problematic_projection_reason_facts_integrity_idx '
+        'on ops.problematic_projection_reason_facts '
+        '(library_id, revision, item_key collate "c", normalized_reason collate "c", '
+        'display_reason collate "c", category_reason collate "c")'
+    ) in sql
+    assert (
+        'create index if not exists problematic_projection_search_facts_integrity_idx '
+        'on ops.problematic_projection_search_facts '
+        '(library_id, revision, item_key collate "c", fact_kind collate "c", '
+        'semantic_child_identity collate "c")'
+    ) in sql
+
+
+def test_0128_closes_projection_functions_to_exact_roles():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    ).replace(", ", ",")
+    app_functions = (
+        "ops.resolve_problematic_projection_library()",
+        "ops.enqueue_problematic_projection_rebuild(bigint,text)",
+    )
+    worker_functions = (
+        "ops.prepare_claimed_problematic_projection(bigint,integer,text,text,timestamptz)",
+        "ops.validate_claimed_problematic_projection(bigint,integer,text,text,bigint,bigint,bigint,uuid,timestamptz)",
+        "ops.load_claimed_problematic_projection_source(bigint,integer,text,text,bigint,bigint,bigint,uuid,integer,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_source(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,text,jsonb,boolean,timestamptz)",
+        "ops.load_claimed_problematic_projection_staged_group(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,bigint,integer,timestamptz)",
+        "ops.load_claimed_problematic_projection_group_accumulator(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,timestamptz)",
+        "ops.advance_claimed_problematic_projection_group_accumulator(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,bigint,bigint,integer,bigint,timestamptz)",
+        "ops.checkpoint_claimed_problematic_projection_group_facts(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,bigint,jsonb,integer,bigint,timestamptz)",
+        "ops.load_claimed_problematic_projection_group_facts(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_items(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,jsonb,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_search_facts(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_reason_facts(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,jsonb,timestamptz)",
+        "ops.complete_claimed_problematic_projection_group(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,text,timestamptz)",
+        "ops.publish_claimed_problematic_projection(bigint,integer,text,text,bigint,bigint,bigint,uuid,timestamptz)",
+        "ops.fail_claimed_problematic_projection(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,timestamptz)",
+        "ops.cleanup_claimed_problematic_projection(bigint,integer,text,text,bigint,bigint,bigint,uuid,timestamptz)",
+        "ops.reclaim_one_abandoned_problematic_projection(timestamptz)",
+    )
+    for signature in (*app_functions, *worker_functions):
+        assert f"revoke all on function {signature} from public" in sql
+        assert f"revoke all on function {signature} from album_haven_readonly" in sql
+    for signature in app_functions:
+        assert f"grant execute on function {signature} to album_haven_app" in sql
+    for signature in worker_functions:
+        assert f"grant execute on function {signature} to album_haven_worker" in sql
+        assert f"grant execute on function {signature} to album_haven_app" not in sql
+
+
+def test_0128_extends_worker_startup_preflight_for_projection_handler():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "rename to validate_durable_worker_startup_baseline_0125" in sql
+    assert "create or replace function ops.validate_durable_worker_startup(" in sql
+    assert "'problematic_files_projection'" in sql
+    assert re.search(
+        r"ops\.validate_durable_worker_startup_baseline_0125\(\s*"
+        r"array_remove\(p_registered_kinds, 'problematic_files_projection'\)",
+        sql,
+    )
+    assert "ops.problematic_projection_claim_valid" in sql
+    assert "ops.load_due_problematic_projection_integrity_audit" in sql
+    assert "pg_catalog.to_regprocedure(required.signature)" in sql
+    assert "pg_catalog.has_function_privilege(" in sql
+    assert "grant execute on function ops.validate_durable_worker_startup(text[])" in sql
+
+
+def test_0128_worker_startup_accepts_exact_legacy_or_projection_kind_sets():
+    function_sql = _problematic_projection_function_sql(
+        "ops.validate_durable_worker_startup"
+    )
+
+    assert "baseline_kinds constant text[]" in function_sql
+    assert (
+        "p_registered_kinds is not distinct from baseline_kinds"
+        in function_sql
+    )
+    assert (
+        "ops.validate_durable_worker_startup_baseline_0125(p_registered_kinds)"
+        in function_sql
+    )
+    new_set_branch = function_sql.split(
+        "p_registered_kinds is not distinct from expected_kinds",
+        1,
+    )[1]
+    assert "pg_catalog.to_regprocedure(required.signature)" in new_set_branch
+
+
+def test_0128_extends_durable_job_kind_without_weakening_existing_policies():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    assert "'problematic_files_projection'" in sql
+    assert "kind = 'problematic_files_projection' and max_attempts = 3" in sql
+    assert "recovery_policy = 'retry_safe'" in sql
+    for existing in (
+        "full_scan", "targeted_reconciliation", "post_scan_cover_refresh",
+        "cover_lookup", "cover_bulk_refresh", "cover_remote_save",
+        "lastfm_scrobble_retry", "auth_welcome_delivery",
+        "auth_invitation_delivery", "auth_password_reset_delivery",
+    ):
+        assert f"'{existing}'" in sql
+
+
+def test_0128_enqueue_matches_the_closed_projection_authorization_contract():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    enqueue_start = sql.index(
+        "create or replace function ops.enqueue_problematic_projection_rebuild"
+    )
+    enqueue_end = sql.index(
+        "create or replace function ops.invalidate_problematic_projection",
+        enqueue_start,
+    )
+    enqueue_sql = sql[enqueue_start:enqueue_end]
+
+    assert "'problematic_files_projection', 'problematic_files_projection'" in enqueue_sql
+    assert "'library:' || p_library_id::text" in enqueue_sql
+    assert "'projection_kind', 'problematic_files'" in enqueue_sql
+    assert "'source_generation', state_row.source_generation" in enqueue_sql
+    assert "'rebuild_epoch', state_row.rebuild_epoch" in enqueue_sql
+    assert "'library_id', p_library_id" not in enqueue_sql
+    assert "'requested_by', p_requested_by" not in enqueue_sql
+    assert "'self_hosted', 'private_web'" in enqueue_sql
+    assert "'server_worker'" not in enqueue_sql
+    assert (
+        "'problematic-files-projection:' || p_library_id::text || ':' || "
+        "state_row.source_generation::text || ':' || state_row.rebuild_epoch::text"
+    ) in enqueue_sql
+
+
+def test_0128_capability_verifier_is_migrator_only_and_uses_worker_registry():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    signature = "ops.problematic_projection_worker_ready(text)"
+    assert "from ops.worker_instances" in sql
+    assert "compatible_schema_version = 1" in sql
+    assert "registered_handler_fingerprint = p_expected_fingerprint" in sql
+    assert "lifecycle_state = 'running'" in sql
+    assert "drain_state = 'none'" in sql
+    assert "last_heartbeat_at >= pg_catalog.clock_timestamp() - interval '90 seconds'" in sql
+    for role in ("public", "album_haven_app", "album_haven_readonly", "album_haven_worker"):
+        assert f"revoke all on function {signature} from {role}" in sql
+    assert f"grant execute on function {signature} to album_haven_migrator" in sql
 
 
 def test_0127_restores_only_explicit_authoritative_exception_clears():
@@ -2376,7 +3544,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-88:] == [
+    assert migration_names[-89:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -2465,6 +3633,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0125_preserve_cover_selection_metadata.sql",
         "0126_acknowledge_mixed_version_library_warnings.sql",
         "0127_restore_authoritative_exception_clear.sql",
+        "0128_create_problematic_files_projection.sql",
     ]
 
 
@@ -6708,3 +7877,523 @@ def test_missing_album_candidate_index_matches_generated_stale_predicate():
     assert "on library.local_track_files (track_id) where scan_cache_stale is true" in sql
     assert "update " not in sql and "delete " not in sql
     assert "grant " not in sql
+
+
+def test_problematic_projection_extracts_active_loose_membership_sources():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    assert "'loose_source'::text as group_kind" in sql
+    assert "local_album_membership_problem" in sql
+    assert "album_id is null" in sql
+    assert "scan_cache_stale is false" in sql
+
+
+def test_problematic_projection_stages_duplicate_companion_topology():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    companion_sql = sql.split(
+        "companion_candidates as materialized (", 1
+    )[1].split("), source_keys as materialized", 1)[0]
+
+    assert "'duplicate_companion'::text as child_kind" in companion_sql
+    assert (
+        "lookup.semantic_child_identity || ':' || "
+        "lpad(candidate_file.id::text, 20, '0') as child_identity"
+    ) in companion_sql
+    assert re.search(
+        r"\(\s*lookup\.semantic_child_identity\s*,\s*candidate_file\.id\s*\)\s*>\s*"
+        r"\(\s*split_part\(state\.child_identity, ':', 1\)\s*,\s*"
+        r"split_part\(state\.child_identity, ':', 2\)::bigint\s*\)",
+        companion_sql,
+    )
+    assert "order by lookup.semantic_child_identity, candidate_file.id" in companion_sql
+    assert "candidate_root.library_id = p_library_id" in companion_sql
+    assert "candidate_file.library_root_id = candidate_root.id" in companion_sql
+    assert "candidate_track.id = candidate_file.track_id" in companion_sql
+    assert "candidate_track.library_id = p_library_id" in companion_sql
+    assert "companion_album.id = candidate_track.album_id" in companion_sql
+    assert "companion_album.id <> active_group.group_identity" in companion_sql
+    assert (
+        "problematic_physical_album_container(candidate_file.private_path) "
+        "<> lookup.fact_value ->> 'physical_album_container'"
+    ) in companion_sql
+    assert "where not exists (" in companion_sql
+    assert (
+        "container_member.library_root_id = candidate_file.library_root_id"
+    ) in companion_sql
+    for field in (
+        "companion_file_id",
+        "companion_private_path",
+        "companion_library_root_id",
+        "companion_root_category",
+    ):
+        assert f"'{field}'" in sql
+
+
+def test_problematic_projection_normalizes_replay_safe_child_facts():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    facts = sql.split(
+        "create table if not exists ops.problematic_projection_group_facts", 1
+    )[1].split("create index", 1)[0]
+    assert "projection_id text not null" in facts
+    assert "semantic_child_identity text not null" in facts
+    assert "references ops.problematic_projection_group_accumulators" in facts
+    assert "on update cascade" in facts
+    assert "on delete cascade" in facts
+    assert "unique (" in facts
+    assert "projection_id, fact_kind, semantic_child_identity" in facts
+
+    checkpoint = sql.split(
+        "create or replace function "
+        "ops.checkpoint_claimed_problematic_projection_group_facts", 1
+    )[1].split("create or replace function", 1)[0]
+    assert "entry ->> 'projection_id'" in checkpoint
+    assert "entry ->> 'semantic_child_identity'" in checkpoint
+    assert "on conflict (" in checkpoint
+    assert "projection_id, fact_kind, semantic_child_identity" in checkpoint
+
+
+def test_problematic_projection_fact_read_uses_semantic_keyset_and_hard_batch_cap():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    loader = sql.split(
+        "create or replace function "
+        "ops.load_claimed_problematic_projection_group_facts", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "fact.projection_id" in loader
+    assert "fact.fact_kind" in loader
+    assert "fact.semantic_child_identity" in loader
+    assert "order by fact.projection_id, fact.fact_kind, fact.semantic_child_identity" in loader
+    assert "limit least(greatest(p_limit, 1), 100)" in loader
+
+
+def test_problematic_projection_source_drain_and_worker_grants_are_bounded():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    source = sql.split(
+        "create or replace function ops.load_claimed_problematic_projection_source",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    assert "active_group as materialized" in source
+    assert "join active_group" in source
+    assert "limit least(p_limit, p_child_limit, 100)" in source
+    assert "grant execute on function ops.load_claimed_problematic_projection_source" in sql
+    assert "to album_haven_worker" in sql
+    assert "grant select on table ops.problematic_projection_group_facts" not in sql
+
+
+def test_problematic_projection_publish_replays_committed_revision_after_lost_reply():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "locked_state.committed_revision = p_revision" in publish
+    assert "locked_state.source_generation = p_source_generation" in publish
+    assert "locked_state.rebuild_epoch = p_rebuild_epoch" in publish
+    assert "return query select true" in publish
+
+
+def test_problematic_projection_publish_certifies_every_durable_build_stage_is_drained():
+    publish = _problematic_projection_function_sql(
+        "ops.publish_claimed_problematic_projection"
+    ).split("insert into ops.problematic_projection_headers", 1)[0]
+
+    for relation in (
+        "ops.problematic_projection_source_staging",
+        "ops.problematic_projection_group_accumulators",
+        "ops.problematic_projection_group_facts",
+    ):
+        assert relation in publish
+        assert re.search(
+            rf"not exists \( select 1 from {re.escape(relation)}",
+            publish,
+        )
+    assert "locked_state.group_kind is null" in publish
+    assert "ops.load_claimed_problematic_projection_source(" in publish
+    assert "page_complete" in publish
+
+
+def test_problematic_projection_ownership_moves_do_not_use_noncanonical_libraries():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    for table in (
+        "library.library_roots",
+        "library.local_albums",
+        "library.local_artists",
+        "library.local_tracks",
+        "library.separate_releases",
+        "library.exception_overrides",
+        "library.ignored_repairs",
+    ):
+        match = re.search(
+            rf"create trigger invalidate_problematic_projection_update "
+            rf".*? on {re.escape(table)} .*?;",
+            sql,
+        )
+        assert match is not None
+        trigger = match.group(0)
+        assert "update of" in trigger
+        assert "library_id" not in trigger
+    ownership = _problematic_projection_function_sql(
+        "ops.invalidate_problematic_projection_ownership_move"
+    )
+    assert "ops.resolve_problematic_projection_library()" in ownership
+    assert "canonical_library_id" in ownership
+    assert "old_row.library_id is not distinct from canonical_library_id" in ownership
+    assert "new_row.library_id is not distinct from canonical_library_id" in ownership
+    assert "invalidate_problematic_projection_library(old.library_id)" not in ownership
+    assert "invalidate_problematic_projection_library(new.library_id)" not in ownership
+    assert "old_row.library_id is distinct from new_row.library_id" in ownership
+
+
+def test_problematic_projection_duplicate_root_conflict_never_demotes_primary():
+    checkpoint = _problematic_projection_function_sql(
+        "ops.checkpoint_claimed_problematic_projection_group_facts"
+    )
+    conflict = checkpoint.split("on conflict", 1)[1]
+
+    assert "excluded.fact_value ->> 'primary'" in conflict
+    assert "problematic_projection_group_facts.fact_value ->> 'primary'" in conflict
+    assert re.search(r"primary[^\n]+ or [^\n]+primary", conflict)
+
+
+def test_problematic_projection_reclaim_uses_one_database_timestamp():
+    reclaim = _problematic_projection_function_sql(
+        "ops.reclaim_one_abandoned_problematic_projection"
+    )
+
+    assert "database_now timestamptz := pg_catalog.clock_timestamp()" in reclaim
+    assert "job.lease_expires_at < database_now" in reclaim
+    assert "scheduled_at = database_now" in reclaim
+    assert "updated_at = database_now" in reclaim
+    assert "p_observed_at" not in reclaim
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "load_claimed_problematic_projection_group_accumulator",
+        "advance_claimed_problematic_projection_group_accumulator",
+        "checkpoint_claimed_problematic_projection_group_facts",
+        "load_claimed_problematic_projection_group_facts",
+        "stage_claimed_problematic_projection_items",
+        "stage_claimed_problematic_projection_reason_facts",
+        "complete_claimed_problematic_projection_group",
+        "publish_claimed_problematic_projection",
+    ),
+)
+def test_problematic_projection_preflight_closes_each_live_handler_dependency(
+    function_name,
+):
+    startup = _problematic_projection_function_sql(
+        "ops.validate_durable_worker_startup"
+    )
+
+    assert f"'ops.{function_name}(" in startup
+    assert "pg_catalog.to_regprocedure(required.signature) is null" in startup
+    assert (
+        "not pg_catalog.has_function_privilege( session_user, "
+        "required.signature, 'execute' )"
+    ) in startup
+
+
+def test_problematic_projection_retry_rebinds_same_build_without_restart():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    prepare = sql.split(
+        "create or replace function ops.prepare_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "update ops.problematic_projection_source_staging" in prepare
+    assert "update ops.problematic_projection_item_staging" in prepare
+    assert "update ops.problematic_projection_group_accumulators" in prepare
+    assert "set attempt = p_attempt" in prepare
+    assert "requested_attempt = p_attempt" in prepare
+    assert "delete from ops.problematic_projection_" not in prepare
+
+
+def test_problematic_projection_fact_payload_has_per_row_octet_ceiling():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    facts = sql.split(
+        "create table if not exists ops.problematic_projection_group_facts", 1
+    )[1].split("create index", 1)[0]
+
+    assert "octet_length(fact_value::text) <= 65536" in facts
+
+
+def test_problematic_projection_source_and_fact_reads_fence_exact_build_scope():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    for function_name in (
+        "load_claimed_problematic_projection_source",
+        "load_claimed_problematic_projection_group_facts",
+    ):
+        function_sql = sql.split(
+            f"create or replace function ops.{function_name}", 1
+        )[1].split("create or replace function", 1)[0]
+        assert "ops.validate_claimed_problematic_projection" in function_sql
+        for parameter in (
+            "p_library_id",
+            "p_source_generation",
+            "p_rebuild_epoch",
+            "p_revision",
+        ):
+            assert parameter in function_sql
+
+
+def test_problematic_projection_retry_rebind_cascades_child_fact_attempts():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    facts = sql.split(
+        "create table if not exists ops.problematic_projection_group_facts", 1
+    )[1].split("create index", 1)[0]
+    prepare = sql.split(
+        "create or replace function ops.prepare_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "references ops.problematic_projection_group_accumulators" in facts
+    assert "on update cascade" in facts
+    assert "update ops.problematic_projection_group_accumulators" in prepare
+    assert "set attempt = p_attempt" in prepare
+    assert "update ops.problematic_projection_group_facts" not in prepare
+
+
+def test_problematic_projection_prepare_recovers_committed_build_for_lost_ack_retry():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    state = sql.split(
+        "create table if not exists ops.problematic_projection_state", 1
+    )[1].split(");", 1)[0]
+    prepare = sql.split(
+        "create or replace function ops.prepare_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "committed_job_id bigint" in state
+    assert "selected_state.committed_job_id = p_job_id" in prepare
+    assert "selected_state.committed_revision is not null" in prepare
+    assert "selected_state.live_job_id is null" in prepare
+    assert "selected_state.committed_revision" in prepare
+
+
+def test_problematic_projection_publish_replay_fences_committed_owner_and_build():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+    replay = publish.split("return query select true", 1)[0]
+
+    assert "locked_state.committed_job_id = p_job_id" in replay
+    assert "locked_state.library_id = p_library_id" in replay
+    assert "locked_state.committed_revision = p_revision" in replay
+    assert "locked_state.source_generation = p_source_generation" in replay
+    assert "locked_state.rebuild_epoch = p_rebuild_epoch" in replay
+    assert "ops.problematic_projection_claim_valid" in replay
+
+
+def test_problematic_projection_reason_filter_uses_canonical_category_relation():
+    from music_app.services.problematic_projection_postgres import _read_page_sql
+
+    migration_sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    reader_sql = _normalized_sql(_read_page_sql())
+
+    assert "ops.problematic_projection_reason_facts" in migration_sql
+    assert "normalized_reason text not null" in migration_sql
+    assert "category_reason text not null" in migration_sql
+    assert "ops.problematic_projection_reason_facts" in reader_sql
+    assert "normalized_reason = any (%(reasons)s::text[])" in reader_sql
+    assert "reasons && %(reasons)s::text[]" not in reader_sql
+
+
+def test_problematic_projection_separate_release_membership_is_paged_relational_input():
+    source_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+
+    assert "jsonb_agg(" not in source_sql
+    assert "'separate_release'" in source_sql
+    assert "separate_release_keys" not in source_sql
+    assert "limit least(p_limit, p_child_limit, 100)" in source_sql
+
+
+def test_problematic_projection_cleanup_keeps_committed_and_one_predecessor_on_replay():
+    migration_sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    publish_sql = _problematic_projection_function_sql(
+        "ops.publish_claimed_problematic_projection"
+    )
+    replay_prefix = publish_sql.split("if not found", 1)[0]
+    revision_cleanup = publish_sql.split(
+        "delete from ops.problematic_projection_headers as old_header", 1
+    )[1]
+
+    assert re.search(
+        r"foreign key\s*\(library_id,\s*committed_revision\)\s*"
+        r"references ops\.problematic_projection_headers\(library_id,\s*revision\)",
+        migration_sql,
+    )
+    assert "return query select true" not in replay_prefix
+    assert "locked_state.committed_revision" in revision_cleanup
+    assert "limit 1" in revision_cleanup
+    assert "published_at" not in revision_cleanup
+
+
+def test_0128_terminal_failure_derives_locked_state_before_prepare_succeeds():
+    failure_sql = _problematic_projection_function_sql(
+        "ops.fail_claimed_problematic_projection"
+    )
+
+    assert "selected_state ops.problematic_projection_state%rowtype" in failure_sql
+    assert "select projection_state.* into selected_state" in failure_sql
+    assert "for update" in failure_sql
+    assert "p_source_generation is null or" in failure_sql
+    assert "p_rebuild_epoch is null or" in failure_sql
+    assert "p_revision is null or" in failure_sql
+    assert (
+        "projection_state.build_revision is null or "
+        "projection_state.requested_attempt = p_attempt"
+    ) in failure_sql
+    assert (
+        "projection_state.requested_attempt = selected_state.requested_attempt"
+        in failure_sql
+    )
+    assert "selected_state.source_generation" in failure_sql
+    assert "selected_state.library_id" in failure_sql
+
+
+def test_problematic_projection_integrity_audit_pages_the_exact_reason_relation():
+    sql = " ".join(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8").lower().split()
+    )
+    state_table = sql.split(
+        "create table if not exists ops.problematic_projection_state",
+        1,
+    )[1].split("create table", 1)[0]
+    assert "audit_reason_facets" not in state_table
+    load_due = sql.split(
+        "create or replace function ops.load_due_problematic_projection_integrity_audit",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    advance = sql.split(
+        "create or replace function ops.advance_problematic_projection_integrity_audit",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    page = sql.split(
+        "create or replace function ops.load_problematic_projection_integrity_page",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    for column in (
+        "audit_after_fact_type text",
+        "audit_after_item_key text",
+        "audit_after_identity_one text",
+        "audit_after_identity_two text",
+        "audit_after_identity_three text",
+        "audit_last_counted_item_key text",
+        "audit_search_fact_count bigint",
+        "audit_search_fingerprint bit(256)",
+    ):
+        assert column in state_table
+
+    for cursor in (
+        "audit_after_fact_type",
+        "audit_after_item_key",
+        "audit_after_identity_one",
+        "audit_after_identity_two",
+        "audit_after_identity_three",
+        "audit_last_counted_item_key",
+        "audit_search_fact_count",
+        "audit_search_fingerprint",
+    ):
+        assert cursor in load_due
+        assert cursor in advance
+
+    assert "from ops.problematic_projection_reason_facts" in page
+    assert "from ops.problematic_projection_search_facts" in page
+    assert "problematic_projection_items" not in page
+    assert "p_after_fact_type text" in page
+    assert "p_after_identity_one text" in page
+    assert "p_after_identity_two text" in page
+    assert "p_after_identity_three text" in page
+    assert (
+        "reason_fact.normalized_reason as identity_one, "
+        "reason_fact.display_reason as identity_two, "
+        "reason_fact.category_reason as identity_three"
+    ) in page
+    assert (
+        "search_fact.fact_kind as identity_one, "
+        "search_fact.semantic_child_identity as identity_two, "
+        "''::text as identity_three"
+    ) in page
+    assert (
+        "select fact.fact_type, fact.item_key, fact.normalized_reason, "
+        "fact.display_reason, fact.category_reason, fact.fact_kind, "
+        "fact.semantic_child_identity, fact.normalized_text"
+    ) in page
+    exact_cursor = (
+        'fact.fact_type collate "c", fact.item_key collate "c", '
+        'fact.identity_one collate "c", fact.identity_two collate "c", '
+        'fact.identity_three collate "c"'
+    )
+    assert (
+        'reason_fact.item_key collate "c", '
+        'reason_fact.normalized_reason collate "c", '
+        'reason_fact.display_reason collate "c", '
+        'reason_fact.category_reason collate "c"'
+    ) in page
+    assert (
+        'search_fact.item_key collate "c", search_fact.fact_kind collate "c", '
+        'search_fact.semantic_child_identity collate "c"'
+    ) in page
+    assert "select * from reason_facts union all select * from search_facts" in page
+    assert f"order by {exact_cursor}" in page
+    assert page.count("limit least(greatest(p_limit, 1), 100)") == 3
+
+
+def test_problematic_projection_integrity_revision_reset_clears_composite_cursor():
+    sql = " ".join(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8").lower().split()
+    )
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    complete = sql.split(
+        "create or replace function ops.complete_problematic_projection_integrity_audit",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    for cursor in (
+        "audit_after_fact_type = null",
+        "audit_after_item_key = null",
+        "audit_after_identity_one = null",
+        "audit_after_identity_two = null",
+        "audit_last_counted_item_key = null",
+        "audit_search_fact_count = 0",
+        "audit_search_fingerprint = 0::bit(256)",
+    ):
+        assert cursor in publish
+        assert cursor in complete

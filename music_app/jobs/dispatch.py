@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable
 from typing import Any
 
 from music_app.services.jobs.models import JobKind
-from music_app.services.jobs.registry import JOB_POLICIES, policy_for
+from music_app.services.jobs.registry import (
+    policy_for,
+    registered_handler_fingerprint,
+)
 
 
 JobHandler = Callable[..., Any]
@@ -56,26 +57,7 @@ class JobHandlerRegistry:
     def fingerprint(self) -> str:
         """Return a deterministic fingerprint of the registered dispatch contract."""
 
-        contract = []
-        for kind in sorted(self._handlers):
-            policy = JOB_POLICIES[kind]
-            contract.append(
-                {
-                    "allowed_capability_keys": sorted(policy.allowed_capability_keys),
-                    "kind": kind,
-                    "max_attempts": policy.max_attempts,
-                    "public_lifecycle": policy.public_lifecycle,
-                    "recovery_policy": policy.recovery_policy.value,
-                    "server_owned": policy.server_owned,
-                }
-            )
-        encoded = json.dumps(
-            {"contract_version": 1, "handlers": contract},
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("ascii")
-        return hashlib.sha256(encoded).hexdigest()
+        return registered_handler_fingerprint(self._handlers)
 
 
 __all__ = ["JobHandler", "JobHandlerRegistry"]

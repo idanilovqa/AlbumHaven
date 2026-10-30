@@ -459,7 +459,7 @@ test('failure alert Log History link passes its exact entry to the authoritative
   assert.equal(context.state.utility.selectedLogHistoryId, 'older-entry', 'the controller accepts selection after its scoped request');
 });
 
-test('applying a problem filter preserves the selected album in the live bootstrap handler when it still matches', () => {
+test('applying a problem filter preserves the selected album in the live bootstrap handler when it still matches', async () => {
   const { context, calls } = createContext({
     problematicFiles: [
       { key: 'album-1', problem_reasons: ['Poor art quality', 'Missing year'] },
@@ -475,7 +475,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
     }),
   });
 
-  context.handleUtilityBootstrapClick(event);
+  await context.handleUtilityBootstrapClick(event);
 
   assert.equal(wasPrevented(), true);
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
@@ -510,17 +510,61 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.equal(context.state.utility.problemDropdownOpen, false);
 });
 
-test('applying a problem filter waits for the complete Problematic Files snapshot', async () => {
-  let releaseComplete;
-  const completeLoadPromise = new Promise((resolve) => { releaseComplete = resolve; });
+test('applying a problem filter preserves a matching hydrated off-page selection', async () => {
+  const { context } = createContext({
+    problematicFiles: [{ key: 'first-page', problem_reasons: ['Missing cover art'] }],
+    selectedProblematicKey: 'off-page',
+    selectedProblematicDetail: {
+      key: 'off-page',
+      detail_loaded: true,
+      problem_reasons: ['Poor art quality', 'Missing year'],
+    },
+  });
+  const filterContainer = createElement();
+  const { event } = createEvent({
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '[data-problem-filter-value]': createElement({
+      'data-problem-filter-value': 'Poor art quality',
+    }),
+  });
+
+  await context.handleUtilityBootstrapClick(event);
+
+  assert.equal(context.state.utility.selectedProblematicKey, 'off-page');
+});
+
+test('applying a problem filter clears a nonmatching hydrated off-page selection', async () => {
+  const { context } = createContext({
+    problematicFiles: [{ key: 'first-page', problem_reasons: ['Missing cover art'] }],
+    selectedProblematicKey: 'off-page',
+    selectedProblematicDetail: {
+      key: 'off-page',
+      detail_loaded: true,
+      problem_reasons: ['Missing year'],
+    },
+  });
+  const filterContainer = createElement();
+  const { event } = createEvent({
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '[data-problem-filter-value]': createElement({
+      'data-problem-filter-value': 'Poor art quality',
+    }),
+  });
+
+  await context.handleUtilityBootstrapClick(event);
+
+  assert.equal(context.state.utility.selectedProblematicKey, '');
+});
+
+test('applying a problem filter requests a bounded server-filtered page', async () => {
   const { context, calls } = createContext({
     problematicFiles: [{ key: 'partial', problem_reasons: ['Missing cover art'] }],
     problematicFilesComplete: false,
-    completeLoadPromise,
   });
-  context.waitForProblematicFilesComplete = async () => {
-    await completeLoadPromise;
-    return context.state.utility.problematicFilesComplete;
+  const loads = [];
+  context.loadProblematicFiles = async (force, options) => {
+    loads.push({ force, options, filters: [...context.state.utility.selectedProblemFilters] });
+    return context.state.utility.problematicFiles;
   };
   const filterContainer = createElement();
   const { event } = createEvent({
@@ -530,19 +574,13 @@ test('applying a problem filter waits for the complete Problematic Files snapsho
     }),
   });
 
-  const click = context.handleUtilityBootstrapClick(event);
-  await Promise.resolve();
-  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), []);
-  assert.equal(calls.renders, 0);
-
-  context.state.utility.problematicFiles = [
-    { key: 'canonical', problem_reasons: ['Poor art quality'] },
-  ];
-  context.state.utility.problematicFilesComplete = true;
-  releaseComplete();
-  await click;
-
+  await context.handleUtilityBootstrapClick(event);
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
+  assert.deepEqual(JSON.parse(JSON.stringify(loads)), [{
+    force: true,
+    options: { preserveSelectedDetail: true },
+    filters: ['Poor art quality'],
+  }]);
   assert.equal(calls.renders, 1);
 });
 

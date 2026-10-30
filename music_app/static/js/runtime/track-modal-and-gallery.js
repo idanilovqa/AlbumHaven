@@ -34,8 +34,8 @@ function attachUtilityModalEvents() {
     const tab = owner.activeTab;
     searchRenderTimer = setTimeout(async () => {
       searchRenderTimer = null;
-      if (tab === 'problematic-files' && owner.problematicFilesComplete === false
-          && !(await waitForProblematicFilesComplete())) return;
+      if (tab === 'problematic-files'
+          && !(await loadProblematicFiles(true, { preserveSelectedDetail: true }))) return;
       if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) renderUtilityModalContent();
     }, 80);
   };
@@ -56,7 +56,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      invalidateProblematicFilesPaging();
+    }
     else return;
     scheduleSearchRender();
   });
@@ -77,7 +80,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      invalidateProblematicFilesPaging();
+    }
     else return;
     scheduleSearchRender();
   });

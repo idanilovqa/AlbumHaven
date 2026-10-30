@@ -168,6 +168,28 @@ test('scroll schedules one range update and keeps mounted rows bounded', () => {
   assert.ok(Number(list.dataset.problematicVirtualStart) > 0);
 });
 
+test('near-end scrolling requests one next page per scheduled range update', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  let nextPageRequests = 0;
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+    onNearEnd() {
+      nextPageRequests += 1;
+    },
+  });
+  virtualList.render(makeItems(50), 'album-0');
+
+  list.scrollTop = 50 * 68;
+  list.emit('scroll');
+  list.emit('scroll');
+  assert.equal(frames.length, 1);
+  frames.shift()();
+
+  assert.equal(nextPageRequests, 1);
+});
+
 test('reveal scrolls an offscreen selected row into the mounted range', () => {
   const { api, frames } = loadVirtualList();
   const list = createList();

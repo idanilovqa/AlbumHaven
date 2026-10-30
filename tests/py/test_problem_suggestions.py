@@ -240,8 +240,8 @@ def test_incomplete_reverse_write_requires_recovery_instead_of_claiming_rollback
     assert failure['edit_outcome'] == 'recovery_pending'
 
 
-@pytest.mark.parametrize('boundary', ['initial_detail', 'mutation_refresh'])
-def test_alias_proposals_survive_initial_detail_and_mutation_refresh(boundary, monkeypatch):
+@pytest.mark.parametrize('boundary', ['album_key_detail', 'track_path_detail'])
+def test_alias_proposals_survive_targeted_problematic_detail_refresh(boundary, monkeypatch):
     from music_app.services import library_browse_postgres as module
     from tests.py.test_library_browse_postgres import _normal_problematic_product_row
 
@@ -256,15 +256,14 @@ def test_alias_proposals_survive_initial_detail_and_mutation_refresh(boundary, m
     repository = module.PostgresLibraryBrowseRepository({'ALBUM_HAVEN_APP_DATABASE_URL': 'postgresql://alias-test'}, connect=lambda *_args: connection)
     monkeypatch.setattr(type(repository), '_load_problematic_file_rows', lambda *_args, **_kwargs: [row])
     monkeypatch.setattr(type(repository), '_load_missing_album_rows', lambda *_args, **_kwargs: [])
-    def aliases(_self, **kwargs):
-        alias_reads.append(kwargs.get('connection'))
-        return {'alias_to_canonical': {'Approved Alias': 'Canonical Artist'}}
-    monkeypatch.setattr(type(repository), '_load_relation_alias_maps', aliases)
-    if boundary == 'initial_detail':
-        payload = repository._build_problematic_files_payload_uncached()['initial_detail']
-        expected_connection = connection
+    def aliases(_self):
+        alias_reads.append(True)
+        return {'Approved Alias': 'Canonical Artist'}
+    monkeypatch.setattr(type(repository), '_load_persisted_problematic_aliases', aliases)
+    if boundary == 'album_key_detail':
+        album_key = module._problematic_album_projection_payloads([row])[0]['key']
+        payload = repository.build_problematic_file_detail_payload(album_key)
     else:
         payload = repository.build_problematic_album_payload_by_track_paths({row['file_private_path']})
-        expected_connection = None
     assert any(proposal['field'] == 'artist' and proposal['corrected'] == 'Canonical Artist' for proposal in payload['suggested_edits'])
-    assert alias_reads == [expected_connection]
+    assert alias_reads == [True]

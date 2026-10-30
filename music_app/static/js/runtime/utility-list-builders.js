@@ -546,7 +546,9 @@ function buildProblematicAlbumDetail(album) {
 }
 
 function getSelectedProblematicAlbum() {
-  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey)
+    || (state.utility.selectedProblematicDetail?.key === state.utility.selectedProblematicKey
+      ? state.utility.selectedProblematicDetail : null);
 }
 
 function getAlbumTrackPaths(album) {
@@ -3004,12 +3006,10 @@ function getAlbumProblemFilterReasons(album) {
 }
 
 function getProblemReasonTypes() {
-  const reasons = new Set();
-  (state.utility.problematicFiles || []).forEach((album) => {
-    getAlbumProblemFilterReasons(album).forEach((reason) => {
-      if (reason) reasons.add(reason);
-    });
-  });
+  const reasons = new Set([
+    ...(state.utility.problematicReasonFacets || []),
+    ...(state.utility.selectedProblemFilters || []),
+  ].map(normalizeProblemFilterReason).filter(Boolean));
   return Array.from(reasons).sort((a, b) => a.localeCompare(b));
 }
 
@@ -3018,14 +3018,6 @@ function albumMatchesProblemFilters(album, selectedFilters = state.utility.selec
   if (!selected.length) return true;
   const reasons = new Set(getAlbumProblemFilterReasons(album));
   return selected.some((reason) => reasons.has(normalizeProblemFilterReason(reason)));
-}
-
-function getAlbumProblemFilterSortIndex(album) {
-  const selected = state.utility.selectedProblemFilters || [];
-  if (!selected.length) return Number.MAX_SAFE_INTEGER;
-  const reasons = new Set(getAlbumProblemFilterReasons(album));
-  const index = selected.findIndex((reason) => reasons.has(reason));
-  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
 function renderProblemFilterControls(els) {
@@ -3076,39 +3068,7 @@ function renderProblemFilterControls(els) {
 }
 
 function getFilteredProblematicAlbums() {
-  const items = state.utility.problematicFiles || [];
-  const query = (state.utility.searchQuery || '').trim().toLowerCase();
-
-  const filtered = items.filter((album) => {
-    if (!albumMatchesProblemFilters(album)) return false;
-    if (!query) return true;
-    const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
-    const trackTitles = Array.isArray(album.tracks) ? album.tracks.map((track) => String(track.title || '')) : [];
-    const haystack = [
-      String(album.name || ''),
-      String(album.raw_name || ''),
-      String(album.album_artist || ''),
-      String(album.raw_album_artist || ''),
-      String(album.year || ''),
-      ...(Array.isArray(album.problem_reasons) ? album.problem_reasons.map((reason) => String(reason || '')) : []),
-      String(album.search_text || ''),
-      ...trackTitles,
-      ...repairRows.flatMap((row) => [
-        String(row.track_title || ''),
-        String(row.original || ''),
-        String(row.repaired || ''),
-      ]),
-    ].join('\n').toLowerCase();
-    return haystack.includes(query);
-  });
-
-  if (!(state.utility.selectedProblemFilters || []).length) return filtered;
-  return filtered.slice().sort((a, b) => (
-    getAlbumProblemFilterSortIndex(a) - getAlbumProblemFilterSortIndex(b)
-    || String(a.name || '').localeCompare(String(b.name || ''))
-    || String(a.album_artist || '').localeCompare(String(b.album_artist || ''))
-    || String(a.year || '').localeCompare(String(b.year || ''))
-  ));
+  return state.utility.problematicFiles || [];
 }
 
 function getProblematicAlbumIssueLabel(album) {
@@ -3212,25 +3172,38 @@ async function openUtilityModalForTrack(trackPath) {
       && Number(state.utility.problematicSummaryRequestToken || 0)
         > summaryRequestTokenBeforePendingTasks
     );
+    state.utility.searchQuery = '';
+    state.utility.selectedProblemFilters = [];
     const loadTrackSummary = async () => {
-      const complete = loadProblematicFiles(true, { render: false });
-      const initial = state.utility.initialLoadPromise || complete;
-      if (initial !== complete) {
-        complete.then((result) => {
-          if (result !== null && openedCanonicalTarget && ownsNavigation()
-              && state.utility.activeTab === 'problematic-files'
-              && state.utility.focusedTrackPath === String(trackPath || '')) {
-            renderUtilityModalContent();
-          }
-        });
-      }
-      const result = await initial;
+      const request = loadProblematicFiles(true, { render: false });
+      const result = await request;
       if (result === null || !ownsNavigation()
-          || (initial.problematicSummaryRequestToken !== undefined
-            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
-      if (getProblematicAlbumForTrackPath(trackPath)) return result;
-      // Only returned canonical track membership may identify the target.
-      return complete;
+          || (request.problematicSummaryRequestToken !== undefined
+            && request.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      return result;
+    };
+    const loadTargetedAlbum = async () => {
+      let detail;
+      try {
+        detail = await loadProblematicAlbumDetailForTrack(trackPath);
+      } catch (error) {
+        if (ownsNavigation()) {
+          console.error('[AlbumHaven][Utilities] Failed to locate a problematic track.', error);
+          showToast('Unable to load problematic album detail.', 'error', 3200);
+        }
+        return null;
+      }
+      if (!detail || !ownsNavigation()) return null;
+      const targetPaths = new Set([String(trackPath || '')].filter(Boolean));
+      const pageItems = (state.utility.problematicFiles || []).filter((item) => (
+        String(item?.key || '') === String(detail.key || '')
+        || !albumsShareTrackPath(item, targetPaths)
+      ));
+      const pageIndex = pageItems.findIndex((item) => String(item?.key || '') === String(detail.key || ''));
+      if (pageIndex >= 0) pageItems[pageIndex] = detail;
+      state.utility.problematicFiles = pageItems;
+      state.utility.selectedProblematicDetail = pageIndex >= 0 ? null : detail;
+      return detail;
     };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
       const loadResult = await loadTrackSummary();
@@ -3242,6 +3215,7 @@ async function openUtilityModalForTrack(trackPath) {
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
+    if (!album) album = await loadTargetedAlbum();
     if (!ownsNavigation()) return;
     if (!album) {
       showToast('This track is not currently listed in Problematic Files.', 'error', 3200);
@@ -3254,59 +3228,30 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
-    let refreshedStaleDetailTarget = false;
     if (!album.detail_loaded) {
-      while (album && !album.detail_loaded) {
-        const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
-        state.utility.selectedProblematicKey = album.key || '';
-        const detailRequest = loadProblematicAlbumDetail(
-          album.key || '',
-          undefined,
-          { render: false, allowMissing: true },
-        );
-        const detailOwner = Number(state.utility.problematicDetailRequestToken || 0);
-        const refreshedDetail = await detailRequest;
-        if (!ownsNavigation()) return;
-        const detailMissing = !refreshedDetail
-          && Number(state.utility.problematicDetailRequestToken || 0) === detailOwner;
-        const currentSummary = state.utility.completeLoadPromise
-          || state.utility.initialLoadPromise;
-        if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
-          const current = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
-          if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
-            await state.utility.detailLoadPromises[current.key];
-            if (!ownsNavigation()) return;
-          }
-          if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
-            album = detailMissing ? null : getProblematicAlbumForTrackPath(trackPath);
-            if (!album && !refreshedStaleDetailTarget) {
-              if (currentSummary && typeof currentSummary.then === 'function') {
-                await currentSummary;
-                if (!ownsNavigation()) return;
-                album = getProblematicAlbumForTrackPath(trackPath);
-                if (album) continue;
-              }
-              refreshedStaleDetailTarget = true;
-              const refreshResult = await loadTrackSummary();
-              if (refreshResult === null || !ownsNavigation()) return;
-              album = getProblematicAlbumForTrackPath(trackPath);
-              if (album) continue;
-            }
-            if (album?.detail_loaded
-                || !currentSummary
-                || typeof currentSummary.then !== 'function') break;
-          }
-        }
-        if (!currentSummary || typeof currentSummary.then !== 'function') {
-          if (!state.utility.loaded) return;
-          album = getProblematicAlbumForTrackPath(trackPath);
-          if (!album) return;
-          continue;
-        }
-        await currentSummary;
-        if (!ownsNavigation()) return;
-        album = getProblematicAlbumForTrackPath(trackPath);
+      const detailSummaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+      state.utility.selectedProblematicKey = album.key || '';
+      album = await loadProblematicAlbumDetail(
+        album.key || '',
+        undefined,
+        { render: false, allowMissing: true },
+      );
+      if (!ownsNavigation()) return;
+      const hydratedProblematicPaths = [
+        ...(Array.isArray(album?.problematic_track_paths) ? album.problematic_track_paths : []),
+        ...(Array.isArray(album?.track_paths) ? album.track_paths : []),
+      ].map((path) => String(path || ''));
+      if (album && !hydratedProblematicPaths.includes(String(trackPath || ''))) {
+        album = await loadTargetedAlbum();
       }
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== detailSummaryOwner) {
+        const currentSummary = state.utility.loadPromise;
+        if (currentSummary) await currentSummary;
+        if (!ownsNavigation() || !state.utility.loaded) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
+        if (!album?.detail_loaded) album = await loadTargetedAlbum();
+      }
+      if (!album) album = await loadTargetedAlbum();
     }
     if (!album) return;
     state.utility.selectedProblematicKey = album.key || '';

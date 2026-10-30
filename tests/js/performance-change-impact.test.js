@@ -151,6 +151,17 @@ test('Problematic Files dependencies require both real-app performance targets',
   }
 });
 
+test('Problematic Files shared client owners require both real-app performance targets', () => {
+  for (const changedPath of [
+    'music_app/static/js/runtime/bootstrap-utility-event-handlers.js',
+    'music_app/static/js/runtime/track-modal-and-gallery.js',
+  ]) {
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    assert.ok(targets.includes('utility-problematic-files'), changedPath);
+    assert.ok(targets.includes('problematic-files-focused'), changedPath);
+  }
+});
+
 test('agent guidance requires all PF performance layers without weakening the budget', () => {
   const guidance = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
   const checks = fs.readFileSync(path.join(repoRoot, 'docs/problematic-files-regression-checks.md'), 'utf8');

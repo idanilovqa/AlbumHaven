@@ -193,6 +193,66 @@ test('problematic-file render scrolls the focused track row into view determinis
   );
 });
 
+test('mobile problematic list keeps horizontal paging active and shows the server total', () => {
+  const album = { key: 'album-alpha', name: 'Album Alpha', detail_loaded: false };
+  const pagingCalls = [];
+  let virtualOptions = null;
+  const elements = {
+    overlay: {},
+    list: {
+      innerHTML: '',
+      scrollTop: 0,
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    },
+    detail: { innerHTML: '', removeAttribute() {} },
+    count: { textContent: '' },
+    search: { disabled: false, placeholder: '', value: '' },
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
+    tabs: [],
+  };
+  const context = {
+    window: {
+      ProblematicFilesVirtualList: {
+        create(options) {
+          virtualOptions = options;
+          return { render() {}, dispose() {} };
+        },
+      },
+      NavigationTree: { updateItem() {}, setItemSelected() {} },
+    },
+    globalThis: {},
+    mobilePageState: { pages: [] },
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        loading: false,
+        loaded: true,
+        problematicFiles: [album],
+        problematicFilesNextCursor: 'page-2',
+        problematicFilesTotal: 1492,
+        searchQuery: '',
+        selectedProblematicKey: '',
+        selectedProblemFilters: [],
+      },
+    },
+    usesMobilePageLayout: () => true,
+    getUtilityModalElements: () => elements,
+    getFilteredProblematicAlbums: () => [album],
+    renderProblemFilterControls() {},
+    buildProblematicAlbumListItem: () => '<button>Album Alpha</button>',
+    loadNextProblematicFilesPage() { pagingCalls.push('next'); },
+  };
+  vm.createContext(context);
+  vm.runInContext(rendererSource, context, { filename: rendererPath });
+
+  context.renderProblematicFiles();
+  assert.ok(virtualOptions, 'mobile must reuse the horizontal virtual list');
+  assert.equal(elements.count.textContent, '1492');
+  virtualOptions.onNearEnd();
+  assert.deepEqual(pagingCalls, ['next']);
+});
+
 test('rerender leaves a failed problematic album detail in its terminal state', () => {
   const selectedAlbum = {
     key: 'album-alpha',

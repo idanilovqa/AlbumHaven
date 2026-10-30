@@ -47,6 +47,9 @@ def test_blocking_postgres_utility_reads_do_not_block_the_asgi_event_loop(
             self._block()
             return {"ok": True, "items": [], "initial_detail": None}
 
+        def build_problematic_files_page(self, **_kwargs):
+            return self.build_problematic_files_payload()
+
         def build_utility_rules_payload(self):
             self._block()
             return {"ok": True, "rules": [], "ignored_version_keys": []}

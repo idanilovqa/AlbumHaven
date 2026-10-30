@@ -462,6 +462,12 @@ function loadProblematicTrackNavigationHelpers() {
     },
     async loadProblematicFiles() {},
     async loadProblematicAlbumDetail() {},
+    async loadProblematicAlbumDetailForTrack(requestedTrackPath) {
+      const requestedPaths = new Set([String(requestedTrackPath || '')].filter(Boolean));
+      return context.state.utility.problematicFiles.find(
+        (item) => context.albumsShareTrackPath(item, requestedPaths),
+      ) || null;
+    },
     getSelectedProblematicAlbum() {
       return context.state.utility.problematicFiles.find(
         (item) => item.key === context.state.utility.selectedProblematicKey,
@@ -6953,27 +6959,19 @@ test('hydrated incomplete-order detail remains visible under the summary problem
   );
 });
 
-test('problematic search always includes structured summary fields beside compact track-title text', () => {
+test('problematic list preserves server-owned filter and keyset order', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
-  context.state.utility.problematicFiles = [{
-    key: 'structured-search-album',
-    name: 'Structured Match Album',
-    album_artist: 'Structured Match Artist',
-    year: '2026',
-    raw_name: 'Structured Raw Album',
-    raw_album_artist: 'Structured Raw Artist',
-    problem_reasons: ['Incomplete track order'],
-    search_text: 'Only Track Title',
-  }];
-  context.state.utility.selectedProblemFilters = [];
+  context.state.utility.problematicFiles = [
+    { key: 'server-first', name: 'Zulu', problem_reasons: ['Other'] },
+    { key: 'server-second', name: 'Alpha', problem_reasons: ['Missing year'] },
+  ];
+  context.state.utility.selectedProblemFilters = ['Missing year'];
+  context.state.utility.searchQuery = 'not present in this compact page';
 
-  for (const query of ['structured match album', 'structured raw artist', '2026', 'incomplete track order']) {
-    context.state.utility.searchQuery = query;
-    assert.deepEqual(
-      Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
-      ['structured-search-album'],
-    );
-  }
+  assert.deepEqual(
+    Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
+    ['server-first', 'server-second'],
+  );
 });
 
 test('track problem navigation refreshes one stale loaded summary before selecting the exact track', async () => {
@@ -7019,6 +7017,7 @@ test('track problem navigation refreshes canonical membership when stale detail 
   };
   const summaryLoads = [];
   const detailLoads = [];
+  const targetedLoads = [];
   const opens = [];
   staleAlbum.detail_loaded = false;
   context.loadProblematicAlbumDetail = async (albumKey) => {
@@ -7036,20 +7035,25 @@ test('track problem navigation refreshes canonical membership when stale detail 
     context.state.utility.problematicFiles = [canonicalAlbum];
     return context.state.utility.problematicFiles;
   };
+  context.loadProblematicAlbumDetailForTrack = async (requestedTrackPath) => {
+    targetedLoads.push(requestedTrackPath);
+    return canonicalAlbum;
+  };
   context.openUtilityModal = () => {
     opens.push(context.state.utility.selectedProblematicKey);
   };
 
   await context.openUtilityModalForTrack(trackPath);
 
-  assert.deepEqual(summaryLoads, [true]);
-  assert.deepEqual(detailLoads, [staleAlbum.key, canonicalAlbum.key]);
+  assert.deepEqual(summaryLoads, []);
+  assert.deepEqual(detailLoads, [staleAlbum.key]);
+  assert.deepEqual(targetedLoads, [trackPath]);
   assert.deepEqual(opens, [canonicalAlbum.key]);
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
   assert.equal(context.state.utility.focusedTrackPath, trackPath);
 });
 
-test('track problem navigation waits out a stale summary before refreshing restored membership', async () => {
+test('track problem navigation uses targeted membership without waiting for a stale summary', async () => {
   const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
   const canonicalAlbum = {
     ...staleAlbum,
@@ -7060,7 +7064,7 @@ test('track problem navigation waits out a stale summary before refreshing resto
   const staleSummary = new Promise((resolve) => {
     releaseStaleSummary = resolve;
   });
-  const summaryLoads = [];
+  const targetedLoads = [];
   const opens = [];
   staleAlbum.detail_loaded = false;
   context.state.utility.problematicFilesComplete = false;
@@ -7078,27 +7082,22 @@ test('track problem navigation waits out a stale summary before refreshing resto
     staleAlbum.track_paths = [];
     return staleAlbum;
   };
-  context.loadProblematicFiles = async () => {
-    if (context.state.utility.completeLoadPromise) {
-      summaryLoads.push('reused');
-      return context.state.utility.completeLoadPromise;
-    }
-    summaryLoads.push('fresh');
-    context.state.utility.problematicFiles = [canonicalAlbum];
-    return context.state.utility.problematicFiles;
+  context.loadProblematicAlbumDetailForTrack = async (requestedTrackPath) => {
+    targetedLoads.push(requestedTrackPath);
+    return canonicalAlbum;
   };
   context.openUtilityModal = () => {
     opens.push(context.state.utility.selectedProblematicKey);
   };
 
-  const navigation = context.openUtilityModalForTrack(trackPath);
-  setImmediate(() => releaseStaleSummary(context.state.utility.problematicFiles));
-  await navigation;
+  await context.openUtilityModalForTrack(trackPath);
 
-  assert.deepEqual(summaryLoads, ['fresh']);
+  assert.deepEqual(targetedLoads, [trackPath]);
   assert.deepEqual(opens, [canonicalAlbum.key]);
-  assert.equal(staleDetailLoads, 2);
+  assert.equal(staleDetailLoads, 1);
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
+  releaseStaleSummary(context.state.utility.problematicFiles);
+  await staleSummary;
 });
 
 test('track problem navigation refreshes canonical membership when the stale detail key is missing', async () => {
@@ -7110,6 +7109,7 @@ test('track problem navigation refreshes canonical membership when the stale det
   };
   const detailOptions = [];
   const summaryLoads = [];
+  const targetedLoads = [];
   const opens = [];
   staleAlbum.detail_loaded = false;
   context.loadProblematicAlbumDetail = async (_albumKey, _force, options) => {
@@ -7121,6 +7121,10 @@ test('track problem navigation refreshes canonical membership when the stale det
     context.state.utility.problematicFiles = [canonicalAlbum];
     return context.state.utility.problematicFiles;
   };
+  context.loadProblematicAlbumDetailForTrack = async (requestedTrackPath) => {
+    targetedLoads.push(requestedTrackPath);
+    return canonicalAlbum;
+  };
   context.openUtilityModal = () => {
     opens.push(context.state.utility.selectedProblematicKey);
   };
@@ -7131,7 +7135,8 @@ test('track problem navigation refreshes canonical membership when the stale det
     JSON.parse(JSON.stringify(detailOptions)),
     [{ render: false, allowMissing: true }],
   );
-  assert.deepEqual(summaryLoads, [true]);
+  assert.deepEqual(summaryLoads, []);
+  assert.deepEqual(targetedLoads, [trackPath]);
   assert.deepEqual(opens, [canonicalAlbum.key]);
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
 });

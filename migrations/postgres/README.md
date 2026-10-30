@@ -398,3 +398,10 @@ Set `PGPASSFILE` when passwordless local automation is required. Keep migration 
 Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated stale-file predicate used by missing-album discovery. It avoids scanning every active file when the stale set is empty or small. The partial index is maintained by PostgreSQL as files become stale or return; it changes no rows, result semantics, or privileges. Older application versions remain compatible. Rollback removes only this index through a subsequent migration.
 
 This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.
+
+`0128_create_problematic_files_projection.sql` adds the durable, library-scoped
+Problematic Files projection, bounded source and integrity cursors, indexed
+committed readers, exact worker capability verification, and least-privilege
+worker functions. Apply it before starting workers that register
+`problematic_files_projection`; legacy workers remain compatible during the
+additive rollout.

@@ -1,10 +1,50 @@
 from __future__ import annotations
 
+from collections import ChainMap
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 
 _UNFINISHED_STATUSES = frozenset({"prepared", "files_verified", "recovery_failed"})
+_APP_OWNED_FIELDS = frozenset({"exception_type", "custom_collection_name"})
+_CANONICAL_COVER_FIELDS = frozenset(
+    {
+        "cover_path",
+        "cover_revision",
+        "cover_selection_origin",
+        "cover_selection_provenance",
+        "local_cover_width",
+        "local_cover_height",
+        "remote_cover_url",
+        "remote_cover_thumbnail_url",
+        "remote_cover_source",
+        "remote_cover_source_label",
+        "remote_cover_album_url",
+        "remote_cover_width",
+        "remote_cover_height",
+    }
+)
+_INVENTORY_FIELDS = frozenset({"title", "genre", "track_number", "disc_number"})
+_STRUCTURAL_FIELD_SETS = frozenset(
+    {
+        frozenset({"album"}),
+        frozenset({"artist"}),
+        frozenset({"album_artist"}),
+        frozenset({"artist", "album_artist"}),
+        frozenset({"album", "artist"}),
+        frozenset({"album", "album_artist"}),
+        frozenset({"album", "artist", "album_artist"}),
+        frozenset({"year"}),
+    }
+)
+
+
+class TagEditRecoveryCommitPending(RuntimeError):
+    """Commit acknowledgement is unknown and authority is not yet decisive."""
+
+
+class TagEditRecoveryCommitIntegrityFailure(RuntimeError):
+    """Journal and authoritative inventory contradict a possible commit."""
 
 
 def reconcile_tag_edit_intents(
@@ -14,12 +54,15 @@ def reconcile_tag_edit_intents(
     restore_physical_values: Callable[[str, dict[str, str]], None],
     persist_resolution: Callable[..., None],
     mark_recovery_failed: Callable[[str, object], None],
+    record_recovery_evidence: Callable[[Mapping[str, str]], None] | None = None,
 ) -> dict[str, int]:
     """Resolve unfinished intents from real files without trusting UI state."""
     summary = {
         "completed": 0,
         "rolled_back": 0,
         "reconciled_external": 0,
+        "commit_pending": 0,
+        "integrity_failed": 0,
         "failed": 0,
     }
     for intent in intents:
@@ -110,10 +153,49 @@ def reconcile_tag_edit_intents(
                 last_error=last_error,
             )
             summary[resolution_status] += 1
+        except TagEditRecoveryCommitPending as error:
+            if record_recovery_evidence is not None:
+                record_recovery_evidence(
+                    _typed_commit_outcome_evidence(
+                        intent_id,
+                        "commit_pending",
+                        error,
+                    )
+                )
+            summary["commit_pending"] += 1
+        except TagEditRecoveryCommitIntegrityFailure as error:
+            if record_recovery_evidence is not None:
+                record_recovery_evidence(
+                    _typed_commit_outcome_evidence(
+                        intent_id,
+                        "integrity_failed",
+                        error,
+                    )
+                )
+            summary["integrity_failed"] += 1
         except Exception as exc:
             mark_recovery_failed(intent_id, exc)
             summary["failed"] += 1
     return summary
+
+
+def _typed_commit_outcome_evidence(
+    intent_id: str,
+    outcome: str,
+    error: BaseException,
+) -> dict[str, str]:
+    reason = (
+        "Commit acknowledgement remains unconfirmed."
+        if outcome == "commit_pending"
+        else "Commit authority failed integrity confirmation."
+    )
+    cause = error.__cause__ or error
+    return {
+        "intent_id": intent_id,
+        "outcome": outcome,
+        "reason": reason,
+        "cause_class": type(cause).__name__,
+    }
 
 
 def _normalized_changes(raw_changes: object) -> list[dict[str, object]]:
@@ -183,7 +265,14 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
     config = getattr(runtime, "config")
     repository = PostgresTagEditIntentRepository(config)
     root_identity = library_root_cache_identity(config)
-    summary = {"completed": 0, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
+    summary = {
+        "completed": 0,
+        "rolled_back": 0,
+        "reconciled_external": 0,
+        "commit_pending": 0,
+        "integrity_failed": 0,
+        "failed": 0,
+    }
     file_cache = None
     for candidate in repository.load_unfinished_intents(
         library_root_identity=root_identity
@@ -208,10 +297,14 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
 
 def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file_cache):
     from music_app.services.cache import (
-        persist_structural_tag_edit_for_config,
-        save_cache_updates_to_disk_for_config,
+        finalize_recovered_tag_edit_for_config,
+        persist_recovered_tag_edit_for_config,
     )
     from music_app.services.library_roots import resolve_configured_media_path
+    from music_app.services.scan_cache_persistence import (
+        RecoveredTagEditCommitUnknown,
+        select_scan_cache_adapter,
+    )
     from music_app.services.metadata import (
         apply_text_repairs_to_file,
         read_editable_tag_values,
@@ -252,6 +345,15 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
         )
         repository.mark_recovery_failed(intent_id, error)
 
+    def record_recovery_evidence(evidence: Mapping[str, str]) -> None:
+        logger.warning(
+            "Tag edit recovery deferred intent_id=%s outcome=%s reason=%s cause_class=%s",
+            evidence["intent_id"],
+            evidence["outcome"],
+            evidence["reason"],
+            evidence["cause_class"],
+        )
+
     def persist_resolution(
         *,
         intent: dict[str, object],
@@ -263,6 +365,12 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
         intent_id = _text(intent.get("id"))
         changed_entries: dict[str, dict[str, object]] = {}
         recorded_changes = _normalized_changes(intent.get("changes"))
+        recorded_fields = {
+            field
+            for change in recorded_changes
+            for field in dict(change["requested_values"])
+        }
+        structural_fields, inventory_fields = _recovery_partitions(recorded_fields)
         for change in recorded_changes:
             path = str(change["path"])
             baseline_entry = file_cache.get(path)
@@ -276,7 +384,11 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
                 refreshed_entry = read_metadata_for_file(
                     resolved_recovery_paths[path]
                 )
-                resolved_entry = {**baseline_entry, **refreshed_entry}
+                resolved_entry = _resolved_recovery_entry(
+                    baseline_entry=baseline_entry,
+                    refreshed_entry=refreshed_entry,
+                    recorded_fields=set(dict(change["requested_values"])),
+                )
             else:
                 resolved_entry = dict(baseline_entry)
             if path in exception_updates:
@@ -298,41 +410,64 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
             status=status,
             last_error=last_error,
         )
-        structural_field = _recovery_structural_field(
-            previous_entries={
-                str(change["path"]): dict(change["old_values"])
-                for change in recorded_changes
-            },
-            updated_entries={
-                str(change["path"]): dict(change["requested_values"])
-                for change in recorded_changes
-            },
-            recorded_fields={
-                field
-                for change in recorded_changes
-                for field in dict(change["requested_values"])
-                if field != "exception_type"
-            },
-        )
-        if structural_field:
-            persist_structural_tag_edit_for_config(
+        previous_file_entries = file_cache
+        try:
+            persist_recovered_tag_edit_for_config(
                 config,
                 changed_paths=set(changed_entries),
-                previous_file_entries=file_cache,
-                updated_file_entries={**file_cache, **changed_entries},
-                changed_field_names={structural_field},
+                previous_file_entries=previous_file_entries,
+                resolved_file_entries=ChainMap(changed_entries, previous_file_entries),
+                structural_field_names=set(structural_fields),
+                inventory_field_names=set(inventory_fields),
                 before_commit=repository_hook,
-                rebuild_relation_projection=True,
+                commit_guard=lambda commit: commit(),
             )
-        else:
-            save_cache_updates_to_disk_for_config(
+        except RecoveredTagEditCommitUnknown as unknown:
+            try:
+                journal = repository.load_intent_for_recovery(
+                    intent_id,
+                    library_root_identity=str(
+                        intent.get("library_root_identity") or ""
+                    ).strip(),
+                )
+                authority = select_scan_cache_adapter(
+                    config
+                ).load_recovered_tag_edit_state(set(changed_entries))
+            except Exception as error:
+                raise TagEditRecoveryCommitPending(
+                    "Recovered tag edit authority could not be confirmed."
+                ) from error
+            _confirm_recovered_tag_edit_commit(
+                journal=journal,
+                authority=authority,
+                prepared_result=unknown.persistence_result,
+                expected_status=status,
+                expected_entries=changed_entries,
+                admitted_fields=structural_fields.union(inventory_fields),
+            )
+            finalize_recovered_tag_edit_for_config(
                 config,
-                config["CACHE_PATH"],
-                changed_entries,
-                baseline_file_cache=file_cache,
-                before_commit=repository_hook,
-                rebuild_relation_projection=True,
+                structural_partition_ran=bool(
+                    unknown.persistence_result.get("structural_partition_ran")
+                ),
             )
+            changed_entries = {
+                path: dict(entry)
+                for path, entry in dict(authority["file_entries"]).items()
+            }
+            authoritative_overrides = dict(authority["exception_overrides"])
+            for path, entry in changed_entries.items():
+                override = dict(authoritative_overrides[path])
+                exception_type = _text(override.get("exception_type"))
+                custom_collection_name = _text(
+                    override.get("custom_collection_name")
+                )
+                entry["exception_type"] = exception_type or None
+                entry["custom_collection_name"] = (
+                    custom_collection_name
+                    if exception_type == "Custom Collection"
+                    else None
+                )
         file_cache.update(changed_entries)
 
     summary = reconcile_tag_edit_intents(
@@ -347,30 +482,108 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
         ),
         persist_resolution=persist_resolution,
         mark_recovery_failed=mark_recovery_failed,
+        record_recovery_evidence=record_recovery_evidence,
     )
     summary["failed"] += preflight_failures
     logger.info(
-        "Tag edit recovery completed completed=%s rolled_back=%s external=%s failed=%s",
+        "Tag edit recovery completed completed=%s rolled_back=%s external=%s "
+        "commit_pending=%s integrity_failed=%s failed=%s",
         summary["completed"],
         summary["rolled_back"],
         summary["reconciled_external"],
+        summary["commit_pending"],
+        summary["integrity_failed"],
         summary["failed"],
     )
     return summary
 
 
-def _recovery_structural_field(
+def _recovery_partitions(
+    recorded_fields: set[str] | frozenset[str],
+) -> tuple[frozenset[str], frozenset[str]]:
+    physical_fields = frozenset(recorded_fields).difference(_APP_OWNED_FIELDS)
+    inventory_fields = physical_fields.intersection(_INVENTORY_FIELDS)
+    structural_fields = physical_fields.difference(inventory_fields)
+    if structural_fields and structural_fields not in _STRUCTURAL_FIELD_SETS:
+        raise ValueError("Tag edit recovery fields have no supported persistence owner.")
+    return structural_fields, inventory_fields
+
+
+def _resolved_recovery_entry(
     *,
-    previous_entries: Mapping[str, Mapping[str, object]],
-    updated_entries: Mapping[str, Mapping[str, object]],
-    recorded_fields: set[str] | None = None,
-) -> str:
-    changed_fields = set(recorded_fields) if recorded_fields is not None else {
+    baseline_entry: Mapping[str, object],
+    refreshed_entry: Mapping[str, object],
+    recorded_fields: set[str],
+) -> dict[str, object]:
+    structural_fields, inventory_fields = _recovery_partitions(recorded_fields)
+    admitted_fields = structural_fields.union(inventory_fields)
+    ancillary_fields = {"mtime", "size"}
+    if "year" in structural_fields:
+        ancillary_fields.add("release_date")
+    ignored_authority_fields = _APP_OWNED_FIELDS.union(_CANONICAL_COVER_FIELDS)
+    unexpected = sorted(
         field
-        for path, entry in updated_entries.items()
-        for field in entry
-        if field != "exception_type"
-        and _text(previous_entries.get(path, {}).get(field))
-        != _text(entry.get(field))
-    }
-    return next(iter(changed_fields)) if changed_fields in ({"album"}, {"year"}) else ""
+        for field, value in refreshed_entry.items()
+        if field not in admitted_fields
+        and field not in ancillary_fields
+        and field not in ignored_authority_fields
+        and _text(baseline_entry.get(field)) != _text(value)
+    )
+    if unexpected:
+        raise ValueError(
+            "Tag edit recovery observed unowned metadata drift: "
+            + ", ".join(unexpected)
+        )
+    resolved = dict(baseline_entry)
+    for field in admitted_fields.union(ancillary_fields):
+        if field in refreshed_entry:
+            resolved[field] = refreshed_entry[field]
+    return resolved
+
+
+def _confirm_recovered_tag_edit_commit(
+    *,
+    journal: Mapping[str, object] | None,
+    authority: Mapping[str, object],
+    prepared_result: Mapping[str, object],
+    expected_status: str,
+    expected_entries: Mapping[str, Mapping[str, object]],
+    admitted_fields: frozenset[str],
+) -> None:
+    journal_status = str((journal or {}).get("status") or "").strip().casefold()
+    if journal_status in _UNFINISHED_STATUSES or not journal_status:
+        raise TagEditRecoveryCommitPending(
+            "Recovered tag edit commit is not yet confirmed."
+        )
+    if journal_status != str(expected_status or "").strip().casefold():
+        raise TagEditRecoveryCommitIntegrityFailure(
+            "Recovered tag edit journal terminal state is contradictory."
+        )
+    prepared_revision = int(
+        prepared_result.get("inventory_mutation_revision") or 0
+    )
+    authority_revision = int(authority.get("inventory_mutation_revision") or 0)
+    if authority_revision < prepared_revision:
+        raise TagEditRecoveryCommitIntegrityFailure(
+            "Recovered tag edit inventory revision is contradictory."
+        )
+    if authority_revision > prepared_revision:
+        return
+    authoritative_entries = authority.get("file_entries")
+    if not isinstance(authoritative_entries, Mapping):
+        raise TagEditRecoveryCommitPending(
+            "Recovered tag edit authority is unavailable."
+        )
+    for path, expected in expected_entries.items():
+        current = authoritative_entries.get(path)
+        if not isinstance(current, Mapping):
+            raise TagEditRecoveryCommitIntegrityFailure(
+                "Recovered tag edit authority omitted a changed path."
+            )
+        if any(
+            _text(current.get(field)) != _text(expected.get(field))
+            for field in admitted_fields
+        ):
+            raise TagEditRecoveryCommitIntegrityFailure(
+                "Recovered tag edit authority contradicts the prepared values."
+            )

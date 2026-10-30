@@ -257,3 +257,17 @@ def test_direct_app_login_copies_inherited_column_privileges():
     assert "has_column_privilege(" in source
     assert "'album_haven_app', relation.oid, attribute.attnum" in source
     assert "grant %s (%i) on table %s to %i" in source
+
+
+def test_direct_app_login_copies_only_grantable_function_privileges():
+    bootstrap_source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
+    isolated_postgres_source = (
+        REPO_ROOT / "tests" / "e2e" / "support" / "isolatedPostgres.py"
+    ).read_text(encoding="utf-8").casefold()
+
+    for source in (bootstrap_source, isolated_postgres_source):
+        assert re.search(
+            r"has_function_privilege\(\s*current_user,\s*routine\.oid",
+            source,
+        )
+        assert "with grant option" in source

@@ -174,6 +174,11 @@ const state = {
     loadPromise: null,
     completeLoadPromise: null,
     problematicFilesComplete: false,
+    problematicFilesNextCursor: null,
+    problematicFilesPageSignature: '',
+    problematicFilesTotal: 0,
+    problematicReasonFacets: [],
+    selectedProblematicDetail: null,
     detailLoadPromises: {},
     problematicDiagnostics: {
       summaryLoad: null,

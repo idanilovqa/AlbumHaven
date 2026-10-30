@@ -28,24 +28,13 @@ function loadHelpers() {
   return context;
 }
 
-test('P04 multiple selected problem filters include their union', () => {
-  const context = loadHelpers();
-  context.state.utility.selectedProblemFilters = ['Missing year', 'Encoding problem'];
-  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key).sort(), ['both', 'encoding-only', 'year-only']);
-  assert.equal(context.state.utility.selectedProblematicKey, 'year-only', 'matching navigation context remains valid');
-});
-
-test('P04 search intersects the union of selected problem types', () => {
+test('P04 server-owned page order is not filtered or resorted by stale client state', () => {
   const context = loadHelpers();
   context.state.utility.selectedProblemFilters = ['Missing year', 'Encoding problem'];
   context.state.utility.searchQuery = 'selected';
-  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key).sort(), ['encoding-only', 'year-only']);
-});
-
-test('P04 clearing every filter includes all problem types while keeping search', () => {
-  const context = loadHelpers();
-  context.state.utility.searchQuery = 'selected';
-  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key), ['year-only', 'encoding-only', 'unrelated']);
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key), [
+    'year-only', 'encoding-only', 'both', 'unrelated',
+  ]);
 });
 
 test('P03 selecting a second problem preserves independently selected targets', () => {

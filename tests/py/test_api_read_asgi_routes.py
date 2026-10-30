@@ -16,6 +16,7 @@ from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
 from tests.py.asgi_testing import runtime_app_from_asgi_app
 
 from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor
+from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
 
 @pytest.fixture
@@ -4983,8 +4984,11 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_page(self, *, limit):
+        def build_problematic_files_page(self, *, limit, cursor=None, filter="", sort="album"):
             assert limit == 50
+            assert cursor is None
+            assert filter == ""
+            assert sort == "album"
             return {
                 "count": 1,
                 "items": [{"key": "bounded-album", "detail_loaded": False}],
@@ -5070,20 +5074,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     list_payload = _decode_json(list_body)
     assert list_payload == {
         "count": 1,
-        "items": [
-            {
-                "key": "broken-album",
-                "detail_loaded": False,
-            }
-        ],
-        "initial_detail": {
-            "key": "broken-album",
-            "detail_loaded": True,
-            "track_problem_rows": [{"filename": "01.flac"}],
-            "persistence_backend": "postgres",
-            "persistence_seam": "library_browse",
-            "view_data_source": "postgres_library_browse",
-        },
+        "items": [{"key": "bounded-album", "detail_loaded": False}],
+        "initial_detail": {"key": "bounded-album", "detail_loaded": True},
+        "complete": False,
         "persistence_backend": "postgres",
         "persistence_seam": "library_browse",
         "view_data_source": "postgres_library_browse",
@@ -5132,6 +5125,144 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "error": "Problematic album not found.",
     }
     assert repository_configs == [app.config, app.config, app.config, app.config, app.config]
+
+
+def test_asgi_problematic_files_default_and_scoped_reads_are_always_bounded(
+    app,
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    page_calls = []
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_files_payload(self):
+            raise AssertionError("interactive Problematic Files must not build an unbounded projection")
+
+        def build_problematic_files_page(self, *, limit, cursor=None, filter="", sort="album"):
+            page_calls.append({
+                "limit": limit,
+                "cursor": cursor,
+                "filter": filter,
+                "sort": sort,
+            })
+            return {
+                "count": 0,
+                "items": [],
+                "initial_detail": None,
+                "next_cursor": None,
+                "total": 0,
+                "complete": True,
+            }
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    asgi_app.state.library_watch_health_service = SimpleNamespace(load_problems=lambda: [])
+
+    default_status, _headers, _body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+    )
+    scoped_status, _headers, _body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"cursor": "page-2", "filter": "wanted", "sort": "album"},
+    )
+
+    assert default_status == scoped_status == 200
+    assert page_calls == [
+        {"limit": 50, "cursor": None, "filter": "", "sort": "album"},
+        {"limit": 50, "cursor": "page-2", "filter": "wanted", "sort": "album"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected_status", "expected_code"),
+    [
+        ("pending", 503, "problematic_projection_pending"),
+        ("expired", 409, "problematic_projection_cursor_expired"),
+        ("invalid", 400, "invalid_problematic_projection_cursor"),
+    ],
+)
+def test_problematic_projection_route_maps_typed_reader_failures(
+    app, monkeypatch, raised, expected_status, expected_code
+):
+    asgi_app = _make_asgi_app()
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_files_page(self, **_kwargs):
+            if raised == "pending":
+                raise asgi_read_routes.ProblematicProjectionPending("private storage detail")
+            if raised == "expired":
+                raise asgi_read_routes.ProblematicProjectionCursorExpiredError(
+                    "private revision detail"
+                )
+            raise asgi_read_routes.ProblematicProjectionCursorError("private cursor detail")
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "_is_postgres_utility_projection_request",
+        lambda _request: True,
+    )
+
+    status, headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"cursor": "opaque"},
+    )
+
+    assert status == expected_status
+    assert _decode_json(body)["error_code"] == expected_code
+    assert "private" not in body.decode("utf-8")
+    projected_headers = {str(key).lower(): str(value) for key, value in headers.items()}
+    if raised == "pending":
+        assert projected_headers["retry-after"] == "1"
+        assert projected_headers["cache-control"] == "no-store"
+
+
+def test_problematic_projection_route_rejects_nfkc_expanded_query_before_storage(
+    app,
+    monkeypatch,
+):
+    asgi_app = _make_asgi_app()
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/unused"
+    )
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "_is_postgres_utility_projection_request",
+        lambda _request: True,
+    )
+
+    status, headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"filter": "\ufdfa" * 125},
+    )
+
+    assert status == 400
+    assert _decode_json(body)["error_code"] == "invalid_problematic_files_request"
+    assert {str(key).lower(): str(value) for key, value in headers.items()}[
+        "cache-control"
+    ] == "no-store"
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):

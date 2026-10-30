@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any
@@ -23,6 +24,9 @@ JOB_POLICIES: Mapping[str, JobPolicy] = MappingProxyType({
     ),
     "post_scan_cover_refresh": JobPolicy(
         frozenset(), 2, RecoveryPolicy.RETRY_SAFE, server_owned=True
+    ),
+    "problematic_files_projection": JobPolicy(
+        frozenset(), 3, RecoveryPolicy.RETRY_SAFE, server_owned=True
     ),
     "cover_lookup": JobPolicy(
         frozenset({"library.covers.lookup"}), 2, RecoveryPolicy.RETRY_SAFE
@@ -128,6 +132,43 @@ def policy_for(kind: str | JobKind) -> JobPolicy:
         return JOB_POLICIES[key]
     except (KeyError, TypeError) as exc:
         raise ValueError("unknown job kind") from exc
+
+
+def registered_handler_fingerprint(kinds: Iterable[str | JobKind]) -> str:
+    """Encode one deterministic registered-kind contract fingerprint."""
+
+    keys = sorted(
+        {
+            kind.value if isinstance(kind, JobKind) else kind
+            for kind in kinds
+        }
+    )
+    contract = []
+    for kind in keys:
+        policy = policy_for(kind)
+        contract.append(
+            {
+                "allowed_capability_keys": sorted(policy.allowed_capability_keys),
+                "kind": kind,
+                "max_attempts": policy.max_attempts,
+                "public_lifecycle": policy.public_lifecycle,
+                "recovery_policy": policy.recovery_policy.value,
+                "server_owned": policy.server_owned,
+            }
+        )
+    encoded = json.dumps(
+        {"contract_version": 1, "handlers": contract},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def expected_registered_handler_fingerprint() -> str:
+    """Return the fingerprint for the complete closed durable-job contract."""
+
+    return registered_handler_fingerprint(JobKind)
 
 
 def _validate_identifier(

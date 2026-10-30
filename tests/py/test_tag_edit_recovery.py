@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import ChainMap
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,10 @@ from music_app.services import (
     tag_edit_intents_postgres,
 )
 from music_app.services.tag_edit_recovery import (
-    _recovery_structural_field,
+    TagEditRecoveryCommitIntegrityFailure,
+    TagEditRecoveryCommitPending,
+    _recovery_partitions,
+    _resolved_recovery_entry,
     reconcile_tag_edit_intents,
     reconcile_unfinished_tag_edit_intents_on_startup,
 )
@@ -66,17 +70,15 @@ def run_startup_recovery(
     changes,
     physical_values,
     refreshed_entries,
+    commit_unknown=False,
+    terminal_status="completed",
+    authority_error=None,
+    authority_overrides=None,
+    evidence_logs=None,
 ):
-    structural_calls = []
-    generic_calls = []
-
-    def capture_generic_call(*args, **kwargs):
-        captured_kwargs = dict(kwargs)
-        captured_kwargs["baseline_file_cache"] = {
-            path: dict(entry)
-            for path, entry in kwargs["baseline_file_cache"].items()
-        }
-        generic_calls.append((args, captured_kwargs))
+    recovery_calls = []
+    effect_calls = []
+    failures = []
 
     class IntentRepository:
         def __init__(self, _config):
@@ -91,12 +93,34 @@ def run_startup_recovery(
         def complete_in_transaction(self, *_args, **_kwargs):
             pass
 
-        def mark_recovery_failed(self, *_args):
-            raise AssertionError("startup recovery unexpectedly failed")
+        def load_intent_for_recovery(self, _intent_id, **_kwargs):
+            return {
+                "id": "intent-1",
+                "library_root_identity": "active-root",
+                "status": terminal_status,
+            }
+
+        def mark_recovery_failed(self, intent_id, error):
+            failures.append((intent_id, str(error)))
 
     class SnapshotAdapter:
         def load_snapshot(self, _cache_path, _root_identity):
             return file_cache, None, {}, None, None
+
+        def load_recovered_tag_edit_state(self, changed_paths):
+            if authority_error is not None:
+                raise authority_error
+            return {
+                "inventory_mutation_revision": 2,
+                "file_entries": {
+                    path: {**file_cache[path], **refreshed_entries[path]}
+                    for path in changed_paths
+                },
+                "exception_overrides": {
+                    path: dict((authority_overrides or {}).get(path) or {})
+                    for path in changed_paths
+                },
+            }
 
     monkeypatch.setattr(
         tag_edit_intents_postgres,
@@ -130,15 +154,48 @@ def run_startup_recovery(
         "read_metadata_for_file",
         lambda path: dict(refreshed_entries[str(path)]),
     )
+    def persist_recovery(*_args, **kwargs):
+        captured = dict(kwargs)
+        captured["previous_file_entries_snapshot"] = {
+            path: dict(entry)
+            for path, entry in kwargs["previous_file_entries"].items()
+        }
+        recovery_calls.append(captured)
+        result = {
+            "inventory_mutation_revision": 2,
+            "structural_partition_ran": bool(kwargs["structural_field_names"]),
+        }
+        if commit_unknown:
+            raise scan_cache_persistence.RecoveredTagEditCommitUnknown(result)
+        return result
+
+    monkeypatch.setattr(
+        cache,
+        "persist_recovered_tag_edit_for_config",
+        persist_recovery,
+        raising=False,
+    )
     monkeypatch.setattr(
         cache,
         "persist_structural_tag_edit_for_config",
-        lambda *_args, **kwargs: structural_calls.append(dict(kwargs)),
+        lambda *_args, **_kwargs: pytest.fail(
+            "startup recovery used the ordinary structural writer"
+        ),
+    )
+    monkeypatch.setattr(
+        cache,
+        "finalize_recovered_tag_edit_for_config",
+        lambda config, *, structural_partition_ran: effect_calls.append(
+            (config, structural_partition_ran)
+        ),
+        raising=False,
     )
     monkeypatch.setattr(
         cache,
         "save_cache_updates_to_disk_for_config",
-        capture_generic_call,
+        lambda *_args, **_kwargs: pytest.fail(
+            "startup recovery used the generic snapshot writer"
+        ),
     )
 
     runtime = SimpleNamespace(
@@ -146,10 +203,18 @@ def run_startup_recovery(
             "CACHE_PATH": tmp_path / "inert-cache.json",
             "MUSIC_DIR": tmp_path,
         },
-        logger=SimpleNamespace(info=lambda *_args: None),
+        logger=SimpleNamespace(
+            info=lambda *_args: None,
+            error=lambda *_args, **_kwargs: None,
+            warning=lambda *args, **kwargs: (
+                evidence_logs.append((args, kwargs))
+                if evidence_logs is not None
+                else None
+            ),
+        ),
     )
     summary = reconcile_unfinished_tag_edit_intents_on_startup(runtime)
-    return summary, structural_calls, generic_calls
+    return summary, recovery_calls, failures, effect_calls
 
 
 def test_recovery_finishes_fully_written_files_forward():
@@ -163,7 +228,14 @@ def test_recovery_finishes_fully_written_files_forward():
         {"album": "New", "title": "New title"},
     )
 
-    assert summary == {"completed": 1, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
+    assert summary == {
+        "completed": 1,
+        "rolled_back": 0,
+        "reconciled_external": 0,
+        "commit_pending": 0,
+        "integrity_failed": 0,
+        "failed": 0,
+    }
     assert restored == []
     assert failed == []
     assert persisted == [
@@ -300,93 +372,350 @@ def test_terminal_intents_are_ignored_when_recovery_is_repeated():
         mark_recovery_failed=lambda *_args: calls.append("failed"),
     )
 
-    assert summary == {"completed": 0, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
+    assert summary == {
+        "completed": 0,
+        "rolled_back": 0,
+        "reconciled_external": 0,
+        "commit_pending": 0,
+        "integrity_failed": 0,
+        "failed": 0,
+    }
     assert calls == []
 
 
-def test_recovery_routes_album_changes_through_structural_persistence():
-    assert _recovery_structural_field(
-        previous_entries={PATH: {"album": "Old", "year": 2026}},
-        updated_entries={PATH: {"album": "New", "year": 2026}},
-    ) == "album"
+@pytest.mark.parametrize(
+    ("recorded_fields", "expected"),
+    [
+        pytest.param({"album"}, ({"album"}, set()), id="structural"),
+        pytest.param({"title"}, (set(), {"title"}), id="inventory"),
+        pytest.param(
+            {"artist", "album_artist", "genre"},
+            ({"artist", "album_artist"}, {"genre"}),
+            id="mixed",
+        ),
+        pytest.param(
+            {"exception_type", "custom_collection_name"},
+            (set(), set()),
+            id="app-owned-only",
+        ),
+    ],
+)
+def test_recovery_partitions_only_supported_field_owners(recorded_fields, expected):
+    structural, inventory = _recovery_partitions(recorded_fields)
+    assert (set(structural), set(inventory)) == expected
 
 
-def test_recovery_keeps_exception_only_changes_on_generic_persistence():
-    assert _recovery_structural_field(
-        previous_entries={PATH: {"album": "Old", "exception_type": ""}},
-        updated_entries={
-            PATH: {"album": "Old", "exception_type": "Non-album rarity"},
+@pytest.mark.parametrize(
+    "recorded_fields",
+    [
+        pytest.param({"edition"}, id="unsupported-field"),
+        pytest.param({"album", "year"}, id="unsupported-structural-combination"),
+        pytest.param({"album", "metadata_schema_version"}, id="unowned-reread-field"),
+    ],
+)
+def test_recovery_partitions_reject_unsupported_or_ambiguous_ownership(recorded_fields):
+    with pytest.raises(ValueError, match="supported persistence owner"):
+        _recovery_partitions(recorded_fields)
+
+
+def test_recovered_entry_preserves_canonical_cover_authority():
+    resolved = _resolved_recovery_entry(
+        baseline_entry={
+            "album": "Before",
+            "cover_path": "covers/current.jpg",
+            "cover_revision": "current-revision",
         },
-    ) == ""
+        refreshed_entry={
+            "album": "After",
+            "cover_path": "covers/stale.jpg",
+            "cover_revision": "stale-revision",
+        },
+        recorded_fields={"album"},
+    )
+
+    assert resolved == {
+        "album": "After",
+        "cover_path": "covers/current.jpg",
+        "cover_revision": "current-revision",
+    }
 
 
-def test_startup_recovery_uses_generic_persistence_for_album_and_year_change(
+def test_recovered_entry_rejects_unowned_reread_drift():
+    with pytest.raises(ValueError, match="unowned metadata drift.*edition"):
+        _resolved_recovery_entry(
+            baseline_entry={"album": "Before", "edition": ""},
+            refreshed_entry={"album": "After", "edition": "Deluxe"},
+            recorded_fields={"album"},
+        )
+
+
+def test_confirmed_lost_commit_ack_uses_targeted_authority_without_marking_failed(
+    monkeypatch,
+    tmp_path,
+):
+    track_path = str(tmp_path / "track-01.mp3")
+    summary, recovery_calls, failures, effect_calls = run_startup_recovery(
+        monkeypatch,
+        tmp_path,
+        file_cache={track_path: {"title": "Old"}},
+        changes=[
+            {
+                "path": track_path,
+                "old_values": {"title": "Old"},
+                "requested_values": {"title": "New"},
+            }
+        ],
+        physical_values={track_path: {"title": "New"}},
+        refreshed_entries={track_path: {"title": "New"}},
+        commit_unknown=True,
+    )
+
+    assert len(recovery_calls) == 1
+    assert failures == []
+    assert summary["completed"] == 1
+    assert len(effect_calls) == 1
+    assert effect_calls[0][1] is False
+
+
+def test_unfinished_lost_commit_ack_stays_pending_without_marking_failed(
+    monkeypatch,
+    tmp_path,
+):
+    track_path = str(tmp_path / "track-01.mp3")
+    summary, _recovery_calls, failures, effect_calls = run_startup_recovery(
+        monkeypatch,
+        tmp_path,
+        file_cache={track_path: {"title": "Old"}},
+        changes=[
+            {
+                "path": track_path,
+                "old_values": {"title": "Old"},
+                "requested_values": {"title": "New"},
+            }
+        ],
+        physical_values={track_path: {"title": "New"}},
+        refreshed_entries={track_path: {"title": "New"}},
+        commit_unknown=True,
+        terminal_status="files_verified",
+    )
+
+    assert failures == []
+    assert summary["commit_pending"] == 1
+    assert summary["failed"] == 0
+    assert effect_calls == []
+
+
+def test_lost_commit_ack_authority_read_failure_stays_pending(
+    monkeypatch,
+    tmp_path,
+):
+    track_path = str(tmp_path / "track-01.mp3")
+
+    summary, _recovery_calls, failures, effect_calls = run_startup_recovery(
+        monkeypatch,
+        tmp_path,
+        file_cache={track_path: {"title": "Old"}},
+        changes=[
+            {
+                "path": track_path,
+                "old_values": {"title": "Old"},
+                "requested_values": {"title": "New"},
+            }
+        ],
+        physical_values={track_path: {"title": "New"}},
+        refreshed_entries={track_path: {"title": "New"}},
+        commit_unknown=True,
+        authority_error=RuntimeError("authority temporarily unavailable"),
+    )
+
+    assert failures == []
+    assert summary["commit_pending"] == 1
+    assert summary["failed"] == 0
+    assert effect_calls == []
+
+
+@pytest.mark.parametrize(
+    ("error_type", "outcome"),
+    [
+        pytest.param(
+            TagEditRecoveryCommitPending,
+            "commit_pending",
+            id="pending",
+        ),
+        pytest.param(
+            TagEditRecoveryCommitIntegrityFailure,
+            "integrity_failed",
+            id="integrity",
+        ),
+    ],
+)
+def test_typed_commit_outcomes_emit_bounded_private_evidence_without_replay(
+    error_type,
+    outcome,
+):
+    reads = []
+    failures = []
+    evidence = []
+    cause = ConnectionError("private database endpoint and credentials")
+    error = error_type(
+        "authority unavailable\nC:/private/library/" + ("sensitive" * 80)
+    )
+    error.__cause__ = cause
+
+    summary = reconcile_tag_edit_intents(
+        [intent({"title": "Old"}, {"title": "New"})],
+        read_physical_values=lambda path, fields: (
+            reads.append((path, set(fields))) or {"title": "New"}
+        ),
+        restore_physical_values=lambda *_args: pytest.fail(
+            "typed commit outcome replayed media"
+        ),
+        persist_resolution=lambda **_kwargs: (_ for _ in ()).throw(error),
+        mark_recovery_failed=lambda *args: failures.append(args),
+        record_recovery_evidence=lambda item: evidence.append(dict(item)),
+    )
+
+    assert summary[outcome] == 1
+    assert summary["failed"] == 0
+    assert reads == [(PATH, {"title"})]
+    assert failures == []
+    assert len(evidence) == 1
+    assert evidence[0]["intent_id"] == "intent-1"
+    assert evidence[0]["outcome"] == outcome
+    assert evidence[0]["cause_class"] == "ConnectionError"
+    assert "\n" not in evidence[0]["reason"]
+    assert "C:/private/library" not in evidence[0]["reason"]
+    assert len(evidence[0]["reason"]) <= 160
+
+
+def test_confirmed_lost_commit_ack_installs_authoritative_exception_override(
+    monkeypatch,
+    tmp_path,
+):
+    track_path = str(tmp_path / "track-01.mp3")
+    file_cache = {
+        track_path: {
+            "path": track_path,
+            "title": "Old",
+            "exception_type": None,
+            "custom_collection_name": None,
+        }
+    }
+
+    summary, _calls, failures, _effects = run_startup_recovery(
+        monkeypatch,
+        tmp_path,
+        file_cache=file_cache,
+        changes=[
+            {
+                "path": track_path,
+                "old_values": {
+                    "title": "Old",
+                    "exception_type": "",
+                    "custom_collection_name": "",
+                },
+                "requested_values": {
+                    "title": "New",
+                    "exception_type": "Custom Collection",
+                    "custom_collection_name": "Night drive",
+                },
+            }
+        ],
+        physical_values={track_path: {"title": "New"}},
+        refreshed_entries={
+            track_path: {
+                "path": track_path,
+                "title": "New",
+                "exception_type": None,
+                "custom_collection_name": None,
+            }
+        },
+        commit_unknown=True,
+        authority_overrides={
+            track_path: {
+                "exception_type": "Custom Collection",
+                "custom_collection_name": "Night drive",
+            }
+        },
+    )
+
+    assert summary["completed"] == 1
+    assert failures == []
+    assert file_cache[track_path]["exception_type"] == "Custom Collection"
+    assert file_cache[track_path]["custom_collection_name"] == "Night drive"
+
+
+def test_startup_recovery_composes_structural_and_inventory_partitions(
     monkeypatch,
     tmp_path,
 ):
     track_path = str(tmp_path / "track-01.mp3")
     previous_entry = {
         "album": "Old album",
-        "year": "2024",
-        "title": "Opening",
+        "title": "Old title",
         "track_number": "1",
     }
     resolved_entry = {
         **previous_entry,
         "album": "New album",
-        "year": "2025",
+        "title": "New title",
     }
 
-    summary, structural_calls, generic_calls = run_startup_recovery(
+    summary, recovery_calls, failures, _effect_calls = run_startup_recovery(
         monkeypatch,
         tmp_path,
         file_cache={track_path: previous_entry},
         changes=[
             {
                 "path": track_path,
-                "old_values": {"album": "Old album", "year": "2024"},
-                "requested_values": {"album": "New album", "year": "2025"},
+                "old_values": {"album": "Old album", "title": "Old title"},
+                "requested_values": {"album": "New album", "title": "New title"},
             }
         ],
-        physical_values={track_path: {"album": "New album", "year": "2025"}},
+        physical_values={track_path: {"album": "New album", "title": "New title"}},
         refreshed_entries={
-            track_path: {"album": "New album", "year": "2025", "title": "Opening"}
+            track_path: {"album": "New album", "title": "New title"}
         },
     )
 
     assert summary["completed"] == 1
-    assert structural_calls == []
-    assert len(generic_calls) == 1
-    args, kwargs = generic_calls[0]
-    assert args[2] == {track_path: resolved_entry}
-    assert kwargs["baseline_file_cache"] == {track_path: previous_entry}
+    assert failures == []
+    assert len(recovery_calls) == 1
+    call = recovery_calls[0]
+    assert call["structural_field_names"] == {"album"}
+    assert call["inventory_field_names"] == {"title"}
+    assert call["resolved_file_entries"] == {track_path: resolved_entry}
+    assert call["previous_file_entries_snapshot"] == {track_path: previous_entry}
 
 
 @pytest.mark.parametrize(
-    ("requested_updates", "expected_targeted_field"),
+    ("requested_updates", "expected_structural", "expected_inventory"),
     [
-        pytest.param({"album": "New album"}, "album", id="album-only-targeted"),
-        pytest.param({"year": "2025"}, "year", id="year-only-targeted"),
+        pytest.param({"album": "New album"}, {"album"}, set(), id="album"),
+        pytest.param({"year": "2025"}, {"year"}, set(), id="year"),
         pytest.param(
             {"album_artist": "New artist"},
-            None,
-            id="album-artist-only-generic",
+            {"album_artist"},
+            set(),
+            id="album-artist",
         ),
-        pytest.param({"edition": "Deluxe"}, None, id="edition-only-generic"),
         pytest.param(
             {"album": "New album", "album_artist": "New artist"},
-            None,
-            id="album-and-album-artist-generic",
+            {"album", "album_artist"},
+            set(),
+            id="album-and-album-artist",
         ),
         pytest.param(
             {"album": "New album", "exception_type": "Non-album rarity"},
-            "album",
-            id="album-and-exception-targeted",
+            {"album"},
+            set(),
+            id="album-and-exception",
         ),
         pytest.param(
-            {"year": "2025", "edition": "Deluxe"},
-            None,
-            id="year-and-edition-generic",
+            {"title": "New title", "genre": "Rock"},
+            set(),
+            {"title", "genre"},
+            id="inventory",
         ),
     ],
 )
@@ -394,7 +723,8 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
     monkeypatch,
     tmp_path,
     requested_updates,
-    expected_targeted_field,
+    expected_structural,
+    expected_inventory,
 ):
     track_path = str(tmp_path / "track-01.mp3")
     previous_entry = {
@@ -404,15 +734,18 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
         "edition": "",
         "exception_type": "",
         "title": "Opening",
+        "genre": "",
         "track_number": "1",
     }
     resolved_entry = {**previous_entry, **requested_updates}
+    if "exception_type" in requested_updates:
+        resolved_entry["custom_collection_name"] = None
     old_values = {
         field: previous_entry[field]
         for field in requested_updates
     }
 
-    summary, structural_calls, generic_calls = run_startup_recovery(
+    summary, recovery_calls, failures, _effect_calls = run_startup_recovery(
         monkeypatch,
         tmp_path,
         file_cache={track_path: previous_entry},
@@ -428,19 +761,14 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
     )
 
     assert summary["completed"] == 1
-    if expected_targeted_field is not None:
-        assert generic_calls == []
-        assert len(structural_calls) == 1
-        call = structural_calls[0]
-        assert call["changed_field_names"] == {expected_targeted_field}
-    else:
-        assert structural_calls == []
-        assert len(generic_calls) == 1
-        args, call = generic_calls[0]
-        assert args[2] == {track_path: resolved_entry}
-        assert call["baseline_file_cache"] == {track_path: previous_entry}
+    assert failures == []
+    assert len(recovery_calls) == 1
+    call = recovery_calls[0]
+    assert call["structural_field_names"] == expected_structural
+    assert call["inventory_field_names"] == expected_inventory
+    assert call["resolved_file_entries"] == {track_path: resolved_entry}
+    assert call["previous_file_entries_snapshot"] == {track_path: previous_entry}
     assert callable(call["before_commit"])
-    assert call["rebuild_relation_projection"] is True
 
 
 def test_startup_recovery_passes_merged_inventory_for_blank_album_change(
@@ -463,7 +791,7 @@ def test_startup_recovery_passes_merged_inventory_for_blank_album_change(
     }
     resolved_changed_entry = {**previous_cache[changed_path], "album": ""}
 
-    summary, structural_calls, generic_calls = run_startup_recovery(
+    summary, recovery_calls, failures, _effect_calls = run_startup_recovery(
         monkeypatch,
         tmp_path,
         file_cache=previous_cache,
@@ -485,10 +813,16 @@ def test_startup_recovery_passes_merged_inventory_for_blank_album_change(
     )
 
     assert summary["completed"] == 1
-    assert generic_calls == []
-    assert len(structural_calls) == 1
-    assert structural_calls[0]["changed_paths"] == {changed_path}
-    assert structural_calls[0]["updated_file_entries"] == {
+    assert failures == []
+    assert len(recovery_calls) == 1
+    assert recovery_calls[0]["changed_paths"] == {changed_path}
+    assert recovery_calls[0]["previous_file_entries"] is previous_cache
+    assert isinstance(recovery_calls[0]["resolved_file_entries"], ChainMap)
+    assert recovery_calls[0]["resolved_file_entries"].maps[1] is previous_cache
+    assert set(recovery_calls[0]["resolved_file_entries"].maps[0]) == {
+        changed_path
+    }
+    assert recovery_calls[0]["resolved_file_entries"] == {
         changed_path: resolved_changed_entry,
         sibling_path: previous_cache[sibling_path],
     }
@@ -642,7 +976,14 @@ def test_startup_recovery_claims_one_intent_at_a_time_before_loading_inventory(m
             return {}, None, {}, None, None
     def reconcile(_runtime, _repository, claimed, _file_cache):
         events.append(("reconcile", claimed["id"]))
-        return {"completed": 1, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
+        return {
+            "completed": 1,
+            "rolled_back": 0,
+            "reconciled_external": 0,
+            "commit_pending": 0,
+            "integrity_failed": 0,
+            "failed": 0,
+        }
     monkeypatch.setattr(tag_edit_intents_postgres, "PostgresTagEditIntentRepository", Repository)
     monkeypatch.setattr(library_roots, "library_root_cache_identity", lambda _config: "root")
     monkeypatch.setattr(scan_cache_persistence, "select_scan_cache_adapter", lambda _config: Adapter())

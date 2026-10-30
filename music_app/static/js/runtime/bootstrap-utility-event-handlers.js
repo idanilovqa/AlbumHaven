@@ -138,9 +138,7 @@ async function handleUtilityBootstrapClick(event) {
   const reconcileProblematicSelectionForFilters = (nextSelectedFilters) => {
     const selectedKey = String(state.utility.selectedProblematicKey || '');
     if (!selectedKey) return;
-    const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-      String(album?.key || '') === selectedKey
-    )) || null;
+    const selectedAlbum = getSelectedProblematicAlbum();
     if (selectedAlbum && albumMatchesProblemFilters(selectedAlbum, nextSelectedFilters)) {
       return;
     }
@@ -159,8 +157,6 @@ async function handleUtilityBootstrapClick(event) {
   const problemFilterOption = event.target.closest('[data-problem-filter-value]');
   if (problemFilterOption) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = problemFilterOption.getAttribute('data-problem-filter-value') || '';
     if (value) {
       const selected = state.utility.selectedProblemFilters || [];
@@ -172,6 +168,7 @@ async function handleUtilityBootstrapClick(event) {
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
       state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
+      await loadProblematicFiles(true, { preserveSelectedDetail: true });
       renderUtilityModalContent();
       if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
@@ -181,8 +178,6 @@ async function handleUtilityBootstrapClick(event) {
   const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
   if (removeProblemFilter) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
     const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
     state.utility.selectedProblemFilters = nextSelectedFilters;
@@ -190,6 +185,7 @@ async function handleUtilityBootstrapClick(event) {
     reconcileProblematicSelectionForFilters(nextSelectedFilters);
     state.utility.problemDropdownOpen = false;
     state.utility.showRepairedDisplay = true;
+    await loadProblematicFiles(true, { preserveSelectedDetail: true });
     renderUtilityModalContent();
     return;
   }

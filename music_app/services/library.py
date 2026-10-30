@@ -313,11 +313,19 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         )
         else ""
     )
-    track_artist_values = [
-        _normalize_display_artist_name(entry.get("artist")).strip()
-        for entry in entries
-        if str(entry.get("artist") or "").strip()
-    ]
+    track_artist_values = []
+    for entry in entries:
+        structured_artists = entry.get("artists")
+        if isinstance(structured_artists, (list, tuple)):
+            track_artist_values.extend(
+                _normalize_display_artist_name(artist).strip()
+                for artist in structured_artists
+                if str(artist or "").strip()
+            )
+        elif str(entry.get("artist") or "").strip():
+            track_artist_values.append(
+                _normalize_display_artist_name(entry.get("artist")).strip()
+            )
     canonical_track_artists, track_artist_counts = _canonicalize_artist_names(track_artist_values)
     distinct_track_artists = [artist for artist in canonical_track_artists if artist]
     total_tracks = sum(track_artist_counts.values())

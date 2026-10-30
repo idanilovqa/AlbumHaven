@@ -163,8 +163,10 @@ def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, 
         ({"metadata_schema_version": 3, "release_date": "2004-07-16"}, False),
         ({"metadata_schema_version": 4, "release_date": None}, False),
         ({"metadata_schema_version": 4, "release_date": "2004-07-16"}, False),
-        ({"metadata_schema_version": 5, "release_date": None}, True),
-        ({"metadata_schema_version": 5, "release_date": "2004-07-16"}, True),
+        ({"metadata_schema_version": 5, "release_date": None}, False),
+        ({"metadata_schema_version": 5, "release_date": "2004-07-16"}, False),
+        ({"metadata_schema_version": 6, "release_date": None}, True),
+        ({"metadata_schema_version": 6, "release_date": "2004-07-16"}, True),
     ],
 )
 def test_file_metadata_schema_is_current_requires_exact_non_bool_version(
@@ -382,6 +384,43 @@ def test_first_tag_preserves_a_real_multi_value_text_sequence():
     }
 
     assert metadata.first_tag(tags, ["artist"]) == "Ayreon"
+
+
+def test_read_metadata_preserves_multi_value_track_artist_credit(monkeypatch, tmp_path):
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services import scan_cache_persistence
+
+    track_path = tmp_path / "01 - America Is Waiting.mp3"
+    track_path.touch()
+    monkeypatch.setattr(
+        metadata,
+        "read_tags",
+        lambda _path: {
+            "album": SimpleNamespace(text=["My Life in the Bush of Ghosts"]),
+            "albumartist": SimpleNamespace(text=["Brian Eno & David Byrne"]),
+            "artist": SimpleNamespace(text=["Brian Eno", "David Byrne"]),
+            "title": SimpleNamespace(text=["America Is Waiting"]),
+            "tracknumber": SimpleNamespace(text=["1"]),
+        },
+    )
+
+    entry = metadata.read_metadata_for_file(track_path)
+    albums = build_albums_from_file_cache({str(track_path): entry})
+
+    assert entry["artist"] == "Brian Eno & David Byrne"
+    assert entry["artists"] == ["Brian Eno", "David Byrne"]
+    assert albums[0].artists == ["Brian Eno", "David Byrne"]
+    assert albums[0].tracks[0].artist == "Brian Eno & David Byrne"
+
+    artist_rows, _album_rows, _featured_rows, track_rows, _file_rows = (
+        scan_cache_persistence._inventory_rows_from_albums(
+            {str(track_path): entry},
+            albums,
+        )
+    )
+
+    assert {row["name"] for row in artist_rows} == {"Brian Eno", "David Byrne"}
+    assert track_rows[0]["metadata"].obj["artists"] == ["Brian Eno", "David Byrne"]
 
 
 def test_read_metadata_falls_back_from_empty_album_artist_text_to_track_artist(
@@ -608,7 +647,7 @@ def test_read_metadata_for_generated_mp3_parses_real_id3_album_rating_txxx(
     assert parsed["album_artist"] == "Christopher Tin"
     assert parsed["genre"] == "Classical Crossover"
     assert parsed["album_rating"] == 9
-    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 5
+    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 6
 
 def test_read_editable_tag_values_returns_exact_blanks_and_requested_fields(monkeypatch):
     audio = {

@@ -3385,10 +3385,12 @@ def _inventory_rows_from_albums(
             private_path = str(file_entry.get("path") or track_key).strip()
             represented_private_paths.add(private_path)
             track_artist_name = _text_or_none(getattr(track, "artist", None) or getattr(album, "album_artist", None))
-            attached_track_artist_names = track_artist_credit_members(
-                track_artist_name,
-                owner_name,
-            )
+            raw_track_artist_names = file_entry.get("artists")
+            attached_track_artist_names = (
+                _deduped_artist_names(list(raw_track_artist_names))
+                if isinstance(raw_track_artist_names, (list, tuple))
+                else []
+            ) or track_artist_credit_members(track_artist_name, owner_name)
             track_artist_key = ensure_artist(
                 attached_track_artist_names[0]
                 if attached_track_artist_names

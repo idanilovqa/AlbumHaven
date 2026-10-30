@@ -27,7 +27,7 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 5
+FILE_METADATA_SCHEMA_VERSION = 6
 
 if EasyID3 is not None:
     EasyID3.RegisterTXXXKey("albumrating", "Album Rating")
@@ -220,6 +220,29 @@ def first_tag(tags: dict[str, object], keys: list[str]) -> str | None:
             if text:
                 return text
     return None
+
+
+def artist_tag_values(tags: dict[str, object], keys: list[str]) -> list[str]:
+    for key in keys:
+        value = tags.get(key)
+        values = value if isinstance(value, (list, tuple)) else getattr(value, "text", None)
+        if not isinstance(values, (list, tuple)):
+            text = first_tag(tags, [key])
+            if text:
+                return [text]
+            continue
+        artists: list[str] = []
+        for item in values:
+            text = (
+                item.decode("utf-8", errors="ignore").strip()
+                if isinstance(item, bytes)
+                else str(item).strip()
+            )
+            if text and text not in artists:
+                artists.append(text)
+        if artists:
+            return artists
+    return []
 
 
 def first_custom_tag(tags: dict[str, object], logical_names: list[str]) -> str | None:
@@ -611,9 +634,11 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     tags = read_tags(path)
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""
-    track_artist = first_tag(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"])
+    track_artists = artist_tag_values(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"])
+    track_artist = " & ".join(track_artists) if track_artists else None
     album_artist = first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]) or track_artist or "Unknown Artist"
     track_artist = track_artist or album_artist
+    track_artists = track_artists or [track_artist]
     track_title = first_tag(tags, ["title", "tit2"]) or path.stem
     genre = first_tag(tags, ["genre", "tcon", "\xa9gen"])
     track_number = safe_int(first_tag(tags, ["tracknumber", "track number", "track", "trck"]))
@@ -635,6 +660,7 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
         "genre": genre,
         "track_number": track_number, "disc_number": disc_number, "disc_number_raw": disc_number_raw,
         "total_discs": total_discs, "disc_subtitle": disc_subtitle or None, "artist": track_artist,
+        "artists": track_artists,
         "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_type": album_type, "album_rating": album_rating,
         "exception_type": exception_type or None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,

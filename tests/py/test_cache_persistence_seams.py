@@ -33,6 +33,18 @@ def test_file_entry_round_trip_preserves_local_membership_rejection(tmp_path):
     assert cache_module.deserialize_file_entry(serialized)["local_album_membership_problem"] == entry["local_album_membership_problem"]
 
 
+def test_file_entry_round_trip_preserves_structured_track_artists(tmp_path):
+    entry = _cache_entry(tmp_path / "joint-credit.flac")
+    entry["artist"] = "Brian Eno & David Byrne"
+    entry["artists"] = ["Brian Eno", "David Byrne"]
+
+    serialized = cache_module.serialize_file_entry(entry)
+    hydrated = cache_module.deserialize_file_entry(serialized)
+
+    assert serialized["artists"] == ["Brian Eno", "David Byrne"]
+    assert hydrated["artists"] == ["Brian Eno", "David Byrne"]
+
+
 def test_file_entry_round_trip_preserves_structural_cover_inheritance(tmp_path):
     entry = _cache_entry(tmp_path / "split.flac")
     entry["cover_inherited_from_structural_edit"] = True

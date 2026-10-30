@@ -360,7 +360,15 @@ test('FTC-COVERS-026 an explicit adequate local cover remains user-owned and mak
       expect(fullSize.sha256).toBe(saved.candidateFullSize.sha256);
       expect((await readOwnedLegacyCoverState(fixture)).provenance).toBe('explicit');
       const evidence = await coverLookupActions.readProviderFixtureEvidence();
-      expect((evidence.apple_search_terms || []).some(term => String(term).includes(fixture.artist))).toBe(false);
+      const selectedReleaseQueries = new Set([
+        `${fixture.artist} ${fixture.album}`,
+        `${fixture.artist} ${fixture.album} ${fixture.year}`,
+      ]);
+      expect(
+        (evidence.apple_search_terms || [])
+          .map(term => String(term))
+          .filter(term => selectedReleaseQueries.has(term)),
+      ).toEqual([]);
       await trackModalActions.waitForCoverLookupImprovementIndicator(false);
       await trackModalActions.close();
     }

@@ -3262,6 +3262,8 @@ def _inventory_rows_from_albums(
                 and not _is_various_artist(classified_owner)
             ):
                 return classified_owner
+            if _is_various_artist(tagged_owner):
+                return None
             tagged_members = split_album_artist_members(tagged_owner)
             if (
                 classified_owner is not None

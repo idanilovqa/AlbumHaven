@@ -440,6 +440,14 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         if explicit_various
         else _format_shared_album_artist(display_member_artists)
     )
+    if (
+        display_album_artist == "Various Artists"
+        and persisted_compilation_state is not True
+        and len(display_member_artists) <= 3
+        and display_member_artists
+    ):
+        display_album_artist = _format_shared_album_artist(display_member_artists)
+        member_artists = display_member_artists
     return (
         compilation_state(True),
         display_album_artist or "Various Artists",

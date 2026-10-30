@@ -53,7 +53,9 @@ def build_cover_refresh_jobs(
                 "selected_remote_cover_url": entry.get("selected_remote_cover_url", entry.get("remote_cover_url")),
                 "selected_remote_cover_width": entry.get("selected_remote_cover_width", entry.get("remote_cover_width")),
                 "selected_remote_cover_height": entry.get("selected_remote_cover_height", entry.get("remote_cover_height")),
-                "selected_cover_path": str(entry.get("selected_cover_path") or "").strip() or None,
+                "selected_cover_path": (
+                    str(entry.get("selected_cover_path") or "").strip() or None
+                ) if entry_album_id is not None else None,
                 "selected_cover_path_conflict": False,
                 "needs_cover_fetch": False,
             },
@@ -94,7 +96,11 @@ def build_cover_refresh_jobs(
                 "cover_selection_provenance",
             ):
                 job[field] = None
-        elif entry_selected_cover_path and not job.get("selected_cover_path_conflict"):
+        elif (
+            entry_album_id is not None
+            and entry_selected_cover_path
+            and not job.get("selected_cover_path_conflict")
+        ):
             if job.get("selected_cover_path") not in {None, entry_selected_cover_path}:
                 job["selected_cover_path"] = None
                 job["selected_cover_path_conflict"] = True

@@ -592,14 +592,13 @@ def test_targeted_various_artists_release_keeps_every_track_artist_visible(
         album="Rain Man",
         album_artist="Various Artists",
         track_artists=("Belle Stars", "Watcher Compilation Performer"),
+        is_compilation=True,
         preserve_tagged_compilation_owner=True,
     )
     artist_rows, album_rows, featured_rows, track_rows, _track_file_rows = rows
 
     assert album_rows[0]["artist_key"] is None
-    assert album_rows[0]["metadata"]["album_artist"] == (
-        "Belle Stars / Watcher Compilation Performer"
-    )
+    assert album_rows[0]["metadata"]["album_artist"] == "Various Artists"
     assert {
         row["artist_key"]
         for row in featured_rows

@@ -201,6 +201,8 @@ def test_targeted_additions_publish_tagged_or_inferred_album_artist_identity(
             )
             entry["album_artist"] = album_artist
             entry["track_number"] = index
+            if album == "Rain Man":
+                entry["is_compilation"] = True
             entries.append(entry)
         if stage_first_track and addition_index == 0:
             fixture.adapter.persist_targeted_inventory_mutation(

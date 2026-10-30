@@ -698,6 +698,7 @@ def _reusable_cover_lookup_task_id(
     config: Mapping[str, object] | None,
     preferred_task_id: str = "",
     allow_preferred_path_rebind: bool = False,
+    requested_manual_urls: list[str] | None = None,
 ) -> str:
     def path_key(value: object) -> str:
         text = str(value or "").strip()
@@ -705,6 +706,13 @@ def _reusable_cover_lookup_task_id(
 
     normalized_paths = sorted(filter(None, (path_key(path) for path in requested_track_paths)))
     if not normalized_paths:
+        return ""
+    normalized_manual_urls = sorted({
+        str(url or "").strip()
+        for url in (requested_manual_urls or [])
+        if str(url or "").strip()
+    })
+    if not preferred_task_id and not normalized_manual_urls:
         return ""
     persisted_tasks = load_cover_lookup_notifications(config) if config is not None else []
     with _COVER_LOOKUP_TASKS_LOCK:
@@ -721,9 +729,17 @@ def _reusable_cover_lookup_task_id(
         })
     for task in sorted(tasks_by_id.values(), key=_sort_cover_lookup_task_key, reverse=True):
         task_id = str(task.get("id") or "")
+        task_manual_urls = sorted({
+            str(url or "").strip()
+            for url in (task.get("manual_urls") or [])
+            if str(url or "").strip()
+        })
         if (
             task_id not in busy_ids
-            and task_id == preferred_task_id
+            and (
+                task_id == preferred_task_id
+                or (not preferred_task_id and task_manual_urls == normalized_manual_urls)
+            )
             and not bool(task.get("internal"))
             and is_terminal_cover_lookup_task(task)
             and (
@@ -746,15 +762,12 @@ def create_cover_lookup_task(
     allow_preferred_path_rebind: bool = False,
 ) -> tuple[str, Event]:
     preferred_task_id = str(preferred_task_id or "").strip()
-    reusable_task_id = (
-        ""
-        if not preferred_task_id
-        else _reusable_cover_lookup_task_id(
-            requested_track_paths,
-            config=config,
-            preferred_task_id=preferred_task_id,
-            allow_preferred_path_rebind=allow_preferred_path_rebind,
-        )
+    reusable_task_id = _reusable_cover_lookup_task_id(
+        requested_track_paths,
+        config=config,
+        preferred_task_id=preferred_task_id,
+        allow_preferred_path_rebind=allow_preferred_path_rebind,
+        requested_manual_urls=manual_urls,
     )
     task_id = reusable_task_id or uuid.uuid4().hex
     cancel_event = Event()

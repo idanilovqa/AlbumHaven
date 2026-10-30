@@ -27,11 +27,17 @@ function albumCardHtml(album, options = {}) {
   const albumKey = getAlbumRequestKey(album);
   const albumVersionKey = getAlbumCardVersionKey(album);
   const albumFallback = JSON.stringify({
+    album_id: album?.album_id || album?.id || null,
     key: getAlbumRequestKey(album),
     name: String(album?.name || ''),
     album_artist: String(album?.album_artist || ''),
     year: album?.year ?? '',
     edition: String(album?.edition || ''),
+    identity_revision: album?.identity_revision !== null
+      && album?.identity_revision !== undefined
+      && Number.isSafeInteger(Number(album.identity_revision))
+      ? Number(album.identity_revision)
+      : null,
     preview_only: Boolean(album?.preview_only),
     track_count_preview: Number(album?.track_count_preview || 0),
     total_duration_seconds: Number(album?.total_duration_seconds || 0),

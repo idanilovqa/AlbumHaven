@@ -94,6 +94,11 @@ test('same-query preserve-scroll response retains mounted children for scroll de
   assert.equal(calls.renderView[0].preserveMountedGallery, undefined);
   assert.equal(calls.renderView[0].preserveMountedGalleryChildren, true);
   assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 13);
+  assert.equal(
+    context.state.view.artist_groups[0].albums[0].identity_revision,
+    13,
+    'rendered cards retain the inventory revision that produced their identity',
+  );
 });
 
 test('foreground view consumes a deferred inventory refresh at the revision it applies', async () => {

@@ -430,13 +430,14 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const albumIdQuery = Number.isInteger(albumId) && albumId > 0
     ? `&album_id=${encodeURIComponent(String(albumId))}`
     : '';
+  const lineageQuery = options.resolveLineage === true ? '&resolve_lineage=1' : '';
   const albumKeyUrl = `/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`;
   const requestOptions = {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
   };
-  let response = await fetch(`${albumKeyUrl}${albumIdQuery}`, requestOptions);
+  let response = await fetch(`${albumKeyUrl}${albumIdQuery}${lineageQuery}`, requestOptions);
   let payload = null;
   try {
     payload = await response.json();
@@ -500,7 +501,9 @@ function selectTrackModalCurrentRelease(albumId) {
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return Promise.resolve(null);
-  const cachedAlbum = options.canonicalRefresh === true
+  const requiresIdentityResolution = options.canonicalRefresh === true
+    || options.resolveLineage === true;
+  const cachedAlbum = requiresIdentityResolution
     ? null
     : getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
   if (cachedAlbum) return Promise.resolve(cachedAlbum);
@@ -508,7 +511,7 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const existingLoad = requestAliases
     .map((alias) => trackModalAlbumDetailsLoads.get(alias))
     .find(Boolean);
-  if (existingLoad && options.canonicalRefresh !== true) {
+  if (existingLoad && !requiresIdentityResolution) {
     const speculativeController = trackModalSpeculativeAlbumDetailsLoadControllers.get(existingLoad);
     if (options.speculative === true || !speculativeController) return existingLoad;
     trackModalSpeculativeAlbumDetailsLoadControllers.delete(existingLoad);
@@ -572,6 +575,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
       canonicalRefresh: true,
+      resolveLineage: true,
     });
   } catch (error) {
     loadError = error;
@@ -693,6 +697,7 @@ function openTrackModal(album, options = {}) {
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
     const detailsPromise = loadTrackModalAlbumDetails(albumKey, {
       albumId: albumWithPlaybackContext.album_id || albumWithPlaybackContext.id,
+      resolveLineage: albumWithPlaybackContext.resolve_lineage === true,
     });
     detailsPromise.then((hydratedAlbum) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
@@ -779,6 +784,18 @@ function resolveTrackModalActionAlbum(button) {
   const albumVersionKey = String(getTrackModalButtonAlbumVersionKey(button) || '').trim();
   const currentAlbum = getCurrentTrackModalAlbum();
   const fallbackAlbum = parseTrackModalButtonAlbumFallback(button);
+  const renderedIdentityRevision = Number(fallbackAlbum?.identity_revision);
+  const currentIdentityRevision = Number(state?.status?.inventory_mutation_revision || 0);
+  if (
+    fallbackAlbum
+    && fallbackAlbum.identity_revision !== null
+    && fallbackAlbum.identity_revision !== undefined
+    && Number.isSafeInteger(renderedIdentityRevision)
+    && renderedIdentityRevision >= 0
+    && currentIdentityRevision > renderedIdentityRevision
+  ) {
+    return { ...fallbackAlbum, resolve_lineage: true };
+  }
   if (albumVersionKey) {
     const currentAlbumVersionKey = getTrackModalAlbumVersionKey(currentAlbum);
     if (currentAlbum && !albumRequiresHydration(currentAlbum) && currentAlbumVersionKey === albumVersionKey) {
@@ -820,7 +837,10 @@ async function resolveHydratedTrackModalActionAlbum(button) {
   ).trim();
   if (!albumKey) return null;
   try {
-    return await loadTrackModalAlbumDetails(albumKey);
+    return await loadTrackModalAlbumDetails(albumKey, {
+      albumId: album.album_id || album.id,
+      resolveLineage: album.resolve_lineage === true,
+    });
   } catch (error) {
     console.error('[AlbumHaven][AlbumDetails] Failed to load full album details for action.', error);
     showToast('Unable to load album details.', 'error', 3200);

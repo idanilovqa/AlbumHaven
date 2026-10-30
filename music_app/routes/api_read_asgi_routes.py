@@ -70,7 +70,13 @@ from config import PERSISTENCE_BACKEND_POSTGRES
 router = APIRouter()
 
 _ALBUM_DETAIL_QUERY_PARAMS = frozenset(
-    {"album_id", "album_key", "client_surface", "client_surface_class"}
+    {
+        "album_id",
+        "album_key",
+        "client_surface",
+        "client_surface_class",
+        "resolve_lineage",
+    }
 )
 
 
@@ -1017,6 +1023,7 @@ async def album_details(request: Request) -> JSONResponse:
         )
     album_key = str(request.query_params.get("album_key") or "").strip()
     album_id_text = str(request.query_params.get("album_id") or "").strip()
+    resolve_lineage_first = request.query_params.get("resolve_lineage") == "1"
     try:
         album_id = int(album_id_text) if album_id_text else None
     except ValueError:
@@ -1047,7 +1054,33 @@ async def album_details(request: Request) -> JSONResponse:
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         lineage = None
         payload = None
-        if album_id is not None:
+        if resolve_lineage_first:
+            try:
+                lineage = await run_in_threadpool(
+                    AlbumIdentityLineageRepository(_app_config(request)).resolve,
+                    album_id=album_id,
+                    album_key=album_key or None,
+                )
+            except (RuntimeError, OSError):
+                lineage = {"status": "unresolved", "album": None, "choices": []}
+            if lineage["status"] == "split":
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "This album was split—choose the current release",
+                        "resolution_kind": "album_split",
+                        "current_releases": lineage["choices"],
+                    },
+                    status_code=409,
+                )
+            current_album = lineage.get("album")
+            if isinstance(current_album, Mapping):
+                payload = await run_in_threadpool(
+                    repository.build_album_detail_payload_by_id,
+                    current_album.get("album_id"),
+                    client_surface_class=client_surface_class,
+                )
+        if payload is None and album_id is not None:
             current_payload = await run_in_threadpool(
                 repository.build_album_detail_payload_by_id,
                 album_id,
@@ -1058,7 +1091,7 @@ async def album_details(request: Request) -> JSONResponse:
                 or str(current_payload.get("key") or "").strip() == album_key
             ):
                 payload = current_payload
-        else:
+        elif payload is None:
             payload = await run_in_threadpool(
                 repository.build_album_detail_payload,
                 album_key,

@@ -2013,11 +2013,15 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     });
     expect(saved.requestPayload.task_id).not.toBe(generationBTaskId);
     expect(saved.payload.optimistic_cover_path).toMatch(/[\\/]cover\.jpg$/i);
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.waitForDrawerOpen();
+    await expect(coverLookupActions.coverLookup.taskCardById(generationATaskId)).toHaveCount(1);
     await coverLookupActions.waitForTaskStatusById(generationATaskId, 'Art chosen', {
       timeout: 120000,
     });
     const savedTask = await coverLookupActions.readTaskById(generationATaskId);
     expect(savedTask?.selected_candidate_id).toBe(generationAChoice.id);
+    await coverLookupActions.closeDrawer();
     const persistedGenerationA = await coverLookupActions.readFullSizeCoverEvidence({
       coverPath: saved.payload.optimistic_cover_path,
       label: 'persisted generation-A cover before generation-B completion',

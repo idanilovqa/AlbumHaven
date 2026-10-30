@@ -695,7 +695,11 @@ def _install_fake_notification_adapter(monkeypatch, config, initial_tasks=None):
 
 
 @pytest.mark.parametrize("preferred_task_id", ["", "  "])
-def test_fresh_lookup_allocates_new_task_for_same_files(config, monkeypatch, preferred_task_id):
+def test_fresh_lookup_allocates_new_task_for_same_files_without_manual_urls(
+    config,
+    monkeypatch,
+    preferred_task_id,
+):
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     other_track_path = track_path.with_name("different.mp3")
     completed_id = "completed-same-album"
@@ -733,6 +737,54 @@ def test_fresh_lookup_allocates_new_task_for_same_files(config, monkeypatch, pre
         task_id,
         completed_id,
         "different-files-same-labels",
+    }
+
+
+def test_manual_lookup_reuses_terminal_task_for_same_files_and_urls_without_preferred_id(
+    config,
+    monkeypatch,
+):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    completed_id = "completed-manual-lookup"
+    manual_urls = [
+        "https://covers.example/front.jpg",
+        "https://covers.example/back.jpg",
+    ]
+    _install_fake_notification_adapter(monkeypatch, config, [
+        {
+            "id": completed_id,
+            "status": "completed",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "track_paths": [str(track_path).swapcase()],
+            "manual_urls": list(manual_urls),
+            "created_at": "2026-05-17T00:00:00+00:00",
+            "finished_at": "2026-05-17T00:01:00+00:00",
+        },
+        {
+            "id": "different-manual-lookup",
+            "status": "completed",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "track_paths": [str(track_path)],
+            "manual_urls": ["https://covers.example/different.jpg"],
+            "created_at": "2026-05-18T00:00:00+00:00",
+            "finished_at": "2026-05-18T00:01:00+00:00",
+        },
+    ])
+
+    task_id, _cancel_event = create_cover_lookup_task(
+        _album_payload(track_path),
+        {str(track_path)},
+        list(reversed(manual_urls)),
+        config=config,
+    )
+
+    assert task_id == completed_id
+    assert cover_lookup_result(task_id)["status"] == "pending"
+    assert {task["id"] for task in list_cover_lookup_tasks(config=config)} == {
+        completed_id,
+        "different-manual-lookup",
     }
 
 

@@ -582,6 +582,99 @@ test('stale album hydration sends its id and renders current split choices', asy
   );
 });
 
+test('a card rendered before an inventory mutation resolves lineage before current identity', () => {
+  const staleRenderedAlbum = {
+    album_id: 17,
+    key: 'artist::original',
+    name: 'Original Album',
+    album_artist: 'Artist',
+    preview_only: true,
+    track_count_preview: 9,
+    identity_revision: 7,
+  };
+  const currentIndexedAlbum = {
+    ...staleRenderedAlbum,
+    track_count_preview: 4,
+    identity_revision: 8,
+  };
+  const { context } = loadHelper({
+    initialAlbums: [currentIndexedAlbum],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: () => ({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        ok: false,
+        error: 'This album was split—choose the current release',
+        resolution_kind: 'album_split',
+        current_releases: [],
+      }),
+    }),
+  });
+  const staleButton = new context.HTMLElement('stale-card');
+  staleButton.setAttribute('data-album-key', staleRenderedAlbum.key);
+  staleButton.setAttribute('data-album', JSON.stringify(staleRenderedAlbum));
+
+  assert.equal(context.openTrackModalForButton(staleButton), true);
+  assert.equal(
+    context.fetchCalls[0].url,
+    '/album-details?album_key=artist%3A%3Aoriginal&album_id=17&resolve_lineage=1',
+  );
+});
+
+test('an unstamped preview card does not claim stale lineage', () => {
+  const album = {
+    album_id: 17,
+    key: 'artist::current',
+    name: 'Current Album',
+    album_artist: 'Artist',
+    preview_only: true,
+    identity_revision: null,
+  };
+  const { context } = loadHelper({
+    initialAlbums: [album],
+    inventoryMutationRevision: 8,
+  });
+  const button = new context.HTMLElement('unstamped-card');
+  button.setAttribute('data-album-key', album.key);
+  button.setAttribute('data-album', JSON.stringify(album));
+
+  assert.equal(context.openTrackModalForButton(button), true);
+  assert.equal(
+    context.fetchCalls[0].url,
+    '/album-details?album_key=artist%3A%3Acurrent&album_id=17',
+  );
+});
+
+test('a stale card bypasses current hydrated details before resolving lineage', () => {
+  const staleRenderedAlbum = {
+    album_id: 17,
+    key: 'artist::original',
+    name: 'Original Album',
+    album_artist: 'Artist',
+    preview_only: true,
+    identity_revision: 7,
+  };
+  const currentHydratedAlbum = {
+    ...staleRenderedAlbum,
+    preview_only: false,
+    identity_revision: 8,
+    tracks: [{ path: 'C:\\Music\\Artist\\Original Album\\01 Current.flac' }],
+  };
+  const { context } = loadHelper({
+    initialAlbums: [staleRenderedAlbum],
+    inventoryMutationRevision: 8,
+  });
+  context.cacheHydratedTrackModalAlbum(staleRenderedAlbum.key, currentHydratedAlbum);
+  const button = new context.HTMLElement('stale-cached-card');
+  button.setAttribute('data-album-key', staleRenderedAlbum.key);
+  button.setAttribute('data-album', JSON.stringify(staleRenderedAlbum));
+
+  assert.equal(context.openTrackModalForButton(button), true);
+  assert.equal(context.fetchCalls.length, 1);
+  assert.match(context.fetchCalls[0].url, /resolve_lineage=1$/);
+});
+
 test('Album Details retries by key when an older server rejects album_id', async () => {
   const album = {
     album_id: 419232,

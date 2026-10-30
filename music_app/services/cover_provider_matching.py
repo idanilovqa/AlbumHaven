@@ -411,6 +411,19 @@ def compound_release_title_starts_with_album(target_album: str, candidate_album:
     return canonical_album_title(parts[0]) == canonical_album_title(target_album)
 
 
+def candidate_album_title_expands_target(target_album: str, candidate_album: str) -> bool:
+    if compound_release_title_starts_with_album(target_album, candidate_album):
+        return True
+    if extract_album_part_marker(target_album) != extract_album_part_marker(candidate_album):
+        return False
+    candidate_is_remaster, _candidate_remaster_years = remaster_identity(candidate_album)
+    if candidate_is_remaster:
+        return False
+    target_title = canonical_album_title(target_album)
+    candidate_title = canonical_album_title(candidate_album)
+    return bool(target_title and candidate_title.startswith(f"{target_title} "))
+
+
 def release_year_from_match_meta(meta: dict | None) -> int | None:
     metadata = meta or {}
     return parse_year(metadata.get("year") or metadata.get("releaseDate"))
@@ -591,13 +604,11 @@ def match_score(
         and (target_sequence_marker is not None or candidate_sequence_marker is not None)
     ):
         return 0.0
-    compound_release_match = compound_release_title_starts_with_album(
+    title_expansion_match = candidate_album_title_expands_target(
         target_album,
         candidate_album,
     )
     album_core_score = similarity(target_album_core, candidate_album_core)
-    if compound_release_match:
-        album_core_score = max(album_core_score, 1.0)
     is_self_titled_target = is_self_titled_album(target_artist, target_album)
     self_titled_album_identity_matches = (
         target_album_core == candidate_album_core
@@ -614,6 +625,7 @@ def match_score(
     if (
         is_short_album_title(target_album)
         and target_album_core != candidate_album_core
+        and not title_expansion_match
         and not (is_self_titled_target and self_titled_album_identity_matches)
     ):
         return 0.0
@@ -624,13 +636,17 @@ def match_score(
     if (
         target_tokens != candidate_tokens
         and (target_tokens < candidate_tokens or candidate_tokens < target_tokens)
-        and not compound_release_match
+        and not title_expansion_match
         and not (is_self_titled_target and self_titled_album_identity_matches)
     ):
         return 0.0
     if has_release_type_marker(candidate_album) and not has_release_type_marker(target_album) and album_core_score < 0.9:
         return 0.0
-    if has_live_marker(target_album) != has_live_marker(candidate_album) and album_core_score < 0.95:
+    if (
+        has_live_marker(target_album) != has_live_marker(candidate_album)
+        and not title_expansion_match
+        and album_core_score < 0.95
+    ):
         return 0.0
     if suspicious_digit_album_substitution(target_album, candidate_album):
         year_delta = abs(target_year - candidate_year) if target_year and candidate_year else None
@@ -638,6 +654,8 @@ def match_score(
         artist_is_weak = artist_score < 0.78
         if year_is_off or artist_is_weak:
             return 0.0
+    if title_expansion_match:
+        album_core_score = max(album_core_score, 0.82)
     effective_album_score = max(album_score, album_core_score)
     exact_album_bonus = album_match_bonus(target_album, candidate_album)
     if album_core_score < 0.82:

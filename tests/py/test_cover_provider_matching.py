@@ -188,7 +188,7 @@ def test_match_score_accepts_exact_first_disc_title_in_compound_release_title():
     ) > 0.0
 
 
-def test_match_score_does_not_treat_unseparated_live_title_as_compound_release():
+def test_match_score_accepts_unseparated_partial_title_for_same_artist():
     assert matching.match_score(
         target_artist="Miriodor",
         target_album="Parade",
@@ -196,6 +196,18 @@ def test_match_score_does_not_treat_unseparated_live_title_as_compound_release()
         target_year=2005,
         candidate_artist="Miriodor",
         candidate_album="Parade Live at NEARfest",
+        candidate_year=2005,
+    ) > 0.0
+
+
+def test_match_score_rejects_partial_title_for_a_different_numbered_part():
+    assert matching.match_score(
+        target_artist="Miriodor",
+        target_album="Parade",
+        target_edition=None,
+        target_year=2005,
+        candidate_artist="Miriodor",
+        candidate_album="Parade Part 2",
         candidate_year=2005,
     ) == 0.0
 

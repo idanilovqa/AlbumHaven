@@ -25,6 +25,8 @@ class LedgerConnection:
         self.applied = []
         self.fail_insert = False
         self.role_checked = False
+        self.trigger_privilege = False
+        self.events = []
 
     def __enter__(self):
         self.before = deepcopy((self.ledger_exists, self.ledger, self.applied))
@@ -45,6 +47,17 @@ class LedgerConnection:
 
     def execute(self, sql, params=None):
         query = str(sql).lower()
+        if query.lstrip().startswith('select has_table_privilege'):
+            self.events.append('presence:probe')
+            return Result([{'has_trigger': self.trigger_privilege}])
+        if query.startswith('grant trigger'):
+            self.trigger_privilege = True
+            self.events.append('presence:grant')
+            return Result([])
+        if query.startswith('revoke trigger'):
+            self.trigger_privilege = False
+            self.events.append('presence:revoke')
+            return Result([])
         if 'to_regclass' in query:
             return Result([{'migration_table': 'ops.schema_migrations' if self.ledger_exists else None}])
         if query.lstrip().startswith('select') and 'ops.schema_migrations' in query:
@@ -56,12 +69,16 @@ class LedgerConnection:
             if self.fail_insert:
                 raise RuntimeError('ledger insert unavailable')
             self.ledger[params[0]] = params[1]
+            self.events.append('ledger:' + params[0])
             return Result([])
         if query.startswith('-- fixture migration'):
             assert self.role_checked
             if 'bootstrap' in query:
                 self.ledger_exists = True
             self.applied.append(sql)
+            if 'current playback' in query:
+                assert self.trigger_privilege is True
+                self.events.append('presence:body')
             return Result([])
         raise AssertionError(f'Unexpected migration harness query: {sql}')
 
@@ -111,6 +128,30 @@ def test_migration_and_ledger_insert_roll_back_together(migration_store):
         isolated.apply_all_migrations('owned-test-url')
     assert connection.applied == []
     assert list(connection.ledger) == [first.name]
+
+
+def test_isolated_runner_scopes_0096_trigger_authority_through_ledger_insert(
+    migration_store,
+):
+    connection, first, second = migration_store
+    presence = first.with_name('0096_create_current_playback_presence.sql')
+    presence.write_text('-- fixture migration current playback\n')
+
+    isolated.apply_all_migrations('owned-test-url')
+
+    scoped = [event for event in connection.events if event.startswith('presence:')]
+    assert scoped == [
+        'presence:probe',
+        'presence:grant',
+        'presence:body',
+        'presence:revoke',
+    ]
+    body = connection.events.index('presence:body')
+    assert body < connection.events.index('ledger:' + presence.name)
+    assert connection.events.index('ledger:' + presence.name) < connection.events.index(
+        'presence:revoke'
+    )
+    assert connection.trigger_privilege is False
 
 
 class CaptureResetConnection:

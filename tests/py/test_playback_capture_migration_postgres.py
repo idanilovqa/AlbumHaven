@@ -5,7 +5,17 @@ import pytest
 
 from music_app.services.playback_capture import CaptureError
 from music_app.services import playback_capture_postgres as repository
-from tests.py.test_playback_capture_postgres import capture_db, urls
+from tests.py.test_playback_capture_postgres import capture_db as current_capture_db, urls
+from tests.py.listening_tracking_historical_support import historical_capture_db
+
+
+@pytest.fixture
+def capture_db(request):
+    cohort = getattr(request, 'param', None)
+    if cohort is None:
+        return request.getfixturevalue('current_capture_db')
+    assert cohort == 'historical-0153'
+    return request.getfixturevalue('historical_capture_db')
 
 
 def _global(db):
@@ -66,6 +76,7 @@ def test_quota_rejection_rolls_back_rows_and_all_charges(capture_db,monkeypatch,
         assert c.execute('select id from integration.playback_capture_budget where account_id=%s',(db.account,)).fetchone() is None
 
 
+@pytest.mark.parametrize('capture_db', ['historical-0153'], indirect=True)
 def test_library_cascade_releases_retained_anonymous_rows(capture_db):
     """A generated, uniquely owned library isolates this migration trigger test."""
     db=capture_db;before=_global(db);db.record();parent=db.rows()[0]

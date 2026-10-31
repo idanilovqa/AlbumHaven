@@ -37,7 +37,7 @@ Generate the HMAC secret with a local password manager or a cryptographically
 secure random generator. Keep it stable between server restarts and outside
 Git. Changing it invalidates derived security state.
 
-Apply every SQL migration in filename order with the migrator connection. Set
+Apply migrations through the checksum-aware runner with the migrator connection. Set
 `PGPASSFILE` to a protected libpq password file, then put the password-free
 migrator URL in the current shell. This keeps the password out of command and
 PowerShell history:
@@ -45,13 +45,24 @@ PowerShell history:
 ```powershell
 $env:PGPASSFILE = 'C:\secure\album-haven-pgpass.conf'
 $env:ALBUM_HAVEN_MIGRATOR_DATABASE_URL = 'postgresql://album_haven_migrator@localhost:5432/album_haven_core'
-Get-ChildItem migrations\postgres\*.sql |
-  Sort-Object Name |
-  ForEach-Object { psql -X -v ON_ERROR_STOP=1 $env:ALBUM_HAVEN_MIGRATOR_DATABASE_URL -f $_.FullName }
+@'
+import os
+import psycopg
+from scripts.render_capabilities_demo import migrate
+
+with psycopg.connect(os.environ['ALBUM_HAVEN_MIGRATOR_DATABASE_URL'],
+                     autocommit=True, connect_timeout=30) as connection:
+    migrate(connection)
+'@ | python -
 ```
 
-The migrations are idempotent, but you should still back up a database that
-contains data you care about before upgrading it.
+Run this from the repository root, with application writers and other migration
+processes stopped and a verified recoverable backup. This calls only the shared
+migration function; it does not run the capabilities-demo bootstrap or seed demo
+data. The runner validates applied checksums, skips recorded migrations, and
+commits each transactional migration together with its ledger entry. It handles
+the separately verified concurrent-index migration explicitly. Do not apply SQL
+files individually with `psql` or claim unrecorded SQL as an applied migration.
 
 ## Create the owner credential
 

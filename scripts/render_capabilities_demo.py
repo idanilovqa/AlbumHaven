@@ -133,7 +133,10 @@ def migrate(connection) -> None:
                 (bootstrap.name, hashlib.sha256(bootstrap.read_bytes()).hexdigest()),
             )
     applied = dict(connection.execute('select migration_name, checksum from ops.schema_migrations').fetchall())
-    from scripts.postgres_migration_compatibility import validate_applied_migrations
+    from scripts.postgres_migration_compatibility import (
+        migration_compatibility_context,
+        validate_applied_migrations,
+    )
 
     validate_applied_migrations(connection, ROOT / 'migrations' / 'postgres', applied)
     for path in files:
@@ -164,11 +167,12 @@ def migrate(connection) -> None:
                 )
         else:
             with connection.transaction():
-                connection.execute(migration_sql)
-                connection.execute(
-                    'insert into ops.schema_migrations (migration_name,checksum) values (%s,%s)',
-                    (path.name, checksum),
-                )
+                with migration_compatibility_context(connection, path.name):
+                    connection.execute(migration_sql)
+                    connection.execute(
+                        'insert into ops.schema_migrations (migration_name,checksum) values (%s,%s)',
+                        (path.name, checksum),
+                    )
 
 
 def generate_media() -> dict[str, dict]:

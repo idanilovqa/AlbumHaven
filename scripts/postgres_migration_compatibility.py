@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,57 @@ LEGACY_TRACK_PREFERENCES_SHA256 = (
     "90e9ebdc18257df4f85df8da2a6e312fdda81b844dfed6f856792d345eed1d23"
 )
 SCOPED_TRACK_PREFERENCES = "0087_reconcile_track_preferences_library_scope.sql"
+CURRENT_PLAYBACK_PRESENCE = "0096_create_current_playback_presence.sql"
+FRIEND_CONNECTIONS = "app.friend_connections"
+
+
+@contextmanager
+def migration_compatibility_context(
+    connection: Any,
+    migration_name: str,
+):
+    """Supply narrowly scoped transactional authority to historical SQL.
+
+    Migration 0090 intentionally revoked every ordinary privilege from the
+    non-superuser migration owner before granting its runtime DML set.  The
+    already-published 0096 bytes later create friend-connection triggers and
+    therefore require TRIGGER for that one transaction.  Keep both migration
+    checksums immutable and leave no durable ACL change.
+    """
+    if migration_name != CURRENT_PLAYBACK_PRESENCE:
+        yield
+        return
+
+    row = connection.execute(
+        "select has_table_privilege(current_user, %s, 'TRIGGER') as has_trigger",
+        (FRIEND_CONNECTIONS,),
+    ).fetchone()
+    value = (
+        row.get("has_trigger")
+        if isinstance(row, Mapping)
+        else row[0]
+        if row
+        else None
+    )
+    if not isinstance(value, bool):
+        raise RuntimeError("Could not verify friend-connection migration authority.")
+
+    granted = not value
+    if granted:
+        connection.execute(
+            f"grant trigger on table {FRIEND_CONNECTIONS} to current_user"
+        )
+    try:
+        yield
+    except Exception:
+        # The surrounding transaction owns rollback. Avoid masking the primary
+        # migration or ledger error with cleanup SQL on an aborted transaction.
+        raise
+    else:
+        if granted:
+            connection.execute(
+                f"revoke trigger on table {FRIEND_CONNECTIONS} from current_user"
+            )
 
 
 def validate_applied_migrations(

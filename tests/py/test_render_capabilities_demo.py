@@ -118,6 +118,7 @@ class MigrationConnection:
         self.events = []
         self.ledger = []
         self.applied = {}
+        self.trigger_privilege = False
 
     @contextmanager
     def transaction(self):
@@ -131,6 +132,17 @@ class MigrationConnection:
 
     def execute(self, sql, parameters=None):
         query = " ".join(str(sql).split()).casefold()
+        if query.startswith("select has_table_privilege"):
+            self.events.append("presence:probe")
+            return Result([(self.trigger_privilege,)])
+        if query.startswith("grant trigger"):
+            self.trigger_privilege = True
+            self.events.append("presence:grant")
+            return Result([])
+        if query.startswith("revoke trigger"):
+            self.trigger_privilege = False
+            self.events.append("presence:revoke")
+            return Result([])
         if "to_regclass('ops.schema_migrations')" in query:
             return Result([("ops.schema_migrations",)])
         if query.startswith("select migration_name, checksum"):
@@ -138,6 +150,11 @@ class MigrationConnection:
         if "ordinary migration" in query:
             assert self.transaction_depth == 1
             self.events.append("ordinary")
+            return Result([])
+        if "current playback presence migration" in query:
+            assert self.transaction_depth == 1
+            assert self.trigger_privilege is True
+            self.events.append("presence:body")
             return Result([])
         if "create index concurrently" in query:
             assert self.transaction_depth == 0
@@ -287,6 +304,33 @@ def test_capabilities_demo_rebuilds_same_name_wrong_0083_index_before_ledger(
         "validate:ready",
     ]
     assert connection.ledger[-1] == "0083_add_album_raw_artist_search_index.sql"
+
+
+def test_capabilities_demo_scopes_0096_trigger_authority_to_its_transaction(
+    tmp_path,
+    monkeypatch,
+):
+    migration_root = tmp_path / "migrations" / "postgres"
+    migration_root.mkdir(parents=True)
+    (migration_root / "0096_create_current_playback_presence.sql").write_text(
+        "select 'current playback presence migration';",
+        encoding="utf-8",
+    )
+    connection = MigrationConnection()
+    monkeypatch.setattr(demo, "ROOT", tmp_path)
+
+    demo.migrate(connection)
+
+    assert connection.events == [
+        "transaction:begin",
+        "presence:probe",
+        "presence:grant",
+        "presence:body",
+        "ledger:0096_create_current_playback_presence.sql",
+        "presence:revoke",
+        "transaction:end",
+    ]
+    assert connection.trigger_privilege is False
 
 
 def test_empty_database_is_eligible_for_initial_seed():

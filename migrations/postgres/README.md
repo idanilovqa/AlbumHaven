@@ -248,3 +248,85 @@ application can create rows for the same account and track in different librarie
 which the old unique index cannot represent. Rollback requires stopping writers,
 inspecting those rows and an explicit data-preserving recovery plan. Never restore
 the old index or edit historical ledger rows merely to make older code start.
+
+## Listening tracking storage
+
+`0169_install_listening_tracking_storage.sql` installs the listening-position,
+history-revision, edition-selection, decoder-observation and derived-metrics
+storage through the ordinary checksum-aware migration runner. It also installs
+Top listening settings and nullable rating/membership baseline fields. There is
+no separate installer or startup-time schema repair.
+
+Stop application writers, importers and maintenance jobs before upgrading. Take
+and verify a recoverable backup, use the existing migration owner and reviewed
+role bootstrap, and keep writers stopped until both SQL and its ledger entry
+commit. The migration takes exclusive locks on the affected existing tables and
+builds ordinary transactional indexes. Set deployment-appropriate lock and
+statement deadlines before starting; do not modify the migration to bypass a
+timeout or incompatibility. This implementation targets PostgreSQL 17 catalogs.
+
+Two exact predecessor inventories are supported: the published Album Tops
+inventory ending at `0153`, and the integrated inventory ending at `0168`.
+The runner discovers registered files; it does not require every integer between
+the predecessor and `0169`. The migration validates complete filenames and
+checksums, not merely the greatest migration number. Do not copy unrelated
+migrations into a branch to fill a numeric gap or edit existing ledger records.
+
+For either predecessor, the supported storage states are:
+
+- Original capture-v1 storage with no proposed tracking additions: install the
+  complete tracking graph atomically, preserving existing v1 rows and receipts.
+- The exact prior tracking graph with local-output decoder coordinates: preserve
+  its data and objects and add the reviewed absolute/converted coordinate checks.
+- That graph with the exact combined WAV/native-FLAC coordinate extension: add
+  only the converted-FLAC coordinate checks.
+- That graph with all three coordinate markers: validate and adopt without
+  rewriting data, schema objects, privileges or sequence counters.
+
+Every state must match its scoped catalog contract, including columns, validated
+constraints, indexes, triggers and directly attached routines, owners, RLS and
+effective permissions. Shared application tables are checked for required
+security and named additions, not unrelated columns or indexes. Unknown,
+partially installed, mixed or modified states fail with an `Incompatible
+listening tracking` error. Investigate that state separately; do not delete
+history, reclassify decoder observations, reset sequences or broaden grants to
+make it match. Existing feature data is never used as evidence of a user action.
+
+The existing role model is retained. Tracking storage does not grant the app
+role DELETE, installation powers or migration-role membership. Top settings
+retain their explicitly limited update columns. Existing privileges on unrelated
+application tables are not revoked or repaired. The migration validates the
+creator's applicable default privileges before creating objects; a different
+deployment role/default-ACL arrangement requires separate qualification.
+
+The independently qualified role layouts are a direct `album_haven_migrator`
+login owning the required objects, or a separate owning migration login that is
+a member of `album_haven_migrator`. The `album_haven_app` and
+`album_haven_readonly` roles must also exist. The actual login must be the
+executing role, without `SET ROLE`; both must be nonsuperusers without CREATEDB,
+CREATEROLE, REPLICATION or BYPASSRLS. App/readonly roles must belong to neither
+the owning migration login nor the named migrator role. Each layout has its own
+complete permissions contract; owner rights are not treated as missing grants,
+and distinct owner/group ACL entries are not collapsed. This migration changes
+no role attributes or memberships to manufacture a compatible layout.
+
+When these columns are first introduced, pre-existing ratings and memberships
+remain NULL/unknown. Only later genuine membership inserts receive the new
+server-time baseline. Adoption preserves legitimate existing non-NULL intent
+and baseline values unchanged; it does not reset them to unknown.
+Library removal retains personal listening history and its accounting charges;
+original library/media identifiers do not confer access to removed media.
+Nullable live pointers still detach through their existing foreign keys. Account
+anonymization and whole-application account-deletion restrictions remain distinct.
+
+The runner must commit the SQL and checksum-ledger insert in the same transaction.
+Any failure rolls back installation/adoption. A repeated run validates and skips
+the recorded migration. After a successful upgrade, rollback means keeping this
+schema and retained evidence while disabling feature gates or using compatible
+application code. Do not restore library-cascade foreign keys by deleting
+surviving history, and do not drop storage as an automatic downgrade.
+
+Installing storage does **not** enable recording, decoder selection or listening
+presentation flags. It also does not establish rendered-playback or Full-listen
+qualification for any codec. Those require their separate runtime verification;
+schema installation alone is not evidence that audio was heard.

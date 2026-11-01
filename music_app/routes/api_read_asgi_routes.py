@@ -1064,15 +1064,22 @@ async def album_details(request: Request) -> JSONResponse:
             except (RuntimeError, OSError):
                 lineage = {"status": "unresolved", "album": None, "choices": []}
             if lineage["status"] == "split":
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "error": "This album was split—choose the current release",
-                        "resolution_kind": "album_split",
-                        "current_releases": lineage["choices"],
-                    },
-                    status_code=409,
-                )
+                # Moving some tracks out records a split, but the album itself stays live.
+                payload = await run_in_threadpool(
+                    repository.build_album_detail_payload,
+                    album_key,
+                    client_surface_class=client_surface_class,
+                ) if album_key and album_id is None else None
+                if payload is None:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "This album was split—choose the current release",
+                            "resolution_kind": "album_split",
+                            "current_releases": lineage["choices"],
+                        },
+                        status_code=409,
+                    )
             current_album = lineage.get("album")
             if isinstance(current_album, Mapping):
                 payload = await run_in_threadpool(

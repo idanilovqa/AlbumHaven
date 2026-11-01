@@ -7616,6 +7616,7 @@ const STREAMING_ENCODED_CREDIT_BYTES = 256 * 1024;
 const STREAMING_RECENT_STALL_MS = 60_000;
 const STREAMING_REQUIRED_HEADROOM = 1.5;
 const STREAMING_TRANSFER_WINDOW_BYTES = 32 * 1024 * 1024;
+const STREAMING_OUTPUT_REPORT_INTERVAL_MS = 5000;
 
 function streamingEngineState() {
   return state.player.streaming;
@@ -8479,6 +8480,32 @@ function handleStreamingRateMismatch(roleState, message) {
   leaveStreamingTrackForRateChange(roleState.track);
 }
 
+function reportStreamingAudioOutput() {
+  const engine = streamingEngineState();
+  const context = engine.context;
+  const now = performance.now();
+  if (!context || now - (Number(engine.outputReportedAtMs) || 0)
+      < STREAMING_OUTPUT_REPORT_INTERVAL_MS) return;
+  const stats = context.playbackStats;
+  const underruns = Number(stats?.underrunEvents) || 0;
+  const alreadyReported = engine.outputReportedContext === context
+    && underruns <= (Number(engine.outputReportedUnderruns) || 0);
+  engine.outputReportedAtMs = now;
+  if (alreadyReported) return;
+  engine.outputReportedContext = context;
+  engine.outputReportedUnderruns = underruns;
+  engine.diagnostics.outputUnderruns = underruns;
+  sendStreamingControl({
+    type: 'output-report',
+    sampleRate: engine.sampleRate,
+    baseLatencyMs: Math.round((Number(context.baseLatency) || 0) * 1000),
+    outputLatencyMs: Math.round((Number(context.outputLatency) || 0) * 1000),
+    underruns,
+    underrunMs: Math.round((Number(stats?.underrunDuration) || 0) * 1000),
+    statsAvailable: Boolean(stats),
+  });
+}
+
 function maybePrepareStreamingSeek(roleState) {
   const engine = streamingEngineState();
   const pendingSeek = engine.pendingSeek;
@@ -9105,6 +9132,7 @@ function handleStreamingWorkletMessage(message) {
       streamingFrames((Number(engine.snapshot.currentTime) || 0)),
     );
     engine.snapshot.currentTime = monotonicTimelineFrame / engine.sampleRate;
+    reportStreamingAudioOutput();
     const observedAtMs = performance.now();
     const previousObservedAtMs = Number(engine.positionFacadeAtMs) || 0;
     if (typeof handleStreamingPlaybackPosition === 'function'
@@ -9402,7 +9430,8 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
     try {
       if (!audioGraphReady) {
         await retireStreamingAudioGraph();
-        context = new AudioContextType({ sampleRate });
+        // 'playback' asks for large output buffers; the default suits games and calls.
+        context = new AudioContextType({ sampleRate, latencyHint: 'playback' });
         engine.context = context;
         engine.sampleRate = sampleRate;
         if (typeof observeBrowserPlaybackAudioContext === 'function') {

@@ -504,8 +504,39 @@ class _PlaybackPcmConnection:
             return await self._log_client_stall(control)
         if command_type == "decoder-fallback":
             return await self._log_decoder_fallback(control)
+        if command_type == "output-report":
+            return await self._log_audio_output(control)
         await self.reject(CLOSE_INVALID_CONTROL)
         return False
+
+    async def _log_audio_output(self, control: dict[str, Any]) -> bool:
+        fields = {
+            name: _bounded_integer(
+                control.get(name), minimum=0, maximum=_MAX_PROTOCOL_INTEGER
+            )
+            for name in (
+                "sampleRate",
+                "baseLatencyMs",
+                "outputLatencyMs",
+                "underruns",
+                "underrunMs",
+            )
+        }
+        stats_available = control.get("statsAvailable")
+        if None in fields.values() or not isinstance(stats_available, bool):
+            await self.reject(CLOSE_INVALID_CONTROL)
+            return False
+        _LOGGER.warning(
+            "Playback audio output rate=%s base_latency_ms=%s output_latency_ms=%s "
+            "underruns=%s underrun_ms=%s stats_available=%s",
+            fields["sampleRate"],
+            fields["baseLatencyMs"],
+            fields["outputLatencyMs"],
+            fields["underruns"],
+            fields["underrunMs"],
+            stats_available,
+        )
+        return True
 
     async def _log_decoder_fallback(self, control: dict[str, Any]) -> bool:
         reason = control.get("reason")

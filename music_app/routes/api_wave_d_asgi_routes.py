@@ -1759,17 +1759,29 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             return _json_response(
                 ({"ok": False, "error": "Saved cover candidates are unavailable"}, 503)
             )
+        snapshot_candidates = (
+            candidate_snapshot.get("candidates")
+            if isinstance(candidate_snapshot, Mapping)
+            else None
+        )
+        # A click can beat the gallery refresh, so a candidate still on offer stays valid.
+        candidate_still_current = isinstance(snapshot_candidates, list) and any(
+            isinstance(item, Mapping) and str(item.get("id") or "") == candidate_id
+            for item in snapshot_candidates
+        )
         if (
             not isinstance(candidate_snapshot, Mapping)
-            or not _same_cover_lookup_generation(
-                candidate_snapshot.get("search_generation"),
-                snapshot_generation,
+            or (
+                not candidate_still_current
+                and not _same_cover_lookup_generation(
+                    candidate_snapshot.get("search_generation"),
+                    snapshot_generation,
+                )
             )
         ):
             return _json_response(
                 ({"ok": False, "error": "Saved cover candidate generation was not found"}, 404)
             )
-        snapshot_candidates = candidate_snapshot.get("candidates")
         notification_action_taken = is_terminal_cover_lookup_task(candidate_snapshot)
         selected_match = next(
             (

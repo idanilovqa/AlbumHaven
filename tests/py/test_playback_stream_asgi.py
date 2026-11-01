@@ -1059,14 +1059,21 @@ def test_waveform_busy_response_does_not_wait_for_disconnect_monitor_cancellatio
         }
         request_task = asyncio.create_task(playback_app(scope, receive, send))
         try:
-            await asyncio.wait_for(monitor_started.wait(), timeout=10)
+            # An instant failure may finish before the monitor's first receive.
+            monitor_wait = asyncio.create_task(monitor_started.wait())
             response_wait = asyncio.create_task(response_started.wait())
+            await asyncio.wait(
+                {monitor_wait, response_wait},
+                timeout=10,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            monitor_wait.cancel()
             completed, _pending = await asyncio.wait({response_wait}, timeout=0.1)
             assert response_wait in completed, (
                 "the 429 response was held behind disconnect-monitor cancellation"
             )
-            await asyncio.sleep(0)
-            assert monitor_cancelled.is_set() is True
+            if monitor_started.is_set():
+                await asyncio.wait_for(monitor_cancelled.wait(), timeout=1)
             status = next(
                 int(message["status"])
                 for message in messages

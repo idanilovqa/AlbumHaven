@@ -1925,6 +1925,36 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
       await archiveSecondaryCard.getAttribute('data-select-remote-cover') || '',
     ).trim();
     expect(archiveSecondaryCandidateId).not.toBe('');
+
+    const replacementCover = findFixtureCoverBySubtitle(
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
+    );
+    expect(replacementCover).not.toBeNull();
+    await coverLookupActions.pasteComposerImageFromProvider(replacementCover.assetId);
+    await expect(
+      coverLookupActions.coverLookup.pendingAttachmentByName('image.png'),
+    ).toBeVisible();
+    await coverLookupActions.coverLookup.manualExtractButton.click();
+    const pastedCard = coverLookupActions.coverLookup.stagedCoverCardByName('image.png');
+    await expect(pastedCard).toBeVisible();
+    await coverLookupActions.selectOnlyCover(pastedCard);
+    const pastedSaveResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/pasted-image-save'
+    ));
+    await coverLookupActions.coverLookup.saveRemoteButton.click();
+    const pastedSaveResponse = await pastedSaveResponsePromise;
+    expect(pastedSaveResponse.status()).toBe(200);
+    expect((await pastedSaveResponse.json()).ok).toBe(true);
+    await expect(coverLookupActions.coverLookup.modal).toBeHidden();
+
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const reopenedSecondaryCard = coverLookupActions.coverLookup
+      .remoteCoverCardById(archiveSecondaryCandidateId);
+    await expect(reopenedSecondaryCard).toBeVisible();
+    await expect(reopenedSecondaryCard).toHaveAttribute('data-cover-lookup-other-remote-art', '1');
+
     const savedSecondary = await coverLookupActions.selectRemoteCandidateByIdAndSave(
       archiveSecondaryCandidateId,
     );

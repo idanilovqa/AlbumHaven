@@ -89,6 +89,16 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
     await staleSplitSession.trackModalActions.waitForInteractiveSummary();
   });
 
+  const staleCardSession = await freshBrowserSession.create();
+  await stepLogger.step('Keep the original album card rendered in a third client', async () => {
+    await staleCardSession.galleryActions.goto(ARTIST_VIEW_URL);
+    await staleCardSession.galleryActions.waitForGalleryReady();
+    await staleCardSession.galleryActions.waitForAlbumVisibleUnderHeading(
+      FIXTURE_ARTIST,
+      FAILURE_FIXTURE_ALBUM,
+    );
+  });
+
   await stepLogger.step('Split both tracks into distinct current releases', async () => {
     await galleryActions.goto(ARTIST_VIEW_URL);
     await galleryActions.waitForGalleryReady();
@@ -132,6 +142,24 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
     expect(summary.title).toBe(albumDetailsTitle(LINEAGE_SPLIT_ALBUM_A));
     expect(summary.trackRows).toBe(1);
     await staleSplitSession.trackModalActions.close();
+  });
+
+  await stepLogger.step('Click the rendered stale card and resolve it to a current release', async () => {
+    await staleCardSession.galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: FAILURE_FIXTURE_ALBUM,
+      year: FIXTURE_YEAR,
+    });
+    await staleCardSession.trackModalActions.waitForIdentitySplitChoices([
+      LINEAGE_SPLIT_ALBUM_A,
+      LINEAGE_SPLIT_ALBUM_B,
+    ]);
+    const summary = await staleCardSession.trackModalActions.chooseCurrentRelease(
+      LINEAGE_SPLIT_ALBUM_A,
+    );
+    expect(summary.title).toBe(albumDetailsTitle(LINEAGE_SPLIT_ALBUM_A));
+    expect(summary.trackRows).toBe(1);
+    await staleCardSession.trackModalActions.close();
   });
 
   const staleMergeSession = await freshBrowserSession.create();

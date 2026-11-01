@@ -917,8 +917,10 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         if (
             task_id
             and isinstance(candidate_snapshot, Mapping)
-            and str(candidate_snapshot.get("search_generation") or "").strip()
-            != task_id
+            and not _same_cover_lookup_generation(
+                candidate_snapshot.get("search_generation"),
+                task_id,
+            )
         ):
             candidate_snapshot = None
     return JSONResponse(

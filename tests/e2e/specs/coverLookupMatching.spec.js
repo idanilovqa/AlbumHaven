@@ -119,6 +119,7 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
       baselineFullSizeCover.sha256.toLowerCase(),
     );
 
+    await expect(coverLookupActions.coverLookup.firstRemoteCoverCard).toBeVisible();
     const candidates = await coverLookupActions.readRemoteCandidateSummaries();
     const appleCandidates = candidates.filter(
       (candidate) => candidate.source.toLowerCase().includes('apple'),

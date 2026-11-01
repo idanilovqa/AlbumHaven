@@ -1470,9 +1470,114 @@ def test_pcm_socket_rejects_credit_beyond_per_message_capacity_with_4408(
         async with websocket_session(playback_app, "/playback/pcm") as socket:
             await open_stream(socket, media_path)
             await socket.send_json(
-                {"type": "credit", "generation": 1, "streamId": 1, "frames": 48_001}
+                {
+                    "type": "credit",
+                    "generation": 1,
+                    "streamId": 1,
+                    "frames": playback_stream_asgi.MAX_CREDIT_FRAMES_PER_MESSAGE + 1,
+                }
             )
             assert await socket.receive_close() == 4408
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_reports_the_native_sample_rate_of_a_probed_track(
+    playback_app,
+    media_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "music_app.routes.playback_stream_asgi.read_native_sample_rate",
+        lambda path: 44_100 if path == media_path else 0,
+    )
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {"type": "probe", "requestId": 7, "path": str(media_path)}
+            )
+            assert await socket.receive_json() == {
+                "type": "probe-result",
+                "requestId": 7,
+                "sampleRate": 44_100,
+                "fallbackSampleRate": 44_100,
+                "sizeBytes": media_path.stat().st_size,
+            }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("codecs", [[["mp3"]], ["ogg"], "mp3", [{}]])
+def test_pcm_socket_rejects_malformed_codec_lists_with_4400(
+    playback_app,
+    media_path,
+    decoder_factory,
+    codecs,
+):
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {
+                    "type": "open",
+                    "generation": 1,
+                    "streamId": 1,
+                    "role": "current",
+                    "path": str(media_path),
+                    "startFrame": 0,
+                    "sampleRate": 48_000,
+                    "durationSeconds": 1,
+                    "codecs": codecs,
+                }
+            )
+            assert await socket.receive_close() == 4400
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_logs_client_stall_report_without_closing_the_stream(
+    playback_app,
+    media_path,
+    decoder_factory,
+    caplog,
+):
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await open_stream(socket, media_path)
+            with caplog.at_level("WARNING", logger="music_app.routes.playback_stream_asgi"):
+                await socket.send_json(
+                    {
+                        "type": "stall-report",
+                        "generation": 1,
+                        "streamId": 1,
+                        "durationMs": 3600,
+                        "targetBufferFrames": 576_000,
+                        "pageVisible": False,
+                    }
+                )
+                await socket.send_json({"type": "credit", "generation": 1, "streamId": 1, "frames": 2})
+                assert (await socket.receive_bytes())[:4] == b"AHPC"
+
+    asyncio.run(scenario())
+
+    assert "Playback client stall 3.60s generation=1 stream=1" in caplog.text
+    assert "target_buffer_frames=576000 page_visible=False" in caplog.text
+
+
+def test_pcm_socket_rejects_malformed_client_stall_report_with_4400(playback_app):
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {
+                    "type": "stall-report",
+                    "generation": 1,
+                    "streamId": 1,
+                    "durationMs": "3600\nforged log line",
+                    "targetBufferFrames": 0,
+                    "pageVisible": True,
+                }
+            )
+            assert await socket.receive_close() == 4400
 
     asyncio.run(scenario())
 

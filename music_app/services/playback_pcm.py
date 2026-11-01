@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
+from functools import lru_cache
 import math
 from pathlib import Path
+import re
 import struct
+import subprocess
 from typing import Awaitable, Callable, Literal
 
 from music_app.services.ffmpeg_runtime import (
@@ -18,6 +21,8 @@ _BYTES_PER_STEREO_FRAME = 8
 _STDERR_TAIL_LIMIT = 64 * 1024
 _ENCODED_SEEK_PREROLL_SECONDS = 0.25
 _ROLE_CODES: dict[PcmRole, int] = {"current": 0, "continuity": 1}
+_SAMPLE_RATE_PROBE_TIMEOUT_SECONDS = 30
+_FFMPEG_AUDIO_STREAM_RATE = re.compile(r"Stream #\S+.*?: Audio: .*?, (\d+) Hz")
 
 
 def _validate_nonnegative_integer(name: str, value: object) -> int:
@@ -153,6 +158,52 @@ def pack_pcm_frame(
     return header + pcm
 
 
+@lru_cache(maxsize=512)
+def _probe_sample_rate(path: str, _size: int, _mtime_ns: int, executable: str) -> int:
+    # FFmpeg always exits nonzero without an output; its stream report is the answer.
+    report = subprocess.run(
+        [executable, "-hide_banner", "-nostdin", "-i", path],
+        capture_output=True,
+        creationflags=hidden_subprocess_creation_flags(),
+        check=False,
+        timeout=_SAMPLE_RATE_PROBE_TIMEOUT_SECONDS,
+    ).stderr.decode(errors="replace")
+    match = _FFMPEG_AUDIO_STREAM_RATE.search(report)
+    if match is None:
+        raise RuntimeError("ffmpeg did not report an audio sample rate")
+    return int(match.group(1))
+
+
+def read_native_sample_rate(path: Path, *, ffmpeg_executable: str | None = None) -> int:
+    """Return the rate FFmpeg decodes this file at, so PCM is never resampled."""
+    executable = ffmpeg_executable or resolve_ffmpeg_executable()
+    if not executable:
+        raise RuntimeError("ffmpeg was not found")
+    stat = path.stat()
+    return _probe_sample_rate(str(path), stat.st_size, stat.st_mtime_ns, executable)
+
+
+def pack_encoded_frame(
+    *,
+    generation: int,
+    stream_id: int,
+    role: PcmRole,
+    sequence: int,
+    payload: bytes,
+) -> bytes:
+    """Version 2 frames carry encoded bytes; the count field holds their length."""
+    return b"AHPC" + struct.pack(
+        ">BBHIIII",
+        2,
+        _ROLE_CODES[role],
+        0,
+        generation,
+        stream_id,
+        sequence,
+        len(payload),
+    ) + payload
+
+
 class PcmDecoderProcess:
     def __init__(
         self,
@@ -196,6 +247,14 @@ class PcmDecoderProcess:
         if not executable:
             raise RuntimeError("ffmpeg was not found")
 
+        native_sample_rate = await asyncio.to_thread(
+            read_native_sample_rate,
+            command.path,
+            ffmpeg_executable=executable,
+        )
+        if command.sample_rate != native_sample_rate:
+            raise ValueError("sample_rate does not match the file's native rate")
+
         requested_seek_seconds = command.start_frame / command.sample_rate
         input_seek: tuple[str, ...] = ()
         output_seek: tuple[str, ...] = ()
@@ -217,7 +276,7 @@ class PcmDecoderProcess:
         gapless = await ignored_mp3_gapless_info(command.path, executable)
         audio_filter: tuple[str, ...] = ()
         if gapless is not None:
-            coarse_seconds, filters = gapless.decode_filters(command.sample_rate, command.start_frame)
+            coarse_seconds, filters = gapless.decode_filters(command.start_frame)
             input_seek = ("-ss", str(coarse_seconds)) if coarse_seconds else ()
             output_seek = ()
             audio_filter = ("-af", filters)
@@ -239,8 +298,6 @@ class PcmDecoderProcess:
             "pcm_f32le",
             "-ac",
             "2",
-            "-ar",
-            str(command.sample_rate),
             "pipe:1",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

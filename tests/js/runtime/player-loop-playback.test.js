@@ -573,6 +573,31 @@ test('streaming terminal ended finalizes and releases ownership exactly once', a
   assert.equal(uiUpdates, 1);
 });
 
+test('ended hands the queue to a track that needs another sample rate', async () => {
+  const track = { path: '/music/a.mp3', title: 'A' };
+  const nextTrack = { path: '/music/b.flac', title: 'B' };
+  const { context } = loadHelper({
+    state: { player: { current: track, listenSession: null, loopActive: false } },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 42, duration: 42 }),
+    releasePlaybackOwnership: () => {},
+  });
+  const played = [];
+  context.finalizeListenSession = async () => {};
+  context.updatePlayerUi = () => {};
+  context.peekNextQueuedTrack = () => nextTrack;
+  context.getNextQueuedTrack = () => nextTrack;
+  context.playTrackFromPayload = async (queued, options) => played.push({ queued, options });
+
+  await context.handleStreamingPlaybackEnded({
+    generation: 3, streamId: 9, trackPath: track.path, currentTime: 42,
+    sampleRateChangeTrackPath: nextTrack.path,
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(played)), [
+    { queued: nextTrack, options: { allowSuspendedAutoplayFallback: true } },
+  ]);
+});
+
 test('play command after terminal EOS opens a fresh generation at frame zero before requesting resume', async () => {
   const track = {
     src: '/track?path=song.flac',

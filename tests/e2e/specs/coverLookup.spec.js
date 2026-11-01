@@ -886,7 +886,9 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     ]),
   ));
   const scrollBeforeDelete = await coverLookupActions.readDrawerScrollTop();
-  await coverLookupActions.clearTaskAndExpectImmediateRemoval(selected.identity.album);
+  await coverLookupActions.clearTaskAndExpectImmediateRemoval(
+    new RegExp(`^\\s*${selected.identity.album}\\s*$`, 'u'),
+  );
   expect(await coverLookupActions.readDrawerScrollTop()).toBe(scrollBeforeDelete);
   await expect(coverLookupActions.coverLookup.taskCardById(selected.taskId)).toHaveCount(0);
   for (const taskId of siblingTaskIds) {

@@ -114,6 +114,50 @@ def test_build_track_rows_keeps_album_artist_matches_out_of_secondary_artist():
     assert rows[0]["secondary_artist"] is None
 
 
+def test_build_track_rows_distinguishes_joint_owners_from_split_and_guest_credits():
+    joint_album = SimpleNamespace(
+        album_artist="Brian Eno / David Byrne",
+        artists=["Brian Eno", "David Byrne"],
+        is_split_album=False,
+    )
+    split_album = SimpleNamespace(
+        album_artist="Jordsjo / Breidablik",
+        artists=["Jordsjo", "Breidablik"],
+        is_split_album=True,
+    )
+    joint_track = SimpleNamespace(
+        path=r"C:\Music\Brian Eno and David Byrne\Album\01 Track.flac",
+        title="Joint Track",
+        artist="Brian Eno",
+        album_artist=joint_album.album_artist,
+        duration_seconds=245,
+    )
+    split_track = SimpleNamespace(
+        path=r"C:\Music\Jordsjo and Breidablik\Split\01 Track.flac",
+        title="Split Track",
+        artist="Jordsjo",
+        album_artist=split_album.album_artist,
+        duration_seconds=245,
+    )
+    guest_track = SimpleNamespace(
+        path=r"C:\Music\Brian Eno and David Byrne\Album\02 Track.flac",
+        title="Joint Track With Guest",
+        artist="Brian Eno feat. Guest Voice",
+        album_artist=joint_album.album_artist,
+        duration_seconds=245,
+    )
+
+    assert build_track_rows([joint_track], album=joint_album)[0]["secondary_artist"] == (
+        "Brian Eno / David Byrne"
+    )
+    assert build_track_rows([split_track], album=split_album)[0]["secondary_artist"] == (
+        "Jordsjo"
+    )
+    assert build_track_rows([guest_track], album=joint_album)[0]["secondary_artist"] == (
+        "Brian Eno / David Byrne / feat. Guest Voice"
+    )
+
+
 @pytest.mark.parametrize(
     "raw_title",
     [

@@ -5147,6 +5147,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             for value in query.get(key, [])
         )
         self.server.record_cover_lookup_request("discogs_search_requests")
+        if self.server.get_cover_lookup_mode() == "failed":
+            self._send_json({"results": []}, include_body=include_body)
+            return
         self.server.wait_for_cover_lookup_later_provider(
             query_text,
             provider="discogs",

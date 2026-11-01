@@ -13895,6 +13895,15 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
+// This session knows its own edits, so it never needs asking which release it meant.
+// Other sessions still get the split chooser, and a removed album still returns it.
+const locallyEditedAlbumKeys = new Set();
+
+function rememberLocallyEditedAlbum(album) {
+  const albumKey = String(getAlbumRequestKey(album) || '').trim();
+  if (albumKey) locallyEditedAlbumKeys.add(albumKey);
+}
+
 async function refreshOpenTrackModalAfterInventoryMutation() {
   const els = getTrackModalElements();
   const openAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
@@ -13909,7 +13918,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
       canonicalRefresh: true,
-      resolveLineage: true,
+      resolveLineage: !locallyEditedAlbumKeys.has(albumKey),
     });
   } catch (error) {
     loadError = error;
@@ -14127,6 +14136,7 @@ function resolveTrackModalActionAlbum(button) {
     && Number.isSafeInteger(renderedIdentityRevision)
     && renderedIdentityRevision >= 0
     && currentIdentityRevision > renderedIdentityRevision
+    && !locallyEditedAlbumKeys.has(albumKey)
   ) {
     return { ...fallbackAlbum, resolve_lineage: true };
   }
@@ -34477,6 +34487,7 @@ async function confirmManualTagEdit() {
     if (problematicMutationOriginKey) {
       requestPayload.problematic_files_origin = true;
     }
+    if (typeof rememberLocallyEditedAlbum === 'function') rememberLocallyEditedAlbum(album);
     const response = await fetch('/utilities/edit-tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -269,17 +269,3 @@ def test_resolve_keeps_named_various_artist_and_known_artist_loose_track_albums(
         assert repository.resolve(album_id=candidate["album_id"])["status"] == "current"
 
 
-
-def test_resolve_keeps_a_live_album_that_only_lost_some_tracks():
-    repository, _connection = _repository(
-        [
-            _candidate(7, "artist::album", depth=0),
-            _candidate(8, "artist::moved", depth=1),
-        ]
-    )
-
-    result = repository.resolve(album_key="artist::album")
-
-    assert result["status"] == "current"
-    assert result["album"]["album_id"] == 7
-    assert result["choices"] == []

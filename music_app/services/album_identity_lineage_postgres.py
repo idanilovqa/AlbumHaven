@@ -126,11 +126,6 @@ class AlbumIdentityLineageRepository:
         if len(complete_path_matches) == 1:
             live = complete_path_matches
 
-        # An album that lost some tracks is still itself; its offshoots are not choices.
-        requested_album = [candidate for candidate in live if not candidate.get("depth")]
-        if requested_album:
-            live = requested_album
-
         albums = sorted((_album(candidate) for candidate in live), key=lambda item: item["album_id"])
         if len(albums) > 1:
             return {"status": "split", "album": None, "choices": albums}

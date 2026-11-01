@@ -168,10 +168,13 @@ export class TrackModalActions {
       'This album was split—choose the current release',
       { timeout: options.timeout || 60000 },
     );
-    await expect(this.trackModal.currentReleaseChoices).toHaveCount(expectedNames.length);
-    const titles = await this.trackModal.currentReleaseChoiceTitles.allTextContents();
-    expect(titles.map((title) => title.trim()).sort()).toEqual([...expectedNames].sort());
-    return titles;
+    // A stale session's chooser updates as later splits reach it.
+    await expect.poll(async () => (
+      await this.trackModal.currentReleaseChoiceTitles.allTextContents()
+    ).map((title) => title.trim()).sort(), {
+      timeout: options.timeout || 60000,
+    }).toEqual([...expectedNames].sort());
+    return this.trackModal.currentReleaseChoiceTitles.allTextContents();
   }
 
   async chooseCurrentRelease(albumName) {

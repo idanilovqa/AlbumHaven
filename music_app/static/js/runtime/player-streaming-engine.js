@@ -10,6 +10,7 @@ const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
 const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
+const STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS = 1;
 const STREAMING_SEEK_PREPARE_SECONDS = 0.25;
 const STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS = 1;
 const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEMENT_PREPARE_SECONDS;
@@ -764,6 +765,14 @@ function handleStreamingControl(message) {
     if (message.codec) {
       createStreamingEncodedRole(roleState, message);
       refillStreamingEncodedBytes(roleState);
+      // Compressed audio keeps arriving far faster than it plays, so a shorter head is safe.
+      if (engine.pendingSeek?.kind === 'replacement'
+          && engine.pendingSeek.streamId === roleState.streamId) {
+        roleState.targetBufferFrames = Math.min(
+          roleState.targetBufferFrames,
+          streamingFrames(STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS),
+        );
+      }
     }
     roleState.provisionalTotalFrames = message.provisionalTotalFrames;
     roleState.timelineStartFrame = message.timelineStartFrame;
@@ -877,6 +886,15 @@ function handleStreamingRateMismatch(roleState, message) {
     fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
     sizeBytes: 0,
   });
+  const replacement = engine.pendingSeek;
+  if (replacement?.kind === 'replacement' && replacement.streamId === roleState.streamId) {
+    engine.roles.continuity = null;
+    engine.pendingSeek = null;
+    refreshStreamingActiveRoles();
+    startStreamingTrack(roleState.track, { startSeconds: roleState.continuityOptions.startSeconds })
+      .then(replacement.resolve, replacement.reject);
+    return;
+  }
   if (roleState.role !== 'continuity' || roleState.continuityOptions?.kind !== 'queued-next') {
     failStreamingEngine('socket', { message: 'The track sample rate changed' }, 'rate-mismatch');
     return;
@@ -2051,13 +2069,16 @@ async function startStreamingTrack(track, {
       && promotionAllowsReplacement
       && !engine.pendingSeek;
   };
-  if (canPrepareReplacement() && !knownStreamingSampleRate(track)) {
+  // A switch to a track's start can open at this rate; the server refuses a wrong one.
+  if (canPrepareReplacement() && !knownStreamingSampleRate(track)
+      && (startSeconds > 0 || chooseStreamingQuality(track) === '320')) {
     await requestStreamingSampleRate(track);
     if (engine.startRequestId !== startRequestId) return null;
   }
   preparedReplacement: {
     if (!canPrepareReplacement()
-        || streamingPlaybackRate(track) !== engine.sampleRate) break preparedReplacement;
+        || (knownStreamingSampleRate(track)
+          && streamingPlaybackRate(track) !== engine.sampleRate)) break preparedReplacement;
     cancelStreamingWaveformGeneration(engine.generation);
     if (engine.roles.continuity
         && !closeStreamingContinuityRole('replacement-target')) return null;

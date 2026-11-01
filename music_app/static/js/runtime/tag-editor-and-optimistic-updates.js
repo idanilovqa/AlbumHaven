@@ -2535,14 +2535,20 @@ function refreshTrackModalPlaybackState() {
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   document.querySelectorAll('#track-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);
@@ -2578,14 +2584,20 @@ function refreshNonAlbumModalPlaybackState() {
   const nonAlbumModal = document.getElementById('non-album-modal');
   if (!nonAlbumModal || nonAlbumModal.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);

@@ -5736,3 +5736,63 @@ test('a seek stops the old position downloading so its audio arrives first', asy
   const creditsAfterSeek = harness.sent('credit').filter(({ streamId }) => streamId === open.streamId);
   assert.equal(creditsAfterSeek.length, creditsBeforeSeek.length);
 });
+
+test('a switch to an unknown encoded track opens at once and needs one second of head', async () => {
+  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 48_000 });
+  await harness.api.start(makeTrack('01.mp3'));
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
+  await harness.settle();
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 12.5,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  const probes = harness.sockets[0].probes.length;
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await harness.settle();
+
+  assert.equal(harness.sockets[0].probes.length, probes, 'a switch never waits for a probe');
+  const replacement = harness.sent('open').at(-1);
+  assert.equal(replacement.role, 'continuity');
+  acceptMetadata(harness, replacement, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
+  await harness.settle();
+  assert.equal(harness.engine.roles.continuity.targetBufferFrames, 48_000);
+});
+
+test('a refused switch restarts cleanly at the track rate', async () => {
+  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 48_000 });
+  await harness.api.start(makeTrack('01.mp3'));
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
+  await harness.settle();
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 12.5,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+
+  const switching = harness.api.start(makeTrack('02.mp3'));
+  await harness.settle();
+  const refused = harness.sent('open').at(-1);
+  harness.sockets[0].receive({
+    type: 'rate-mismatch',
+    generation: refused.generation,
+    streamId: refused.streamId,
+    sampleRate: 44_100,
+    fallbackSampleRate: 44_100,
+  });
+  const started = await switching;
+
+  assert.equal(harness.contexts.at(-1).sampleRate, 44_100);
+  assert.equal(harness.sent('open').at(-1).role, 'current');
+  assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
+  assert.equal(started.track.path, makeTrack('02.mp3').path);
+});

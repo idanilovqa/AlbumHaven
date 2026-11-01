@@ -5476,6 +5476,7 @@ const state = {
     appearanceKey: 'backgrounds',
   },
   player: {
+    selectedTrack: null,
     streaming: {
       mode: 'stopped',
       generation: 0,
@@ -7601,6 +7602,7 @@ const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
 const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
+const STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS = 1;
 const STREAMING_SEEK_PREPARE_SECONDS = 0.25;
 const STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS = 1;
 const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEMENT_PREPARE_SECONDS;
@@ -8355,6 +8357,14 @@ function handleStreamingControl(message) {
     if (message.codec) {
       createStreamingEncodedRole(roleState, message);
       refillStreamingEncodedBytes(roleState);
+      // Compressed audio keeps arriving far faster than it plays, so a shorter head is safe.
+      if (engine.pendingSeek?.kind === 'replacement'
+          && engine.pendingSeek.streamId === roleState.streamId) {
+        roleState.targetBufferFrames = Math.min(
+          roleState.targetBufferFrames,
+          streamingFrames(STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS),
+        );
+      }
     }
     roleState.provisionalTotalFrames = message.provisionalTotalFrames;
     roleState.timelineStartFrame = message.timelineStartFrame;
@@ -8468,6 +8478,15 @@ function handleStreamingRateMismatch(roleState, message) {
     fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
     sizeBytes: 0,
   });
+  const replacement = engine.pendingSeek;
+  if (replacement?.kind === 'replacement' && replacement.streamId === roleState.streamId) {
+    engine.roles.continuity = null;
+    engine.pendingSeek = null;
+    refreshStreamingActiveRoles();
+    startStreamingTrack(roleState.track, { startSeconds: roleState.continuityOptions.startSeconds })
+      .then(replacement.resolve, replacement.reject);
+    return;
+  }
   if (roleState.role !== 'continuity' || roleState.continuityOptions?.kind !== 'queued-next') {
     failStreamingEngine('socket', { message: 'The track sample rate changed' }, 'rate-mismatch');
     return;
@@ -9642,13 +9661,16 @@ async function startStreamingTrack(track, {
       && promotionAllowsReplacement
       && !engine.pendingSeek;
   };
-  if (canPrepareReplacement() && !knownStreamingSampleRate(track)) {
+  // A switch to a track's start can open at this rate; the server refuses a wrong one.
+  if (canPrepareReplacement() && !knownStreamingSampleRate(track)
+      && (startSeconds > 0 || chooseStreamingQuality(track) === '320')) {
     await requestStreamingSampleRate(track);
     if (engine.startRequestId !== startRequestId) return null;
   }
   preparedReplacement: {
     if (!canPrepareReplacement()
-        || streamingPlaybackRate(track) !== engine.sampleRate) break preparedReplacement;
+        || (knownStreamingSampleRate(track)
+          && streamingPlaybackRate(track) !== engine.sampleRate)) break preparedReplacement;
     cancelStreamingWaveformGeneration(engine.generation);
     if (engine.roles.continuity
         && !closeStreamingContinuityRole('replacement-target')) return null;
@@ -36132,14 +36154,20 @@ function refreshTrackModalPlaybackState() {
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   document.querySelectorAll('#track-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);
@@ -36175,14 +36203,20 @@ function refreshNonAlbumModalPlaybackState() {
   const nonAlbumModal = document.getElementById('non-album-modal');
   if (!nonAlbumModal || nonAlbumModal.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);
@@ -41528,6 +41562,27 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
 
 let playerTrackSelectionToken = 0;
 
+// A switch takes a moment to reach the listener; the click should not.
+function renderSelectedTrackState(track) {
+  if (track && typeof getPlayerElements === 'function') {
+    renderGlobalPlayerMetadata(getPlayerElements(), track);
+  }
+  if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
+  if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+}
+
+function showSelectedTrackImmediately(track, shouldAutoplay) {
+  if (!shouldAutoplay) return;
+  state.player.selectedTrack = track;
+  renderSelectedTrackState(track);
+}
+
+function clearSelectedTrack() {
+  if (!state.player.selectedTrack) return;
+  state.player.selectedTrack = null;
+  renderSelectedTrackState(state.player.current);
+}
+
 async function playTrackFromPayload(track, options = {}) {
   const shouldAutoplay = options.autoplay !== false;
   if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(track)) {
@@ -41540,6 +41595,7 @@ async function playTrackFromPayload(track, options = {}) {
     throw new Error('Streaming playback engine is unavailable');
   }
   const selectionToken = ++playerTrackSelectionToken;
+  showSelectedTrackImmediately(track, shouldAutoplay);
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
@@ -41549,9 +41605,11 @@ async function playTrackFromPayload(track, options = {}) {
     });
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
+    clearSelectedTrack();
     throw error;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
+  clearSelectedTrack();
   if (startedRole === null) {
     throw new Error('Streaming playback did not start');
   }

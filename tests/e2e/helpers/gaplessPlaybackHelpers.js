@@ -377,7 +377,14 @@ export function observeWaveformTraffic(page) {
         const waiter = { afterMark, criteria: { ...criteria }, resolve, timeoutId: null };
         waiter.timeoutId = setTimeout(() => {
           waiters.delete(waiter);
-          reject(new Error(`Waveform response was not observed: ${JSON.stringify(criteria)}`));
+          const seen = requests.slice(afterMark).map((record) => ({
+            cachedOnly: record.cachedOnly,
+            status: record.response?.status ?? 'no response',
+          }));
+          reject(new Error(
+            `Waveform response was not observed: ${JSON.stringify(criteria)}; `
+              + `requests since mark: ${JSON.stringify(seen)}`,
+          ));
         }, options.timeout || 60000);
         waiters.add(waiter);
       });

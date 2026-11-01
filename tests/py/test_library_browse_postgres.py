@@ -678,6 +678,24 @@ def test_selected_artist_album_payload_preserves_disc_total_and_subtitle():
     assert track["disc_subtitle"] == "Bonus"
 
 
+def test_album_payloads_publish_the_split_release_facet():
+    from music_app.services import library_browse_postgres as browse
+
+    row = _browse_album_row(
+        artist="Jordsjo",
+        album_id=85,
+        album_key="jordsjo-breidablik::split-release",
+        title="Split Release",
+    )
+    row["album_metadata"] = {
+        **row["album_metadata"],
+        "is_split_album": True,
+    }
+
+    assert browse._selected_artist_album_payloads([row], "Jordsjo")[0]["is_split_album"] is True
+    assert browse._root_album_browse_album_payloads([row], "Jordsjo")[0]["is_split_album"] is True
+
+
 def test_postgres_featured_track_artist_remains_featured_with_member_relation():
     from music_app.services import library_browse_postgres as browse
 
@@ -4111,6 +4129,20 @@ def test_exact_artist_fallback_sql_constrains_identity_before_album_expansion():
     assert sql.index(identity_filter) < sql.index(track_expansion)
 
 
+def test_exact_artist_sidebar_merge_excludes_unmatched_release_coartists():
+    from music_app.services.library_browse_postgres import _merge_artist_groups_for_sidebar
+
+    groups = [
+        {"artist": "Bella Ramsey", "albums": [{"key": "hilda"}]},
+        {"artist": "Ryan Carlson", "albums": [{"key": "hilda"}]},
+        {"artist": "Orville Peck", "albums": [{"key": "hilda"}]},
+    ]
+
+    merged = _merge_artist_groups_for_sidebar(groups, [], artists=["Bella Ramsey"])
+
+    assert [group["artist"] for group in merged] == ["Bella Ramsey"]
+
+
 @pytest.mark.parametrize("outside_match", [False, True])
 def test_postgres_exact_search_preserves_family_with_outside_sidebar_match(monkeypatch, outside_match):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
@@ -4189,10 +4221,8 @@ def test_postgres_exact_search_preserves_family_with_outside_sidebar_match(monke
     assert [group["artist"] for group in payload["artist_groups"]] == [
         "Signal Artist", *expected_family,
     ]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        "Signal Artist", "Signal Family", *(["Outside Match"] if outside_match else []),
-    ]
-    assert payload["show_all_artists_sidebar_link"] is outside_match
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Signal Artist"]
+    assert payload["show_all_artists_sidebar_link"] is False
 
 
 @pytest.mark.parametrize("with_alias", [False, True])
@@ -8152,10 +8182,8 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     assert payload["selected_artist"] == "Neal Morse"
     assert payload["query"] == "Neal Morse"
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse", "Cosmic Cathedral"]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        "Neal Morse", "Cosmic Cathedral", "Transatlantic",
-    ]
-    assert payload["artist_count"] == 3
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse"]
+    assert payload["artist_count"] == 1
     assert queued_covers == [
         ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
         ("covers/transatlantic.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
@@ -16927,7 +16955,7 @@ def _missing_browse_row(*, album_id, title, category, artist="Broadcast", stale=
 
 
 @pytest.mark.parametrize("outside_match", ["album", "track", "artist"])
-def test_exact_artist_search_sidebar_includes_other_missing_matches(
+def test_exact_artist_search_sidebar_includes_only_artist_name_matches(
     monkeypatch, missing_album_browse_repository, outside_match,
 ):
     repository = missing_album_browse_repository
@@ -16962,10 +16990,10 @@ def test_exact_artist_search_sidebar_includes_other_missing_matches(
     })
     payload = repository.build_search_payload(query_params={"q": "Broadcast", "category": ["main_library"]})
 
-    expected_other = "Broadcast Collaboration" if outside_match == "artist" else "Other Artist"
-    assert {row["artist"] for row in payload["artists_sidebar"]} == {"Broadcast", expected_other}
-    assert payload["artist_count"] == 2
-    assert payload["show_all_artists_sidebar_link"] is True
+    expected = {"Broadcast", "Broadcast Collaboration"} if outside_match == "artist" else {"Broadcast"}
+    assert {row["artist"] for row in payload["artists_sidebar"]} == expected
+    assert payload["artist_count"] == len(expected)
+    assert payload["show_all_artists_sidebar_link"] is (outside_match == "artist")
     assert payload["selected_artist"] == "Broadcast"
 
 

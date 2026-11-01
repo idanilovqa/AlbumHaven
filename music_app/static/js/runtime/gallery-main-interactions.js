@@ -451,6 +451,9 @@ function updateGalleryMainControls() {
     button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
     button.disabled = false;
   });
+  document.querySelectorAll('[data-gallery-split-albums]').forEach((button) => {
+    button.setAttribute('aria-pressed', mainState.showSplitAlbums === false ? 'false' : 'true');
+  });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
   });
@@ -729,6 +732,8 @@ function handleGalleryMainClick(event) {
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
   if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
+  const splitAlbums = event.target.closest?.('[data-gallery-split-albums]');
+  if (splitAlbums) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-split-albums' }); return true; }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');

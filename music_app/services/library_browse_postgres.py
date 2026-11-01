@@ -2239,9 +2239,22 @@ class PostgresLibraryBrowseRepository:
             )
             payload["artist_groups"] = rendered_artist_groups
             if not omit_sidebar:
+                matching_sidebar_artists = [
+                    str(group.get("artist") or "").strip()
+                    for group in sidebar_artist_groups
+                    if _artist_name_matches_search_query(
+                        query,
+                        str(group.get("artist") or "").strip(),
+                        canonical_to_aliases.get(
+                            str(group.get("artist") or "").strip(),
+                            [],
+                        ),
+                    )
+                ]
                 sidebar_groups = _merge_artist_groups_for_sidebar(
                     rendered_artist_groups,
                     sidebar_artist_groups,
+                    artists=[exact_artist_match, *matching_sidebar_artists],
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups
@@ -7732,6 +7745,7 @@ def _selected_artist_album_payloads(
                 "year": album_year,
                 "release_date": metadata.get("release_date"),
                 "edition": metadata.get("edition"),
+                "is_split_album": bool(metadata.get("is_split_album")),
                 "root_provenance": dict(root_provenance),
                 "library_root_id": row_payload.get("file_library_root_id"),
                 "library_root_category": row_payload.get("file_library_root_category"),
@@ -7885,6 +7899,7 @@ def _root_album_browse_album_payloads(
             ),
             "year": row_payload.get("album_release_year"),
             "edition": metadata.get("edition"),
+            "is_split_album": bool(metadata.get("is_split_album")),
             "root_provenance": dict(_row_json_mapping(metadata.get("root_provenance"))),
             "library_root_category": metadata.get("library_root_category"),
             "track_count_preview": _coerce_int(row_payload.get("track_count")),
@@ -8125,14 +8140,23 @@ def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list
 def _merge_artist_groups_for_sidebar(
     primary_groups: list[dict[str, object]],
     extra_groups: list[dict[str, object]],
+    *,
+    artists: Iterable[object] | None = None,
 ) -> list[dict[str, object]]:
     merged: list[dict[str, object]] = []
     seen_keys: set[str] = set()
+    selected_keys = {
+        _artist_display_dedupe_key(artist)
+        for artist in (artists or [])
+        if str(artist or "").strip()
+    }
     for group in [*list(primary_groups or []), *list(extra_groups or [])]:
-        artist = str(group.get("artist") or "").strip()
-        if not artist:
+        group_artist = str(group.get("artist") or "").strip()
+        if not group_artist:
             continue
-        artist_key = _artist_display_dedupe_key(artist)
+        artist_key = _artist_display_dedupe_key(group_artist)
+        if selected_keys and artist_key not in selected_keys:
+            continue
         if artist_key in seen_keys:
             continue
         seen_keys.add(artist_key)

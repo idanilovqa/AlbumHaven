@@ -387,6 +387,18 @@ function handleGalleryBootstrapClick(event) {
     state.gallery.sidebarShowAllArtistsOverride = null;
     state.ui.pendingSidebarSelectedArtist = '';
     state.ui.pendingSidebarAllArtistsActive = !opensMobileHome;
+    if (opensMobileHome) {
+      applyViewPayload(nextView, { trackSidebarReveal: false });
+      pushBrowserViewState(nextView);
+      renderSidebar();
+      renderRelated();
+      renderLibraryLoader(state.status);
+      Promise.resolve(fetchAndRender(buildApiUrl(nextView), false, {
+        preserveScroll: true,
+        skipPendingViewTransition: true,
+      })).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
+      return;
+    }
     const reusableRootBrowseView = !opensMobileHome && typeof getReusableRootBrowseView === 'function'
       ? getReusableRootBrowseView(nextView)
       : null;
@@ -659,6 +671,7 @@ function handleSidebarArtistSelectionClick(event) {
     || !previousAlbumTypes.has('compilation')
     || previousGalleryMainState.familySelectionExplicit === true
     || (previousGalleryMainState.familyArtists || []).length
+    || previousGalleryMainState.showSplitAlbums === false
   ));
   if (primaryArtistChanged) {
     clearPendingSelectedArtistReconcile();

@@ -23,7 +23,9 @@ from music_app.services.playback_pcm import (
 
 Codec = Literal["mp3", "flac"]
 Quality = Literal["original", "320"]
-MAX_ENCODED_CHUNK_BYTES = 64 * 1024
+MAX_ENCODED_CHUNK_BYTES = 16 * 1024
+# Sent with no request, so starts and seeks do not wait a round trip for first audio.
+INITIAL_ENCODED_CREDIT_BYTES = 64 * 1024
 MAX_ENCODED_CREDIT_BYTES = 1024 * 1024
 _LAME_ENCODER_START_SAMPLES = 1105
 _MP3_MAX_SAMPLE_RATE = 48_000

@@ -9597,6 +9597,21 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
   return roleState;
 }
 
+function probeStreamingTrackWaveform(track) {
+  if (typeof probeCachedWaveformPeaks !== 'function') return;
+  try {
+    const cachedWaveformProbe = probeCachedWaveformPeaks(
+      String(track?.path || ''),
+      streamingEngineState().generation,
+    );
+    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
+      void cachedWaveformProbe.catch(() => {});
+    }
+  } catch (_error) {
+    // Cached waveform probing is optional and must never interrupt playback.
+  }
+}
+
 async function startStreamingTrack(track, {
   startSeconds = 0,
   autoplay = true,
@@ -9655,6 +9670,7 @@ async function startStreamingTrack(track, {
       kind: 'seek', startSeconds: Math.max(0, startSeconds), endSeconds: Math.max(0, startSeconds),
     });
     if (!replacement) return null;
+    probeStreamingTrackWaveform(track);
     replacement.targetBufferFrames = Math.min(
       streamingRoleCapacityFrames(replacement),
       streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
@@ -9760,19 +9776,7 @@ async function startStreamingTrack(track, {
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
   current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    try {
-      const cachedWaveformProbe = probeCachedWaveformPeaks(
-        String(track?.path || ''),
-        engine.generation,
-      );
-      if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-        void cachedWaveformProbe.catch(() => {});
-      }
-    } catch (_error) {
-      // Cached waveform probing is optional and must never interrupt playback.
-    }
-  }
+  probeStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
     generation: engine.generation,

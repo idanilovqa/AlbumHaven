@@ -1535,6 +1535,43 @@ def test_pcm_socket_rejects_malformed_codec_lists_with_4400(
     asyncio.run(scenario())
 
 
+def test_pcm_socket_refuses_a_wrong_rate_without_closing_the_connection(
+    playback_app,
+    media_path,
+    monkeypatch,
+):
+    async def refuse(_command):
+        raise playback_stream_asgi.SampleRateMismatch(96_000)
+
+    monkeypatch.setattr(playback_stream_asgi.PcmDecoderProcess, "start", refuse)
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {
+                    "type": "open",
+                    "generation": 1,
+                    "streamId": 1,
+                    "role": "continuity",
+                    "path": str(media_path),
+                    "startFrame": 0,
+                    "sampleRate": 44_100,
+                    "durationSeconds": 1,
+                }
+            )
+            assert await socket.receive_json() == {
+                "type": "rate-mismatch",
+                "generation": 1,
+                "streamId": 1,
+                "sampleRate": 96_000,
+                "fallbackSampleRate": 48_000,
+            }
+            await socket.send_json({"type": "probe", "requestId": 1, "path": ""})
+            assert await socket.receive_close() == 4404
+
+    asyncio.run(scenario())
+
+
 def test_pcm_socket_logs_client_stall_report_without_closing_the_stream(
     playback_app,
     media_path,

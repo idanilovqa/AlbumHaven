@@ -746,6 +746,10 @@ function handleStreamingControl(message) {
     engine.diagnostics.staleMessages += 1;
     return;
   }
+  if (message.type === 'rate-mismatch') {
+    handleStreamingRateMismatch(roleState, message);
+    return;
+  }
   if (message.type === 'metadata') {
     if (!validateStreamingMetadata(message, roleState)) {
       failStreamingEngine(
@@ -853,6 +857,35 @@ function handleStreamingControl(message) {
     { message: `Unknown active streaming control: ${String(message.type)}` },
     'control-protocol-error',
   );
+}
+
+function leaveStreamingTrackForRateChange(track) {
+  const engine = streamingEngineState();
+  // One AudioContext has one rate, so this track starts its own context after `ended`.
+  engine.sampleRateChangeNext = { generation: engine.generation, path: String(track.path || '') };
+  engine.node?.port.postMessage({
+    type: 'expect-continuity',
+    generation: engine.generation,
+    active: false,
+  });
+}
+
+function handleStreamingRateMismatch(roleState, message) {
+  const engine = streamingEngineState();
+  rememberStreamingTrackFormat(String(roleState.track?.path || ''), message.sampleRate, {
+    fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
+    sizeBytes: 0,
+  });
+  if (roleState.role !== 'continuity' || roleState.continuityOptions?.kind !== 'queued-next') {
+    failStreamingEngine('socket', { message: 'The track sample rate changed' }, 'rate-mismatch');
+    return;
+  }
+  engine.roles.continuity = null;
+  engine.pcmEvidenceByStream?.delete(roleState.streamId);
+  engine.diagnostics.bufferedFrames.continuity = 0;
+  engine.diagnostics.inFlightFrames.continuity = 0;
+  refreshStreamingActiveRoles();
+  leaveStreamingTrackForRateChange(roleState.track);
 }
 
 function maybePrepareStreamingSeek(roleState) {
@@ -1271,6 +1304,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     const wasPaused = engine.snapshot.paused;
+    engine.diagnostics.cutoverPreparedFrames = engine.diagnostics.bufferedFrames.continuity;
     swapStreamingBackingCapacities(current, continuity);
     continuity.boundaryNotified = true;
     continuity.role = 'current';
@@ -1711,23 +1745,24 @@ function streamingPlaybackRate(track) {
   return engine.trackFormats?.get(String(track?.path || ''))?.fallbackSampleRate || nativeRate;
 }
 
+function rememberStreamingTrackFormat(path, sampleRate, format) {
+  const engine = streamingEngineState();
+  engine.trackSampleRates ??= new Map();
+  engine.trackFormats ??= new Map();
+  if (engine.trackSampleRates.size >= STREAMING_MAX_KNOWN_TRACK_RATES) {
+    engine.trackSampleRates.clear();
+    engine.trackFormats.clear();
+  }
+  engine.trackSampleRates.set(path, sampleRate);
+  if (format) engine.trackFormats.set(path, format);
+}
+
 function settleStreamingSampleRateProbe(requestId, sampleRate, format = null) {
   const engine = streamingEngineState();
   const probe = engine.sampleRateProbes?.get(requestId);
   if (!probe) return;
   engine.sampleRateProbes.delete(requestId);
-  if (sampleRate > 0) {
-    engine.trackSampleRates ??= new Map();
-    if (engine.trackSampleRates.size >= STREAMING_MAX_KNOWN_TRACK_RATES) {
-      engine.trackSampleRates.clear();
-    }
-    engine.trackSampleRates.set(probe.path, sampleRate);
-    if (format) {
-      engine.trackFormats ??= new Map();
-      if (engine.trackFormats.size >= STREAMING_MAX_KNOWN_TRACK_RATES) engine.trackFormats.clear();
-      engine.trackFormats.set(probe.path, format);
-    }
-  }
+  if (sampleRate > 0) rememberStreamingTrackFormat(probe.path, sampleRate, format);
   probe.resolve(sampleRate);
 }
 
@@ -1798,7 +1833,6 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
         engine.backingCapacityFrames = initialStreamingBackingCapacities();
       }
       if (engine.socket) return;
-      if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
       socket.binaryType = 'arraybuffer';
@@ -2361,19 +2395,15 @@ async function scheduleStreamingContinuity(track, options = {}) {
   if (!engine.roles.current) return null;
   const normalized = normalizeStreamingContinuityOptions(options);
   if (normalized.kind === 'queued-next') {
-    if (!knownStreamingSampleRate(track)) {
+    // Most albums share one rate, so an unknown track is opened at this rate and
+    // the server refuses it if wrong. Only a 320 kbps stream needs its rate first.
+    if (!knownStreamingSampleRate(track) && chooseStreamingQuality(track) === '320') {
       return await requestStreamingSampleRate(track)
         ? scheduleStreamingContinuity(track, normalized)
         : null;
     }
-    if (streamingPlaybackRate(track) !== engine.sampleRate) {
-      // One AudioContext has one rate, so this track starts its own context after `ended`.
-      engine.sampleRateChangeNext = { generation: engine.generation, path: String(track.path || '') };
-      engine.node?.port.postMessage({
-        type: 'expect-continuity',
-        generation: engine.generation,
-        active: false,
-      });
+    if (knownStreamingSampleRate(track) && streamingPlaybackRate(track) !== engine.sampleRate) {
+      leaveStreamingTrackForRateChange(track);
       return null;
     }
   }

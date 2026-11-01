@@ -563,13 +563,27 @@ export function assertActiveReplacementContract(expect, {
     0,
     ...pcmBeforePromotion.map((event) => Number(event.peakSample || 0)),
   );
-  expect(
-    receivedBeforePromotion,
-    'the selected replacement must receive one second of actual PCM before promotion',
-  ).toBeGreaterThanOrEqual(replacementOpen.sampleRate);
-  expect(finiteSamplesBeforePromotion).toBeGreaterThanOrEqual(receivedBeforePromotion * 2);
-  expect(nonZeroSamplesBeforePromotion).toBeGreaterThan(0);
-  expect(peakSampleBeforePromotion).toBeGreaterThan(0);
+  const encodedBeforePromotion = events.slice(0, promotionIndex).filter((event) => (
+    event.direction === 'received'
+      && event.type === 'encoded'
+      && event.generation === replacementOpen.generation
+      && event.streamId === replacementOpen.streamId
+  ));
+  if (encodedBeforePromotion.length) {
+    // Encoded streams have no PCM on the wire; the engine counts what it decoded.
+    expect(
+      afterDiagnostics.cutoverPreparedFrames,
+      'the selected replacement must decode one second of actual PCM before promotion',
+    ).toBeGreaterThanOrEqual(replacementOpen.sampleRate);
+  } else {
+    expect(
+      receivedBeforePromotion,
+      'the selected replacement must receive one second of actual PCM before promotion',
+    ).toBeGreaterThanOrEqual(replacementOpen.sampleRate);
+    expect(finiteSamplesBeforePromotion).toBeGreaterThanOrEqual(receivedBeforePromotion * 2);
+    expect(nonZeroSamplesBeforePromotion).toBeGreaterThan(0);
+    expect(peakSampleBeforePromotion).toBeGreaterThan(0);
+  }
   expect(afterDiagnostics.renderedPcmEvidence?.streamId).toBe(replacementOpen.streamId);
   expect(afterDiagnostics.renderedPcmEvidence?.nonZeroSamples).toBeGreaterThan(0);
   expect(afterDiagnostics.renderedPcmEvidence?.peakSample).toBeGreaterThan(0);
@@ -744,6 +758,7 @@ export async function readGaplessPlaybackDiagnostics(page) {
       currentCapacityFrames: Number(streaming.limits?.currentSeconds || 0) * sampleRate,
       continuityCapacityFrames: Number(streaming.limits?.continuitySeconds || 0) * sampleRate,
       underruns: Number(diagnostics.underruns || 0),
+      cutoverPreparedFrames: Number(diagnostics.cutoverPreparedFrames || 0),
       buffering: Boolean(diagnostics.buffering),
       lastError: diagnostics.lastError || null,
       seekReadinessException: diagnostics.seekReadinessException || null,

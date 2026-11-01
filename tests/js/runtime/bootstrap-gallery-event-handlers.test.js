@@ -1584,6 +1584,9 @@ test('library-home navigation opens Home on mobile instead of All artists', () =
   assert.equal(calls.buildApiUrl.at(-1).surface_request, 'home');
   assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
   assert.equal(calls.buildApiUrl.at(-1).all_artists_active, false);
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(calls.applyViewPayload[0].payload.surface.active, 'home');
+  assert.equal(calls.applyViewPayload[0].runtimeOptions.trackSidebarReveal, false);
   assert.equal(calls.fetchAndRender.at(-1).url, '/home-data');
 });
 
@@ -3698,6 +3701,7 @@ test('selecting a different tree artist preserves search and resets filters whil
     view: 'covers',
     familyArtists: [],
     showFeaturedOn: true,
+    showSplitAlbums: true,
   });
 });
 

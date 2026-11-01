@@ -3330,6 +3330,27 @@ def _inventory_rows_from_albums(
             file_entries_by_path,
         )
         track_artist_names: list[str] = []
+        split_track_member_keys: list[str] = []
+        for track in getattr(album, "tracks", []) or []:
+            track_member_keys = {
+                _key(name)
+                for name in track_artist_credit_members(
+                    getattr(track, "artist", None),
+                    None,
+                )
+                if _key(name) in member_artist_keys
+            }
+            if len(track_member_keys) != 1:
+                split_track_member_keys = []
+                break
+            split_track_member_keys.extend(track_member_keys)
+        is_split_release = (
+            str(getattr(album, "release_type", "") or "").strip().casefold()
+            == "split"
+            or bool(split_track_member_keys)
+            and set(split_track_member_keys) == member_artist_keys
+            and len(member_artist_keys) >= 2
+        )
         album_rows.append(
             {
                 "artist_key": album_artist_key,
@@ -3348,6 +3369,7 @@ def _inventory_rows_from_albums(
                         "featured_artists": [],
                         "edition": getattr(album, "edition", None),
                         "release_type": getattr(album, "release_type", None) or "ALBUM",
+                        "is_split_album": is_split_release,
                         "cover_revision": getattr(album, "cover_revision", None),
                         **_album_cover_authority_metadata(album),
                         "root_provenance": getattr(album, "root_provenance", None),
@@ -3368,7 +3390,11 @@ def _inventory_rows_from_albums(
             if owner_name and same_artist_credit_spelling(owner_name, member_name):
                 continue
             member_key = ensure_artist(member_name)
-            featured_kind = "owner" if member_key == owner_key else "featured_member"
+            featured_kind = (
+                "owner"
+                if is_split_release or has_structured_shared_credit or member_key == owner_key
+                else "featured_member"
+            )
             _append_featured_artist_row(
                 featured_artist_rows,
                 seen_featured_rows,
@@ -3467,6 +3493,8 @@ def _inventory_rows_from_albums(
                     if not (owner_name and same_artist_credit_spelling(owner_name, artist_name))
                 ],
                 "edition": getattr(album, "edition", None),
+                "release_type": getattr(album, "release_type", None) or "ALBUM",
+                "is_split_album": is_split_release,
                 "cover_revision": getattr(album, "cover_revision", None),
                 **_album_cover_authority_metadata(album),
                 "root_provenance": getattr(album, "root_provenance", None),

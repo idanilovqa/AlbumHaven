@@ -4505,9 +4505,19 @@ def test_local_album_inventory_retains_cover_revision_after_track_metadata_rewri
     assert album_rows[0]["metadata"]["cover_revision"] == "exact-cover-sha256"
 
 
-def test_local_album_inventory_publishes_proven_shared_members_instead_of_various_artists():
+@pytest.mark.parametrize(
+    ("album_type", "expected_kind"),
+    [(None, "owner"), ("Split", "owner")],
+)
+def test_local_album_inventory_publishes_proven_shared_members_instead_of_various_artists(
+    album_type,
+    expected_kind,
+    monkeypatch,
+):
     from music_app.services import scan_cache_persistence
     from music_app.services.library import build_albums_from_file_cache
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
 
     album_name = "Watcher Joint Credit Release"
     members = ("Jordsjø", "Breidablik")
@@ -4525,6 +4535,7 @@ def test_local_album_inventory_publishes_proven_shared_members_instead_of_variou
             "duration_seconds": 180,
             "mtime": 1.0,
             "size": 123,
+            "album_type": album_type,
         }
         for track_number, member in enumerate(members, start=1)
     }
@@ -4535,12 +4546,45 @@ def test_local_album_inventory_publishes_proven_shared_members_instead_of_variou
     )
 
     assert album_rows[0]["artist_key"] is None
+    assert album_rows[0]["metadata"]["is_split_album"] is True
     assert {row["name"] for row in artist_rows} == set(members)
     assert {
         (row["artist_key"], row["featured_kind"])
         for row in featured_rows
-        if row["featured_kind"] == "featured_member"
-    } == {(member.casefold(), "featured_member") for member in members}
+        if row["featured_kind"] == expected_kind
+    } == {(member.casefold(), expected_kind) for member in members}
+
+
+def test_local_album_inventory_publishes_joint_credit_members_as_owners(monkeypatch):
+    from types import SimpleNamespace
+
+    from music_app.services import scan_cache_persistence
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+
+    album = SimpleNamespace(
+        key="brian eno & david byrne::my life in the bush of ghosts",
+        name="My Life in the Bush of Ghosts",
+        album_artist="Brian Eno & David Byrne",
+        artists=["Brian Eno", "David Byrne"],
+        tracks=[],
+        year=1981,
+        cover_path=None,
+        edition=None,
+        release_type="Album",
+        root_provenance=None,
+        is_compilation=False,
+    )
+
+    _artists, albums, featured_rows, *_ = (
+        scan_cache_persistence._inventory_rows_from_albums({}, [album])
+    )
+
+    assert albums[0]["metadata"]["is_split_album"] is False
+    assert {
+        (row["artist_key"], row["featured_kind"])
+        for row in featured_rows
+    } == {("brian eno", "owner"), ("david byrne", "owner")}
 
 
 def test_postgres_scan_cache_snapshot_does_not_seed_ratings_by_default(monkeypatch):

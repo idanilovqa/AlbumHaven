@@ -19,6 +19,7 @@ from starlette.websockets import WebSocketDisconnect
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.loops import resolve_loop_media_path
 from music_app.services.playback_encoded import (
+    INITIAL_ENCODED_CREDIT_BYTES,
     EncodedStream,
     fallback_sample_rate,
     open_encoded_stream,
@@ -285,6 +286,7 @@ def _encoded_fields(decoder: object) -> dict[str, object] | None:
         "codec": decoder.codec,
         "skipFrames": decoder.skip_frames,
         "totalFrames": decoder.total_frames,
+        "initialCreditBytes": INITIAL_ENCODED_CREDIT_BYTES,
     }
 
 
@@ -758,6 +760,9 @@ class _PlaybackPcmConnection:
         await self._send_json(
             _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
         )
+        if isinstance(decoder, EncodedStream):
+            decoder.grant_credit(INITIAL_ENCODED_CREDIT_BYTES)
+            self._start_credit_drain(stream)
         return True
 
     async def _reject_open(self, code: int) -> bool:
@@ -800,12 +805,15 @@ class _PlaybackPcmConnection:
             return False
 
         stream.decoder.grant_credit(frames)
+        self._start_credit_drain(stream)
+        return True
+
+    def _start_credit_drain(self, stream: _PlaybackStream) -> None:
         if stream.credit_task is None or stream.credit_task.done():
             task = asyncio.create_task(self._drain_stream_credit(stream))
             stream.credit_task = task
             self._pending_credit_tasks.add(task)
             task.add_done_callback(self._pending_credit_tasks.discard)
-        return True
 
     async def _drain_stream_credit(self, stream: _PlaybackStream) -> None:
         try:

@@ -7612,7 +7612,7 @@ const STREAMING_ENCODED_BUFFER_SECONDS = { current: 120, continuity: 30 };
 const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
 const STREAMING_ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
-const STREAMING_ENCODED_CREDIT_BYTES = 256 * 1024;
+const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
 const STREAMING_RECENT_STALL_MS = 60_000;
 const STREAMING_REQUIRED_HEADROOM = 1.5;
 const STREAMING_TRANSFER_WINDOW_BYTES = 32 * 1024 * 1024;
@@ -8595,7 +8595,7 @@ function createStreamingEncodedRole(roleState, message) {
     deliveredFrames: 0,
     queue: [],
     queuedBytes: 0,
-    creditedBytes: 0,
+    creditedBytes: Number(message.initialCreditBytes) || 0,
     nextWireSequence: 0,
     lastArrivalMs: 0,
     localCreditFrames: 0,
@@ -8635,6 +8635,8 @@ function streamingEncodedBufferBytes(roleState) {
 function refillStreamingEncodedBytes(roleState) {
   const encoded = roleState.encoded;
   if (encoded.eos || roleState.closed) return;
+  // The stream being left must not compete with the audio the listener just asked for.
+  if (streamingEngineState().pendingSeek?.currentStreamId === roleState.streamId) return;
   const missingBytes = streamingEncodedBufferBytes(roleState)
     - encoded.queuedBytes - encoded.creditedBytes;
   if (missingBytes < STREAMING_ENCODED_CREDIT_BYTES

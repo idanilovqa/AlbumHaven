@@ -5461,20 +5461,31 @@ test('encoded streams advertise codecs and keep exactly the samples the server m
   assert.equal(harness.engine.diagnostics.decoderFallback, undefined);
 });
 
+test('audio the server sends on open counts as already requested', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'), {
+    initialCreditBytes: 64 * 1024,
+  });
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(64 * 1024)));
+
+  assert.equal(harness.engine.diagnostics.lastError, undefined);
+});
+
 test('encoded bytes are requested separately from decoded ring credit', async () => {
   const harness = encodedHarness();
   await startEncoded(harness, makeTrack('01.mp3'));
 
   const credit = harness.sent('credit');
   assert.equal(credit.length, 1, 'one bounded byte request is outstanding at a time');
-  assert.equal(credit[0].frames, 256 * 1024);
+  assert.equal(credit[0].frames, 64 * 1024);
 });
 
 test('encoded bytes beyond granted credit are a protocol failure', async () => {
   const harness = encodedHarness();
   const open = await startEncoded(harness, makeTrack('01.mp3'));
 
-  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array((256 * 1024) + 1)));
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array((64 * 1024) + 1)));
 
   assert.match(harness.engine.diagnostics.lastError.message, /byte credit/);
 });
@@ -5702,4 +5713,26 @@ test('a prepared replacement checks the waveform cache before audio is ready', a
   assert.deepEqual(JSON.parse(JSON.stringify(probes)), [
     { path: 'C:/Music/Album/02.flac', generation: open.generation },
   ]);
+});
+
+test('a seek stops the old position downloading so its audio arrives first', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'));
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 1,
+  });
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(64 * 1024)));
+  await harness.settle();
+  const creditsBeforeSeek = harness.sent('credit').filter(({ streamId }) => streamId === open.streamId);
+
+  await harness.api.seek(30);
+  harness.sockets[0].receive(encodedFrame(open, 1, new Uint8Array(100)));
+  await harness.settle();
+
+  const creditsAfterSeek = harness.sent('credit').filter(({ streamId }) => streamId === open.streamId);
+  assert.equal(creditsAfterSeek.length, creditsBeforeSeek.length);
 });

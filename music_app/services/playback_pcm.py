@@ -25,6 +25,14 @@ _SAMPLE_RATE_PROBE_TIMEOUT_SECONDS = 30
 _FFMPEG_AUDIO_STREAM_RATE = re.compile(r"Stream #\S+.*?: Audio: .*?, (\d+) Hz")
 
 
+class SampleRateMismatch(ValueError):
+    """The client assumed a rate this file does not have."""
+
+    def __init__(self, native_rate: int) -> None:
+        super().__init__("sample_rate does not match the file's native rate")
+        self.native_rate = native_rate
+
+
 def _validate_nonnegative_integer(name: str, value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer")
@@ -253,7 +261,7 @@ class PcmDecoderProcess:
             ffmpeg_executable=executable,
         )
         if command.sample_rate != native_sample_rate:
-            raise ValueError("sample_rate does not match the file's native rate")
+            raise SampleRateMismatch(native_sample_rate)
 
         requested_seek_seconds = command.start_frame / command.sample_rate
         input_seek: tuple[str, ...] = ()

@@ -17,6 +17,7 @@ from music_app.services.playback_pcm import (
     PcmOpenCommand,
     PcmRole,
     PcmStreamMetadata,
+    SampleRateMismatch,
 )
 
 
@@ -241,7 +242,7 @@ async def _open_flac(command: PcmOpenCommand, quality: Quality) -> EncodedStream
             total_frames=total_frames,
         )
     if command.sample_rate != native_rate:
-        raise ValueError("sample_rate does not match the file's native rate")
+        raise SampleRateMismatch(native_rate)
     total_frames = native_samples - command.start_frame
     if command.start_frame == 0:
         return _FileByteStream(
@@ -285,7 +286,7 @@ async def open_encoded_stream(
     if stream_map is None:
         return None
     if command.sample_rate != stream_map.sample_rate:
-        raise ValueError("sample_rate does not match the file's native rate")
+        raise SampleRateMismatch(stream_map.sample_rate)
     window = stream_map.window(command.start_frame)
     return _FileByteStream(
         command,

@@ -27,6 +27,7 @@ from music_app.services.playback_pcm import (
     PcmDecoderProcess,
     PcmOpenCommand,
     PcmStreamMetadata,
+    SampleRateMismatch,
     pack_encoded_frame,
     pack_pcm_frame,
     read_native_sample_rate,
@@ -690,6 +691,17 @@ class _PlaybackPcmConnection:
                 raise
             if self._closed:
                 return False
+            if isinstance(error, SampleRateMismatch):
+                await self._send_json(
+                    {
+                        "type": "rate-mismatch",
+                        "generation": generation,
+                        "streamId": stream_id,
+                        "sampleRate": error.native_rate,
+                        "fallbackSampleRate": fallback_sample_rate(error.native_rate),
+                    }
+                )
+                return True
             await self._send_decoder_error(
                 generation=generation,
                 stream_id=stream_id,

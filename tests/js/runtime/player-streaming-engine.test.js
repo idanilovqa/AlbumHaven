@@ -5322,9 +5322,20 @@ test('a queued track at another rate opens no continuity and is handed over on e
     contextTime: 1,
   });
 
+  harness.engine.diagnostics.bufferedFrames.current = 44_100;
   const nextTrack = makeTrack('next.flac');
-  assert.equal(await harness.api.continuity(nextTrack), null);
-  assert.equal(harness.sent('open').length, 1);
+  await harness.api.continuity(nextTrack);
+  assert.equal(harness.sockets[0].probes.length, 1, 'the next track never waits for a probe');
+  const refused = harness.sent('open').at(-1);
+  assert.equal(refused.sampleRate, 44_100);
+  harness.sockets[0].receive({
+    type: 'rate-mismatch',
+    generation: refused.generation,
+    streamId: refused.streamId,
+    sampleRate: 96_000,
+    fallbackSampleRate: 48_000,
+  });
+  assert.equal(harness.engine.roles.continuity, null);
   assert.equal(harness.portMessages('expect-continuity').at(-1).active, false);
 
   harness.nodes[0].port.dispatch({

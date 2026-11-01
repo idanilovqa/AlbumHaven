@@ -144,9 +144,10 @@ function createEngineHarness(options = {}) {
   }
 
   class FakeAudioContext {
-    constructor({ sampleRate }) {
+    constructor({ sampleRate, latencyHint }) {
       this.state = 'suspended';
       this.sampleRate = sampleRate;
+      this.latencyHint = latencyHint;
       this.currentTime = options.contextTime ?? 12.5;
       this.destination = { kind: 'destination' };
       this.audioWorklet = {
@@ -5634,4 +5635,44 @@ test('padding after the last mapped sample never delays end of stream', async ()
   await harness.settle();
 
   assert.equal(harness.portMessages('eos').at(-1).emittedFrames, 1_152);
+});
+
+test('music playback asks for large output buffers', async () => {
+  const harness = createEngineHarness();
+
+  await harness.api.start(makeTrack());
+
+  assert.equal(harness.contexts[0].latencyHint, 'playback');
+});
+
+test('audio output details are reported once and again only when dropouts grow', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  const context = harness.contexts[0];
+  context.baseLatency = 0.05;
+  context.playbackStats = { underrunEvents: 0, underrunDuration: 0 };
+  const position = () => harness.nodes[0].port.dispatch({
+    type: 'position',
+    generation: open.generation,
+    streamId: open.streamId,
+    timelineFrame: 48_000,
+  });
+
+  harness.setNow(10_000);
+  position();
+  harness.setNow(16_000);
+  position();
+  assert.equal(harness.sent('output-report').length, 1);
+  assert.equal(harness.sent('output-report')[0].baseLatencyMs, 50);
+
+  context.playbackStats = { underrunEvents: 3, underrunDuration: 0.09 };
+  harness.setNow(22_000);
+  position();
+
+  const report = harness.sent('output-report').at(-1);
+  assert.equal(report.underruns, 3);
+  assert.equal(report.underrunMs, 90);
+  assert.equal(report.statsAvailable, true);
 });

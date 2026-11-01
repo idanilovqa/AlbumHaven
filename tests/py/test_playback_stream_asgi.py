@@ -1572,6 +1572,29 @@ def test_pcm_socket_refuses_a_wrong_rate_without_closing_the_connection(
     asyncio.run(scenario())
 
 
+def test_pcm_socket_logs_audio_output_report(playback_app, caplog):
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            with caplog.at_level("WARNING", logger="music_app.routes.playback_stream_asgi"):
+                await socket.send_json(
+                    {
+                        "type": "output-report",
+                        "sampleRate": 44_100,
+                        "baseLatencyMs": 50,
+                        "outputLatencyMs": 120,
+                        "underruns": 3,
+                        "underrunMs": 90,
+                        "statsAvailable": True,
+                    }
+                )
+                await socket.send_json({"type": "output-report"})
+                assert await socket.receive_close() == 4400
+
+    asyncio.run(scenario())
+
+    assert "underruns=3 underrun_ms=90" in caplog.text
+
+
 def test_pcm_socket_logs_client_stall_report_without_closing_the_stream(
     playback_app,
     media_path,

@@ -302,6 +302,7 @@ function createEngineHarness(options = {}) {
     },
     window,
     createStreamingDecoder: options.createStreamingDecoder,
+    probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
     handleStreamingPlaybackFirstFrame: options.handleStreamingPlaybackFirstFrame,
     handleStreamingPlaybackBoundary: options.handleStreamingPlaybackBoundary,
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
@@ -5675,4 +5676,30 @@ test('audio output details are reported once and again only when dropouts grow',
   assert.equal(report.underruns, 3);
   assert.equal(report.underrunMs, 90);
   assert.equal(report.statsAvailable, true);
+});
+
+test('a prepared replacement checks the waveform cache before audio is ready', async () => {
+  const probes = [];
+  const harness = createEngineHarness({
+    probeCachedWaveformPeaks: (path, generation) => probes.push({ path, generation }),
+  });
+  await harness.api.start(makeTrack('01.flac'));
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 96_000;
+  probes.length = 0;
+
+  void harness.api.start(makeTrack('02.flac'));
+  await harness.settle();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(probes)), [
+    { path: 'C:/Music/Album/02.flac', generation: open.generation },
+  ]);
 });

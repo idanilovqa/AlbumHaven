@@ -707,7 +707,9 @@ export function assertSustainedPlaybackContract(expect, measurement) {
   expect(after.buffering).toBe(false);
   expect(after.generation).toBe(before.generation);
   expect(after.currentStreamId).toBe(before.currentStreamId);
-  expect(after.currentTime - before.currentTime).toBeGreaterThanOrEqual(requiredSeconds);
+  // Time adds up from frame counts, so compare at frame precision rather than float noise.
+  expect(Math.round((after.currentTime - before.currentTime) * after.sampleRate))
+    .toBeGreaterThanOrEqual(Math.round(requiredSeconds * after.sampleRate));
   expect(
     timing.wallClockPassed,
     `Playback accumulated ${Math.round(timing.wallClockOverheadMs)} ms of wall-clock stall.`,

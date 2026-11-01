@@ -3341,3 +3341,23 @@ test('thin mobile Play hit area yields horizontal playhead drag but preserves ta
   document.dispatch('pointerup', { pointerId: 7 });
   assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
 });
+
+test('a clicked track shows as playing before streaming starts', async () => {
+  let finishStart;
+  const shown = [];
+  const { context } = loadHelper({
+    state: { player: { current: { path: 'old.flac' }, selectedTrack: null, loopActive: false } },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 3, duration: 42 }),
+    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    getPlayerElements: () => ({}),
+    refreshTrackModalPlaybackState: () => shown.push(context.state.player.selectedTrack?.path || ''),
+    refreshNonAlbumModalPlaybackState: () => {},
+  });
+
+  const playing = context.playTrackFromPayload({ path: 'new.flac', src: 'new' });
+
+  assert.deepEqual(shown, ['new.flac'], 'the row updates before the switch completes');
+  finishStart(null);
+  await assert.rejects(playing, /did not start/);
+  assert.equal(context.state.player.selectedTrack, null, 'a failed switch shows the real track again');
+});

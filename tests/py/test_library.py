@@ -375,7 +375,7 @@ def test_build_albums_from_file_cache_preserves_persisted_non_compilation_family
     assert inferred_relation_views["folder_related"] == {}
 
 
-def test_build_albums_from_file_cache_preserves_explicit_various_artists_owner():
+def test_build_albums_from_file_cache_names_few_artists_behind_various_artists_tag():
     album_name = "Watcher Joint Credit Release"
     member_artists = ("Jordsjø", "Breidablik")
     file_cache = {
@@ -394,8 +394,8 @@ def test_build_albums_from_file_cache_preserves_explicit_various_artists_owner()
 
     assert len(albums) == 1
     assert albums[0].is_compilation is True
-    assert albums[0].album_artist == "Various Artists"
-    assert albums[0].artists == []
+    assert albums[0].album_artist == "Jordsjø / Breidablik"
+    assert albums[0].artists == list(member_artists)
 
 
 def test_build_albums_from_file_cache_deduplicates_repeated_composite_album_artist_names():

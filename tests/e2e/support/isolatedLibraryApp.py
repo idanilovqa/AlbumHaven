@@ -5081,6 +5081,8 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         self.server.record_musicbrainz_completed()
 
     def _serve_cover_art_archive(self, release_id: str, *, include_body: bool) -> None:
+        # Read the failure mode only after a held search is released.
+        self.server.cover_lookup_later_provider_gate.wait()
         self.server.record_cover_art_archive_request(release_id)
         spec = next(
             (item for item in self.server.cover_specs if str(item["cover_id"]) == release_id),

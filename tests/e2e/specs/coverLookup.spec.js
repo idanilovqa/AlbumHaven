@@ -848,6 +848,10 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     await coverLookupActions.waitForTaskCoverDecodedById(taskId);
   }
 
+  // The saved card starts on the remote candidate, then settles on the local cover.
+  await expect.poll(async () => (
+    await coverLookupActions.readTaskCardEvidenceById(selected.taskId)
+  ).imageSrc).toContain('/cover?path=');
   const afterSave = await readCards();
   for (const { taskId } of notifications.slice(0, -1)) {
     expect(afterSave[taskId]).toEqual(before[taskId]);

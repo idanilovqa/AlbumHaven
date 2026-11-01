@@ -325,6 +325,7 @@ async function playTrackFromPayload(track, options = {}) {
     startedRole = await startStreamingTrack(track, {
       startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
       autoplay: shouldAutoplay,
+      allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
     });
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
@@ -436,6 +437,11 @@ async function handleStreamingPlaybackEnded(event = {}) {
     });
   }
   updatePlayerUi();
+  if (event.sampleRateChangeTrackPath
+      && String(peekNextQueuedTrack()?.path || '') === event.sampleRateChangeTrackPath) {
+    // A locked phone may refuse the new context; stay paused so a tap can resume it.
+    await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
+  }
 }
 
 async function handleStreamingPlaybackBoundary(event = {}) {

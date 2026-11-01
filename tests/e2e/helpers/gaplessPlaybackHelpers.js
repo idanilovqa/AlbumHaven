@@ -23,6 +23,16 @@ function parsePcmFrame(payload) {
   if (view.getUint8(0) !== 65 || view.getUint8(1) !== 72
       || view.getUint8(2) !== 80 || view.getUint8(3) !== 67) return null;
   const frameCount = view.getUint32(20, false);
+  if (view.getUint8(4) === 2) {
+    return {
+      type: 'encoded',
+      role: view.getUint8(5) === 0 ? 'current' : 'continuity',
+      generation: view.getUint32(8, false),
+      streamId: view.getUint32(12, false),
+      sequence: view.getUint32(16, false),
+      byteCount: frameCount,
+    };
+  }
   if (view.getUint8(4) !== 1 || frameCount <= 0
       || bytes.byteLength !== 24 + (frameCount * 8)) return null;
   const sampleCount = frameCount * 2;
@@ -556,7 +566,7 @@ export function assertActiveReplacementContract(expect, {
   expect(
     receivedBeforePromotion,
     'the selected replacement must receive one second of actual PCM before promotion',
-  ).toBeGreaterThanOrEqual(48000);
+  ).toBeGreaterThanOrEqual(replacementOpen.sampleRate);
   expect(finiteSamplesBeforePromotion).toBeGreaterThanOrEqual(receivedBeforePromotion * 2);
   expect(nonZeroSamplesBeforePromotion).toBeGreaterThan(0);
   expect(peakSampleBeforePromotion).toBeGreaterThan(0);
@@ -719,7 +729,7 @@ export async function readGaplessPlaybackDiagnostics(page) {
     const snapshot = getStreamingPlaybackSnapshot();
     const streaming = state.player?.streaming || {};
     const diagnostics = snapshot.diagnostics || {};
-    const sampleRate = Number(snapshot.sampleRate || 48000);
+    const sampleRate = Number(snapshot.sampleRate);
     return {
       mode: String(snapshot.mode || ''),
       generation: Number(snapshot.generation || 0),
